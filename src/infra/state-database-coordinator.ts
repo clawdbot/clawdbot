@@ -8,6 +8,7 @@ import {
   runWithSqliteCoordinator,
   SqliteCoordinatorError,
   tryAcquireExclusiveSqliteCoordinator,
+  tryAcquireSharedSqliteCoordinator,
 } from "./sqlite-coordinator.js";
 
 const heldCoordinators = new Map<
@@ -15,7 +16,7 @@ const heldCoordinators = new Map<
   { coordinator: { release: () => void }; references: number }
 >();
 
-type CoordinatorFamily = "gateway-lifecycle" | "state-lifecycle";
+type CoordinatorFamily = "gateway-lifecycle" | "state-lifecycle" | "state-handles";
 type CoordinatorOptions = {
   databasePath: string;
   coordinatorPath?: string;
@@ -128,6 +129,16 @@ export function acquireGatewayLifecycleCoordinator(params: CoordinatorOptions) {
 }
 
 export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
+  // Lifecycle ownership is reentrant for nested transactions. File publication
+  // is not: even this process must refuse before ownership probes touch SQLite.
+  const handlesPath = resolveLifecycleCoordinatorPath("state-handles", {
+    databasePath: params.databasePath,
+    runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
+    uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
+  });
+  if (heldCoordinators.has(handlesPath)) {
+    throw new StateDatabaseCoordinatorContentionError("state-handles");
+  }
   return acquireLifecycleCoordinator("state-lifecycle", params);
 }
 
@@ -151,4 +162,28 @@ export function withStateSchemaFence<T>(
     throw error;
   }
   return runWithSqliteCoordinator(coordinator, "state schema mutation", operation);
+}
+
+/** A live cached connection excludes file publication, not other cached connections. */
+export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
+  const pathname =
+    params.coordinatorPath ??
+    resolveLifecycleCoordinatorPath("state-handles", {
+      databasePath: params.databasePath,
+      runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
+      uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
+    });
+  ensurePrivateSqliteCoordinatorDirectory(path.dirname(pathname), "state-handles coordinator");
+  const coordinator = tryAcquireSharedSqliteCoordinator(pathname, {
+    busyTimeoutMs: params.busyTimeoutMs,
+  });
+  if (!coordinator) {
+    throw new StateDatabaseCoordinatorContentionError("state-handles");
+  }
+  return coordinator;
+}
+
+/** Acquire only after closing local cached owners under the state lifecycle gate. */
+export function acquireStateDatabaseHandleExclusion(params: CoordinatorOptions) {
+  return acquireLifecycleCoordinator("state-handles", params);
 }

@@ -19,8 +19,8 @@ import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { movePathToTrash } from "../infra/fs-safe.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveHomeDir, shortenHomeInString, shortenHomePath } from "../utils.js";
 
@@ -424,7 +424,7 @@ export async function removeStateAndLinkedPaths(
 
   const lock = await acquireStateCleanupOwnership(cleanup);
   let lockHeld = true;
-  let stateCoordinator: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
+  let stateCoordinator: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
   const releaseLock = async () => {
     if (!lockHeld) {
       return;
@@ -450,10 +450,7 @@ export async function removeStateAndLinkedPaths(
       ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
     });
-    stateCoordinator = acquireStateDatabaseCoordinator({
-      databasePath,
-      busyTimeoutMs: 0,
-    });
+    stateCoordinator = acquireOpenClawStateDatabaseFileExclusion(databasePath);
     const preservePaths = requestedPreservePaths
       .map((target) =>
         isPathWithin(target, requestedStateDir)

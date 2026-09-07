@@ -91,10 +91,10 @@ export function ensurePrivateSqliteCoordinatorDirectory(
   }
 }
 
-/** Hold a raw exclusive transaction until release for cross-process coordination. */
-export function tryAcquireExclusiveSqliteCoordinator(
+function tryAcquireSqliteCoordinator(
   location: string,
-  options: { busyTimeoutMs?: number } = {},
+  mode: "shared" | "exclusive",
+  options: { busyTimeoutMs?: number },
 ): { release: () => void } | null {
   const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? 0));
   const database = openNodeSqliteDatabase(location);
@@ -103,7 +103,11 @@ export function tryAcquireExclusiveSqliteCoordinator(
     // This handle never writes or commits data. Keep the empty database's initial
     // journal in memory so acquiring a lock does not create filesystem artifacts.
     database.exec(
-      `PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;`,
+      `PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA journal_mode = MEMORY; ${
+        mode === "exclusive"
+          ? "BEGIN EXCLUSIVE;"
+          : "BEGIN; SELECT rootpage FROM sqlite_schema LIMIT 1;"
+      }`,
     );
   } catch (error) {
     database.close();
@@ -112,8 +116,13 @@ export function tryAcquireExclusiveSqliteCoordinator(
     }
     throw error;
   }
+  let released = false;
   return {
     release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
       const errors: unknown[] = [];
       try {
         database.exec("ROLLBACK");
@@ -133,4 +142,20 @@ export function tryAcquireExclusiveSqliteCoordinator(
       }
     },
   };
+}
+
+/** Hold a raw exclusive transaction until release for cross-process coordination. */
+export function tryAcquireExclusiveSqliteCoordinator(
+  location: string,
+  options: { busyTimeoutMs?: number } = {},
+): { release: () => void } | null {
+  return tryAcquireSqliteCoordinator(location, "exclusive", options);
+}
+
+/** Retain a read lock for a live handle; no rows or journal files are written. */
+export function tryAcquireSharedSqliteCoordinator(
+  location: string,
+  options: { busyTimeoutMs?: number } = {},
+): { release: () => void } | null {
+  return tryAcquireSqliteCoordinator(location, "shared", options);
 }

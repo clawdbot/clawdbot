@@ -9,12 +9,16 @@ import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import {
+  acquireStateDatabaseCoordinator,
+  acquireStateDatabaseHandleExclusion,
+} from "../infra/state-database-coordinator.js";
 import {
   createOpenClawDatabaseVerificationError,
   readOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import { closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
@@ -77,9 +81,7 @@ function closeOpenClawStateDatabaseHandle(
   }
   clearNodeSqliteKyselyCacheForDatabase(database.db);
   try {
-    if (database.db.isOpen) {
-      database.db.close();
-    }
+    closeTrackedStateDatabase(database.db);
   } catch (error) {
     errors.push(error);
   }
@@ -191,6 +193,7 @@ function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase):
     return;
   }
   database.walMaintenance.close();
+  closeTrackedStateDatabase(database.db);
   clearNodeSqliteKyselyCacheForDatabase(database.db);
   cachedDatabases.delete(database.path);
   notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
@@ -257,9 +260,7 @@ function retireCachedOpenClawStateDatabase(
     // Acquire before checkpointing or removing cache ownership: a refused close
     // must leave the same live owner available for a later coordinated retry.
     database.walMaintenance.close(options);
-    if (database.db.isOpen) {
-      database.db.close();
-    }
+    closeTrackedStateDatabase(database.db);
     cachedDatabases.delete(database.path);
     notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
   });
@@ -320,3 +321,28 @@ export const openClawStateDatabaseCache = {
   recordOpenClawStateDatabaseOpenFailure,
   recordOpenClawStateDatabaseLifecycleOpenError,
 };
+
+/** Drain local cached owners before excluding participating foreign handles for file removal. */
+export function acquireOpenClawStateDatabaseFileExclusion(pathname: string): {
+  release: () => void;
+} {
+  const databasePath = path.resolve(pathname);
+  const lifecycle = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
+  let handles: ReturnType<typeof acquireStateDatabaseHandleExclusion>;
+  try {
+    closeOpenClawStateDatabaseByPath(databasePath);
+    handles = acquireStateDatabaseHandleExclusion({ databasePath, busyTimeoutMs: 0 });
+  } catch (error) {
+    lifecycle.release();
+    throw error;
+  }
+  return {
+    release: () => {
+      try {
+        handles.release();
+      } finally {
+        lifecycle.release();
+      }
+    },
+  };
+}

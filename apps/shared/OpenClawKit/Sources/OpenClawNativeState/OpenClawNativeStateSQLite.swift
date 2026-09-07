@@ -203,6 +203,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     ]
 
     private let databaseURL: URL
+    private let handleLease: OpenClawNativeStateHandleLease
     fileprivate let database: OpaquePointer
     fileprivate let connectionLock = NSRecursiveLock()
 
@@ -212,6 +213,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         createIfMissing: Bool = true) throws
     {
         self.databaseURL = databaseURL
+        self.handleLease = try OpenClawNativeStateHandleLease(databaseURL: databaseURL)
         if createIfMissing {
             try Self.secureDirectory(databaseURL.deletingLastPathComponent())
         }
@@ -240,6 +242,8 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     }
 
     deinit {
+        // Statements retain this owner. Its handle lease is released only after
+        // SQLite closes and final metadata maintenance has completed.
         sqlite3_close(self.database)
         try? Self.secureDatabaseFiles(self.databaseURL)
     }

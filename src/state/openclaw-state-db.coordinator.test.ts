@@ -1,11 +1,16 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import {
+  acquireStateDatabaseCoordinator,
+  acquireStateDatabaseHandleExclusion,
+} from "../infra/state-database-coordinator.js";
+import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseByPath,
@@ -67,7 +72,12 @@ function sqliteBytes(databasePath: string) {
   return Object.fromEntries(
     ["", "-wal", "-shm", "-journal"].map((suffix) => {
       const file = databasePath + suffix;
-      return [suffix, fs.existsSync(file) ? fs.readFileSync(file).toString("base64") : null];
+      return [
+        suffix,
+        fs.existsSync(file)
+          ? createHash("sha256").update(fs.readFileSync(file)).digest("hex")
+          : null,
+      ];
     }),
   );
 }
@@ -109,6 +119,60 @@ describe("shared-state transaction lifecycle participation", () => {
           .prepare("SELECT event_key FROM diagnostic_events WHERE scope = ?")
           .all("retirement"),
       ).toEqual([{ event_key: "retained" }]);
+    },
+  );
+
+  it.each(["explicit", "periodic"] as const)(
+    "defers %s WAL maintenance while lifecycle exclusion is held and retries afterward",
+    async (mode) => {
+      const root = tempDirs.make("openclaw-state-wal-coordinator-");
+      let periodic: (() => void) | undefined;
+      const realSetInterval = globalThis.setInterval;
+      const interval = vi
+        .spyOn(globalThis, "setInterval")
+        .mockImplementation((callback, delay, ...args) => {
+          if (delay === 30 * 60 * 1000 && typeof callback === "function") {
+            periodic = () => callback(...args);
+          }
+          return realSetInterval(callback, delay, ...args);
+        });
+      let database: ReturnType<typeof openOpenClawStateDatabase>;
+      try {
+        database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
+      } finally {
+        interval.mockRestore();
+      }
+      database.db.exec("PRAGMA wal_autocheckpoint=0");
+      runOpenClawStateWriteTransaction(
+        (owner) => {
+          owner.db
+            .prepare(
+              "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+            )
+            .run("maintenance", "preserved", "{}", 1);
+        },
+        { database },
+      );
+      const release = await holdStateCoordinator(database.path);
+      const before = sqliteBytes(database.path);
+      try {
+        if (mode === "explicit") {
+          expect(database.walMaintenance.checkpoint()).toBe(false);
+        } else {
+          expect(periodic).toBeTypeOf("function");
+          periodic?.();
+        }
+        expect(sqliteBytes(database.path)).toEqual(before);
+      } finally {
+        await release();
+      }
+      expect(database.walMaintenance.checkpoint()).toBe(true);
+      expect(sqliteBytes(database.path)).not.toEqual(before);
+      expect(
+        database.db
+          .prepare("SELECT event_key FROM diagnostic_events WHERE scope=?")
+          .all("maintenance"),
+      ).toEqual([{ event_key: "preserved" }]);
     },
   );
 
@@ -164,4 +228,28 @@ describe("shared-state transaction lifecycle participation", () => {
       ).toEqual([{ event_key: "committed" }]);
     },
   );
+});
+
+it("releases the physical handle lease when connection configuration fails before schema setup", () => {
+  const root = tempDirs.make("openclaw-state-open-lease-failure-");
+  const pathname = path.join(root, "openclaw.sqlite");
+  expect(() =>
+    openUnpublishedStateDatabase({
+      pathname,
+      env: { OPENCLAW_STATE_DIR: root },
+      busyTimeoutMs: -1,
+      lockFailureReporting: "suppress",
+      ensureSchema: () => {
+        throw new Error("schema must not run");
+      },
+      recordOpenFailure: () => {
+        throw new Error("configuration is not corruption");
+      },
+    }),
+  ).toThrow(/busyTimeoutMs/);
+  const exclusion = acquireStateDatabaseHandleExclusion({
+    databasePath: pathname,
+    busyTimeoutMs: 0,
+  });
+  exclusion.release();
 });

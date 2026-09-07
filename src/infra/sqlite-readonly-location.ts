@@ -13,6 +13,7 @@ import {
   resolvePrivateSqliteSnapshotStagingRoot,
 } from "./sqlite-private-directory.js";
 import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
+import { withSqliteSourceHandle, withSqliteSourceHandleAsync } from "./sqlite-source-handle.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -479,7 +480,7 @@ async function createOnlineReadOnlyBackup(
  * The InProcess exports are child-only: POSIX close() can release every lock
  * the calling process holds on the same source inode.
  */
-export async function prepareSqliteReadOnlyLocationInProcess(
+async function prepareReadOnlySourceInProcess(
   pathname: string,
   stagingRoot?: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
@@ -560,7 +561,7 @@ export async function prepareSqliteReadOnlyLocationInProcess(
   });
 }
 
-export function prepareSqliteReadOnlyLocationSyncInProcess(
+function prepareReadOnlySourceSyncInProcess(
   pathname: string,
   stagingRoot?: string,
 ): PreparedSqliteReadOnlyLocation {
@@ -662,7 +663,9 @@ export async function withSqliteSnapshotSource<T>(
   let prepared = await prepareSqliteSnapshotSource(pathname);
   try {
     try {
-      return await operation(prepared?.location ?? pathname);
+      return prepared
+        ? await operation(prepared.location)
+        : await withSqliteSourceHandleAsync(pathname, () => operation(pathname));
     } catch (error) {
       if (prepared) {
         throw error;
@@ -676,4 +679,16 @@ export async function withSqliteSnapshotSource<T>(
   } finally {
     prepared?.cleanup();
   }
+}
+
+export function prepareSqliteReadOnlyLocationInProcess(pathname: string, stagingRoot?: string) {
+  return withSqliteSourceHandleAsync(pathname, () =>
+    prepareReadOnlySourceInProcess(pathname, stagingRoot),
+  );
+}
+
+export function prepareSqliteReadOnlyLocationSyncInProcess(pathname: string, stagingRoot?: string) {
+  return withSqliteSourceHandle(pathname, () =>
+    prepareReadOnlySourceSyncInProcess(pathname, stagingRoot),
+  );
 }

@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import { withSqliteSourceHandle } from "../infra/sqlite-source-handle.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -73,17 +74,21 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   pathname: string,
   location = pathname,
 ): T {
-  const env = options.env ?? process.env;
-  openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
-  const db = openNodeSqliteDatabase(location, { readOnly: true });
-  try {
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedStateSchemaVersion(db, pathname);
-    return operation({ db, path: pathname });
-  } finally {
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
-  }
+  const read = () => {
+    const env = options.env ?? process.env;
+    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+    const db = openNodeSqliteDatabase(location, { readOnly: true });
+    try {
+      db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+      assertSupportedStateSchemaVersion(db, pathname);
+      return operation({ db, path: pathname });
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      db.close();
+    }
+  };
+  // Private completed snapshots no longer own descriptors on the live source.
+  return location === pathname ? withSqliteSourceHandle(pathname, read) : read();
 }
 
 /**
