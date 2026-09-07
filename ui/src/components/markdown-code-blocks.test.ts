@@ -526,7 +526,7 @@ PY
   });
 
   it("keeps highlighted HTML code escaped", () => {
-    const rendered = toSanitizedMarkdownHtml("```rendered\n<script>alert(1)</script>\n```");
+    const rendered = toSanitizedMarkdownHtml("```html\n<script>alert(1)</script>\n```");
     const fragment = htmlFragment(rendered);
     const code = fragment.querySelector("pre code");
 
