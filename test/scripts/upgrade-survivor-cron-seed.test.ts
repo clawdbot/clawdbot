@@ -1,7 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { assertLegacyOperatorCronOwners } from "../../scripts/e2e/lib/upgrade-survivor/legacy-operator-state.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -211,4 +212,54 @@ repair_fixture_plugin_consent
   );
   expect(readFileSync(path.join(root, "updated"), "utf8")).toBe("complete");
   expect(existsSync(path.join(root, "restarted"))).toBe(mode === "auto-auth");
+});
+
+const baselineJobs = [
+  { id: "job-default", name: "survivor-default-owner" },
+  { id: "job-ops", name: "survivor-ops-owner", agentId: "ops" },
+];
+
+function migratedJobs() {
+  return baselineJobs.map((job) => ({ ...job, effectiveAgentId: job.agentId ?? "main" }));
+}
+
+// These checks protect the lane's independent acceptance contract: merely
+// retaining cron rows must not conceal a lost effective owner after Doctor.
+describe("legacy operator cron acceptance", () => {
+  it("requires both unchanged jobs with their resolved runtime owners", () => {
+    expect(() =>
+      assertLegacyOperatorCronOwners({ jobs: migratedJobs() }, { jobs: baselineJobs }),
+    ).not.toThrow();
+  });
+
+  it("allows candidate maintenance jobs but rejects duplicated operator jobs", () => {
+    const jobs = [
+      ...migratedJobs(),
+      { id: "heartbeat", name: "heartbeat-main", agentId: "main", effectiveAgentId: "main" },
+    ];
+    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).not.toThrow();
+    jobs.push({ ...jobs[0]!, id: "duplicate-default" });
+    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).toThrow(
+      "cron job count changed",
+    );
+  });
+
+  it.each([null, undefined, "ops"])("rejects default-owner projection %s", (effectiveAgentId) => {
+    const jobs = migratedJobs();
+    Object.assign(jobs[0]!, { effectiveAgentId });
+    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).toThrow(
+      "cron owner unresolved or changed: survivor-default-owner",
+    );
+  });
+
+  it("rejects a missing job and an explicit owner rewritten behind a correct projection", () => {
+    expect(() =>
+      assertLegacyOperatorCronOwners({ jobs: migratedJobs().slice(1) }, { jobs: baselineJobs }),
+    ).toThrow("cron job count changed");
+    const jobs = migratedJobs();
+    jobs[1]!.agentId = "main";
+    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).toThrow(
+      "cron explicit owner changed",
+    );
+  });
 });

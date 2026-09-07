@@ -120,7 +120,7 @@ runs:
 
     # Blacksmith's image tracks an older runner-images snapshot whose toolcache
     # Node patches sit just under this repo's engines floor (measured 2026-08-16:
-    # 20.20.0/22.22.0/24.13.0 against >=22.22.3 and >=24.15.0), so every job
+    # 20.20.0/22.22.0/24.13.0 below the supported release floors), so every job
     # falls through to a nodejs.org download. That is ~2.6s normally but tail-
     # spikes past 110s when the mirror throttles our ~46 simultaneous fetches,
     # and it lands on every job at once. Keep the payload in the Actions cache,

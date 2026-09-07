@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -205,5 +205,128 @@ describe("survivor exec approval policy observation", () => {
     const result = observe();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("exec approval policy is not valid JSON");
+  });
+});
+
+function approvalFixture() {
+  const root = tempDirs.make("survivor-legacy-operator-");
+  const state = join(root, "state");
+  const artifactRoot = join(root, "artifacts");
+  const policy = {
+    version: 1,
+    defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+    agents: {
+      main: { allowlist: [{ id: "main-command", pattern: "/usr/bin/uname" }] },
+      ops: { allowlist: [{ id: "ops-command", pattern: "/usr/bin/date" }] },
+    },
+  };
+  mkdirSync(artifactRoot);
+  mkdirSync(join(state, "state"), { recursive: true });
+  writeFileSync(
+    join(artifactRoot, "legacy-operator-baseline.json"),
+    JSON.stringify({ approvals: policy, approvalsJsonEra: true }),
+  );
+  const dbPath = join(state, "state", "openclaw.sqlite");
+  const legacyPath = join(state, "exec-approvals.json");
+  const writeCanonical = (value: unknown) => {
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec("CREATE TABLE exec_approvals_config (config_key TEXT PRIMARY KEY, raw_json TEXT)");
+      db.prepare("INSERT INTO exec_approvals_config VALUES ('current', ?)").run(
+        JSON.stringify(value),
+      );
+    } finally {
+      db.close();
+    }
+  };
+  const run = (stage = "survival") => {
+    const dbBefore = existsSync(dbPath) ? readFileSync(dbPath) : null;
+    const result = spawnSync(process.execPath, [assertions, "assert-exec-approvals"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
+        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifactRoot,
+        OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
+        OPENCLAW_STATE_DIR: state,
+      },
+    });
+    if (dbBefore) {
+      expect(readFileSync(dbPath).equals(dbBefore)).toBe(true);
+    } else {
+      expect(existsSync(dbPath)).toBe(false);
+    }
+    expect(result.stdout + result.stderr).not.toContain("private-runtime-socket-token");
+    return result;
+  };
+  return { policy, legacyPath, writeCanonical, run };
+}
+
+describe("legacy operator approvals acceptance", () => {
+  it("accepts JSON-era null usage placeholders in the baseline policy", () => {
+    const { policy, legacyPath, run } = approvalFixture();
+    Object.assign(policy.agents.main.allowlist[0]!, {
+      lastUsedAt: null,
+      lastUsedCommand: null,
+      lastResolvedPath: null,
+    });
+    writeFileSync(legacyPath, JSON.stringify(policy));
+    const result = run("baseline");
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each(["lastUsedAt", "lastUsedCommand", "lastResolvedPath"])(
+    "rejects unmigrated null %s in canonical SQLite policy",
+    (field) => {
+      const { policy, writeCanonical, run } = approvalFixture();
+      Object.assign(policy.agents.main.allowlist[0]!, { [field]: null });
+      writeCanonical(policy);
+      const result = run();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("legacy operator exec approvals changed");
+    },
+  );
+
+  it("accepts baseline JSON but rejects the retained file after SQLite import", () => {
+    const { policy, legacyPath, writeCanonical, run } = approvalFixture();
+    writeFileSync(legacyPath, JSON.stringify(policy));
+    const baseline = run("baseline");
+    expect(baseline.status, baseline.stderr).toBe(0);
+    // The real importer owns retirement. This independent fixture supplies its output.
+    writeCanonical({ ...policy, socket: { token: "private-runtime-socket-token" } });
+    const retainedLegacy = run();
+    expect(retainedLegacy.status).toBe(1);
+    expect(retainedLegacy.stderr).toContain("legacy exec approvals file was not retired");
+  });
+
+  it("accepts the exact policy without comparing runtime socket credentials", () => {
+    const { policy, writeCanonical, run } = approvalFixture();
+    writeCanonical({ ...policy, socket: { token: "private-runtime-socket-token" } });
+    const result = run();
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each(["allowlist", "mode", "agent"])("rejects altered %s without repairing it", (field) => {
+    const { policy, writeCanonical, run } = approvalFixture();
+    if (field === "allowlist") {
+      policy.agents.main.allowlist.pop();
+    } else if (field === "mode") {
+      policy.defaults.security = "full";
+    } else {
+      policy.agents.ops.allowlist[0]!.pattern = "/usr/bin/other";
+    }
+    writeCanonical(policy);
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("legacy operator exec approvals changed");
+  });
+
+  it("rejects missing canonical storage instead of importing the legacy specimen", () => {
+    const { policy, legacyPath, run } = approvalFixture();
+    writeFileSync(legacyPath, JSON.stringify(policy));
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("legacy operator approvals database missing");
+    expect(JSON.parse(readFileSync(legacyPath, "utf8"))).toEqual(policy);
   });
 });

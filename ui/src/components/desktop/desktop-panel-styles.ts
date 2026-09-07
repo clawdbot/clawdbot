@@ -72,7 +72,8 @@ const desktopPanelStyles = css`
     border-color: var(--accent, #ff5c5c);
     color: var(--accent, #ff5c5c);
   }
-  .desktop-button:disabled {
+  .desktop-button:disabled,
+  .desktop-touch-action:disabled {
     opacity: 0.5;
   }
   .desktop-session {

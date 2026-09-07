@@ -1,10 +1,6 @@
 /** Runs prompt assembly, admission, submission, and prompt-local recovery. */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
-  buildHeartbeatOutcomeContext,
-  claimHeartbeatOutcomeForRun,
-} from "../../../infra/heartbeat-outcome-store.js";
-import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
   setAgentRunAttemptTerminalFailure,
@@ -181,24 +177,10 @@ export async function runEmbeddedAttemptPromptPhase(
   leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
 
   try {
-    const canClaimHeartbeatOutcome =
-      attempt.trigger === "user" && attempt.sessionPersistence !== "detached";
-    const heartbeatOutcomeContext =
-      canClaimHeartbeatOutcome && attempt.sessionKey
-        ? buildHeartbeatOutcomeContext(
-            claimHeartbeatOutcomeForRun({
-              agentId: sessionAgentId,
-              sessionKey: attempt.sessionKey,
-              storePath: attempt.sessionTarget?.storePath,
-              runId: attempt.runId,
-            }),
-          )
-        : undefined;
     const promptContext = prepareEmbeddedAttemptPromptContext({
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
-      ...(heartbeatOutcomeContext ? { heartbeatOutcomeContext } : {}),
       messages: activeSession.messages,
       prompt: promptAssembly,
       replaceSessionMessages: (messages) => {

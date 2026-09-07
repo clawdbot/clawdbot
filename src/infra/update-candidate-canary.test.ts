@@ -53,7 +53,7 @@ beforeEach(async () => {
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.1" }));
   mocks.snapshot.mockResolvedValue({
     code: 0,
-    stdout: Buffer.from("[]"),
+    stdout: Buffer.from(JSON.stringify({ versions: [], pluginPaths: {} })),
     stderr: Buffer.alloc(0),
     termination: "exit",
   });
@@ -237,6 +237,7 @@ describe("update candidate canary", () => {
       }),
     );
     const rehearsal = await prepareUpdateCandidateRehearsal({
+      candidateRoot: root,
       config,
       stateDir: root,
       env: {},

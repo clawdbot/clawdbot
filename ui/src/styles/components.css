@@ -5706,16 +5706,6 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-.session-row-state {
-  display: inline-grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 14px;
-  align-items: center;
-  justify-items: center;
-  gap: 6px;
-  pointer-events: none;
-}
-
 .sidebar-session-fork-indicator {
   display: inline-flex;
   margin-right: 4px;

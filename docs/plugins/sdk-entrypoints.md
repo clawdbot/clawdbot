@@ -531,9 +531,20 @@ Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 | `openclaw/plugin-sdk/channel-setup`     | Optional-install setup surfaces                                                                                                                                                    |
 | `openclaw/plugin-sdk/channel-dm-policy` | Account-aware DM policy descriptors for setup flows                                                                                                                                |
 | `openclaw/plugin-sdk/setup-tools`       | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
-| `openclaw/plugin-sdk/archive`           | Bounded archive extraction and single-entry reads                                                                                                                                  |
+| `openclaw/plugin-sdk/archive`           | Bounded TAR/gzip member inspection, archive extraction, and single-entry reads                                                                                                     |
 | `openclaw/plugin-sdk/root-walk`         | Budgeted, root-bounded directory walking                                                                                                                                           |
 | `openclaw/plugin-sdk/secret-file`       | Pinned secret reads and first-writer-wins creation                                                                                                                                 |
+
+`inspectTarArchive({ archivePath, timeoutMs, limits, entryFilter, onFiltered })`
+returns a bounded, frozen list of accepted `{ path, kind, size }` TAR/gzip members
+without creating an extracted tree. It uses fs-safe's complete admission and
+zero-strip extraction policy, not tar display output. Paths use the existing
+canonical archive identity; LF and Unicode spelling are preserved. Use matching
+filter/limit settings and retain or verify the same archive bytes for subsequent
+extraction: inspection results are not reusable write authority. Only the resolved
+result is complete-admission evidence; a filter callback can precede a later
+policy failure. The member manifest does not synthesize implicit parent directories,
+so whole-tree consumers must authorize those parent paths separately.
 
 Keep heavy SDKs, CLI registration, and long-lived runtime services in the
 full entry.

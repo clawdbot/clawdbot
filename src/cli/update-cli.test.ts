@@ -359,7 +359,7 @@ vi.mock("../process/exec.js", () => ({
   // Retain real rehearsal config projection and drift checks in this CLI fixture.
   runCommandBuffered: async () => ({
     code: 0,
-    stdout: Buffer.from("[]"),
+    stdout: Buffer.from(JSON.stringify({ versions: [], pluginPaths: {} })),
     stderr: Buffer.alloc(0),
   }),
   runCommandWithTimeout: vi.fn(),

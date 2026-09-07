@@ -277,6 +277,8 @@ export type ReplyOperation = {
   readonly lastActivityAtMs: number;
   /** True when this operation has owned the supplied session ID. */
   hasOwnedSessionId(sessionId: string): boolean;
+  /** Capture lineage before a pending barrier outlives this operation's lane. */
+  captureOwnedSessionIds(): Set<string>;
   recordActivity(): void;
   setPhase(
     next:

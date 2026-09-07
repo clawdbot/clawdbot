@@ -95,6 +95,18 @@ suite.define(() => {
           }),
         )
         .toBe("Unread");
+      expect(await row.locator(".session-row-state").count()).toBe(0);
+      expect(await row.getByRole("img", { name: "Unread", exact: true }).count()).toBe(0);
+      const accessibility = await context.newCDPSession(page);
+      const { nodes } = await accessibility.send("Accessibility.getFullAXTree");
+      const linkNode = nodes.find(
+        (node) => node.role?.value === "link" && node.name?.value === "Active run Queued repair",
+      );
+      expect(linkNode?.description?.value).toBe("Unread");
+      expect(
+        `${linkNode?.name?.value} ${linkNode?.description?.value}`.match(/Unread/g),
+      ).toHaveLength(1);
+      await accessibility.detach();
       expect(
         await row.getByRole("link", { name: "Active run Queued repair", exact: true }).count(),
       ).toBe(1);
