@@ -194,6 +194,21 @@
   margin-top: 0 !important;
 }
 
+/* Keep the destination responsive without flashing a loader on fast history.
+   Removing the skeleton when content arrives also cancels its pending reveal. */
+.chat-thread-inner > openclaw-panel-loading-skeleton {
+  animation: chat-skeleton-reveal 0s 500ms backwards;
+}
+
+@keyframes chat-skeleton-reveal {
+  from {
+    visibility: hidden;
+  }
+  to {
+    visibility: visible;
+  }
+}
+
 .chat-thread-inner {
   /* Shared gutter plus the responsive side inset that used to be
      .chat-thread's horizontal padding (moved off the scroll container so
