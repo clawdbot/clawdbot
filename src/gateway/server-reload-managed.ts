@@ -416,10 +416,10 @@ export function startManagedGatewayConfigReloader(
       try {
         assertCurrent();
         const acceptedRestart = acceptRestartConfig(sourceConfig);
-        if (!acceptance.runtimeApplied) {
+        if (acceptance.application === "skipped") {
           // acceptRestartConfig leaves returned debt in its paused/conservative owner.
           // This candidate explicitly skipped runtime application, so a later
-          // runtime-applied acceptance—not this source-only write—may rearm it.
+          // applied or restart-pending acceptance may rearm it.
           assertCurrent();
           recordAcceptedRestartTarget(createRestartTarget());
           params.acceptTerminalConfig({

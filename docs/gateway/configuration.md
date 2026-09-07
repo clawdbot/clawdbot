@@ -737,6 +737,11 @@ When replacement ingress reports ready, old paths it did not reclaim are removed
 
 ### Reload planning
 
+A saved restart-required change remains pending until the replacement Gateway
+starts; saving or applying equivalent settings again does not make them active
+or cancel the pending restart. Reverting to the running settings cancels the
+config-driven restart only when no unapplied plugin-install changes remain.
+
 When you edit a source file that is referenced through `$include`, OpenClaw plans
 the reload from the source-authored layout, not the flattened in-memory view.
 That keeps hot-reload decisions (hot-apply vs restart) predictable even when a
