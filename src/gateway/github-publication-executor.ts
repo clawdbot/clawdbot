@@ -1,10 +1,10 @@
-import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { resolveGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import {
   currentGitHubPublicationConfig,
   resolveLocalGitHubPublicationWorktreeOwner,
@@ -189,8 +189,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     identity = await refreshIdentity();
     const baseTransportEnv = {
       ...identity.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
     };
     const baseFetched = await run(githubPublicationBaseFetchArgs(repository, remoteBaseSha), {
       cwd: worktree.path,
@@ -350,8 +350,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     identity = await refreshIdentity();
     let transportEnv = {
       ...identity.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
     };
     const pushArgs = githubPublicationPushArgs(httpsRemote, headCommit, branch);
     const observeRemoteHead = async () => {
@@ -372,8 +372,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       identity = await refreshIdentity();
       transportEnv = {
         ...identity.env,
-        GIT_CONFIG_GLOBAL: os.devNull,
-        GIT_CONFIG_SYSTEM: os.devNull,
+        GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+        GIT_CONFIG_SYSTEM: gitNullConfigPath(),
       };
       remoteHead = await step(observeRemoteHead);
       if (remoteHead !== headCommit) {
