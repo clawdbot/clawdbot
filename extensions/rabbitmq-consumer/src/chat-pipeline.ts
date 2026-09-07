@@ -30,7 +30,6 @@ import { prepareHistorySessionSnapshot } from "./session-snapshot.js";
 import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { buildSuhengDesignContext } from "./suheng-design-context.js";
 import { SUHENG_RUNTIME_SYSTEM_PROMPT } from "./suheng-runtime-context.js";
-import { resolveSuhengToolsAllow } from "./suheng-tool-profile.js";
 import { buildSuhengWorkspaceContext } from "./suheng-workspace-context.js";
 import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
 import { pickTopicByLlm } from "./topic-llm-picker.js";
@@ -1131,11 +1130,10 @@ export async function processChatMessage(
       const citationDirective = buildCitationDirective();
       const suhengWorkspaceContext = buildSuhengWorkspaceContext(userMessage);
       const suhengDesignContext = buildSuhengDesignContext(userMessage);
-      const toolsAllow = resolveSuhengToolsAllow(userMessage, {
-        hasAttachments: materializedAttachments.length > 0,
-        hasCustomSkills: selectedSkills.length > 0,
-        builtinSkillName,
-      });
+      // Interactive turns keep the runtime-authorized tool catalog. A per-message
+      // keyword allowlist breaks follow-ups ("make it clearer", "retry") even
+      // while the model retains the earlier task. Runtime policy still enforces
+      // provider, agent, owner, sandbox and subagent restrictions on every run.
 
       // Continue in this history row's full snapshot before the agent appends.
       await prepareHistorySessionSnapshot({
@@ -1153,7 +1151,6 @@ export async function processChatMessage(
         sessionKey,
         message: `${inferredBuiltinSkillDirective}${ackDirective}${attachmentDirective}${certImageDirective}${memoryDirective}${citationDirective}${suhengWorkspaceContext}${suhengDesignContext}[userId:${userId}]${topicContext} ${userMessage}${templateContext}${skillContext}`,
         extraSystemPrompt: SUHENG_RUNTIME_SYSTEM_PROMPT,
-        ...(toolsAllow ? { toolsAllow } : {}),
         systemPromptMode: builtinSkillName ? "full" : "minimal",
         bootstrapContextMode: "lightweight",
         ...(builtinSkillName ? { skillFilter: [builtinSkillName] } : {}),

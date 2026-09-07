@@ -145,7 +145,44 @@ describe("processChatMessage", () => {
     await rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("runs ordinary Suheng turns with compact context and an intent-scoped toolset", async () => {
+  it("keeps runtime-authorized tools available across artifact creation, follow-ups and retries", async () => {
+    const calls: SubagentRunParams[] = [];
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        calls.push(args);
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    for (const [index, message] of [
+      "请生成8月交通舆情发布时间趋势和行政分布的html图片",
+      "行政区划分布请生成饼图，两张图都像素高一点",
+      "重试出图",
+      "再清晰一点",
+      "把它放到我的skill",
+      "继续",
+    ].entries()) {
+      await processChatMessage(
+        { ...createChatMessage(), historyId: index + 1, message },
+        historyManager,
+        mercureConfig,
+        runtime,
+        logger,
+      );
+    }
+    expect(calls).toHaveLength(6);
+    for (const call of calls) {
+      expect(call.sessionKey).toBe(SESSION_KEY);
+      // No content-derived second filter may remove tools allowed by runtime policy.
+      expect(call).not.toHaveProperty("toolsAllow");
+      expect(call.extraSystemPrompt).toContain("工具可用性以本轮实际工具列表为准");
+    }
+    expect(new Set(calls.map((call) => call.systemPromptMode)).size).toBe(1);
+  });
+
+  it("runs ordinary Suheng turns with compact context and runtime-managed tools", async () => {
     let captured: SubagentRunParams | undefined;
     const runtime = createRuntimeMock({
       workspaceDir,
@@ -163,10 +200,7 @@ describe("processChatMessage", () => {
       bootstrapContextMode: "lightweight",
       systemPromptMode: "minimal",
     });
-    expect(captured?.toolsAllow).toEqual(
-      expect.arrayContaining(["feed_query", "full_text_search", "web_search"]),
-    );
-    expect(captured?.toolsAllow).not.toContain("schedule_create");
+    expect(captured).not.toHaveProperty("toolsAllow");
     expect(captured?.extraSystemPrompt).toContain("已知事实、分析推断、处置建议");
     expect(snapshotMocks.prepare).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -270,9 +304,7 @@ describe("processChatMessage", () => {
       logger,
     );
 
-    expect(captured?.toolsAllow).toEqual(
-      expect.arrayContaining(["web_fetch", "video_link_parse", "video_understand"]),
-    );
+    expect(captured).not.toHaveProperty("toolsAllow");
     expect(captured?.extraSystemPrompt).toContain("video_link_parse");
   });
 
@@ -300,14 +332,11 @@ describe("processChatMessage", () => {
       logger,
     );
 
-    expect(captured?.toolsAllow).toEqual(
-      expect.arrayContaining(["link_batch_create", "link_batch_list", "link_batch_status"]),
-    );
-    expect(captured?.toolsAllow).not.toContain("complaint_submit");
+    expect(captured).not.toHaveProperty("toolsAllow");
     expect(captured?.extraSystemPrompt).toContain("不要用 web_fetch 逐条代替");
   });
 
-  it("keeps full skill instructions while narrowing tools for a bundled skill", async () => {
+  it("keeps full skill instructions without narrowing the runtime tools for a bundled skill", async () => {
     let captured: SubagentRunParams | undefined;
     const runtime = createRuntimeMock({
       workspaceDir,
@@ -336,9 +365,7 @@ describe("processChatMessage", () => {
       systemPromptMode: "full",
       skillFilter: ["gov-public-opinion-analysis-agent"],
     });
-    expect(captured?.toolsAllow).toEqual(
-      expect.arrayContaining(["chart_render", "feed_query", "file_share", "read", "write"]),
-    );
+    expect(captured).not.toHaveProperty("toolsAllow");
   });
 
   it("forwards only assistant deltas matching this run's sessionKey", async () => {
@@ -1818,9 +1845,7 @@ describe("processChatMessage", () => {
     );
 
     expect(capturedSkillFilter).toEqual(["ai-collaboration-diagnostic"]);
-    expect(capturedToolsAllow).toContain("collaboration_history_query");
-    expect(capturedToolsAllow).not.toContain("sessions_history");
-    expect(capturedToolsAllow).not.toContain("sessions_list");
+    expect(capturedToolsAllow).toBeUndefined();
     expect(resolveMany).not.toHaveBeenCalled();
     expect(capturedMessage).not.toContain("启用了以下自定义技能");
     expect(capturedMessage).not.toContain("不应注入");
