@@ -205,6 +205,7 @@ export async function maybeRestartService(params: {
   serviceEnv?: NodeJS.ProcessEnv;
   serviceInstallEnv?: NodeJS.ProcessEnv | null;
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
+  serviceManagerUid?: number;
   gatewayPort: number;
   restartScriptPath?: string | null;
   invocationCwd?: string;
@@ -395,6 +396,7 @@ export async function maybeRestartService(params: {
             const state = await readGatewayServiceState(resolveGatewayService(), {
               env: activation.serviceEnv,
               requireEffective: true,
+              requireLoadedCommand: true,
               validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
               timeoutMs: activation.timeoutMs,
             });
@@ -402,6 +404,7 @@ export async function maybeRestartService(params: {
               state,
               root: activation.result.root ?? verdict.root,
               preManagedServiceStop: {
+                serviceManagerUid: activation.serviceManagerUid,
                 serviceEnv: activation.serviceEnv,
                 serviceUpdateVerdict: { ...verdict, refreshDefinition: false },
               },

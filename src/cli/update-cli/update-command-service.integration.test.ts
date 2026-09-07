@@ -122,6 +122,7 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),
   readSystemdServiceExecStart: mocks.command,
   readSystemdServiceRuntime: async () => ({
+    systemd: { managerUid: 2001 },
     status: mocks.running ? "running" : "stopped",
     ...(mocks.running ? { pid: 4242 } : {}),
   }),
@@ -422,6 +423,7 @@ describe("preserved update activation with real version guards", () => {
         opts: { json, run },
         refreshServiceEnv: late,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
         gatewayPort: late ? 19001 : 19305,
         requireRunningServiceAfterRestart: true,
@@ -543,6 +545,7 @@ describe("preserved update activation with real version guards", () => {
       opts: { json: true, run },
       refreshServiceEnv: false,
       serviceUpdateVerdict: before.serviceUpdateVerdict,
+      serviceManagerUid: before.serviceManagerUid,
       serviceEnv: before.serviceEnv,
       gatewayPort: 19305,
       requireRunningServiceAfterRestart: true,

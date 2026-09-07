@@ -46,6 +46,9 @@ function managerReply(args: string[], overrides: Record<string, unknown> = {}): 
   if (args.includes("GetNameOwner")) {
     return success(JSON.stringify({ type: "s", data: [":1.42"] }));
   }
+  if (args.includes("GetConnectionUnixUser")) {
+    return success(JSON.stringify({ type: "u", data: [2001] }));
+  }
   if (args.includes("GetUnit")) {
     return success(JSON.stringify({ type: "o", data: [unitPath] }));
   }
@@ -95,9 +98,34 @@ describe("loaded-only systemd runtime", () => {
       ),
     ).toBe(true);
     const pinned = busctl.mock.calls.filter(([, args]) => !args.includes("GetNameOwner"));
-    expect(pinned).toHaveLength(4);
+    expect(pinned).toHaveLength(5);
     expect(pinned.every(([, args]) => args.includes(":1.42"))).toBe(true);
   });
+
+  it("uses the pinned bus owner's native UID instead of the updater account", async () => {
+    const runtime = await readSystemdServiceRuntime(env, { requireLoaded: true });
+    expect(runtime.systemd).toMatchObject({ managerUid: 2001 });
+    expect(
+      busctl.mock.calls.some(
+        ([, args]) => args.includes("GetConnectionUnixUser") && args.at(-1) === ":1.42",
+      ),
+    ).toBe(true);
+  });
+
+  it.each([[], [2001.5], [-1], 2001].map((uid) => ({ uid })))(
+    "refuses an invalid manager UID reply $uid",
+    async ({ uid }) => {
+      busctl.mockImplementation(async (_env, args) =>
+        args.includes("GetConnectionUnixUser")
+          ? success(JSON.stringify({ type: "u", data: uid }))
+          : managerReply(args),
+      );
+      await expect(readSystemdServiceRuntime(env, { requireLoaded: true })).resolves.toMatchObject({
+        status: "unknown",
+        inspectionFailure: expect.anything(),
+      });
+    },
+  );
 
   it.each(["inactive", "failed", "activating", "deactivating", "reloading"])(
     "preserves terminal versus transitional state %s",
@@ -182,7 +210,7 @@ describe("loaded-only systemd runtime", () => {
       const runtime = await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 500 });
       expect(runtime.status).toBe("unknown");
       expect(busctl).toHaveBeenCalledTimes(6);
-      expect(busctl.mock.calls.map((call) => call[2])).toEqual([83, 82, 80, 76, 70, 50]);
+      expect(busctl.mock.calls.map((call) => call[2])).toEqual([71, 68, 64, 57, 46, 25]);
       expect(systemctl).not.toHaveBeenCalled();
     } finally {
       now.mockRestore();

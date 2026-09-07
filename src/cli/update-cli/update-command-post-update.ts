@@ -551,16 +551,15 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         cause: error,
       });
     }
-    const { restartScriptPath, refreshGatewayServiceEnv, gatewayServiceEnv, serviceUpdateVerdict } =
-      restartContext;
+    const { restartScriptPath, refreshGatewayServiceEnv, gatewayServiceEnv } = restartContext;
     const {
       gatewayServiceInstallEnv,
       skipLegacyServiceRestart,
       serviceStateReadEnv,
       serviceMutationAllowed,
       serviceMutationSkipMessage,
+      gatewayPort,
     } = restartContext;
-    const { gatewayPort } = restartContext;
 
     await writeControlPlaneUpdateRestartSentinelBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
@@ -578,7 +577,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           opts: params.opts,
           refreshServiceEnv: refreshGatewayServiceEnv,
           serviceLoadBoundary: params.serviceLoadBoundary,
-          serviceUpdateVerdict,
+          serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
+          serviceManagerUid: restartContext.serviceManagerUid,
           serviceEnv: gatewayServiceEnv,
           serviceInstallEnv: gatewayServiceInstallEnv,
           gatewayPort,
@@ -633,8 +633,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
                 timeoutMs: params.updateStepTimeoutMs,
                 invocationCwd: params.invocationCwd,
                 expectedService: rollbackStopState ?? {
+                  serviceManagerUid: restartContext.serviceManagerUid,
                   serviceEnv: gatewayServiceEnv ?? serviceStateReadEnv,
-                  serviceUpdateVerdict,
+                  serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
                 },
                 recoveryStop: currentServiceStop(),
                 onVerified: recordVerifiedDowntime,

@@ -30,7 +30,7 @@ export async function readLoadedSystemdServiceRuntime(
   const budget =
     timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 5000;
   const deadline = performance.now() + budget;
-  let remainingQueries = 6;
+  let remainingQueries = 7;
   const unavailable = () =>
     new Error("Loaded systemd runtime could not be inspected without activation.");
   const query = async (args: string[], signatures: string[]): Promise<unknown[]> => {
@@ -76,6 +76,19 @@ export async function readLoadedSystemdServiceRuntime(
   try {
     // Address every unit query to the observed unique bus owner, never a newly started manager.
     const owner = await readOwner();
+    const [credentials] = await query(
+      ["call", BUS, "/org/freedesktop/DBus", BUS, "GetConnectionUnixUser", "s", owner],
+      ["u"],
+    );
+    if (
+      !Array.isArray(credentials) ||
+      credentials.length !== 1 ||
+      !isUint32(credentials[0]) ||
+      credentials[0] === 0xffffffff
+    ) {
+      throw unavailable();
+    }
+    const managerUid = credentials[0];
     const [unit] = await query(
       ["call", owner, "/org/freedesktop/systemd1", `${MANAGER}.Manager`, "GetUnit", "s", unitName],
       ["o"],
@@ -165,6 +178,7 @@ export async function readLoadedSystemdServiceRuntime(
       ],
       systemd: {
         unit: id,
+        managerUid,
         result,
         nRestarts: restarts,
         startLimitBurst: burst,

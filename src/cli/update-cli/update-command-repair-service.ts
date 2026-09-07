@@ -23,7 +23,10 @@ export async function repairUpdateService(params: {
   nodeRunner?: string;
   timeoutMs: number;
   invocationCwd?: string;
-  expectedService: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
+  expectedService: Pick<
+    PreManagedServiceStop,
+    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
+  >;
   recoveryStop?: PreManagedServiceStop;
   onVerified?: (verifiedAtMs: number) => void;
 }): Promise<UpdateRunResult> {
@@ -35,6 +38,7 @@ export async function repairUpdateService(params: {
     const state = await readGatewayServiceState(resolveGatewayService(), {
       env: params.env,
       requireEffective: true,
+      requireLoadedCommand: true,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs: params.timeoutMs,
     });
@@ -50,6 +54,7 @@ export async function repairUpdateService(params: {
     // A refreshed definition is observed once before inference. Later turns
     // must retain this exact launcher, rather than inherit refresh authority.
     pinnedService = {
+      serviceManagerUid: params.expectedService.serviceManagerUid,
       serviceEnv: state.env,
       serviceUpdateVerdict:
         verdict.kind === "owned" ? { ...verdict, refreshDefinition: false } : verdict,

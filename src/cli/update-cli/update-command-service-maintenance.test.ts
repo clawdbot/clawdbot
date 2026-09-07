@@ -147,7 +147,10 @@ it.each(nativeOfflineCases)(
         readRuntime:
           scenario.platform === "win32"
             ? readScheduledTaskRuntime
-            : async () => ({ status: scenario.runtime }),
+            : async () => ({
+                status: scenario.runtime,
+                ...(scenario.platform === "linux" ? { systemd: { managerUid: 2001 } } : {}),
+              }),
         isLoaded: async () => scenario.loaded,
         isEnabled: async () => {
           if (scenario.enabled === undefined) {
@@ -240,7 +243,11 @@ it
             programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
             environment: { HOME: home },
           }),
-          readRuntime: async () => ({ status: "running", pid: process.ppid }),
+          readRuntime: async () => ({
+            status: "running",
+            pid: process.ppid,
+            systemd: { managerUid: 2001 },
+          }),
           isLoaded: async () => true,
         });
         mocks.service.mockReturnValue(service);
@@ -272,3 +279,82 @@ it
     );
   }),
 );
+
+it.each([
+  { label: "changed account", uid: 3002 },
+  { label: "missing account", uid: undefined },
+  { label: "same account", uid: 2001 },
+])("revalidates native manager identity before preparation: $label", (scenario) =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    let managerUid: number | undefined = 2001;
+    const stop = vi.fn(async () => undefined);
+    mocks.service.mockReturnValue(
+      createMockGatewayService({
+        readCommand: async () => ({
+          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+          environment: { HOME: home },
+        }),
+        readRuntime: async () => ({ status: "running", systemd: { managerUid } }),
+        isLoaded: async () => true,
+        stop,
+      }),
+    );
+    const params = {
+      updateInstallKind: "package" as const,
+      root: process.cwd(),
+      shouldRestart: true,
+      jsonMode: true,
+      phase: "inspect" as const,
+    };
+    const before = await maybeStopManagedServiceBeforeMutableUpdate(params);
+    expect(before.serviceUpdateVerdict?.kind).toBe("owned");
+    expect(before).toMatchObject({ serviceManagerUid: 2001 });
+    managerUid = scenario.uid;
+    const next = maybeStopManagedServiceBeforeMutableUpdate({
+      ...params,
+      phase: "prepare",
+      expectedService: before,
+    });
+    if (scenario.uid === 2001) {
+      await expect(next).resolves.toMatchObject({
+        stopped: true,
+        serviceManagerUid: 2001,
+        serviceUpdateVerdict: { kind: "owned" },
+      });
+    } else {
+      await expect(next).rejects.toThrow(/ownership|manager identity/);
+    }
+    expect(stop).toHaveBeenCalledTimes(scenario.uid === 2001 ? 1 : 0);
+  }),
+);
+
+it("refuses owned Linux admission without a native manager UID", () =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    const stop = vi.fn(async () => undefined);
+    mocks.service.mockReturnValue(
+      createMockGatewayService({
+        readCommand: async () => ({
+          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+          environment: { HOME: home },
+        }),
+        readRuntime: async () => ({ status: "running" }),
+        isLoaded: async () => true,
+        stop,
+      }),
+    );
+    await expect(
+      maybeStopManagedServiceBeforeMutableUpdate({
+        updateInstallKind: "package",
+        root: process.cwd(),
+        shouldRestart: true,
+        jsonMode: true,
+        phase: "inspect",
+      }),
+    ).resolves.toMatchObject({
+      serviceUpdateVerdict: { kind: "unavailable" },
+      serviceMutationAllowed: false,
+    });
+    expect(stop).not.toHaveBeenCalled();
+  }));

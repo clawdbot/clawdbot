@@ -325,6 +325,7 @@ export async function rollbackFailedUpdate(params: {
       opts,
       refreshServiceEnv: false,
       serviceUpdateVerdict: verdict,
+      serviceManagerUid: before?.serviceManagerUid,
       serviceEnv: recoveryEnv,
       serviceInstallEnv: before?.serviceDefinitionEnv,
       gatewayPort: port,

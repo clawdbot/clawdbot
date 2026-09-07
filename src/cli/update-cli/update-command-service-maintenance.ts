@@ -66,6 +66,8 @@ export type PreManagedServiceStop = {
   serviceEnv?: NodeJS.ProcessEnv;
   serviceDefinitionEnv?: NodeJS.ProcessEnv;
   serviceNodeRunner?: string;
+  /** Original account observed from the pinned native user-manager connection. */
+  serviceManagerUid?: number;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
@@ -80,6 +82,13 @@ export function resolvePreparedGatewayUpdatePolicy(
     allowGatewayActivation:
       shouldRestart && stopState?.stopped === true && verdict?.kind === "owned",
   };
+}
+
+function observedSystemdManagerUid(state: GatewayServiceState): number | undefined {
+  const uid = state.runtime?.systemd?.managerUid;
+  return typeof uid === "number" && Number.isInteger(uid) && uid >= 0 && uid < 0xffffffff
+    ? uid
+    : undefined;
 }
 
 async function inspectManagedGatewayServiceBeforeUpdate(params: {
@@ -114,7 +123,8 @@ async function inspectManagedGatewayServiceBeforeUpdate(params: {
   }
   if (
     state.loadState.status === "unknown" ||
-    (state.runtime?.status !== "running" && state.runtime?.status !== "stopped")
+    (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
+    (process.platform === "linux" && observedSystemdManagerUid(state) === undefined)
   ) {
     return unavailable();
   }
@@ -134,7 +144,7 @@ async function inspectManagedGatewayServiceBeforeUpdate(params: {
 }
 
 function matchesStoppedService(
-  before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">,
+  before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">,
   state: GatewayServiceState,
   inspection: ManagedGatewayUpdateVerdict,
 ): boolean {
@@ -156,6 +166,9 @@ function matchesStoppedService(
     resolveGatewayProfileSuffix(before.serviceEnv.OPENCLAW_PROFILE) ===
       resolveGatewayProfileSuffix(state.env.OPENCLAW_PROFILE) &&
     resolveName(before.serviceEnv) === resolveName(state.env) &&
+    (process.platform !== "linux" ||
+      (before.serviceManagerUid !== undefined &&
+        before.serviceManagerUid === observedSystemdManagerUid(state))) &&
     (refreshDefinition ||
       ("fingerprint" in inspection && inspection.fingerprint === verdict.fingerprint)),
   );
@@ -164,7 +177,10 @@ function matchesStoppedService(
 export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   state: GatewayServiceState;
   root: string;
-  preManagedServiceStop?: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
+  preManagedServiceStop?: Pick<
+    PreManagedServiceStop,
+    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
+  >;
   allowInstallRootChange?: boolean;
 }): Promise<ManagedGatewayUpdateVerdict> {
   const before = params.preManagedServiceStop;
@@ -219,7 +235,7 @@ export type UpdateCommandRecoveryState = {
 
 export function createWindowsTaskAutoStartGuard(params: {
   root: string;
-  before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
+  before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">;
   timeoutMs?: number;
 }): () => Promise<void> {
   const before = params.before;
@@ -315,7 +331,10 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   jsonMode: boolean;
   phase?: "inspect" | "prepare";
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
-  expectedService?: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
+  expectedService?: Pick<
+    PreManagedServiceStop,
+    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
+  >;
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
@@ -386,6 +405,9 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     serviceDefinitionEnv:
       resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},
     serviceNodeRunner: resolveManagedServiceNodeRunner(serviceState.command),
+    ...(process.platform === "linux"
+      ? { serviceManagerUid: observedSystemdManagerUid(serviceState) }
+      : {}),
     serviceUpdateVerdict,
   };
   if (serviceUpdateVerdict.kind === "unavailable") {
@@ -496,6 +518,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       state: currentState,
       root: params.root,
       preManagedServiceStop: {
+        serviceManagerUid: inspected.serviceManagerUid,
         serviceEnv: serviceState.env,
         serviceUpdateVerdict:
           serviceUpdateVerdict.kind === "owned"

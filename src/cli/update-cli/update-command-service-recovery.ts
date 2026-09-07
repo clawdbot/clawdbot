@@ -175,12 +175,15 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       );
     }
     const service = resolveGatewayService();
-    let expectedService: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict"> =
-      before;
+    let expectedService: Pick<
+      PreManagedServiceStop,
+      "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
+    > = before;
     const readCurrentService = async () => {
       const state = await readGatewayServiceState(service, {
         env: before.serviceEnv,
         requireEffective: true,
+        requireLoadedCommand: true,
         validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
         timeoutMs: params.timeoutMs,
       });
@@ -192,6 +195,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       // Recovery preserves the current definition. Once observed, even a same-unit
       // replacement during config or health awaits must not inherit this activation.
       expectedService = {
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: state.env,
         serviceUpdateVerdict:
           inspection.kind === "owned" ? { ...inspection, refreshDefinition: false } : inspection,

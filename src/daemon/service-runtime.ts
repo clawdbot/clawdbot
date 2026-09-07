@@ -6,6 +6,8 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 /** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
 type GatewayServiceSystemdRuntime = {
   unit?: string;
+  /** Native D-Bus credential of the observed user-manager connection, not the CLI UID. */
+  managerUid?: number;
   killMode?: string;
   tasksCurrent?: number;
   memoryCurrent?: number;

@@ -40,6 +40,7 @@ export async function prepareUpdateRestart(
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
+  let serviceManagerUid = params.preManagedServiceStop?.serviceManagerUid;
   let serviceUpdateVerdict = params.preManagedServiceStop?.serviceUpdateVerdict;
   let skipLegacyServiceRestart = serviceUpdateVerdict?.kind === "absent";
   const serviceStateReadEnv = resolveServiceRefreshEnv(
@@ -69,6 +70,7 @@ export async function prepareUpdateRestart(
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
         env: serviceStateReadEnv,
         requireEffective: true,
+        requireLoadedCommand: true,
         validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
         timeoutMs: params.updateStepTimeoutMs,
       });
@@ -79,6 +81,7 @@ export async function prepareUpdateRestart(
         allowInstallRootChange: true,
       });
       gatewayServiceEnv = serviceState.env;
+      serviceManagerUid ??= serviceState.runtime?.systemd?.managerUid;
       skipLegacyServiceRestart =
         serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "absent";
       if (serviceUpdateVerdict.kind === "unavailable") {
@@ -151,6 +154,7 @@ export async function prepareUpdateRestart(
     gatewayServiceEnv,
     gatewayServiceInstallEnv,
     serviceUpdateVerdict,
+    serviceManagerUid,
     skipLegacyServiceRestart,
     serviceStateReadEnv,
     serviceMutationAllowed,
