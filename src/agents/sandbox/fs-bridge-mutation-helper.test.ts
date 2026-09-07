@@ -171,6 +171,28 @@ const FORCED_EXDEV_WITH_SOURCE_REPLACEMENT_MUTATION_PYTHON = FORCED_EXDEV_MUTATI
   ].join("\n"),
 );
 
+const FORCED_EXDEV_WITH_FILE_LEAF_SWAP_MUTATION_PYTHON = FORCED_EXDEV_MUTATION_PYTHON.replace(
+  "        if inode_identity(current_stat) != inode_identity(src_file_stat):",
+  [
+    "        swap_fd = os.open('swapped-tmp-entry', WRITE_FLAGS, 0o600, dir_fd=src_parent_fd)",
+    "        os.write(swap_fd, b'swapped')",
+    "        os.close(swap_fd)",
+    "        os.rename('swapped-tmp-entry', src_basename, src_dir_fd=src_parent_fd, dst_dir_fd=src_parent_fd)",
+    "        if inode_identity(current_stat) != inode_identity(src_file_stat):",
+  ].join("\n"),
+);
+
+const FORCED_EXDEV_WITH_SYMLINK_LEAF_SWAP_MUTATION_PYTHON = FORCED_EXDEV_MUTATION_PYTHON.replace(
+  "        if not same_identity(src_stat, current_stat):",
+  [
+    "        os.unlink(src_basename, dir_fd=src_parent_fd)",
+    "        swap_fd = os.open(src_basename, WRITE_FLAGS, 0o600, dir_fd=src_parent_fd)",
+    "        os.write(swap_fd, b'swapped')",
+    "        os.close(swap_fd)",
+    "        if not same_identity(src_stat, current_stat):",
+  ].join("\n"),
+);
+
 describe("sandbox pinned mutation helper", () => {
   it("writes through a pinned directory fd", async () => {
     await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
@@ -839,6 +861,72 @@ describe("sandbox pinned mutation helper", () => {
         await expect(
           fs.readFile(path.join(sourceRoot, "dir", "nested", "file.txt"), "utf8"),
         ).resolves.toBe("replacement");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses leaf cleanup when a regular-file source is swapped before unlink",
+    async () => {
+      await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destRoot = path.join(root, "dest");
+        await fs.mkdir(sourceRoot, { recursive: true });
+        await fs.mkdir(destRoot, { recursive: true });
+        await fs.writeFile(path.join(sourceRoot, "file.txt"), "payload", "utf8");
+
+        const result = runMutationWithSource(FORCED_EXDEV_WITH_FILE_LEAF_SWAP_MUTATION_PYTHON, [
+          "rename",
+          sourceRoot,
+          "",
+          "file.txt",
+          destRoot,
+          "",
+          "file.txt",
+          "1",
+        ]);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(/source changed during move fallback cleanup/i);
+        // Destination keeps the copied payload; the swapped-in entry survives.
+        await expect(fs.readFile(path.join(destRoot, "file.txt"), "utf8")).resolves.toBe("payload");
+        await expect(fs.readFile(path.join(sourceRoot, "file.txt"), "utf8")).resolves.toBe(
+          "swapped",
+        );
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses leaf cleanup when a symlink source is swapped before unlink",
+    async () => {
+      await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destRoot = path.join(root, "dest");
+        const targetFile = path.join(root, "target.txt");
+        await fs.mkdir(sourceRoot, { recursive: true });
+        await fs.mkdir(destRoot, { recursive: true });
+        await fs.writeFile(targetFile, "target", "utf8");
+        await fs.symlink(targetFile, path.join(sourceRoot, "link"));
+
+        const result = runMutationWithSource(FORCED_EXDEV_WITH_SYMLINK_LEAF_SWAP_MUTATION_PYTHON, [
+          "rename",
+          sourceRoot,
+          "",
+          "link",
+          destRoot,
+          "",
+          "link",
+          "1",
+        ]);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(/source changed during move fallback cleanup/i);
+        // Destination still points at the original target; the swapped-in
+        // regular file at the source name survives.
+        await expect(fs.readlink(path.join(destRoot, "link"))).resolves.toBe(targetFile);
+        await expect(fs.readFile(path.join(sourceRoot, "link"), "utf8")).resolves.toBe("swapped");
+        await expect(fs.readFile(targetFile, "utf8")).resolves.toBe("target");
       });
     },
   );
