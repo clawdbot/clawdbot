@@ -1468,10 +1468,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     A setup or handshake failure before request dispatch falls back to SSE; it
     is not retried or reconnected first. After dispatch, failures with an
     unknown outcome remain replay-unsafe and fail closed. The explicit server
-    rejections `previous_response_not_found` and
-    `websocket_connection_limit_reached` are safe exceptions: OpenClaw closes
-    the failed socket and retries that turn once over SSE with full history and
-    no rejected `previous_response_id`.
+    rejections `previous_response_not_found`,
+    `websocket_connection_limit_reached`, and the Zero Data Retention
+    `unsupported_parameter` rejection of `previous_response_id` are safe
+    exceptions: OpenClaw closes the failed socket and retries that turn once
+    over SSE with full history and no rejected `previous_response_id`.
 
     ```json5
     {

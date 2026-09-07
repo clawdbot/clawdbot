@@ -674,39 +674,51 @@ describe("native OpenAI Responses SSE continuation", () => {
     expect(JSON.stringify(sseState.requests[1]?.input)).not.toContain('"compaction"');
   });
 
-  it("recovers a rejected continuation with full history and advances the baseline", async () => {
-    sseState.outcomes.push(
-      sdkCompletion("resp_1", "first answer"),
-      Object.assign(new Error("previous response not found"), {
-        code: "previous_response_not_found",
-        status: 400,
-      }),
-      sdkCompletion("resp_2", "second answer"),
-      sdkCompletion("resp_3", "third answer"),
-    );
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-    const firstUser = userMessage("first question", 1);
-    const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
-    const secondContext = {
-      messages: [firstUser, first, userMessage("second question", 2)],
-      tools: [],
-    };
-    const second = await run(secondContext, { onPayload });
-    await run(
-      {
-        messages: [...secondContext.messages, second, userMessage("third question", 3)],
+  it.each<{ rejection: string; error: { code: string; param?: string; status: number } }>([
+    {
+      rejection: "previous response not found",
+      error: { code: "previous_response_not_found", status: 400 },
+    },
+    {
+      rejection:
+        "Previous response cannot be used for this organization due to Zero Data Retention.",
+      error: { code: "unsupported_parameter", param: "previous_response_id", status: 400 },
+    },
+  ])(
+    "recovers a continuation rejected with $error.code using full history",
+    async ({ rejection, error }) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        Object.assign(new Error(`400 ${rejection}`), error),
+        sdkCompletion("resp_2", "second answer"),
+        sdkCompletion("resp_3", "third answer"),
+      );
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+      const firstUser = userMessage("first question", 1);
+      const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
+      const secondContext = {
+        messages: [firstUser, first, userMessage("second question", 2)],
         tools: [],
-      },
-      { onPayload },
-    );
+      };
+      const second = await run(secondContext, { onPayload });
+      expect(second.stopReason).toBe("stop");
+      await run(
+        {
+          messages: [...secondContext.messages, second, userMessage("third question", 3)],
+          tools: [],
+        },
+        { onPayload },
+      );
 
-    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-    expect(sseState.requests[1]?.input).toHaveLength(1);
-    expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
-    expect(sseState.requests[2]?.input).toHaveLength(3);
-    expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
-    expect(sseState.requests[3]?.input).toHaveLength(1);
-  });
+      expect(sseState.requests).toHaveLength(4);
+      expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+      expect(sseState.requests[1]?.input).toHaveLength(1);
+      expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+      expect(sseState.requests[2]?.input).toHaveLength(3);
+      expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
+      expect(sseState.requests[3]?.input).toHaveLength(1);
+    },
+  );
 
   it("records the effective full-history compaction recovery request", async () => {
     sseState.outcomes.push(
