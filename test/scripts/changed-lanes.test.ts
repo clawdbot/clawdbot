@@ -1924,7 +1924,7 @@ describe("scripts/changed-lanes", () => {
     git(dir, ["init", "-q", "--initial-branch=main"]);
     writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
     commitAll(dir, "initial");
-    const stagedPath = " src/staged\nfile.ts";
+    const stagedPath = process.platform === "win32" ? "src/staged file.ts" : " src/staged\nfile.ts";
     writeRepoFile(dir, stagedPath, "export const staged = 1;\n");
     git(dir, ["add", "--", stagedPath]);
 
