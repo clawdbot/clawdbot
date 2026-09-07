@@ -22,6 +22,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.DpRect
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.window.layout.DisplayFeature
@@ -47,7 +48,7 @@ class FoldAwareContentTest {
     composeRule.setContent {
       CompositionLocalProvider(LocalLayoutDirection provides direction) {
         Box(Modifier.fillMaxSize(), contentAlignment = AbsoluteAlignment.TopLeft) {
-          FoldAwareContent(folds, Modifier.absoluteOffset(x, 50.dp).size(800.dp, 800.dp)) {
+          FoldAwareContent(folds, Modifier.absoluteOffset { IntOffset(x.roundToPx(), 50.dp.roundToPx()) }.size(800.dp, 800.dp)) {
             var draft by remember { mutableStateOf("") }
             DisposableEffect(Unit) {
               starts++
