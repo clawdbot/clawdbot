@@ -525,12 +525,16 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
         if (open?.type === "code_inline" && linkDepth === 0) {
-          const codeUrl = parseWebLinkHref(open.content.trim());
+          const content = open.content.trim();
+          // The URL parser percent-encodes inner whitespace instead of failing,
+          // so a span with trailing prose would otherwise fold that prose into
+          // the href; only a span that is entirely one URL is promoted.
+          const codeUrl = /\s/.test(content) ? null : parseWebLinkHref(content);
           if (!codeUrl || !isGitHubHost(codeUrl.hostname)) {
             continue;
           }
           const label = new state.Token("text", "", 0);
-          label.content = open.content.trim();
+          label.content = content;
           open = new state.Token("link_open", "a", 1);
           open.markup = CODE_SPAN_LINK_MARKUP;
           open.attrSet("href", label.content);
