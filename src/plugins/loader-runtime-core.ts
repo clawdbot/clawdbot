@@ -1,3 +1,4 @@
+import { uniqueValues } from "../../packages/normalization-core/src/string-normalization.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import {
   recordPluginInstallOwnerLookup,
@@ -281,6 +282,16 @@ export function loadOpenClawPluginsCore(
           `[plugins] ${failedPlugins.length} plugin(s) failed to initialize (${formatPluginFailureSummary(
             failedPlugins,
           )}). Run 'openclaw plugins inspect <id> --runtime --json' for runtime diagnostics, 'openclaw plugins list' for registry state, and restart the Gateway after plugin code or load-path changes.`,
+        );
+      }
+      const blockedHookPluginIds = uniqueValues(
+        registry.blockedHooks
+          .filter((entry) => entry.severity === "error")
+          .map((entry) => entry.pluginId),
+      );
+      if (blockedHookPluginIds.length > 0) {
+        logger.error(
+          `[plugins] hook registrations blocked for ${blockedHookPluginIds.length} plugin(s) (${blockedHookPluginIds.join(", ")}); those handlers will never run. Run '/status plugins' or 'openclaw plugins inspect <id> --runtime --json' for the blocked hook names and the config key that unblocks each one.`,
         );
       }
     }

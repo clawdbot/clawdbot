@@ -84,6 +84,12 @@ export type PluginInspectReport = {
     name: string;
     events: string[];
   }>;
+  /**
+   * Typed hooks this plugin asked for that the registry refused. Only populated
+   * on a runtime-loaded report (`openclaw plugins inspect <id> --runtime`),
+   * because a metadata-only snapshot never attempts registration.
+   */
+  blockedHooks: PluginRegistry["blockedHooks"];
   tools: Array<{
     names: string[];
     optional: boolean;
@@ -410,6 +416,9 @@ function buildPluginInspectRecord(
       optional: entry.optional,
     }));
   const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
+  const blockedHooks = (report.blockedHooks ?? [])
+    .filter((entry) => entry.pluginId === plugin.id)
+    .toSorted((a, b) => a.hookName.localeCompare(b.hookName));
   const policyEntry = entries[normalizePluginPolicyId(plugin.id)];
   const shapeSummary = buildPluginShapeSummary({ plugin, report });
   const shape = shapeSummary.shape;
@@ -485,6 +494,7 @@ function buildPluginInspectRecord(
     capabilities: shapeSummary.capabilities,
     typedHooks,
     customHooks,
+    blockedHooks,
     tools,
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],

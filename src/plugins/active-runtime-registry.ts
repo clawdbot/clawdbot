@@ -79,7 +79,15 @@ export function registryContainsRuntimePluginIds(
     return false;
   }
   for (const [key, value] of Object.entries(registry)) {
-    if (key === "diagnostics" || key === "channelSetups" || !Array.isArray(value)) {
+    // `blockedHooks` records refusals, not registrations: a plugin whose only
+    // entry there contributed nothing to this registry and must not count as
+    // present or loaded.
+    if (
+      key === "diagnostics" ||
+      key === "channelSetups" ||
+      key === "blockedHooks" ||
+      !Array.isArray(value)
+    ) {
       continue;
     }
     for (const entry of value) {

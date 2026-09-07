@@ -15,6 +15,7 @@ import {
   mergeStatusPluginHealthSnapshots,
 } from "./status-plugin-health.js";
 import type {
+  BlockedPluginHookRecord,
   ChannelPluginFailureRecord,
   PluginCompatibilityHealthNotice,
   PluginDiagnosticRecord,
@@ -58,6 +59,18 @@ function normalizeDiagnostic(diagnostic: PluginDiagnosticRecord): PluginDiagnost
     normalized.code = diagnostic.code;
   }
   return normalized;
+}
+
+function normalizeBlockedHook(
+  blocked: import("../plugins/registry-types.js").PluginRegistry["blockedHooks"][number],
+): BlockedPluginHookRecord {
+  return {
+    pluginId: blocked.pluginId,
+    hookName: blocked.hookName,
+    reason: blocked.reason,
+    severity: blocked.severity,
+    message: blocked.message,
+  };
 }
 
 function normalizeCompatibilityNotice(
@@ -172,6 +185,7 @@ export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot
     channelPluginFailures: collectChannelPluginFailures({
       diagnostics,
     }),
+    blockedHooks: (registry?.blockedHooks ?? []).map(normalizeBlockedHook),
     runtimeLoadedPluginIds,
   };
 }

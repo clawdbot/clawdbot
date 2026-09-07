@@ -97,6 +97,36 @@ describe("getLoadedRuntimePluginRegistry", () => {
     ).toBeUndefined();
   });
 
+  it("does not treat blocked hook registrations as loaded plugin records", () => {
+    // blockedHooks records refusals; a plugin whose only entry is a refusal
+    // contributed nothing, so registry reuse must not consider it satisfied.
+    const blockedRegistry = createEmptyPluginRegistry();
+    blockedRegistry.blockedHooks.push({
+      pluginId: "conversation-denied",
+      hookName: "before_prompt_build",
+      reason: "conversation-access-missing",
+      severity: "error",
+      configPath: "plugins.entries.conversation-denied.hooks.allowConversationAccess",
+      message: 'typed hook "before_prompt_build" was NOT registered',
+      source: "/tmp/conversation-denied/index.js",
+    });
+    setActivePluginRegistry(blockedRegistry, "conversation-denied", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: ["conversation-denied"],
+      }),
+    ).toBeUndefined();
+    // The refusal also must not make the registry look non-empty.
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: [],
+      }),
+    ).toBe(blockedRegistry);
+  });
+
   it("does not treat setup-only registrations as loaded plugin records", () => {
     const setupRegistry = createEmptyPluginRegistry();
     setupRegistry.plugins.push({

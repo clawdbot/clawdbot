@@ -303,6 +303,38 @@ type PluginHookRegistration = {
   rootDir?: string;
 };
 
+/**
+ * Why a typed hook registration was refused.
+ *
+ * `conversation-access-missing` is the only *implicit* refusal: the operator
+ * never expressed an opinion, the plugin is non-bundled, and the default deny
+ * silently disables a handler the plugin still believes is live. The other two
+ * are deliberate operator configuration.
+ */
+export type PluginBlockedHookReason =
+  | "conversation-access-missing"
+  | "conversation-access-denied"
+  | "prompt-injection-denied";
+
+/**
+ * A typed hook the registry refused to register. `api.on()` returns void, so a
+ * refusal is invisible to the plugin; recording it here keeps the state
+ * queryable after the startup diagnostics scroll past (see
+ * `openclaw plugins inspect <id> --runtime` and `/status plugins`).
+ */
+type PluginBlockedHookRegistration = {
+  pluginId: string;
+  hookName: import("./types.js").PluginHookName;
+  reason: PluginBlockedHookReason;
+  /** `error` for the implicit refusal, `warn` when the operator chose it. */
+  severity: "warn" | "error";
+  /** Config key the operator sets to change this outcome. */
+  configPath: string;
+  /** Full actionable diagnostic text, shared with the emitted diagnostic. */
+  message: string;
+  source: string;
+};
+
 export type PluginServiceRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -602,6 +634,12 @@ export type PluginRegistry = {
   sessionActions: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
+  /**
+   * Typed hooks the registry refused. Not a registration list: entries here are
+   * hooks that are NOT live, so registry consumers that scan arrays for owning
+   * plugin ids must skip this field the same way they skip `diagnostics`.
+   */
+  blockedHooks: PluginBlockedHookRegistration[];
 };
 
 export type PluginRegistryParams = {

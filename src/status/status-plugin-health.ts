@@ -53,6 +53,19 @@ export type ChannelPluginFailureRecord = {
   source?: string;
 };
 
+/**
+ * A typed hook the plugin registry refused to register. `api.on()` returns void,
+ * so the owning plugin never learns it was refused and keeps behaving as if the
+ * handler is live; this section is where an operator or agent can check.
+ */
+export type BlockedPluginHookRecord = {
+  pluginId: string;
+  hookName: string;
+  reason: string;
+  severity: "warn" | "error";
+  message: string;
+};
+
 export type StatusPluginHealthSnapshot = {
   plugins: PluginHealthRecord[];
   diagnostics: PluginDiagnosticRecord[];
@@ -60,6 +73,10 @@ export type StatusPluginHealthSnapshot = {
   runtimeToolQuarantines?: RuntimeToolQuarantineRecord[];
   compatibilityNotices?: PluginCompatibilityHealthNotice[];
   channelPluginFailures?: ChannelPluginFailureRecord[];
+  // Typed hooks the runtime registry refused. Runtime-only knowledge: the
+  // installed disk scan never attempts registration, so it cannot contribute
+  // here. Absent on compact/hand-built snapshots, where no section renders.
+  blockedHooks?: BlockedPluginHookRecord[];
   // Plugin ids confirmed loaded in the active runtime registry (status "loaded").
   // Lets detailed status separate runtime-loaded plugins from installed/discovered
   // inventory (the disk scan marks config-enabled plugins "loaded" before runtime
@@ -156,6 +173,14 @@ export function mergeStatusPluginHealthSnapshots(
       ...(installed.compatibilityNotices ?? []),
       ...(runtime.compatibilityNotices ?? []),
     ]),
+    // Each entry is one refused registration, not one refused hook: a plugin may
+    // call `api.on()` for the same hook several times (distinct `registrationId`,
+    // priority or trigger eligibility) and every one of those handlers is dead.
+    // Concatenate like the quarantine lists above rather than deduping on
+    // plugin+hook+reason, which collapsed those repeats into a single row and made
+    // this the only consumer that under-counted them — compact status, `openclaw
+    // plugins inspect --runtime` and the startup summary all read the raw records.
+    blockedHooks: [...(installed.blockedHooks ?? []), ...(runtime.blockedHooks ?? [])],
     // Runtime-loaded provenance is a runtime-side fact; the installed disk scan
     // cannot confirm it, so it never contributes here.
     runtimeLoadedPluginIds: runtime.runtimeLoadedPluginIds,
@@ -188,10 +213,29 @@ function shouldSuppressChannelPluginDiagnostic(
   );
 }
 
+function shouldSuppressBlockedHookDiagnostic(
+  diagnostic: PluginDiagnosticRecord,
+  blockedHooks: readonly BlockedPluginHookRecord[],
+): boolean {
+  if (diagnostic.code !== "hook-registration-blocked") {
+    return false;
+  }
+  // Same rule as channel failures: only suppress when the blocked-hook section
+  // actually reports it, so a diagnostic without a matching record still counts.
+  return blockedHooks.some(
+    (blocked) =>
+      blocked.message === diagnostic.message &&
+      (diagnostic.pluginId == null || blocked.pluginId === diagnostic.pluginId),
+  );
+}
+
 function getReportableDiagnostics(snapshot: StatusPluginHealthSnapshot): PluginDiagnosticRecord[] {
   const channelPluginFailures = snapshot.channelPluginFailures ?? [];
+  const blockedHooks = snapshot.blockedHooks ?? [];
   return snapshot.diagnostics.filter(
-    (entry) => !shouldSuppressChannelPluginDiagnostic(entry, channelPluginFailures),
+    (entry) =>
+      !shouldSuppressChannelPluginDiagnostic(entry, channelPluginFailures) &&
+      !shouldSuppressBlockedHookDiagnostic(entry, blockedHooks),
   );
 }
 
@@ -222,6 +266,11 @@ export function formatCompactPluginHealthLine(
   const quarantines = snapshot.contextEngineQuarantines.length;
   const runtimeToolQuarantines = snapshot.runtimeToolQuarantines?.length ?? 0;
   const channelPluginFailures = snapshot.channelPluginFailures?.length ?? 0;
+  // Only the implicit refusal (severity "error") is a problem chip; hooks the
+  // operator deliberately denied are steady state and stay off the compact line.
+  const blockedHookErrors = (snapshot.blockedHooks ?? []).filter(
+    (entry) => entry.severity === "error",
+  ).length;
 
   const parts = [
     loadErrors > 0 ? formatCount(loadErrors, "plugin error") : null,
@@ -230,6 +279,7 @@ export function formatCompactPluginHealthLine(
       ? formatCount(runtimeToolQuarantines, "runtime tool quarantine")
       : null,
     channelPluginFailures > 0 ? formatCount(channelPluginFailures, "channel plugin failure") : null,
+    blockedHookErrors > 0 ? formatCount(blockedHookErrors, "blocked hook") : null,
     dependencyIssues > 0 ? formatCount(dependencyIssues, "dependency issue") : null,
     diagnosticErrors > 0 ? formatCount(diagnosticErrors, "diagnostic error") : null,
   ].filter((part): part is string => Boolean(part));
@@ -306,6 +356,13 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
   );
   const channelPluginFailures = (snapshot.channelPluginFailures ?? []).toSorted((left, right) =>
     byLocale(left.channelId, right.channelId),
+  );
+  // Errors first so the accidental refusals lead, then stable by plugin/hook.
+  const blockedHooks = (snapshot.blockedHooks ?? []).toSorted(
+    (left, right) =>
+      Number(right.severity === "error") - Number(left.severity === "error") ||
+      byLocale(left.pluginId, right.pluginId) ||
+      byLocale(left.hookName, right.hookName),
   );
   const unregisteredMemoryProviders = (
     snapshot.unregisteredMemoryEmbeddingProviders ?? []
@@ -419,6 +476,24 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
         return `- ${entry.channelId}${plugin}${source}: ${entry.message}`;
       }),
     );
+  }
+
+  if (blockedHooks.length > 0) {
+    // The registry refused these registrations and api.on() could not tell the
+    // plugin, so this section is the only post-startup answer to "is any hook of
+    // mine refused?". The full message carries the config path and the remedy.
+    lines.push(
+      `Blocked plugin hooks: ${blockedHooks.length}`,
+      ...blockedHooks
+        .slice(0, 8)
+        .map(
+          (entry) =>
+            `- ${entry.severity.toUpperCase()} ${entry.pluginId} ${entry.hookName} [${entry.reason}]: ${entry.message}`,
+        ),
+    );
+    if (blockedHooks.length > 8) {
+      lines.push(`- +${blockedHooks.length - 8} more blocked hooks`);
+    }
   }
 
   if (dependencyIssues.length > 0) {
