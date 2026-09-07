@@ -89,7 +89,7 @@ importers:
         version: 0.3.0
       '@openclaw/proxyline':
         specifier: 0.3.3
-        version: 0.3.3(undici@8.9.0)
+        version: 0.3.3(undici@8.10.2)
       chalk:
         specifier: 5.6.2
         version: 5.6.2
@@ -190,8 +190,8 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.10.2
+        version: 8.10.2
       web-push:
         specifier: 3.6.7
         version: 3.6.7
@@ -444,8 +444,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.10.2
+        version: 8.10.2
 
   extensions/byteplus:
     devDependencies:
@@ -691,8 +691,8 @@ importers:
         specifier: 1.1.39
         version: 1.1.39
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.10.2
+        version: 8.10.2
       ws:
         specifier: 8.21.0
         version: 8.21.0
@@ -1369,8 +1369,8 @@ importers:
   extensions/qa-matrix:
     dependencies:
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.10.2
+        version: 8.10.2
     devDependencies:
       '@openclaw/matrix':
         specifier: workspace:*
@@ -1554,8 +1554,8 @@ importers:
         specifier: 1.1.39
         version: 1.1.39
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.10.2
+        version: 8.10.2
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -7502,8 +7502,8 @@ packages:
     resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
     engines: {node: '>=20.18.1'}
 
-  undici@8.9.0:
-    resolution: {integrity: sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA==}
+  undici@8.10.2:
+    resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
     engines: {node: '>=22.19.0'}
 
   unhomoglyph@1.0.6:
@@ -9232,9 +9232,9 @@ snapshots:
       jszip: 3.10.1
       tar: 7.5.22
 
-  '@openclaw/proxyline@0.3.3(undici@8.9.0)':
+  '@openclaw/proxyline@0.3.3(undici@8.10.2)':
     dependencies:
-      undici: 8.9.0
+      undici: 8.10.2
 
   '@opentelemetry/api-logs@0.220.0':
     dependencies:
@@ -14020,7 +14020,7 @@ snapshots:
 
   undici@7.29.0: {}
 
-  undici@8.9.0: {}
+  undici@8.10.2: {}
 
   unhomoglyph@1.0.6: {}
 
