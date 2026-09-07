@@ -252,6 +252,7 @@ describe("scripts/pr wrappers", () => {
     const review = readScript("scripts/pr-lib/review.sh");
     const push = readScript("scripts/pr-lib/push.sh");
     const merge = readScript("scripts/pr-lib/merge.sh");
+    const mergeOutcome = readScript("scripts/pr-lib/merge-outcome.sh");
 
     expect(script).toContain('base_json=$(read_pr_view_json "$pr" "baseRefName")');
     expect(common).toContain('gh pr view "$pr" --json "$fields"');
@@ -260,9 +261,11 @@ describe("scripts/pr wrappers", () => {
     expect(push).toContain('gh_plain api graphql --input "$payload_file"');
     expect(push).not.toContain("gh_plain api graphql --input -");
     expect(merge).toContain('gh_plain pr merge "$pr"');
-    expect(merge).toContain('"repos/$repo_nwo/issues/$pr/comments"');
-    expect(merge).toContain("--jq '.html_url // empty'");
-    expect(merge).toContain('git push --force-with-lease="refs/heads/$head_ref:$PREP_HEAD_SHA"');
+    expect(mergeOutcome).toContain('gh_plain api --hostname "$MERGE_REPO_HOST" --method POST');
+    expect(mergeOutcome).toContain("--jq '.html_url // empty'");
+    expect(merge).toContain(
+      'git push --force-with-lease="refs/heads/$MERGE_HEAD_REF:$PREP_HEAD_SHA"',
+    );
   });
 
   itPosix("fails loudly at preflight when ripgrep is unavailable", () => {
@@ -366,6 +369,44 @@ describe("scripts/pr wrappers", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(`<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n`);
   });
+
+  itPosix(
+    "requires an exact receipt and explicit confirmation for completion-only dispatch",
+    () => {
+      const fixture = makeMismatchedWrapperRepo();
+      writeFileSync(
+        join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+        `merge_complete() { printf '<%s>\\n' "$@"; }\nmerge_run() { exit 99; }\n`,
+      );
+      const oid = "a".repeat(40);
+      for (const args of [
+        ["123", oid],
+        ["123", "HEAD", "--confirmed-operator-completion"],
+        ["0123", oid, "--confirmed-operator-completion"],
+        ["123", oid, "--confirmed-operator-recovery"],
+        ["123", oid, "--confirmed-operator-completion", "--auto-merge"],
+      ]) {
+        const result = spawnSync(
+          join(fixture.canonical, "scripts/pr"),
+          ["merge-complete", ...args],
+          {
+            cwd: fixture.canonical,
+            encoding: "utf8",
+            env: fixture.env,
+          },
+        );
+        expect(result.status, result.stdout + result.stderr).toBe(2);
+        expect(result.stdout).toContain("Usage:");
+      }
+      const result = spawnSync(
+        join(fixture.canonical, "scripts/pr"),
+        ["merge-complete", "123", oid, "--confirmed-operator-completion"],
+        { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toBe(`<123>\n<${oid}>\n`);
+    },
+  );
 
   itPosix("rejects ambiguous body flags and keeps recovery confirmation mandatory", () => {
     const fixture = makeMismatchedWrapperRepo();
