@@ -73,7 +73,7 @@ You only need to override `models.providers.qianfan` when you need a custom base
 
 ## Config example
 
-This example explicitly selects the current DeepSeek flagship instead of the onboarding compatibility default.
+This example explicitly selects the current DeepSeek flagship, which is also the model onboarding sets as the default.
 
 ```json5
 {

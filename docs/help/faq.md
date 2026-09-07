@@ -818,7 +818,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?">
-    Yes: nodes are the first-class way to reach your laptop from a remote Gateway and unlock more than shell access. The Gateway runs on macOS/Linux (Windows via WSL2) and is lightweight (a small VPS or Raspberry Pi-class box is fine; 4 GB RAM is plenty), so a common setup is an always-on host plus your laptop as a node.
+    Yes: nodes are the first-class way to reach your laptop from a remote Gateway and unlock more than shell access. The Gateway runs on macOS, Linux, and Windows (native or WSL2) and is lightweight (a small VPS or Raspberry Pi-class box is fine; 4 GB RAM is plenty), so a common setup is an always-on host plus your laptop as a node.
 
     - **No inbound SSH required** - nodes connect out to the Gateway WebSocket via device pairing.
     - **Safer execution controls** - `system.run` is gated by node allowlists/approvals on that laptop.
@@ -897,7 +897,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="Should I install on a second laptop or just add a node?">
-    For **local tools only** (screen/camera/exec) on the second laptop, add it as a **node** - one Gateway, no duplicated config. Local node tools are currently macOS-only. Install a second Gateway only for **hard isolation** or two fully separate bots.
+    For **local tools only** (screen/camera/exec) on the second laptop, add it as a **node** - one Gateway, no duplicated config. The local tools a node exposes depend on its platform. See [Nodes](/nodes) for the per-platform defaults. Install a second Gateway only for **hard isolation** or two fully separate bots.
 
     Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Multiple gateways](/gateway/multiple-gateways).
 

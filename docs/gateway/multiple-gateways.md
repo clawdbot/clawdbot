@@ -31,7 +31,7 @@ During `openclaw --profile rescue onboard`:
 
 - Use a separate Telegram bot token, dedicated to the rescue account (easy to keep operator-only, independent from the main bot's channel/app install, and a simple DM-based recovery path).
 - Keep the `rescue` profile name.
-- Use a base port at least 20 higher than the main bot.
+- Use a base port at least 120 higher than the main bot.
 - Accept the default rescue workspace unless you already manage one yourself.
 
 ### What `--profile rescue onboard` changes
