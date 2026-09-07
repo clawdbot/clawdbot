@@ -275,6 +275,32 @@ describe("chunkDiscordText", () => {
     expect(expectDefined(chunks[1], "second Discord chunk").trimStart().startsWith("_")).toBe(true);
   });
 
+  it.each([
+    ["Reasoning:", "_hello_", "emphasis"],
+    ["Thinking...", "_hello_", "emphasis"],
+    ["Reasoning:", "__hello__", "strong"],
+    ["Thinking...", "__hello__", "strong"],
+  ])(
+    "restores %s %s formatting when trailing blank lines leave one chunk",
+    (prefix, wrapped, type) => {
+      const chunks = chunkDiscordText(`${prefix}\n${wrapped}${"\n".repeat(17)}`);
+      expect(chunks).toHaveLength(1);
+      const nodes = fromMarkdown(chunks[0] ?? "").children;
+      expect(nodes).toEqual([
+        expect.objectContaining({
+          type: "paragraph",
+          children: [
+            expect.objectContaining({ type: "text", value: `${prefix}\n` }),
+            expect.objectContaining({
+              type,
+              children: [expect.objectContaining({ type: "text", value: "hello" })],
+            }),
+          ],
+        }),
+      ]);
+    },
+  );
+
   it("keeps reasoning italic markers outside synthetic closing fences", () => {
     const body = Array.from({ length: 12 }, (_, i) => `code-${i}`).join("\n");
     const chunks = chunkDiscordText(`Reasoning:\n_Intro\n\`\`\`txt\n${body}\n\`\`\`_`, {

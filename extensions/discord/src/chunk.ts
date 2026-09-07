@@ -245,11 +245,9 @@ function leadingCodePrefixEnd(body: string): number {
 // When Discord chunking splits the message, we close italics at the end of
 // each chunk and reopen at the start of the next. Code-leading continuations reopen after code.
 function rebalanceReasoningItalics(source: string, chunks: string[], maxChars: number): string[] {
-  if (
-    chunks.length <= 1 ||
-    maxChars < MIN_REASONING_ITALICS_CHUNK_CHARS ||
-    !hasReasoningItalics(source)
-  ) {
+  // Whitespace-only chunks may be discarded after the outer delimiter was removed.
+  // Restore it even when splitting leaves just one nonempty message.
+  if (maxChars < MIN_REASONING_ITALICS_CHUNK_CHARS || !hasReasoningItalics(source)) {
     return chunks;
   }
   return chunks.map((chunk, index) => {
@@ -267,12 +265,15 @@ function rebalanceReasoningItalics(source: string, chunks: string[], maxChars: n
         body = `${body.slice(0, body.length - content.length)}_${content}`;
       }
     }
+    // The final source delimiter was removed before splitting, even if content ends in `_`.
     if (
-      !body.trimEnd().endsWith("_") &&
+      (index === chunks.length - 1 || !body.trimEnd().endsWith("_")) &&
       /^(?:_|(?:Reasoning:|Thinking\.{0,3})\n+_)/u.test(body.trimStart())
     ) {
       // A closing italic marker must not turn a generated fence closer into code content.
-      body += parseFenceLine(body.split("\n").at(-1) ?? "") ? "\n_" : "_";
+      const content = body.trimEnd();
+      const closing = parseFenceLine(content.split("\n").at(-1) ?? "") ? "\n_" : "_";
+      body = content + closing + body.slice(content.length);
     }
     return prefix + body;
   });
