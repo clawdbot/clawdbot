@@ -143,9 +143,10 @@ describe("broadcast dispatch", () => {
     path: "/tmp/inbound-clip.mp4",
     contentType: "video/mp4",
   });
+  const mockCurrentConfig = vi.fn(() => createBroadcastConfig());
   const runtimeStub = {
     config: {
-      current: vi.fn(() => createBroadcastConfig()),
+      current: mockCurrentConfig,
     },
     system: {
       enqueueSystemEvent: vi.fn(),
@@ -225,7 +226,7 @@ describe("broadcast dispatch", () => {
   } as unknown as PluginRuntime;
 
   async function handleFeishuMessage(params: Parameters<typeof handleFeishuMessageImpl>[0]) {
-    runtimeStub.config.current.mockReturnValue(params.cfg);
+    mockCurrentConfig.mockReturnValue(params.cfg);
     await handleFeishuMessageImpl(params);
   }
 
