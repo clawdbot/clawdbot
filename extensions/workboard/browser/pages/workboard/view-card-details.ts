@@ -3,6 +3,7 @@ import { renderDashboard, renderDialog } from "../../components/host-components.
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { renderLinkedPlainText } from "../../lib/linkify-text.ts";
 import {
   addWorkboardCardComment,
   getWorkboardDependencyState,
@@ -328,8 +329,8 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
             card.notes
               ? html`
                   <section class="workboard-detail__section">
-                    <h3>${t("workboard.fieldNotes")}</h3>
-                    <p>${card.notes}</p>
+                  <h3>${t("workboard.fieldNotes")}</h3>
+                  <p>${renderLinkedPlainText(card.notes)}</p>
                   </section>
                 `
               : nothing
@@ -352,7 +353,9 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
               comments.length
                 ? html`
                     <ol class="workboard-detail__list">
-                      ${comments.slice(-6).map((comment) => html`<li>${comment.body}</li>`)}
+                      ${comments
+                        .slice(-6)
+                        .map((comment) => html`<li>${renderLinkedPlainText(comment.body)}</li>`)}
                     </ol>
                   `
                 : html`<p>${t("workboard.detailNoNotes")}</p>`

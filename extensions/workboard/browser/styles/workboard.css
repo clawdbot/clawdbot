@@ -840,6 +840,13 @@
   overflow: hidden;
 }
 
+.workboard-card p a,
+.workboard-detail__section a {
+  color: var(--accent);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
 .workboard-card__top,
 .workboard-card__meta {
   justify-content: space-between;

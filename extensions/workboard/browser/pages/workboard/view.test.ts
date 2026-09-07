@@ -556,6 +556,43 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-health")?.textContent).toContain("running");
   });
 
+  it("turns note and comment URLs into external links", () => {
+    const { state, container, renderView } = createWorkboardView();
+    state.cards = [
+      createWorkboardCard({
+        title: "Research competitors",
+        notes: "See [Anrop](https://anrop.no/) and https://www.smuv.no/.",
+        metadata: {
+          comments: [{ id: "comment-1", body: "Also https://www.ringli.no/.", createdAt: 2 }],
+        },
+      }),
+    ];
+    renderView();
+
+    const compactLink = container.querySelector(".workboard-card p a");
+    expect(compactLink?.textContent).toBe("Anrop");
+    expect(compactLink?.getAttribute("href")).toBe("https://anrop.no/");
+    expect(compactLink?.getAttribute("target")).toBe("_blank");
+    expect(compactLink?.getAttribute("rel")).toBe("noopener noreferrer");
+
+    compactLink?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(state.detailCardId).toBeNull();
+
+    state.detailCardId = "card-1";
+    renderView();
+
+    const noteLinks = [
+      ...container.querySelectorAll<HTMLAnchorElement>(".workboard-detail__section p a"),
+    ];
+    expect(noteLinks.map((link) => link.getAttribute("href"))).toEqual([
+      "https://anrop.no/",
+      "https://www.smuv.no/",
+    ]);
+    expect(container.querySelector(".workboard-detail__list a")?.getAttribute("href")).toBe(
+      "https://www.ringli.no/",
+    );
+  });
+
   it("distinguishes the dragged card from its available drop columns", () => {
     const { state, container, renderView } = createWorkboardView({ canWrite: true });
     state.cards = [
