@@ -16,6 +16,7 @@ import {
 import {
   clearActiveEmbeddedRun,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  resolveEmbeddedAgentSessionProgressState,
   setActiveEmbeddedRun,
 } from "../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle, testing } from "../embedded-agent-runner/runs.test-support.js";
@@ -139,6 +140,54 @@ afterEach(() => {
 });
 
 describe("host-prepared embedded tool authority", () => {
+  it("captures only a matching admitted owner for legacy active-run registration", async () => {
+    const params = {
+      ...attempt,
+      agentId: "ops",
+      sessionKey: "global",
+      sandboxSessionKey: "global",
+    };
+    const handle = createEmbeddedRunHandle({ runId: params.runId });
+    const state = (agentId: string) =>
+      resolveEmbeddedAgentSessionProgressState(params.sessionId, {
+        agentId,
+        defaultAgentId: "main",
+      });
+    const admission = prepareAgentRunAdmission({
+      cfg: { agents: { list: [{ id: "main", default: true }, { id: "ops" }] } },
+      operationalRunInstance: createOperationalRunInstanceRef(params.runId),
+      facts: {
+        agentId: params.agentId,
+        runId: params.runId,
+        ingress: { kind: "system", state: "present", boundary: "tool-authority-test" },
+      },
+    });
+    try {
+      await withGatewayToolCallerIdentity({ agentId: "ops", sessionKey: "global" }, () => {
+        setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+        expect(state("ops")).toBeUndefined();
+      });
+      clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+      const admittedRunContext = await admission.admit("embedded", "authority-test");
+      await withPreparedEmbeddedRunToolAuthority(
+        { admittedRunContext },
+        params,
+        undefined,
+        async (prepared) => {
+          handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+          setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+          expect(state("ops")).toBe("running");
+          expect(state("main")).toBeUndefined();
+        },
+      );
+      expect(state("ops")).toBe("running");
+      expect(state("main")).toBeUndefined();
+    } finally {
+      clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+      admission.close();
+    }
+  });
+
   it.each(["claim", "wrapper", "lifecycle", "persistence"] as const)(
     "refuses early native-question answers after creator %s closure",
     async (closure) => {

@@ -926,6 +926,11 @@ describe("sanitizeRenderableText", () => {
 });
 
 describe("Markdown display safety", () => {
+  it("preserves layout controls while removing neighboring C0, DEL, and C1 controls", () => {
+    const input = "a\u0008\tb\u000b\nc\u000c\rd\u000e\u001f\u007f\u0080\u009f";
+    expect(sanitizeMarkdownSource(input)).toBe("a\tb\nc\rd");
+  });
+
   it("strips hostile controls from source without adding directional isolates", () => {
     const input = "\u202e# مرحبا\u202c\n\u009b31m> שלום\u009b0m";
     const sanitized = sanitizeMarkdownSource(input);
@@ -954,12 +959,19 @@ describe("Markdown display safety", () => {
 describe("isTerminalSafeAutocompleteValue", () => {
   it("accepts ordinary Unicode and rejects terminal or bidi controls", () => {
     expect(isTerminalSafeAutocompleteValue("/tmp/مرحبا-東京.txt")).toBe(true);
+    expect(isTerminalSafeAutocompleteValue("👩🏽‍💻/cafe\u0301.txt")).toBe(true);
     for (const value of [
       "bad\x1b[31m",
       "bad\tvalue",
+      "bad\rvalue",
+      "bad\nvalue",
+      "bad\u007fvalue",
+      "bad\u0085value",
       "bad\u009bvalue",
       "bad\u200evalue",
       "bad\u202evalue",
+      "bad\u2066value",
+      "bad\u2069value",
     ]) {
       expect(isTerminalSafeAutocompleteValue(value)).toBe(false);
     }

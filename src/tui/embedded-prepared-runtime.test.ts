@@ -19,7 +19,7 @@ let state: OpenClawTestState;
 describe("EmbeddedPreparedModelRuntimeHost", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
   });
 
   it("reuses its configured publication across two actual run admissions", async () => {

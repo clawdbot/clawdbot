@@ -9,9 +9,9 @@ import type { NodeListNode } from "../shared/node-list-types.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
-import { boundCodeModeError, boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
+import type { CodeModeReplyLease } from "./code-mode-program-data.js";
+import type { PendingBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -207,15 +207,16 @@ export async function runBridgeRequest(params: {
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
   codeModeRunId: string;
-  maxOutputBytes: number;
+  reply: CodeModeReplyLease;
   remainingMs: number;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
-}): Promise<SettledBridgeRequest> {
+}): Promise<void> {
   const catalogProjection = params.catalogProjection;
   try {
+    params.signal?.throwIfAborted();
     const values = Array.isArray(params.request.args) ? params.request.args : [];
     let value: unknown;
     switch (params.request.method) {
@@ -403,23 +404,11 @@ export async function runBridgeRequest(params: {
         break;
       }
     }
-    value = boundCodeModeValue(value, params.maxOutputBytes);
-    // Search must remain a callable-name array; a truncation marker erases discovery.
-    if (params.request.method === "search" && !Array.isArray(value)) {
-      throw new ToolInputError(
-        "Search results exceed the output budget. Narrow the query or lower the limit.",
-      );
-    }
-    return { id: params.request.id, ok: true, value };
+    params.reply.settle(true, value);
   } catch (error) {
-    const boundedError = boundCodeModeError(
+    params.reply.settle(
+      false,
       redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
-      params.maxOutputBytes,
     );
-    return {
-      id: params.request.id,
-      ok: false,
-      error: boundedError,
-    };
   }
 }

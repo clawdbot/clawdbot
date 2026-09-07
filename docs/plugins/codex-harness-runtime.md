@@ -18,6 +18,12 @@ continuation, and native compaction. OpenClaw owns channel routing, session
 files, visible message delivery, OpenClaw dynamic tools, approvals, media
 delivery, and a transcript mirror around that boundary.
 
+Successful `/btw` side questions report aggregate usage to reply usage hooks and,
+when diagnostics are enabled, `model.usage` events. Totals include cache reads,
+cache writes, and every completed model call in the side thread's native tool
+loop; replayed response IDs are counted once. The visible reply still contains
+only the last answer, and the main session's usage and context snapshot stay unchanged.
+
 For native connected apps, Codex also owns the final per-thread app and tool
 policy. OpenClaw caches a runtime-and-workspace-scoped `plugin/installed`
 snapshot, reads exact configured plugin details, provisionally admits only

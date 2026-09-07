@@ -25,8 +25,8 @@ import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-st
 import { splitSystemPromptCacheBoundary } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import {
-  supportsBedrockModelPromptCaching,
-  supportsBedrockPromptCaching,
+  resolveBedrockPromptCachePolicy,
+  supportsBedrockClaudePromptCaching,
 } from "./bedrock-options.js";
 import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
 import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
@@ -209,14 +209,6 @@ function extractRegionFromArn(arn: string): string | undefined {
 }
 
 /**
- * Check if a resolved foundation model ARN supports prompt caching using the
- * same matcher OpenClaw uses for direct model IDs.
- */
-function resolvedModelSupportsCaching(modelArn: string): boolean {
-  return supportsBedrockPromptCaching(modelArn);
-}
-
-/**
  * Resolve the underlying foundation model for an application inference profile
  * via GetInferenceProfile. Results are cached so we only call the API once per
  * profile ARN. Returns traits needed for request shaping when the model id is
@@ -259,7 +251,8 @@ async function resolveAppProfileTraits(
     const modelArns = models.map((model) => model.modelArn ?? "");
     const traits = {
       cacheEligible:
-        models.length > 0 && modelArns.every((modelArn) => resolvedModelSupportsCaching(modelArn)),
+        models.length > 0 &&
+        modelArns.every((modelArn) => supportsBedrockClaudePromptCaching(modelArn)),
       omitTemperature: modelArns.some(isOpus47OrNewerBedrockModelRef),
     };
     appProfileTraitsCache.set(modelId, traits);
@@ -305,7 +298,7 @@ function injectBedrockCachePoints(
   context: Context,
   model: Model,
 ): void {
-  if (!cacheRetention || cacheRetention === "none" || supportsBedrockModelPromptCaching(model)) {
+  if (!cacheRetention || cacheRetention === "none" || resolveBedrockPromptCachePolicy(model)) {
     return;
   }
   const point = makeCachePoint(cacheRetention);
@@ -401,6 +394,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   }) => {
     const modelRef = { id: modelId, params: model?.params };
     if (
+      resolveBedrockPromptCachePolicy(modelRef) === "nova" ||
       isAnthropicBedrockModel(modelId) ||
       resolveClaudeModelIdentity(modelRef).startsWith("claude-")
     ) {
@@ -573,7 +567,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         extractRegionFromBaseUrl(model?.baseUrl) ??
         currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =
-        isBedrockAppInferenceProfile(modelId) && !supportsBedrockPromptCaching(modelId);
+        isBedrockAppInferenceProfile(modelId) && !supportsBedrockClaudePromptCaching(modelId);
       const shouldOmitTemperature =
         opus47OrNewer || fable5 || isLatestAdaptiveBedrockModelRef(modelId, model?.params);
       const shouldPatchMaxThinking = supportsNativeMax && thinkingLevel === "max";

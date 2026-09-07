@@ -134,7 +134,7 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     }
   });
 
-  it("releases code-block observations when navigation removes the final transcript", async () => {
+  it("releases hidden transcript observations and resumes them on the retained code", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -196,6 +196,7 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await expect.poll(async () => (await observations()).connected).toBe(2);
+      const code = await page.locator(".chat-thread code").elementHandle();
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
       await sidebar
@@ -204,10 +205,22 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
         .click();
       await page.locator('.settings-sidebar__item[href="/logs"]').click();
       await page.locator("openclaw-logs-page").waitFor({ state: "visible" });
-      expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
+      await page.locator("openclaw-chat-pane").waitFor({ state: "hidden" });
+      expect(await code?.evaluate((element) => element.isConnected)).toBe(true);
       // A page reload would discard the probe too and cannot prove in-app teardown.
       expect((await observations()).observed).toBeGreaterThanOrEqual(2);
+      await expect.poll(async () => (await observations()).connected).toBe(0);
       await expect.poll(async () => (await observations()).detached).toBe(0);
+      await page.goBack();
+      await page.goBack();
+      await page.locator(".chat-thread code").waitFor({ state: "visible" });
+      expect(
+        await page
+          .locator(".chat-thread code")
+          .evaluate((element, previous) => element === previous, code),
+      ).toBe(true);
+      await expect.poll(async () => (await observations()).connected).toBe(2);
+      expect((await observations()).detached).toBe(0);
     } finally {
       await context.close();
     }

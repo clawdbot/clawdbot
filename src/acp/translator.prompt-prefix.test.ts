@@ -6,8 +6,11 @@ import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:main";
@@ -52,7 +55,7 @@ describe("acp prompt cwd prefix", () => {
     });
 
     const requestSpy = createStopAfterSendSpy();
-    const agent = new AcpGatewayAgent(
+    const agent = createAcpGatewayAgent(
       createAcpConnection(),
       createAcpGateway(requestSpy as unknown as GatewayClient["request"]),
       {
@@ -145,7 +148,7 @@ describe("acp prompt cwd prefix", () => {
       sessionKey: TEST_SESSION_KEY,
       cwd: path.join(os.homedir(), "openclaw-test"),
     });
-    const agent = new AcpGatewayAgent(
+    const agent = createAcpGatewayAgent(
       createAcpConnection(),
       createAcpGateway(requestSpy as unknown as GatewayClient["request"]),
       {

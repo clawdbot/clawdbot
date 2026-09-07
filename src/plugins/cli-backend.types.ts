@@ -226,6 +226,8 @@ export type CliBackendLiveSessionHandle = {
 export type CliBackendLiveSessionCapability = {
   fingerprint: string;
   current(): CliBackendLiveSessionHandle | undefined;
+  /** Retires the current process and awaits host-owned cleanup before replacement. */
+  restart(): Promise<void>;
   register(handle: CliBackendLiveSessionHandle): void;
   /** Rebinds this exact admitted turn to the registered process's stable capture. */
   activate(handle: CliBackendLiveSessionHandle): void;

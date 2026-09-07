@@ -5,14 +5,16 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildAgentMainSessionKey,
+  DEFAULT_MAIN_KEY,
+  normalizeMainKey,
+  parseAgentSessionKeyParts,
+  type ParsedAgentSessionKey,
+} from "@openclaw/session-url-contract";
 
-type ParsedAgentSessionKey = {
-  agentId: string;
-  rest: string;
-};
-
+export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY };
 export const DEFAULT_AGENT_ID = "main";
-export const DEFAULT_MAIN_KEY = "main";
 
 export type UiSessionDefaultsHost = {
   assistantAgentId?: string | null;
@@ -32,12 +34,11 @@ export { normalizeAgentId };
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const parts = normalizeLowercaseStringOrEmpty(sessionKey).split(":").filter(Boolean);
-  if (parts.length < 3 || parts[0] !== "agent") {
-    return null;
-  }
-  const agentId = normalizeOptionalString(parts[1]);
-  return agentId ? { agentId, rest: parts.slice(2).join(":") } : null;
+  // Display ownership historically tolerates empty segments and folds the tail.
+  // Store identities and URL literals apply their own stricter policies.
+  return parseAgentSessionKeyParts(
+    normalizeLowercaseStringOrEmpty(sessionKey).split(":").filter(Boolean).join(":"),
+  );
 }
 
 export function parseSessionKeyParts(
@@ -62,10 +63,6 @@ export function isPinnableUiSessionRow(row: {
   spawnedBy?: string | null;
 }): boolean {
   return resolveUiSessionNavigationParentKey(row) == null && !isSubagentSessionKey(row.key);
-}
-
-function normalizeMainKey(value: string | undefined | null): string {
-  return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
 }
 
 export function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | null): string {
@@ -320,15 +317,6 @@ export function uiSessionRowMatchesSelectedChat(
     rowKey,
     rowAgentId ?? (isUiGlobalSessionKey(rowKey) ? selected?.agentId : undefined),
   );
-}
-
-export function buildAgentMainSessionKey(params: {
-  agentId: string;
-  mainKey?: string | undefined;
-}): string {
-  const agentId = normalizeAgentId(params.agentId);
-  const mainKey = normalizeMainKey(params.mainKey);
-  return `agent:${agentId}:${mainKey}`;
 }
 
 export function normalizeDefaultMainSessionAliasForUi(

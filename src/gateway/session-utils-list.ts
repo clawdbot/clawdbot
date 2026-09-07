@@ -214,16 +214,18 @@ function filterSessionEntries(params: {
   const selectedProfileId = profileReference?.value;
 
   const candidateEntries = visibleEntries.filter(([key, entry]) => {
+    const target = params.targetsBySessionKey?.get(key);
+    const storeKey = target?.storeKey ?? key;
     if (
       isCronRunSessionKey(key) ||
-      (!includeGlobal && key === "global") ||
-      (!includeUnknown && key === "unknown")
+      (!includeGlobal && storeKey === "global") ||
+      (!includeUnknown && storeKey === "unknown")
     ) {
       return false;
     }
-    if (agentId && key !== "global") {
-      const parsed = parseAgentSessionKey(key);
-      if (!parsed || normalizeAgentId(parsed.agentId) !== agentId) {
+    if (agentId && storeKey !== "global") {
+      const ownerAgentId = target?.storeKey ? target.agentId : parseAgentSessionKey(key)?.agentId;
+      if (!ownerAgentId || normalizeAgentId(ownerAgentId) !== agentId) {
         return false;
       }
     }
@@ -231,7 +233,7 @@ function filterSessionEntries(params: {
       return false;
     }
     if (spawnedBy) {
-      if (key === "unknown" || key === "global") {
+      if (storeKey === "unknown" || storeKey === "global") {
         return false;
       }
       const filterRowContext = resolveSessionListRowContext(params);
@@ -476,7 +478,11 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
   const storeChildSessionsByKey = buildStoreChildSessionIndex({
     store,
-    keys: selection.entries.map(([key]) => key),
+    keys: [
+      ...new Set(
+        selection.entries.map(([key]) => params.targetsBySessionKey.get(key)?.storeKey ?? key),
+      ),
+    ],
     now,
     subagentRuns: usePreparedChildReads ? sharedRowContext?.subagentRuns : undefined,
     excludedChildKeys: filteredSessionKeys,
@@ -590,12 +596,13 @@ export async function listSessionsFromStoreAsync(
         if (!entry.sessionId || (!list.includeDerivedTitles && !list.includeLastMessage)) {
           return [];
         }
+        const target = expectDefined(targetsBySessionKey.get(key), "transcript row target");
         return [
           {
-            ...expectDefined(targetsBySessionKey.get(key), "transcript row target").storeTarget,
+            ...target.storeTarget,
             sessionEntry: entry,
             sessionId: entry.sessionId,
-            sessionKey: key,
+            sessionKey: target.storeKey ?? key,
           },
         ];
       });
@@ -609,14 +616,15 @@ export async function listSessionsFromStoreAsync(
     let transcriptFieldIndex = 0;
     for (let i = 0; i < list.entries.length; i++) {
       const [key, entry] = expectDefined(list.entries[i], "entries entry at i");
+      const target = expectDefined(targetsBySessionKey.get(key), "session row owner");
       const includeTranscriptFields = i < list.transcriptFieldRows;
       const row = buildGatewaySessionRow({
         cfg,
-        storePath: list.storePath,
+        storePath: target.storeKey ? target.storeTarget.storePath : list.storePath,
         store,
-        key,
+        key: target.storeKey ?? key,
         entry,
-        agentId: expectDefined(targetsBySessionKey.get(key), "session row owner").agentId,
+        agentId: target.agentId,
         modelCatalog: params.modelCatalog,
         now: list.now,
         includeDerivedTitles: false,
@@ -627,6 +635,7 @@ export async function listSessionsFromStoreAsync(
         skipTranscriptUsageFallback: true,
         lightweightListRow: true,
       });
+      row.key = key;
       if (
         entry?.sessionId &&
         includeTranscriptFields &&

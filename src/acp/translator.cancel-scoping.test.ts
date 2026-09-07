@@ -11,8 +11,12 @@ import { describe, expect, it, type Mock, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import type { AcpGatewayAgent } from "./translator.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 type Harness = {
   agent: AcpGatewayAgent;
@@ -85,7 +89,7 @@ function createHarness(
     });
   }
 
-  const agent = new AcpGatewayAgent(
+  const agent = createAcpGatewayAgent(
     connection,
     createAcpGateway(requestSpy as unknown as GatewayClient["request"]),
     { sessionStore, ...options },

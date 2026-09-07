@@ -134,10 +134,29 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     }
   });
 
+  it.each([
+    "429 Too Many Requests: subscription usage limit reached",
+    "429 weekly usage limit exhausted; Please try again in 120s",
+    "429 daily request limit reached",
+  ])("leaves exhausted usage windows to profile failover: %s", async (message) => {
+    const controller = createController(vi.fn(async () => false));
+    const onRetry = vi.fn();
+    await expect(
+      controller.maybeRetryTransient({ reason: "rate_limit", message, onRetry }),
+    ).resolves.toBe(false);
+    expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(controller.transientRetryCount).toBe(0);
+  });
+
   it("honors a rate-limit retry floor beyond the non-rate-limit time window", async () => {
     const controller = createController(vi.fn(async () => false));
     await expect(
-      controller.maybeRetryTransient({ reason: "rate_limit", retryAfterMs: 120000 }),
+      controller.maybeRetryTransient({
+        reason: "rate_limit",
+        message: "429 Too Many Requests: Please try again in 120s",
+        retryAfterMs: 120000,
+      }),
     ).resolves.toBe(true);
     expect(mocks.sleepWithAbort).toHaveBeenCalledWith(120000, undefined);
   });

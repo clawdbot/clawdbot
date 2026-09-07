@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
@@ -16,7 +16,7 @@ import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/pa
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sanitizeTriageUpdateFailure } from "../commands/triage-update.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -26,7 +26,7 @@ import {
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import type { PackageUpdateTransaction } from "../infra/package-update-steps.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { isBetaTag } from "../infra/update-channels.js";
@@ -359,7 +359,7 @@ vi.mock("../process/exec.js", () => ({
   // Retain real rehearsal config projection and drift checks in this CLI fixture.
   runCommandBuffered: async () => ({
     code: 0,
-    stdout: Buffer.from("[]"),
+    stdout: Buffer.from(JSON.stringify({ versions: [], pluginPaths: {} })),
     stderr: Buffer.alloc(0),
   }),
   runCommandWithTimeout: vi.fn(),
@@ -1384,6 +1384,33 @@ describe("update-cli", () => {
     runtimeConfig: config,
     ...overrides,
   });
+
+  const useFileBackedConfig = async (): Promise<void> => {
+    const configPath = resolveConfigPath();
+    const previous = await fs.readFile(configPath, "utf8").catch((error: unknown) => {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+      return undefined;
+    });
+    onTestFinished(async () => {
+      if (previous === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previous);
+      }
+    });
+    const raw = "{}\n";
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, raw, { mode: 0o600 });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+      configSnapshot(baseConfig, {
+        path: configPath,
+        raw,
+        hash: createHash("sha256").update(raw).digest("hex"),
+      }),
+    );
+  };
 
   const stableConfig = (overrides: Omit<OpenClawConfig, "update"> = {}): OpenClawConfig => ({
     update: { channel: "stable" },
@@ -6731,6 +6758,7 @@ describe("update-cli", () => {
   it.each(["verification", "lifecycle", "shim swap"] as const)(
     "gates old Gateway recovery at the swap boundary after staged npm %s failure",
     async (failure) => {
+      await useFileBackedConfig();
       const tempDir = tempDirs.make("openclaw-update-staged-fail-");
       const prefix = path.join(tempDir, "prefix");
       const nodeModules = path.join(prefix, "lib", "node_modules");
@@ -8363,6 +8391,7 @@ describe("update-cli", () => {
   );
 
   it("keeps Windows Scheduled Task autostart disabled after unverified lifecycle failure", async () => {
+    await useFileBackedConfig();
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const root = await mockPackageInstallAtCaseDir("openclaw-update-recovery-failure");
     primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
@@ -8400,6 +8429,7 @@ describe("update-cli", () => {
   });
 
   it("does not re-enable Windows task autostart on interruption during package lifecycle", async () => {
+    await useFileBackedConfig();
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const processOnSpy = vi.spyOn(process, "on");
     const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);

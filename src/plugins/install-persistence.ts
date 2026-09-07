@@ -431,17 +431,17 @@ function resolveReplacedManagedInstallRemoval(params: {
   return plan.directoryRemoval;
 }
 
-function prepareConfigForDisabledInstall(config: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const entry = config.plugins?.entries?.[pluginId];
+export function prepareConfigForDisabledInstall(cfg: OpenClawConfig, id: string): OpenClawConfig {
+  const entry = cfg.plugins?.entries?.[id];
   const policy = isRecord(entry) ? { ...entry } : {};
   delete policy.config;
   return {
-    ...config,
+    ...cfg,
     plugins: {
-      ...config.plugins,
+      ...cfg.plugins,
       entries: {
-        ...config.plugins?.entries,
-        [pluginId]: { ...policy, enabled: false },
+        ...cfg.plugins?.entries,
+        [id]: { ...policy, enabled: false },
       },
     },
   };

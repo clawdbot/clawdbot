@@ -64,7 +64,7 @@ Codex id list.
 That makes the Codex debugging loop short: notice bad behavior in a channel,
 run `/diagnostics`, approve once, share the report, then run the printed
 `codex resume <thread-id>` command locally if you want to inspect the thread
-yourself. See [Codex harness](/plugins/codex-harness#inspect-codex-threads-locally).
+yourself. See [Codex harness](/plugins/codex-harness/commands#inspect-codex-threads-locally).
 
 ## What the export contains
 
@@ -237,6 +237,6 @@ file-system scan or writing a pre-OOM snapshot.
 
 - [Health checks](/gateway/health)
 - [Gateway CLI](/cli/gateway#gateway-diagnostics-export)
-- [Gateway protocol](/gateway/protocol#rpc-method-families)
+- [Gateway protocol](/gateway/protocol/rpc-methods#rpc-method-families)
 - [Logging](/logging)
 - [OpenTelemetry export](/gateway/opentelemetry) - separate flow for streaming diagnostics to a collector

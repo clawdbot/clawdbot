@@ -309,6 +309,20 @@ describe("cacheRetention default behavior", () => {
     ).toBe("long");
   });
 
+  it.each([undefined, "short", "long", "none"] as const)(
+    "preserves %s retention for the Bedrock Converse policy owner",
+    (cacheRetention) => {
+      expect(
+        resolveCacheRetention(
+          { cacheRetention },
+          "amazon-bedrock",
+          "bedrock-converse-stream",
+          "amazon.nova-micro-v1:0",
+        ),
+      ).toBe(cacheRetention);
+    },
+  );
+
   it("warns instead of creating an undocumented cacheRetention alias", () => {
     applyAndExpectWrapped({
       cfg: {

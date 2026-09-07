@@ -4,9 +4,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { listUpdateRuns } from "../infra/update-run-ledger.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import {
+  formatCliProcessFailure,
+  runCliProcessChild,
+  waitForCliProcessStderrMarker,
+} from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fixture = fileURLToPath(
@@ -86,8 +91,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         "dev",
         ...(scenario === "human-recovery-plugin-error" ? [] : ["--yes"]),
         "--no-restart",
-        "--timeout",
-        blockedPhase || scenario === "borrowed-phase" ? "1" : "9",
+        ...(blockedPhase ? [] : ["--timeout", scenario === "borrowed-phase" ? "1" : "9"]),
         ...(json && scenario !== "inherited-json" ? ["--json"] : []),
       ];
       const readRun = () =>
@@ -100,27 +104,23 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
                 child: import("node:child_process").ChildProcessWithoutNullStreams,
               ) => {
                 child.stdin.end();
-                await new Promise<void>((resolve, reject) => {
-                  let stderr = "";
-                  const onData = (chunk: string) => {
-                    stderr += chunk;
-                    if (!stderr.includes("fixture configSnapshot entered")) {
-                      return;
-                    }
-                    child.stderr.off("data", onData);
-                    try {
-                      observedPhaseStart = readRun();
-                      resolve();
-                    } catch (error) {
-                      reject(new Error("Could not read the phase-start ledger", { cause: error }));
-                    }
-                  };
-                  child.stderr.on("data", onData);
-                });
+                await waitForCliProcessStderrMarker(child, "fixture configSnapshot entered");
+                try {
+                  observedPhaseStart = readRun();
+                } catch (error) {
+                  throw new Error("Could not read the phase-start ledger", { cause: error });
+                }
               },
             }
           : {}),
-        nodeArgs: ["--import", "tsx", fixture, scenario, ...args],
+        nodeArgs: [
+          "--import",
+          "tsx",
+          fixture,
+          JSON.stringify(runtimeProcessEntrypoints),
+          scenario,
+          ...args,
+        ],
         env: {
           ESBUILD_WORKER_THREADS: "0",
           PATH: path.dirname(process.execPath),
@@ -160,7 +160,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       }
       if (blockedPhase) {
         if (scenario === "phase-hang") {
-          expect(observedPhaseStart?.steps).toContainEqual(
+          expect(observedPhaseStart?.steps, failure).toContainEqual(
             expect.objectContaining({
               step: "finalize:configSnapshot",
               status: "in_progress",
@@ -175,6 +175,11 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         });
         if (scenario === "phase-hang") {
           expect(output.stuckPhase).toBe(blockedPhase);
+          const prerequisite = output.phaseTimings.find(
+            (entry: { phase: string }) => entry.phase === "targetConfigValidation",
+          );
+          expect(prerequisite, failure).toMatchObject({ outcome: "completed" });
+          expect(prerequisite.durationMs, failure).toBeGreaterThanOrEqual(1_000);
         } else {
           expect(output.stuckPhase).toBeUndefined();
           const pid = Number(await fs.readFile(path.join(root, "completion.pid"), "utf8"));

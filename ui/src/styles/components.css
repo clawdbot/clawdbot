@@ -315,6 +315,9 @@ openclaw-session-owner-chip {
 
 /* ===========================================
    Login Gate
+   One card, two layouts. data-mode="form": the operator fixes the connection
+   here, so the form leads. data-mode="status": the fix happens on the Gateway
+   host, so the explanation and one command lead and the form folds away.
    =========================================== */
 
 .login-gate {
@@ -330,153 +333,115 @@ openclaw-session-owner-chip {
 }
 
 .login-gate__card {
-  width: min(520px, 100%);
+  width: min(560px, 100%);
   margin-block: auto;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 32px;
+  padding: 24px 32px 28px;
+  box-shadow: var(--shadow-sm);
   animation: scale-in 0.25s var(--ease-out);
 }
 
-.login-gate__header {
-  text-align: center;
+.login-gate__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 24px;
+  font-size: 13px;
+  line-height: 1;
 }
 
 .login-gate__logo {
-  width: 48px;
-  height: 48px;
-  margin-bottom: 12px;
+  width: 22px;
+  height: 22px;
 }
 
-.login-gate__title {
+.login-gate__brand-name {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.login-gate__body {
+  display: grid;
+  gap: 20px;
+}
+
+/* ── Title block ── */
+
+.login-gate__status-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.login-gate__status-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  color: var(--login-gate-tone, var(--accent));
+  background: color-mix(in srgb, var(--login-gate-tone, var(--accent)) 12%, transparent);
+}
+
+.login-gate__status-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.login-gate__failure[data-tone="pending"] {
+  --login-gate-tone: var(--accent);
+}
+
+.login-gate__failure[data-tone="warn"] {
+  --login-gate-tone: var(--warn);
+}
+
+.login-gate__failure[data-tone="danger"] {
+  --login-gate-tone: var(--danger);
+}
+
+.login-gate__status-text {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.login-gate__heading,
+.login-gate__failure-title {
+  margin: 0;
   font-size: 22px;
   font-weight: 700;
+  line-height: 1.2;
   letter-spacing: -0.02em;
+  color: var(--text-strong);
 }
 
-.login-gate__sub {
-  color: var(--muted);
-  font-size: 14px;
-  margin-top: 4px;
-}
-
-.login-gate__form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.login-gate__connect {
-  margin-top: 4px;
-  width: 100%;
-  justify-content: center;
-  padding: 10px 16px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.login-gate__failure {
-  margin-top: 14px;
-}
-
-.login-gate__failure-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text);
-}
-
+.login-gate__lede,
 .login-gate__failure-summary {
-  margin-top: 6px;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.login-gate__failure-steps {
-  margin: 10px 0 0;
-  padding-left: 18px;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.login-gate__failure-steps .login-gate__command {
-  display: inline-flex;
-  box-sizing: border-box;
-  max-width: 100%;
-  margin: 2px 3px;
-  vertical-align: middle;
-}
-
-.login-gate__failure-steps .login-gate__command code {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.login-gate__failure-steps li + li {
-  margin-top: 4px;
-}
-
-.login-gate__failure-detail {
-  margin-top: 10px;
-  font-size: 12px;
-}
-
-.login-gate__failure-detail summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
   color: var(--muted);
 }
 
-.login-gate__failure-raw {
-  margin-top: 6px;
-  overflow-wrap: anywhere;
-  color: var(--muted);
+/* ── Hero command: the one thing to run ── */
+
+.login-gate__hero {
+  display: grid;
+  gap: 6px;
 }
 
-.login-gate__failure-docs {
-  display: inline-flex;
-  margin-top: 10px;
-  font-size: 12px;
-}
-
-.login-gate__help {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-}
-
-.login-gate__help-title {
+.login-gate__hero-label {
+  font-size: 11px;
   font-weight: 600;
-  font-size: 12px;
-  color: var(--text);
-}
-
-.login-gate__steps {
-  margin: 10px 0 0;
-  padding-left: 20px;
-  font-size: 12px;
-  line-height: 1.6;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--muted);
-}
-
-.login-gate__steps li {
-  margin-bottom: 6px;
-}
-
-.login-gate__steps li:last-child {
-  margin-bottom: 0;
-}
-
-.login-gate__steps code {
-  display: block;
-  margin: 4px 0 2px;
-  padding: 5px 10px;
-  font-family: var(--mono);
-  font-size: 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  user-select: all;
 }
 
 .login-gate__command {
@@ -509,6 +474,314 @@ openclaw-session-owner-chip {
   border: 0;
 }
 
+.login-gate__command--hero {
+  margin: 0;
+  padding: 12px 10px 12px 14px;
+  border-color: var(--border-strong);
+  background: var(--bg-accent);
+  border-radius: var(--radius-md);
+}
+
+.login-gate__command--hero code {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+/* The prompt glyph is decorative; copying still yields the bare command. */
+.login-gate__command--hero code::before {
+  content: "$ ";
+  color: var(--muted);
+  user-select: none;
+}
+
+.login-gate__command--hero .chat-copy-btn {
+  flex: 0 0 auto;
+  padding: 6px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.login-gate__command--hero:hover .chat-copy-btn {
+  border-color: var(--border);
+  background: var(--card);
+}
+
+/* The copy glyph swap normally ships with chat styles, which the gate renders
+   without; own it here so the check never shows beside the copy icon. */
+.login-gate .chat-copy-btn__icon {
+  position: relative;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.login-gate .chat-copy-btn__icon-copy,
+.login-gate .chat-copy-btn__icon-check {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.login-gate .chat-copy-btn__icon-check,
+.login-gate .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
+  opacity: 0;
+}
+
+.login-gate .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
+  opacity: 1;
+}
+
+/* ── Steps ── */
+
+.login-gate__failure-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.login-gate__failure-steps li + li {
+  margin-top: 6px;
+}
+
+.login-gate__failure-steps li::marker {
+  color: var(--muted);
+}
+
+.login-gate__failure-steps .login-gate__command {
+  display: inline-flex;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 1px 2px;
+  padding: 1px 4px 1px 8px;
+  vertical-align: middle;
+  font-size: 12px;
+}
+
+.login-gate__failure-steps .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.login-gate__failure-steps .login-gate__command .chat-copy-btn {
+  padding: 3px 4px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.login-gate__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.login-gate__failure-refresh {
+  justify-self: start;
+}
+
+/* ── Form ── */
+
+.login-gate__form {
+  display: grid;
+  gap: 14px;
+}
+
+.login-gate__form .field {
+  gap: 6px;
+}
+
+.login-gate__form .field label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.login-gate__field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.login-gate__field-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.login-gate__form .field input[aria-invalid="true"] {
+  border-color: var(--login-gate-tone, var(--danger));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--login-gate-tone, var(--danger)) 14%, transparent);
+}
+
+.login-gate__segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-accent);
+}
+
+.login-gate__segmented button {
+  border: 0;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.login-gate__segmented button[aria-checked="true"] {
+  background: var(--card);
+  color: var(--text-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.login-gate__segmented button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.login-gate__connect {
+  margin-top: 2px;
+  justify-content: center;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.login-gate__form .login-gate__connect {
+  width: 100%;
+}
+
+/* ── Folded connection summary (status mode) ── */
+
+.login-gate__connection {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.login-gate__connection > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.login-gate__connection > summary::-webkit-details-marker {
+  display: none;
+}
+
+.login-gate__connection-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.login-gate__connection-target span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.login-gate__connection-target svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.login-gate__connection-cred {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.login-gate__connection-change {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.login-gate__connection[open] .login-gate__connection-change {
+  color: var(--muted);
+}
+
+.login-gate__connection[open] > summary {
+  margin-bottom: 14px;
+}
+
+/* ── Footer ── */
+
+.login-gate__foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.login-gate__failure-detail {
+  min-width: 0;
+  flex: 1;
+}
+
+.login-gate__failure-detail summary {
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.login-gate__failure-raw {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.login-gate__failure-docs {
+  flex: 0 0 auto;
+}
+
+/* ── First-run help (no failure yet) ── */
+
+.login-gate__help {
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.login-gate__help-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.login-gate__steps {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.login-gate__steps li {
+  margin-bottom: 6px;
+}
+
+.login-gate__steps li:last-child {
+  margin-bottom: 0;
+}
+
 .login-gate__docs {
   margin-top: 10px;
   font-size: 12px;
@@ -524,7 +797,17 @@ openclaw-session-owner-chip {
   }
 
   .login-gate__card {
-    padding: 24px 20px;
+    padding: 20px 20px 24px;
+  }
+
+  .login-gate__status-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .login-gate__heading,
+  .login-gate__failure-title {
+    font-size: 20px;
   }
 
   /* 44px touch targets per platform guidelines. */
@@ -541,6 +824,14 @@ openclaw-session-owner-chip {
 
   .login-gate__connect {
     min-height: 44px;
+  }
+
+  .login-gate__actions .login-gate__connect {
+    width: 100%;
+  }
+
+  .login-gate__connection-cred {
+    display: none;
   }
 }
 
@@ -815,6 +1106,26 @@ openclaw-session-owner-chip {
   box-shadow: var(--shadow-lg);
 }
 
+/* Settings outcomes can use the lower corner without covering chat controls.
+ * Keep this opt-in so anchored notices and the shell's top placement stay intact. */
+.app-toast--bottom {
+  top: auto;
+  bottom: calc(20px + var(--safe-area-bottom));
+  width: min(380px, calc(100vw - 32px));
+  padding: 8px 8px 8px 16px;
+  border-radius: var(--radius-lg);
+  transition:
+    opacity 180ms ease-out,
+    translate 180ms ease-out;
+}
+
+@starting-style {
+  .app-toast--bottom {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+
 .app-toast--anchored {
   right: auto;
   left: var(--app-toast-anchor-center);
@@ -880,7 +1191,8 @@ openclaw-session-owner-chip {
 
   /* The unanchored chat toast shares the viewport with shell and pane chrome.
      Anchored permission toasts already carry a measured pane-header offset. */
-  openclaw-toast-host[data-toast-placement="shell"] .app-toast:not(.app-toast--anchored) {
+  openclaw-toast-host[data-toast-placement="shell"]
+    .app-toast:not(.app-toast--anchored, .app-toast--bottom) {
     top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
   }
 
@@ -888,6 +1200,10 @@ openclaw-session-owner-chip {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
     max-width: none;
+  }
+
+  .app-toast--bottom {
+    width: auto;
   }
 
   .app-toast--anchored {
@@ -962,7 +1278,32 @@ openclaw-session-owner-chip {
   line-height: 1;
 }
 
+.app-toast--bottom .app-toast__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: var(--bg-muted);
+  color: var(--text-strong);
+}
+
+.app-toast--bottom .app-toast__message {
+  flex: 1 1 auto;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.app-toast--bottom .app-toast__dismiss {
+  width: 44px;
+  height: 44px;
+}
+
+.app-toast--bottom .app-toast__dismiss svg {
+  width: 16px;
+  height: 16px;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .app-toast--bottom,
   .app-toast--anchored,
   .app-toast--anchored[data-active="true"],
   .app-toast--anchored[data-active="false"] {
@@ -5286,8 +5627,7 @@ td.data-table-key-col {
   display: inline;
 }
 
-/* Session row primitives shared by sidebar recents and the chat session picker.
-   Reserve hover-action width without moving the row or hiding trailing state. */
+/* Session rows reserve hover-action space while keeping activity in the leading slot. */
 .session-row-host {
   --session-row-actions-reserve: 52px;
   position: relative;
@@ -5363,16 +5703,6 @@ td.data-table-key-col {
   transition: opacity var(--duration-fast) ease;
   /* Display-only, and its opacity transition forms a stacking context that
      would otherwise sit above the action buttons and swallow their clicks. */
-  pointer-events: none;
-}
-
-.session-row-state {
-  display: inline-grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 14px;
-  align-items: center;
-  justify-items: center;
-  gap: 6px;
   pointer-events: none;
 }
 
@@ -5555,7 +5885,6 @@ td.data-table-key-col {
   animation: session-run-spin 1.6s linear infinite;
 }
 
-.session-run-spinner--queued,
 .session-glyph__ring--queued {
   animation-play-state: paused;
 }

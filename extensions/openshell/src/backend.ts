@@ -1,7 +1,12 @@
 // Openshell plugin module implements backend behavior.
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  movePathWithCopyFallback,
+  type MovePathPublicationReceipt,
+} from "@openclaw/fs-safe/atomic";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
@@ -38,7 +43,6 @@ import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from
 import { createOpenShellFsBridge } from "./fs-bridge.js";
 import {
   DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
-  movePathWithCopyFallback,
   replaceDirectoryContents,
   stageDirectoryContents,
 } from "./mirror.js";
@@ -1077,6 +1081,7 @@ class OpenShellSandboxBackendImpl {
             throw new Error(result.stderr.trim() || "openshell sandbox download failed");
           }
           const preservedShadows: PreservedLocalShadow[] = [];
+          const failures: unknown[] = [];
           try {
             for (const shadowedRoot of roots.slice(index + 1)) {
               if (
@@ -1090,14 +1095,12 @@ class OpenShellSandboxBackendImpl {
                 .split("/")
                 .filter(Boolean);
               await removeDownloadedWorkspacePath(tmpDir, relativeParts);
-              const preserved = await moveLocalShadowAside({
+              await moveLocalShadowAside({
                 workspaceDir: root.local,
                 tmpDir,
                 relativeParts,
+                preservedShadows,
               });
-              if (preserved) {
-                preservedShadows.push(preserved);
-              }
             }
             const relativeSkillsPath = path.posix.relative(root.remote, remoteSkillsWorkspaceDir);
             if (
@@ -1110,14 +1113,12 @@ class OpenShellSandboxBackendImpl {
               );
             }
             if (root.owner === "workspace") {
-              const preserved = await moveLocalShadowAside({
+              await moveLocalShadowAside({
                 workspaceDir: root.local,
                 tmpDir,
                 relativeParts: MATERIALIZED_SKILLS_REMOTE_PARTS,
+                preservedShadows,
               });
-              if (preserved) {
-                preservedShadows.push(preserved);
-              }
             }
             await replaceDirectoryContents({
               sourceDir: tmpDir,
@@ -1126,10 +1127,38 @@ class OpenShellSandboxBackendImpl {
               // the remote sandbox.
               excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
             });
-          } finally {
-            for (const preserved of preservedShadows.toReversed()) {
-              await restoreLocalShadow({ workspaceDir: root.local, preserved });
+          } catch (error) {
+            failures.push(error);
+          }
+          const retained: string[] = [];
+          for (const preserved of preservedShadows.toReversed()) {
+            if (preserved.sourceRetired) {
+              try {
+                const cleanupFailure = await restoreLocalShadow(preserved);
+                if (cleanupFailure) {
+                  failures.push(cleanupFailure);
+                }
+                continue;
+              } catch (error) {
+                failures.push(error);
+              }
             }
+            retained.push(`${preserved.receipt.path} (workspace path: ${preserved.shadowPath})`);
+          }
+          if (retained.length > 0 || failures.length > 1) {
+            const recovery =
+              retained.length > 0
+                ? ` Inspect the recovery paths ${retained.join("; ")}. ` +
+                  "Remaining workspace entries were preserved; compare both paths before recovering or deleting either copy."
+                : "";
+            throw new AggregateError(
+              failures,
+              `OpenShell mirror synchronization failed: ${failures.map(String).join("; ")}.${recovery}`,
+              { cause: failures[0] },
+            );
+          }
+          if (failures.length > 0) {
+            throw failures[0];
           }
         },
       );
@@ -1319,60 +1348,85 @@ async function removeDownloadedWorkspacePath(
 }
 
 type PreservedLocalShadow = {
-  preservedPath: string;
-  preserveRoot: string;
-  relativeParts: readonly string[];
+  receipt: MovePathPublicationReceipt;
+  shadowPath: string;
+  sourceRetired: boolean;
 };
 
 async function moveLocalShadowAside(params: {
   workspaceDir: string;
   tmpDir: string;
   relativeParts: readonly string[];
-}): Promise<PreservedLocalShadow | undefined> {
+  preservedShadows: PreservedLocalShadow[];
+}): Promise<void> {
   const shadowPath = path.join(params.workspaceDir, ...params.relativeParts);
   const parentStats = await fs.lstat(path.dirname(shadowPath)).catch(() => null);
   if (!parentStats?.isDirectory() || parentStats.isSymbolicLink()) {
-    return undefined;
+    return;
   }
   const shadowStats = await fs.lstat(shadowPath).catch(() => null);
   if (!shadowStats || shadowStats.isSymbolicLink()) {
-    return undefined;
+    return;
   }
   const preserveRoot = await fs.mkdtemp(
     path.join(path.dirname(params.tmpDir), "openclaw-openshell-preserve-"),
   );
-  const preservedPath = path.join(preserveRoot, "shadow");
-  await movePathWithCopyFallback({ from: shadowPath, to: preservedPath });
-  return { preservedPath, preserveRoot, relativeParts: params.relativeParts };
+  let preserved: PreservedLocalShadow | undefined;
+  await movePathWithCopyFallback({
+    from: shadowPath,
+    to: path.join(preserveRoot, "shadow"),
+    onDestinationPublished: (receipt) => {
+      preserved = { receipt, shadowPath, sourceRetired: false };
+      params.preservedShadows.push(preserved);
+    },
+  });
+  if (preserved) {
+    preserved.sourceRetired = true;
+  }
 }
 
-async function restoreLocalShadow(params: {
-  workspaceDir: string;
-  preserved: PreservedLocalShadow;
-}): Promise<void> {
-  let restored = false;
-  try {
-    const shadowPath = path.join(params.workspaceDir, ...params.preserved.relativeParts);
-    const parentPath = path.dirname(shadowPath);
-    const parentStats = await fs.lstat(parentPath).catch(() => null);
-    if (parentStats?.isSymbolicLink()) {
-      throw new Error(`Refusing to restore workspace shadow through symlink parent: ${parentPath}`);
-    }
-    if (parentStats && !parentStats.isDirectory()) {
-      await fs.rm(parentPath, { recursive: true, force: true });
-    }
-    await fs.mkdir(parentPath, { recursive: true });
-    await fs.rm(shadowPath, { recursive: true, force: true });
-    await movePathWithCopyFallback({
-      from: params.preserved.preservedPath,
-      to: shadowPath,
-    });
-    restored = true;
-  } finally {
-    if (restored) {
-      await fs.rm(params.preserved.preserveRoot, { recursive: true, force: true });
-    }
+function assertPreservedShadowIdentity(receipt: MovePathPublicationReceipt): void {
+  const stat = fsSync.lstatSync(receipt.path, { bigint: true });
+  if (
+    stat.isSymbolicLink() ||
+    stat.dev !== receipt.dev ||
+    stat.ino !== receipt.ino ||
+    (process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n))
+  ) {
+    throw new Error(`Refusing to restore an unverified workspace shadow: ${receipt.path}`);
   }
+}
+
+async function restoreLocalShadow(preserved: PreservedLocalShadow): Promise<Error | undefined> {
+  const { shadowPath, receipt } = preserved;
+  const assertBackup = () => assertPreservedShadowIdentity(receipt);
+  const parentPath = path.dirname(shadowPath);
+  const parentStats = await fs.lstat(parentPath).catch(() => null);
+  if (parentStats?.isSymbolicLink()) {
+    throw new Error(`Refusing to restore workspace shadow through symlink parent: ${parentPath}`);
+  }
+  if (parentStats && !parentStats.isDirectory()) {
+    assertBackup();
+    await fs.rm(parentPath, { recursive: true, force: true });
+  }
+  assertBackup();
+  await fs.mkdir(parentPath, { recursive: true });
+  assertBackup();
+  await fs.rm(shadowPath, { recursive: true, force: true });
+  await movePathWithCopyFallback({
+    from: receipt.path,
+    to: shadowPath,
+    assertBeforeMutation: assertBackup,
+  });
+  try {
+    await fs.rmdir(path.dirname(receipt.path));
+  } catch (error) {
+    return new Error(
+      `Workspace shadow was restored at ${shadowPath}, but preservation directory cleanup failed at ${path.dirname(receipt.path)}`,
+      { cause: error },
+    );
+  }
+  return undefined;
 }
 
 function resolveOpenShellTmpRoot(): string {

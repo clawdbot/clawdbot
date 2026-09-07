@@ -404,7 +404,11 @@ export async function closeContext(context: BrowserContext): Promise<void> {
   await context.close().catch(() => {});
 }
 
-export async function renderLoginGate(page: Page, baseUrl: string): Promise<void> {
+export async function renderLoginGate(
+  page: Page,
+  baseUrl: string,
+  { lastError = "unauthorized: gateway token required" }: { lastError?: string | null } = {},
+): Promise<void> {
   const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(baseUrl);
   if (response?.status() !== 200) {
@@ -417,11 +421,11 @@ export async function renderLoginGate(page: Page, baseUrl: string): Promise<void
     details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
   });
   await page.locator(".login-gate").waitFor();
-  await mountLoginGate(page);
+  await mountLoginGate(page, lastError);
 }
 
-async function mountLoginGate(page: Page): Promise<void> {
-  await page.evaluate(async () => {
+async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+  await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");
     const gate = document.createElement("openclaw-login-gate") as HTMLElement & {
       props: Record<string, unknown>;
@@ -431,7 +435,7 @@ async function mountLoginGate(page: Page): Promise<void> {
     gate.props = {
       resourceBasePath: "",
       connected: false,
-      lastError: "unauthorized: gateway token required",
+      lastError: failureMessage,
       lastErrorCode: null,
       hasToken: false,
       hasPassword: false,
@@ -452,5 +456,5 @@ async function mountLoginGate(page: Page): Promise<void> {
     };
     document.body.replaceChildren(gate);
     await gate.updateComplete;
-  });
+  }, lastError);
 }

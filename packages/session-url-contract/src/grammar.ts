@@ -1,6 +1,7 @@
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_MAIN_KEY } from "./session-key.js";
 
-export const DEFAULT_MAIN_KEY = "main";
+export { DEFAULT_MAIN_KEY };
 
 const SHORT_SESSION_REF_RE = /^(?:.*-)?([0-9a-f]{8,32})$/iu;
 const FIXED_RESERVED_SESSION_RESTS = new Set(["main", "global", "boot", "sessions"]);

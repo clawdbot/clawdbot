@@ -1,7 +1,7 @@
 // Openshell plugin module implements mirror behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extractErrorCode, movePathWithCopyFallback } from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 
@@ -121,5 +121,3 @@ export async function stageDirectoryContents(params: {
 }): Promise<void> {
   await reconcileMirrorDirectory({ ...params, replace: false });
 }
-
-export { movePathWithCopyFallback };

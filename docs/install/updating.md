@@ -117,19 +117,25 @@ See [Release channels](/install/development-channels) for channel semantics.
 
 ### Updating from 2026.9.2 across a schema bump
 
-When the target release needs a newer shared-state or registered agent database
-schema, its Doctor refuses an update driven by OpenClaw 2026.9.2 before applying
-repairs. That release introduced the update ledger but still accesses it with old
-code after running the target's Doctor. Migrating first would leave the updater
-unable to finish or safely restore the previous release.
+Updates driven by OpenClaw 2026.9.2 can cross a shared-state schema bump normally.
+The target applies the migration content while retaining the old published
+schema version, so the old updater can finish its ledger writes and final
+report. Doctor explains that schema content is applied and version publication
+is deferred. The new Gateway runs on the migrated content during this interval.
 
-The refusal reports the on-disk and target schema versions and, when readable,
-the driving updater version. Let the failed update finish restoring the previous
-package. OpenClaw 2026.9.2 treats any failed post-install verification as unsafe
-for an automatic restart and leaves the Gateway service stopped; run
-`openclaw gateway start` to bring the previous release back on its untouched
-database, then run the manual update from a shell outside the Gateway. Replace
-`<target>` with the exact target version from the refusal:
+Publication waits until every affected update run has been terminal for at least
+five minutes. A running row that has not changed for more than 30 minutes counts
+as abandoned for this purpose. The Gateway watcher publishes after the deadline;
+a later database open can also publish it. See the precise timing and residual
+old-CLI limitation in [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters).
+
+If an agent database also needs migration, required state metadata is missing,
+or the state-content migration fails, Doctor instead reports
+`update-schema-bump-unfenced` with database versions and manual update commands.
+Let the failed update finish restoring the previous package. OpenClaw 2026.9.2
+leaves the Gateway service stopped after failed post-install verification. Run
+the manual update from a shell outside the Gateway, replacing `<target>` with
+the exact target version from the refusal:
 
 ```bash
 openclaw gateway stop
@@ -143,14 +149,11 @@ omit `--allow-scripts=openclaw`. For a pnpm-owned install, replace the install
 command with `pnpm add -g --allow-build=openclaw openclaw@<target>`; for Bun, use
 `bun add -g --trust openclaw@<target>`.
 
-Same-schema updates continue normally. Earlier updaters, including 2026.9.1,
-do not reopen shared state after Doctor and can cross schema bumps without this
-refusal. Later transactional updaters fence old ledger access and hand completion
-to the candidate, including 2026.9.3 prereleases. The guard requires an active update ledger run from an affected
-updater; a missing table or no running row preserves the earlier update behavior.
-The guard does not undo an earlier migration; if the database is already newer
+Same-schema updates, earlier ledger-less updaters such as 2026.9.1, and fenced
+transactional updaters from 2026.9.3 onward keep their existing behavior. The
+fallback does not undo an earlier migration; if the database is already newer
 than the restored package, install a compatible target and finish Doctor before
-starting the Gateway. See [Database schemas](/reference/database-schemas).
+starting the Gateway.
 
 ### From chat
 
@@ -226,8 +229,8 @@ Installer-driven switches verify the replacement before the working owner is ret
 
 Candidate validation failures leave the old Gateway serving. After activation,
 package recovery can restore the retained previous package only when the shared
-and affected pre-existing per-agent database schema versions and configuration
-content are unchanged. A database first created by the candidate is neutral only
+and affected pre-existing per-agent database schema versions are unchanged and
+configuration has not changed since the candidate’s activation Doctor pass. A database first created by the candidate is neutral only
 at its supported schema version for that database kind. The restored
 Gateway must pass the same runtime checks before recovery is reported as
 complete. A schema migration prevents automatic package rollback; replacing
@@ -713,7 +716,8 @@ made after the backup.
 
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
-pre-activation values and checks that configuration content is unchanged.
+pre-activation values and checks that the config file still matches the content
+reported by the candidate’s activation Doctor writer.
 Databases first created during activation or verification are
 schema-neutral when their version matches the candidate's supported version for
 that database kind. A changed schema version or missing pre-existing database,
@@ -722,17 +726,27 @@ code, the updater also checks that the previous package supports any new databas
 unknown or incompatible support refuses rollback with `rollback-state-unverified`.
 When both checks pass and the retained previous package was verified before the
 update, it stops the candidate and restores the previous generation: package,
-command shim, service definition, and config writer stamp. Owned, writable
+command shim, service definition, and exact pre-activation config bytes, including
+the previous writer stamp. Config replacements use owner-only permissions (`0600`);
+unchanged config needs no write. Owned, writable
 service metadata is refreshed; protected service definitions are preserved.
 The CLI verifies the restarted previous Gateway's service health, version/build
 identity, plugins, channels, and `/readyz` again. Update verification does not use
 model inference: the managed service must be running and own its port, and the
 Gateway hello handshake must match the expected artifact.
 
-The candidate may have advanced the config writer stamp without changing config
-content. Rollback restores that stamp and uses the existing intentional-recovery
-allowance only for its service commands, so the older-binary guard does not block
-recovery. The allowance is never saved in config or the service environment.
+The candidate’s own Doctor migrations in the main config file do not block rollback, including on
+a fresh install’s first update. The updater retains the config immediately before
+Doctor and verifies that Doctor consumed those captured bytes before making changes.
+It also checks the current file against the output hash reported by Doctor’s writer.
+Rollback restores the original bytes only while both hashes match. Restoration
+holds the normal config writer lock and rechecks the hash after acquiring it. Operator edits
+made after activation block restoration, including edits before Doctor reads the
+config and between Doctor’s last write and the updater’s capture. Separate `$include` files must retain
+their pre-activation configuration content; they are not restored by the root-file
+snapshot. The existing intentional-recovery
+allowance applies only to service commands, so the older-binary guard does not
+block recovery; it is never saved in config or the service environment.
 
 Successful recovery leaves the previous Gateway running and finishes the run as
 `rolled-back`, with `after.version` set to the previous version and downtime
@@ -746,16 +760,20 @@ diagnose a failed check. Recovery guidance reports whether the Gateway is runnin
 or stopped from the latest service observation, even when a running candidate did
 not pass verification. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
+Automatic triage never follows a verified rollback; it runs only when the update
+ends failed.
 
-If configuration content changed or the databases are not schema-neutral, rollback is refused with
-`state-migrated-no-rollback`. The updater attempts
+If the config file changed after the activation Doctor pass or the databases are
+not schema-neutral, rollback is refused with
+`state-migrated-no-rollback`. For config edits, the next action names the file
+whose changes blocked restoration. The updater attempts
 [bounded unattended repair](/install/updating#unattended-repair-on-your-own-inference)
 on the installed candidate, preserving migrated state. The same repair slot can
 run if rollback itself fails, targeting the previous release if its package was
 already restored. If repair cannot pass verification, the update
 fails with the original reason and recorded repair attempts. Use `openclaw triage`
 or the printed repair command before considering an older version.
-Automatic rollback restores code, not a full state snapshot.
+Automatic rollback restores code and the captured config, not a full state snapshot.
 The candidate's temporary migration-rehearsal snapshots are removed after
 validation and do not replace your backup.
 If the schema comparison cannot be completed, automatic rollback is refused
@@ -984,7 +1002,7 @@ dependencies, generated runtime files, or state, but a candidate with changed
 tracked source fails before the Gateway stops; fix the source revision before retrying.
 
 After activation, the updater can also enter `repairing` when verification fails
-and changed configuration content or a schema migration prevents rollback, or
+and config edits after the activation Doctor pass or a schema migration prevent rollback, or
 when rollback itself fails. This repair targets the runtime that remains
 installed and preserves migrated state. After each turn, the updater starts or
 restarts a stopped or unhealthy service once, then reruns the service, version,

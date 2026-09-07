@@ -216,7 +216,14 @@ export async function maybeRestartService(params: {
     params.serviceEnv ?? invocationEnv,
     params.invocationCwd,
   );
+  const recordPhase = (phase: "restarting" | "verifying") => {
+    if (params.opts.run) {
+      recordUpdateRunPhase(params.opts.run.runId, phase, undefined, { env: params.opts.run.env });
+    }
+  };
   const failed = async (outcome: "failed" | "restart-health-failed" = "failed") => {
+    // A restart can fail before health verification starts; recovery owns that phase.
+    recordPhase("verifying");
     await recordFailedUpdateGatewayState(params.opts.run, serviceEnv);
     return outcome;
   };
@@ -253,11 +260,6 @@ export async function maybeRestartService(params: {
   }
   let activationAccepted = false;
   let updatedInstallRestartNeedsServiceRootProof = false;
-  const recordPhase = (phase: "restarting" | "verifying") => {
-    if (params.opts.run) {
-      recordUpdateRunPhase(params.opts.run.runId, phase, undefined, { env: params.opts.run.env });
-    }
-  };
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     expectedGatewayBuildId: string | undefined,

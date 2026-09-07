@@ -148,7 +148,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 }
 ```
 
-Agent display names, emoji, and avatars belong to each agent's `identity` block under `agents.entries`; see [Agent configuration](/gateway/config-agents#agentsentries-per-agent-overrides).
+Agent display names, emoji, and avatars belong to each agent's `identity` block under `agents.entries`; see [Agent configuration](/gateway/config-agents/entries-and-multi-agent#agentsentries-per-agent-overrides).
 
 - `seamColor`: operator accent color for native app UI chrome (Talk Mode bubble
   tint, etc.). The Control UI user accent (`ui.prefs.accent`) takes precedence in
@@ -179,6 +179,11 @@ The host desktop source lets the Control UI Desktop panel connect to the Gateway
 machine. It can attach to an existing loopback RFB server, or supervise a
 headless TigerVNC/XFCE desktop on Linux. It is a Labs feature and is off by
 default.
+
+Observer tokens and observer connections are bound to the Gateway connection
+that requested them. Ending or revoking that connection refuses unused tokens
+and closes its observers with `4006 authority_revoked`. Internal callers without
+a Gateway connection keep TTL-only tokens.
 
 ```json5
 {

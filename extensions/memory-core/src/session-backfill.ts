@@ -228,6 +228,8 @@ function mergeSessionBackfillFileProgress(params: {
       ...(firstUnselected ? [firstUnselected.contentIndex] : []),
       ...(scan.progressBlockIndex !== undefined ? [scan.progressBlockIndex] : []),
     ];
+    // The full snapshot identity stays paired while only its consumption cursor rewinds.
+    // Session ingestion uses that snapshot as the append-prefix proof on the next scan.
     files[scan.stateKey] = {
       mtimeMs: scan.mtimeMs,
       size: scan.size,

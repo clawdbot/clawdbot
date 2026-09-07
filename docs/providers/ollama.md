@@ -1069,6 +1069,11 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     `thinking` capability expose `/think low`, `/think medium`, `/think high`,
     and `/think max`; non-thinking models expose only `/think off`.
 
+    When replaying an assistant message, native requests retain its available
+    reasoning in Ollama's separate `thinking` field alongside text and tool
+    calls. This lets tool follow-ups reuse reasoning retained by the session's
+    history policy without mixing it into visible answer text.
+
     ```bash
     openclaw agent --model ollama/gemma4 --thinking off
     openclaw agent --model ollama/gemma4 --thinking low

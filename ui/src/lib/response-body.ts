@@ -1,4 +1,5 @@
 // Control UI response helpers own bounded browser body consumption.
+import { consumeResponseBytes } from "@openclaw/normalization-core";
 
 type ResponseTextLimitOptions = {
   maxBytes: number;
@@ -37,24 +38,22 @@ export async function readResponseTextWithLimit(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const chunks: string[] = [];
-  let totalBytes = 0;
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        const tail = decoder.decode();
-        if (tail) {
-          chunks.push(tail);
-        }
-        break;
-      }
-      totalBytes += value.byteLength;
-      if (totalBytes > options.maxBytes) {
-        // Cancellation is best-effort; finally always releases this reader's lock.
+    await consumeResponseBytes({
+      maxBytes: options.maxBytes,
+      skipEmptyChunks: false,
+      read: () => reader.read(),
+      onChunk: (chunk) => {
+        chunks.push(decoder.decode(chunk, { stream: true }));
+      },
+      onLimit: () => {
         void reader.cancel().catch(() => undefined);
         throw new Error(options.tooLargeMessage);
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
+      },
+    });
+    const tail = decoder.decode();
+    if (tail) {
+      chunks.push(tail);
     }
   } finally {
     reader.releaseLock();

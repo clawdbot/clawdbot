@@ -1,4 +1,4 @@
-type PackageDistImport = { importerPath: string; importedPath: string };
+export type PackageDistImport = { importerPath: string; importedPath: string };
 
 export function collectPackageDistImportErrors(
   params: { files: readonly string[] } & (
@@ -12,3 +12,8 @@ export function collectPackageDistImportErrors(
       }
   ),
 ): string[];
+
+export function collectPackageDistImports(params: {
+  files: readonly string[];
+  readText: (relativePath: string) => string;
+}): PackageDistImport[];
