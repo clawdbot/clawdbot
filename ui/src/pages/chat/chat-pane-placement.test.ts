@@ -83,7 +83,7 @@ describe("chat pane placement", () => {
     const session = { ...activePlacementSession(), hasActiveRun: true };
 
     const moving = dialogs.track(pane.moveHeaderPlacement(session));
-    await vi.waitFor(() => {
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="device:runner"]')).not.toBeNull();
     });
     expect(document.body.querySelector('[data-value="cloud:aws"]')).toBeNull();
@@ -155,7 +155,7 @@ describe("chat pane placement", () => {
     const session = activePlacementSession();
 
     const moving = dialogs.track(pane.moveHeaderPlacement(session));
-    await vi.waitFor(() => {
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
     });
     document.body.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')?.click();
@@ -252,7 +252,7 @@ describe("chat pane placement", () => {
       } satisfies GatewaySessionRow;
 
       const moving = dialogs.track(pane.moveHeaderPlacement(session));
-      await vi.waitFor(() => {
+      await dialogs.waitFor(() => {
         expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
       });
       const incompatible = document.body.querySelector<HTMLButtonElement>(
@@ -411,7 +411,7 @@ describe("chat pane placement", () => {
     } satisfies GatewaySessionRow;
 
     const moving = dialogs.track(pane.moveHeaderPlacement(session));
-    await vi.waitFor(() => {
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
     });
     const device = document.body.querySelector<HTMLButtonElement>(
@@ -490,7 +490,7 @@ describe("chat pane placement", () => {
       } satisfies GatewaySessionRow;
 
       const moving = dialogs.track(pane.moveHeaderPlacement(session));
-      await vi.waitFor(() => {
+      await dialogs.waitFor(() => {
         expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
       });
       document.body.querySelector<HTMLButtonElement>('[data-value="device:build-mac"]')?.click();
@@ -609,12 +609,12 @@ describe("chat pane placement", () => {
     } satisfies GatewaySessionRow;
 
     const moving = dialogs.track(pane.moveHeaderPlacement(session));
-    await vi.waitFor(() =>
+    await dialogs.waitFor(() =>
       expect(request).toHaveBeenCalledWith("environments.list", {
         runtimeId: scenario.runtimeId,
       }),
     );
-    await vi.waitFor(() => {
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
     });
     const device = document.body.querySelector<HTMLButtonElement>(

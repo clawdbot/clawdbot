@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi, type Mock } from "vitest";
 import { ChannelType } from "../internal/discord.js";
+import type { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
 export type MockCallSource = {
   mock: { calls: ArrayLike<ReadonlyArray<unknown>> };
@@ -54,6 +55,37 @@ export function lastMockCall(source: MockCallSource, label: string) {
   return call;
 }
 
+export function createRealtimeBridgeTestHelpers(
+  createBridge: typeof voiceTestMocks.createRealtimeVoiceBridgeSessionMock,
+) {
+  const bridgeParamsAt = (index: number): TestRealtimeBridgeParams =>
+    requireRecord(
+      mockCall(createBridge as unknown as MockCallSource, index, "realtime bridge")[0],
+      "realtime bridge params",
+    ) as TestRealtimeBridgeParams;
+  const realtimeBridgeAt = (index: number) => {
+    const result = createBridge.mock.results[index];
+    if (result?.type !== "return") {
+      throw new Error(`expected realtime provider session at index ${index}`);
+    }
+    return { bridgeParams: bridgeParamsAt(index), session: result.value };
+  };
+  const lastRealtimeBridge = () => realtimeBridgeAt(createBridge.mock.calls.length - 1);
+  // Factory callbacks can fire before their mock result is available.
+  const lastRealtimeBridgeParams = () => bridgeParamsAt(createBridge.mock.calls.length - 1);
+  const sentUserMessages = (session?: typeof voiceTestMocks.realtimeSessionMock) => {
+    const sessions = session
+      ? [session]
+      : createBridge.mock.results.flatMap((result) =>
+          result.type === "return" ? [result.value] : [],
+        );
+    return [...new Set(sessions)].flatMap((source) =>
+      Array.from(source.sendUserMessage.mock.calls).map(([message]) => String(message)),
+    );
+  };
+  return { realtimeBridgeAt, lastRealtimeBridge, lastRealtimeBridgeParams, sentUserMessages };
+}
+
 export function createDiscordVoiceTestHelpers(updateVoiceStateMock: ReturnType<typeof vi.fn>) {
   const createVoiceChannelInfo = (channelId: string, guildId = "g1", guildName = "Guild One") => ({
     id: channelId,
@@ -65,9 +97,8 @@ export function createDiscordVoiceTestHelpers(updateVoiceStateMock: ReturnType<t
 
   const createClient = () => ({
     rest: { get: vi.fn() as Mock },
-    fetchChannel: vi.fn(
-      async (channelId: string): Promise<VoiceChannelInfo | null> =>
-        createVoiceChannelInfo(channelId),
+    fetchChannel: vi.fn(async (channelId: string): Promise<VoiceChannelInfo | null> =>
+      createVoiceChannelInfo(channelId),
     ),
     fetchGuild: vi.fn(async (guildId: string) => ({ id: guildId, name: "Guild One" })),
     getPlugin: vi.fn((_id?: string): unknown => ({

@@ -62,7 +62,6 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
       authResult: params.authResult,
       authConfig: params.cfg.gateway?.auth,
       requestHeaders: params.req.headers,
-      preferCachedIdentity: !rolesConfigured,
     });
     const profile = syncGitHubIdentity
       ? await syncGitHubIdentity()

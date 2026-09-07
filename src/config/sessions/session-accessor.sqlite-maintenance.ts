@@ -2,6 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -316,7 +317,7 @@ async function readSessionTranscriptJsonlBytes(
       );
     }
     for (const row of opened.value) {
-      bytesBySessionId.set(row.session_id, Number(row.jsonl_bytes));
+      bytesBySessionId.set(row.session_id, sqliteNumber(row.jsonl_bytes));
     }
   }
   return bytesBySessionId;
@@ -419,11 +420,17 @@ export function applySessionEntryMaintenance(
       archivedKeys.add(key);
     },
     preserveKeys,
+    preserveRecentMs: maintenance.preserveRecentMs,
   });
   remainingEntryCount -= archived;
   const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
     log: false,
     onPruned: rememberRemoval("pruned"),
+    onArchived: ({ key }) => {
+      archivedKeys.add(key);
+      archived += 1;
+      remainingEntryCount -= 1;
+    },
     preserveKeys,
     preserveRecentMs: maintenance.preserveRecentMs,
   });
@@ -679,7 +686,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     }
     deletedEntries +=
       batch.workItems - (batch.entryRemovals.length - committedEntryRemovals.length);
-    emitCommittedSessionEntryRemovals(committedEntryRemovals);
+    emitCommittedSessionEntryRemovals(scope.agentId, committedEntryRemovals);
     for (const removal of committedEntryRemovals) {
       if (removal.maintenanceReason === "model-run-pruned") {
         committedCounts.modelRunPruned += 1;

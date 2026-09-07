@@ -1,22 +1,25 @@
 ---
-summary: "Adds the Signal channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw Signal channel plugin."
 read_when:
   - You are installing, configuring, or auditing the signal plugin
-title: "Signal plugin"
+title: "Signal plugin reference"
 ---
 
-# Signal plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds the Signal channel surface for sending and receiving OpenClaw messages.
+OpenClaw Signal channel plugin.
 
 ## Distribution
 
 - Package: `@openclaw/signal`
-- Install route: npm; ClawHub: `clawhub:@openclaw/signal`
+- Install route: npm or ClawHub: `clawhub:@openclaw/signal`
 
 ## Surface
 
-channels: `signal`
+- Channels: `signal`
 
 ## Related docs
 

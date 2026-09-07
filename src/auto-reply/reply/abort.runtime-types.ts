@@ -15,6 +15,7 @@ type FastAbortResult = {
 export type TryFastAbortFromMessage = (params: {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
+  isCommandTargetCurrent?: () => boolean;
 }) => Promise<FastAbortResult>;
 
 /** Formats the user-visible abort acknowledgement text. */

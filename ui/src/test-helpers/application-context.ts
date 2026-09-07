@@ -1,6 +1,12 @@
 import { ContextProvider } from "@lit/context";
 import type { RouteId } from "../app-route-paths.ts";
-import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGateway,
+  type ApplicationGatewaySnapshot,
+} from "../app/context.ts";
+import type { MentionsCapability } from "../app/mentions.ts";
 
 export const hiddenScopeUpgradeCapability = {
   state: { phase: "hidden" as const },
@@ -12,9 +18,17 @@ export const hiddenScopeUpgradeCapability = {
   dispose: () => undefined,
 } satisfies ApplicationContext["scopeUpgrade"];
 
+const unavailableMentionsCapability = {
+  snapshot: { phase: "unavailable", items: [], dismissing: [], error: null },
+  refresh: async () => undefined,
+  dismiss: async () => undefined,
+  subscribe: () => () => undefined,
+  dispose: () => undefined,
+} satisfies MentionsCapability;
+
 const emptySidebarAttentionStore = {
   entries: [],
-  activate: () => undefined,
+  activate: () => unavailableMentionsCapability,
   dismiss: () => undefined,
   subscribe: () => () => undefined,
   dispose: () => undefined,
@@ -38,3 +52,28 @@ export function createApplicationContextProvider(context: ApplicationContext<Rou
 }
 
 export type ApplicationContextProvider = ReturnType<typeof createApplicationContextProvider>;
+
+export function createApplicationGateway(initial: ApplicationGatewaySnapshot) {
+  let snapshot = initial;
+  const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
+  const gateway = {
+    connection: { gatewayUrl: "ws://gateway.example.test", token: "", password: "" },
+    get snapshot() {
+      return snapshot;
+    },
+    connect: () => undefined,
+    subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  } as unknown as ApplicationGateway;
+  return {
+    gateway,
+    publish(next: ApplicationGatewaySnapshot) {
+      snapshot = next;
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+  };
+}

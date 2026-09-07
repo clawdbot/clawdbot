@@ -1,7 +1,10 @@
 // Control UI tests cover About artifact identity against a mocked Gateway.
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI About mocked Gateway E2E",
@@ -14,11 +17,7 @@ const BUILT_AT = "2026-07-10T12:34:56.000Z";
 
 suite.define(() => {
   it("shows and copies browser artifact identity, separately from the Gateway version", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     await context.addInitScript(() => {
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,

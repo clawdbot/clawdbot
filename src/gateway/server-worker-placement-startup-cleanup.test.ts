@@ -63,19 +63,22 @@ describe("worker placement startup cleanup ownership", () => {
     );
     const cleanupStarted = createDeferredCore();
     const releaseCleanup = createDeferredCore();
-    const resolveWorkspacePath = vi.fn(async ({ sessionId }: { sessionId: string }) => {
+    const resolveWorkspace = vi.fn(async ({ sessionId }: { sessionId: string }) => {
       cleanupStarted.resolve();
       await releaseCleanup.promise;
-      return path.join(workerEnvironmentSupport.testState.root, sessionId);
+      return {
+        kind: "local" as const,
+        path: path.join(workerEnvironmentSupport.testState.root, sessionId),
+      };
     });
     const recovery = createPlacementRecoveryActions({
       placements,
       environments,
       failure: createPlacementFailureActions({ placements, environments }),
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      resolveWorkspacePath,
+      resolveWorkspace,
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     });
     const starting = recovery.reconcile("startup");
     let sweeping: Promise<void> | undefined;
@@ -86,18 +89,18 @@ describe("worker placement startup cleanup ownership", () => {
           cleanupStarted.promise.then(() => "cleanup"),
         ]),
       ).toBe("ready");
-      expect(resolveWorkspacePath).not.toHaveBeenCalled();
+      expect(resolveWorkspace).not.toHaveBeenCalled();
       await recovery.reconcileActive("worker-debris-0");
-      expect(resolveWorkspacePath).not.toHaveBeenCalled();
+      expect(resolveWorkspace).not.toHaveBeenCalled();
 
       sweeping = recovery.reconcileActive();
       await cleanupStarted.promise;
-      expect(resolveWorkspacePath).toHaveBeenCalledOnce();
+      expect(resolveWorkspace).toHaveBeenCalledOnce();
       releaseCleanup.resolve();
       await sweeping;
-      expect(resolveWorkspacePath).toHaveBeenCalledTimes(50);
+      expect(resolveWorkspace).toHaveBeenCalledTimes(50);
       await recovery.reconcileActive();
-      expect(resolveWorkspacePath).toHaveBeenCalledTimes(50);
+      expect(resolveWorkspace).toHaveBeenCalledTimes(50);
       expect(placements.list()).toEqual(before);
     } finally {
       releaseCleanup.resolve();

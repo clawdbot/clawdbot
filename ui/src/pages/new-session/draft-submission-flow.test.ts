@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -6,6 +7,7 @@ import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placem
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
   getChatAttachmentDataUrl,
+  getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
 } from "../chat/attachment-payload-store.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
@@ -41,6 +43,66 @@ function stubObjectUrls(...urls: string[]) {
 }
 
 describe("DraftSubmissionFlow", () => {
+  it("starts a cloud repository with its selected ref without cloning on the Gateway", async () => {
+    const { context, flow, gateway, place, request } = createDraftFixture({
+      methods: ["sessions.create", "sessions.dispatch"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    vi.spyOn(gateway, "cloudProfiles", "get").mockReturnValue([
+      { id: "cloud", providerId: "crabbox", executionModes: ["worker-turn", "remote-exec"] },
+    ]);
+    vi.spyOn(gateway, "cloudProfilesReady", "get").mockReturnValue(true);
+    vi.spyOn(gateway, "cloudProfilesPending", "get").mockReturnValue(false);
+    const start = vi.fn();
+    context.placementStartup.start = start;
+    vi.mocked(context.sessions.createResult).mockImplementation(async (params) => ({
+      key: expectDefined(params?.key, "remote session create key"),
+      initialRun: { status: "idle" },
+    }));
+    vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+    });
+    place.selectRemoteProject({
+      identity: "openclaw/openclaw",
+      cloneUrl: "https://github.com/openclaw/openclaw.git",
+      projectId: "old-local-clone",
+    });
+    place.setBaseRef("release/next");
+    place.selectCloudProfile("cloud");
+    flow.setMessage("Run only on the cloud worker");
+
+    expect(flow.submitDisabledReason()).toBeUndefined();
+    await flow.submit();
+
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    const created = expectDefined(
+      vi.mocked(context.sessions.createResult).mock.calls[0]?.[0],
+      "remote session create request",
+    );
+    expect(created).toMatchObject({
+      agentId: "main",
+      message: "",
+      repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" },
+    });
+    for (const field of [
+      "projectId",
+      "projectGitUrl",
+      "cwd",
+      "worktree",
+      "worktreeBaseRef",
+      "worktreeName",
+    ]) {
+      expect(created).not.toHaveProperty(field);
+    }
+    expect(request.mock.calls.some(([method]) => method === "projects.add")).toBe(false);
+    expect(start).toHaveBeenCalledOnce();
+    expect(start.mock.calls[0]![0].recovery).toMatchObject({
+      sessionKey: created.key,
+      message: "Run only on the cloud worker",
+      phase: "dispatching",
+      target: { kind: "profile", profileId: "cloud" },
+    });
+  });
   it("keeps a direct background completion watch through a Gateway reconnect", async () => {
     vi.useFakeTimers();
     const { context, flow, request } = createDraftFixture();
@@ -60,7 +122,9 @@ describe("DraftSubmissionFlow", () => {
       key: "agent:main:dashboard:background",
       initialRun: { status: "started", runId: "run-background" },
     });
-    flow.setMessage("start this in the background");
+    flow.setMessage("  @Alex start this in the background  ", [
+      { profileId: "profile-alex", start: 2, end: 7 },
+    ]);
     stubObjectUrls("blob:background-note");
     const attachment = registerTextPayload("background-note");
     flow.attachmentDraft.replace([attachment]);
@@ -73,7 +137,8 @@ describe("DraftSubmissionFlow", () => {
     expect(context.sessions.createResult).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "main",
-        message: "start this in the background",
+        message: "@Alex start this in the background",
+        mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
       }),
       { reconciliation: "background" },
     );
@@ -91,6 +156,9 @@ describe("DraftSubmissionFlow", () => {
       "agent:main:dashboard:background",
       context.gateway.snapshot.client,
     );
+    expect(retained?.message["__openclaw"]).toMatchObject({
+      humanMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
+    });
     expect(retained?.message.content).toContainEqual({
       type: "attachment",
       attachment: {
@@ -101,11 +169,14 @@ describe("DraftSubmissionFlow", () => {
       },
     });
     expect(flow.message).toBe("");
+    expect(flow.mentions).toEqual([]);
     expect(flow.submitting).toBe(false);
   });
 
   it("replays a frozen direct create without inheriting refreshed placement or mutable submit gates", async () => {
+    const takePreparedTitle = vi.fn(() => "Original prepared title");
     const { context, flow, place } = createDraftFixture({
+      takePreparedTitle,
       methods: ["sessions.create", "sessions.dispatch"],
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
@@ -120,17 +191,36 @@ describe("DraftSubmissionFlow", () => {
     vi.mocked(context.navigateAndWait).mockImplementation(async () => {
       queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
     });
-    flow.setMessage("keep the original direct request");
+    flow.setMessage("@Alex keep the original direct request", [
+      { profileId: "profile-original", start: 0, end: 5 },
+    ]);
 
     const initialSubmission = flow.submit();
     await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
     const originalParams = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+    expect(originalParams).toMatchObject({
+      displayName: "Original prepared title",
+      mentions: [{ profileId: "profile-original", start: 0, end: 5 }],
+    });
+    expect(flow.pendingMessage?.["__openclaw"].humanMentions).toEqual([
+      { profileId: "profile-original", start: 0, end: 5 },
+    ]);
     flow.invalidate("gateway-changed");
+    takePreparedTitle.mockReturnValue("Replacement prepared title");
+    flow.setMessage("@Alex a different draft", [
+      { profileId: "profile-replacement", start: 0, end: 5 },
+    ]);
+    expect(flow.pendingMessage?.["__openclaw"].humanMentions).toEqual([
+      { profileId: "profile-original", start: 0, end: 5 },
+    ]);
     place.applyPendingPlacement({ agentId: "main", profileId: "new-cloud-discovery" });
     expect(flow.canSubmit()).toBe(false);
     expect(flow.submitting).toBe(true);
 
     flow.resumeInterruptedSubmission();
+    expect(flow.pendingMessage?.["__openclaw"].humanMentions).toEqual([
+      { profileId: "profile-original", start: 0, end: 5 },
+    ]);
     await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledTimes(2));
     expect(vi.mocked(context.sessions.createResult).mock.calls[1]?.[0]).toEqual(originalParams);
     expect(flow.pendingPlacement.sessionKey).toBe("");
@@ -320,10 +410,26 @@ describe("DraftSubmissionFlow", () => {
       expect(request).not.toHaveBeenCalled();
       expect(place.terminalHostId).toBe("node:chosen");
       expect(place.folder).toBe("/node/existing-project");
+
+      // Same-route revalidation can retire the capability without changing the chosen node.
+      data.startTerminal = false;
+      data.catalogLabel = "";
+      place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
+      request.mockClear();
+      persistPreference.mockClear();
+      place.applyFolder("/node/revalidated-project");
+      expect(request).not.toHaveBeenCalled();
+      expect(persistPreference).not.toHaveBeenCalled();
+      expect(place.terminalHostId).toBe("node:chosen");
+      expect(place.folder).toBe("/node/revalidated-project");
+      await flow.submit();
+      expect(flow.blockedSubmitNotice()).toBe("This session target is unavailable.");
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["disabled", "attachments", "overrides", "missing method", "non-admin"])(
+  it.each(["disabled", "attachments", "overrides", "mentions", "missing method", "non-admin"])(
     "native launch fails visibly for %s without Chat fallback",
     async (failure) => {
       const { context, flow, request } = createDraftFixture({
@@ -352,12 +458,23 @@ describe("DraftSubmissionFlow", () => {
       if (failure === "overrides") {
         flow.capabilities.setToolOverrides({ skills: { release: false } });
       }
-      flow.setMessage("do not turn this into Chat");
+      const message =
+        failure === "mentions" ? "@Alex do not turn this into Chat" : "do not turn this into Chat";
+      flow.setMessage(
+        message,
+        failure === "mentions" ? [{ profileId: "profile-alex", start: 0, end: 5 }] : undefined,
+      );
       await flow.submit();
       expect(flow.blockedSubmitNotice()).toBeTruthy();
       expect(context.sessions.createResult).not.toHaveBeenCalled();
       expect(request).not.toHaveBeenCalled();
-      expect(flow.message).toBe("do not turn this into Chat");
+      expect(flow.message).toBe(message);
+      if (failure === "mentions") {
+        expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
+        expect(flow.blockedSubmitNotice()).toBe(
+          "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
+        );
+      }
       if (failure === "overrides") {
         flow.capabilities.setToolOverrides(null);
         expect(flow.canSubmit()).toBe(true);
@@ -372,6 +489,11 @@ describe("DraftSubmissionFlow", () => {
     const shared = registerTextPayload("shared");
     const displaced = registerTextPayload("displaced");
     const incoming = registerTextPayload("incoming");
+    expect([shared, displaced, incoming].map(getChatAttachmentPreviewUrl)).toEqual([
+      "blob:shared",
+      "blob:displaced",
+      "blob:incoming",
+    ]);
     flow.attachmentDraft.replace([shared, displaced]);
     noteUserMutation.mockClear();
     requestUpdate.mockClear();
@@ -393,6 +515,7 @@ describe("DraftSubmissionFlow", () => {
     const { flow, requestUpdate } = createDraftFixture();
     const noteUserMutation = vi.spyOn(flow.draftPersistence, "noteUserMutation");
     const current = registerTextPayload("current");
+    expect(getChatAttachmentPreviewUrl(current)).toBe("blob:current-draft");
     flow.attachmentDraft.replace([current]);
     noteUserMutation.mockClear();
     requestUpdate.mockClear();
@@ -401,7 +524,8 @@ describe("DraftSubmissionFlow", () => {
       writeSessionPlacementRecovery({
         sessionKey: "agent:main:dashboard:recovery",
         messageId: "message-recovery",
-        message: "recovered cloud prompt",
+        message: "@Alex recovered cloud prompt",
+        mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
         attachments: [
           {
             type: "file",
@@ -426,10 +550,12 @@ describe("DraftSubmissionFlow", () => {
 
     flow.restorePendingPlacementRecovery("ws://gateway.example", "principal-a");
 
-    expect(revokeObjectURL).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:current-draft");
+    expect(getChatAttachmentDataUrl(current)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
     expect(requestUpdate).toHaveBeenCalledOnce();
-    expect(flow.message).toBe("recovered cloud prompt");
+    expect(flow.message).toBe("@Alex recovered cloud prompt");
+    expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
     expect(buildChatApiAttachments(flow.attachmentDraft.attachments)).toEqual([
       {
         type: "file",
@@ -793,7 +919,8 @@ describe("DraftSubmissionFlow", () => {
     flow.pendingPlacement.stageCreate({
       agentId: "cloud",
       target: { kind: "profile", profileId: "aws" },
-      message: "keep this cloud task",
+      message: "@Alex keep this cloud task",
+      mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
       attachments: apiAttachments,
       gatewayUrl: "ws://gateway.example",
       recoveryScope: "principal-a",
@@ -839,7 +966,8 @@ describe("DraftSubmissionFlow", () => {
 
     expect(start).toHaveBeenCalledOnce();
     expect(start.mock.calls[0]?.[0].recovery).toMatchObject({
-      message: "keep this cloud task",
+      message: "@Alex keep this cloud task",
+      mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
       attachments: apiAttachments,
       phase: "dispatching",
     });

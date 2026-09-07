@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Command } from "commander";
 
 export const COLD_READ_COMMAND_PATHS: string[][] = [
@@ -10,9 +11,25 @@ export const COLD_READ_COMMAND_PATHS: string[][] = [
   ["hooks", "info"],
   ["hooks", "check"],
   ["update", "--dry-run"],
+  ["models", "accounts", "list"],
+  ["models", "accounts", "login", "openai"],
+  ["models", "accounts", "use", "personal-account"],
+  ["models", "accounts", "clear-default", "openai"],
 ];
 
 export function registerColdReadCommandFixtures(program: Command, skills: Command): void {
+  const models = expectDefined(
+    program.commands.find((command) => command.name() === "models"),
+    "Expected the models fixture",
+  );
+  const accounts = models.command("accounts");
+  for (const command of ["list", "login", "use", "clear-default"]) {
+    accounts
+      .command(command)
+      .argument("[value]")
+      .option("--json")
+      .action(() => {});
+  }
   program
     .command("node")
     .command("identity")

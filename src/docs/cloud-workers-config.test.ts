@@ -6,7 +6,7 @@ import { OpenClawSchema } from "../config/zod-schema.js";
 
 const CLOUD_WORKER_DOCS = [
   "docs/gateway/cloud-workers.md",
-  "docs/gateway/configuration-reference.md",
+  "docs/gateway/config-cloud-workers.md",
 ] as const;
 const CLOUD_WORKER_PAGE = "gateway/cloud-workers";
 

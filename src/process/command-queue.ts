@@ -11,11 +11,9 @@ import {
   applyCommandLaneCapacity,
   canAdmitInGroup,
   type CommandLaneGroupSpec,
-  drainGroupSiblings,
-  getGroupRegistry,
+  drainCommandLaneGroup,
   getLaneGroup,
   installCommandLaneGroup,
-  type LaneGroupState,
   validateCommandLaneGroupSpec,
 } from "./command-queue.capacity-groups.js";
 import {
@@ -24,6 +22,7 @@ import {
   enqueueLaneQueue,
   type CommandLaneTaskMarker,
   getQueueState,
+  type LaneGroupState,
   type LaneState,
   normalizeLane,
   removeLaneQueueEntry,
@@ -435,7 +434,7 @@ function drainLane(
 
 function drainReadyCommandLane(lane: string, completedState?: LaneState): void {
   if (getLaneGroup(lane)) {
-    drainGroupSiblings(lane, drainLane);
+    drainCommandLaneGroup(lane, drainLane);
     return;
   }
   // An idle scoped lane may have been retired and recreated while an older
@@ -494,7 +493,7 @@ export function publishLaneConfiguration(config: {
     touched.add(lane);
   }
   for (const group of config.clearGroups ?? []) {
-    const { groups, groupByLane } = getGroupRegistry();
+    const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
     const existing = groups.get(group);
     if (existing) {
       for (const member of existing.members) {
@@ -505,7 +504,7 @@ export function publishLaneConfiguration(config: {
     }
   }
   for (const next of validated) {
-    const { groups, groupByLane } = getGroupRegistry();
+    const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
     const previous = groups.get(next.group);
     for (const member of previous?.members ?? []) {
       touched.add(member);

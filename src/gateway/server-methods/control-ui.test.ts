@@ -6,8 +6,13 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import {
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ControlUiGitHubPreview, ControlUiSessionPreview } from "../control-ui-contract.js";
 import { ControlUiGitHubError } from "../control-ui-github-api.js";
 import { createControlUiHandlers } from "./control-ui.js";
@@ -270,55 +275,94 @@ describe("controlUi.githubPreview", () => {
     });
   });
 
-  it("returns a retryable unavailable error for GitHub quota failures", async () => {
-    const handlers = createControlUiHandlers(
-      vi.fn().mockRejectedValue(new ControlUiGitHubError(429, "rate limited")),
-    );
-    const respond = vi.fn<RespondFn>();
-
-    await expectDefined(
-      handlers["controlUi.githubPreview"],
-      'handlers["controlUi.githubPreview"] test invariant',
-    )(
-      requestOptions({ kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" }, respond),
-    );
-
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "UNAVAILABLE",
+  it.each([
+    {
+      failure: "GitHub quota",
+      error: new ControlUiGitHubError(429, "rate limited"),
       message: "GitHub API rate limit exceeded (HTTP 429). Wait and retry.",
       retryable: true,
-    });
-  });
-
-  it("preserves a configured-unavailable preview credential diagnostic", async () => {
-    const error = new SecretSurfaceUnavailableError({
-      ownerKind: "capability",
-      ownerId: "control-ui-github",
-      state: "unavailable",
-      paths: ["gateway.controlUi.github.token"],
-      refKeys: [],
-      reason: "secret reference was not found",
-    });
-    const handlers = createControlUiHandlers(vi.fn().mockRejectedValue(error));
-    const respond = vi.fn<RespondFn>();
-
-    await expectDefined(
-      handlers["controlUi.githubPreview"],
-      'handlers["controlUi.githubPreview"] test invariant',
-    )(
-      requestOptions({ kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" }, respond),
-    );
-
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "UNAVAILABLE",
+    },
+    {
+      failure: "configured-unavailable preview credential",
+      error: new SecretSurfaceUnavailableError({
+        ownerKind: "capability",
+        ownerId: "control-ui-github",
+        state: "unavailable",
+        paths: ["gateway.controlUi.github.token"],
+        refKeys: [],
+        reason: "secret reference was not found",
+      }),
       message:
         "The configured Control UI GitHub credential is unavailable. Resolve gateway.controlUi.github.token and retry.",
       retryable: false,
-    });
-  });
+    },
+  ])(
+    "preserves the $failure diagnostic in the RPC response",
+    async ({ error, message, retryable }) => {
+      const handlers = createControlUiHandlers(vi.fn().mockRejectedValue(error));
+      const respond = vi.fn<RespondFn>();
+
+      await expectDefined(
+        handlers["controlUi.githubPreview"],
+        'handlers["controlUi.githubPreview"] test invariant',
+      )(
+        requestOptions(
+          { kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" },
+          respond,
+        ),
+      );
+
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "UNAVAILABLE",
+        message,
+        retryable,
+      });
+    },
+  );
 });
 
 describe("controlUi.sessionPreview", () => {
+  it("keeps the resolved owner when previewing a qualified global main alias", async () => {
+    await withOpenClawTestState({ label: "hover-global-owner" }, async () => {
+      const cfg: OpenClawConfig = {
+        session: { scope: "global" },
+        agents: { entries: { main: { default: true }, research: {} } },
+      };
+      for (const agentId of ["main", "research"]) {
+        const scope = { agentId, sessionKey: "global", sessionId: `hover-${agentId}` };
+        await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 42 });
+        await persistSessionTranscriptTurn(scope, {
+          cwd: "/tmp",
+          updateMode: "none",
+          messages: [{ message: { role: "user", content: `Title from ${agentId}` }, now: 42 }],
+        });
+      }
+      const handler = expectDefined(
+        createControlUiHandlers()["controlUi.sessionPreview"],
+        "session preview handler",
+      );
+      for (const agentId of ["main", "research"]) {
+        const respond = vi.fn<RespondFn>();
+        await handler(
+          requestOptions({ sessionKey: `agent:${agentId}:main` }, respond, {
+            context: { getRuntimeConfig: () => cfg },
+          }),
+        );
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            status: "ok",
+            sessionKey: "global",
+            agentId,
+            derivedTitle: `Title from ${agentId}`,
+            lastMessagePreview: `Title from ${agentId}`,
+          }),
+          undefined,
+        );
+      }
+    });
+  });
+
   it("returns bounded, redacted metadata for one session", async () => {
     const secret = "sk-test-session-preview-secret-1234567890";
     const loadSessionPreview = vi.fn().mockResolvedValue({

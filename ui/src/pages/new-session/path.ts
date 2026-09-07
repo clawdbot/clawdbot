@@ -42,6 +42,11 @@ function comparableAbsolutePath(value: string): string | null {
   return windows ? normalized.toLowerCase() : normalized;
 }
 
+export function sameAbsolutePath(a: string, b: string): boolean {
+  const path = comparableAbsolutePath(a);
+  return path !== null && path === comparableAbsolutePath(b);
+}
+
 /** Client-side affordance check; the Gateway remains the realpath authority. */
 function isWorkspaceContainedPath(workspace: string, candidate: string): boolean {
   const root = comparableAbsolutePath(workspace);

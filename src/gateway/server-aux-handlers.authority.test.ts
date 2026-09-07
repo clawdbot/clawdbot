@@ -1,8 +1,5 @@
 // Exercises the Gateway-owned authority observer, without loading lazy RPC handlers.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   claimAgentRunApprovalAuthority,
   claimAgentRunDelegatedAuthority,
@@ -12,18 +9,21 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
+import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 type GatewayAux = ReturnType<typeof createGatewayAuxHandlers>;
 type GatewayAuxParams = Parameters<typeof createGatewayAuxHandlers>[0];
 const auxiliaries: GatewayAux[] = [];
-const tempDirs: string[] = [];
+let fixture: OpenClawTestState | undefined;
 
 function createAuthorityHarness(
   params: Pick<
@@ -55,16 +55,21 @@ function createAuthorityHarness(
   return aux;
 }
 
-afterEach(() => {
-  for (const aux of auxiliaries.splice(0)) {
-    aux.unregisterApprovalAuthorityObserver();
-    aux.questionManager.reset();
+beforeEach(async () => {
+  if (fixture) {
+    throw new Error("Previous auxiliary owner cleanup did not finish");
   }
+  fixture = await createOpenClawTestState({ label: "gateway-aux-authority" });
+});
+
+afterEach(async () => {
+  for (const aux of auxiliaries) {
+    await aux.stopOperatorInteractions();
+  }
+  auxiliaries.length = 0;
   resetAgentRunRegistryForTest();
-  closeOpenClawStateDatabaseForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  await fixture?.cleanup();
+  fixture = undefined;
 });
 
 describe("gateway auxiliary authority lifecycle", () => {
@@ -77,6 +82,37 @@ describe("gateway auxiliary authority lifecycle", () => {
     expect(first.execApprovalManager.runtimeEpoch).not.toBe(
       second.execApprovalManager.runtimeEpoch,
     );
+  });
+
+  it("leaves durable approval truth pending when authority closes after owner stop", async () => {
+    const onAgentRunAuthorityClosed = vi.fn();
+    const gatewayAux = createAuthorityHarness({
+      onAgentRunAuthorityClosed,
+      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+    });
+    const authority = claimAgentRunDelegatedAuthority({
+      instanceId: "stopped-approval-owner",
+      runId: "stopped-approval-run",
+    });
+    const record = gatewayAux.execApprovalManager.create({ command: "echo pending" }, 60_000);
+    record.agentRuntimeDelegatedAuthority = { ...authority, kind: "local" };
+    void gatewayAux.execApprovalManager.register(record, 60_000);
+    const pending = getOperatorApprovalDetailed({ id: record.id });
+    expect(pending).toMatchObject({
+      outcome: "found",
+      record: { status: "pending", decision: null, resolvedAtMs: null },
+    });
+    const observerClosed = expect(
+      gatewayAux.execApprovalManager.awaitDecision(record.id),
+    ).rejects.toBeInstanceOf(ApprovalObserverClosedError);
+
+    gatewayAux.beginCloseApprovalObservers();
+    await observerClosed;
+    await gatewayAux.stopOperatorInteractions();
+    releaseAgentRunDelegatedAuthority(authority);
+
+    expect(onAgentRunAuthorityClosed).not.toHaveBeenCalled();
+    expect(getOperatorApprovalDetailed({ id: record.id })).toEqual(pending);
   });
 
   it("cancels generation approvals without closing whole-run capabilities", async () => {
@@ -163,8 +199,7 @@ describe("gateway auxiliary authority lifecycle", () => {
           expect.objectContaining({ operationalRunInstance }),
         );
       } finally {
-        gatewayAux.unregisterApprovalAuthorityObserver();
-        gatewayAux.questionManager.reset();
+        await gatewayAux.stopOperatorInteractions();
         const remaining = replacement ?? authority;
         releaseAgentRunContext(remaining.operationalRunInstance.runId, remaining.claimId);
       }
@@ -212,8 +247,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       ]);
       expect(gatewayAux.questionManager.list().map((question) => question.id)).toEqual(["live"]);
     } finally {
-      gatewayAux.unregisterApprovalAuthorityObserver();
-      gatewayAux.questionManager.reset();
+      await gatewayAux.stopOperatorInteractions();
       authorities.forEach(releaseAgentRunDelegatedAuthority);
     }
   });
@@ -253,17 +287,14 @@ describe("gateway auxiliary authority lifecycle", () => {
         expect.objectContaining({ id: "exec-timeout-publish", decision: "deny" }),
         expect.anything(),
       );
-      gatewayAux.unregisterApprovalAuthorityObserver();
+      await gatewayAux.stopOperatorInteractions();
     } finally {
       vi.useRealTimers();
     }
   });
 
   it("settles and publishes both approval kinds from the production worker-claim observer", async () => {
-    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-aux-worker-"));
-    tempDirs.push(root);
-    closeOpenClawStateDatabaseForTest();
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
     const identity = {
       sessionId: "session-worker-close",
@@ -407,8 +438,7 @@ describe("gateway auxiliary authority lifecycle", () => {
         record: expect.objectContaining({ kind: "plugin", status: "cancelled" }),
       }),
     );
-    gatewayAux.unregisterApprovalAuthorityObserver();
-    gatewayAux.questionManager.reset();
+    await gatewayAux.stopOperatorInteractions();
     releaseAgentRunDelegatedAuthority(runAuthority);
   });
 });

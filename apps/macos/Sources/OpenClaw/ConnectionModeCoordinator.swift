@@ -40,7 +40,7 @@ final class ConnectionModeCoordinator {
             NodesStore.shared.lastError = nil
             await RemoteTunnelManager.shared.stopAll()
             guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
-            WebChatManager.shared.resetTunnels()
+            WebChatManager.shared.resetPrimaryConnections()
         }
 
         switch mode {
@@ -56,7 +56,7 @@ final class ConnectionModeCoordinator {
         case .remote:
             // Never run a local gateway in remote mode.
             GatewayProcessManager.shared.stop()
-            WebChatManager.shared.resetTunnels()
+            WebChatManager.shared.resetPrimaryConnections()
 
             do {
                 NodesStore.shared.lastError = nil

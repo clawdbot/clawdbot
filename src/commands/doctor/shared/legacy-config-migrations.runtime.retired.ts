@@ -447,6 +447,61 @@ function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
   LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
   defineLegacyConfigMigration({
+    id: "runtime.automatic-local-model-lean",
+    describe: "Remove onboarding-owned local model lean settings",
+    legacyRules: [
+      rule(
+        ["wizard", "localModelLeanAutoModel"],
+        "wizard.localModelLeanAutoModel is retired; local models now use Tool Search without reducing their capabilities.",
+      ),
+    ],
+    apply: (raw, changes) => {
+      const wizard = getRecord(raw.wizard);
+      if (!wizard || !Object.hasOwn(wizard, "localModelLeanAutoModel")) {
+        return;
+      }
+      const autoModel = wizard.localModelLeanAutoModel;
+      const defaults = getRecord(getRecord(raw.agents)?.defaults);
+      const model = defaults?.model;
+      const primary = typeof model === "string" ? model : getRecord(model)?.primary;
+      const experimental = getRecord(defaults?.experimental);
+      // The shipped marker owned only a matching default model's true flag.
+      // A changed model or explicit false relinquished that ownership.
+      if (experimental?.localModelLean === true) {
+        if (typeof autoModel === "string" && autoModel === primary) {
+          delete experimental.localModelLean;
+          changes.push("Removed onboarding-owned agents.defaults.experimental.localModelLean.");
+        } else {
+          changes.push(
+            "Retained explicit or unowned agents.defaults.experimental.localModelLean=true; remove it or set it to false to restore the full tool capabilities through Tool Search.",
+          );
+        }
+      }
+      delete wizard.localModelLeanAutoModel;
+      changes.push("Removed retired wizard.localModelLeanAutoModel.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.messages-suppress-tool-errors",
+    describe: "Remove retired tool failure warning suppression",
+    legacyRules: [
+      rule(
+        ["messages", "suppressToolErrors"],
+        "messages.suppressToolErrors is retired; tool failure warnings now appear only when a run ends without a reply.",
+      ),
+    ],
+    apply: (raw, changes) => {
+      const messages = getRecord(raw.messages);
+      if (!messages || !Object.hasOwn(messages, "suppressToolErrors")) {
+        return;
+      }
+      delete messages.suppressToolErrors;
+      changes.push(
+        "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "runtime.retired-internal-hook-handlers",
     describe: "Remove retired internal hook handler registrations",
     legacyRules: [

@@ -16,6 +16,7 @@ import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
+import { controlUiPluginAssetRoot } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
@@ -24,9 +25,12 @@ import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   createControlUiMockSameOriginGatewayScript,
+  prepareControlUiMockGatewayScenario,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
+import { workboardUi } from "../ui/src/test-helpers/control-ui-workboard-fixture.ts";
+import { createOfflineDeviceNode } from "../ui/src/test-helpers/devices-fixtures.ts";
 import {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
@@ -60,6 +64,7 @@ type CliOptions = {
     | "attachments"
     | "board"
     | "code-fences"
+    | "dashboards"
     | "goal"
     | "swarm"
     | "update-available"
@@ -298,6 +303,7 @@ const boardFixtureHtml = `<!doctype html>
     <link rel="stylesheet" href="/src/styles.css" />
     <style>
       body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--bg); }
+      #app { height: 100%; overflow: auto; }
       .board-fixture-shell { box-sizing: border-box; margin: 0 auto; max-width: 1440px; padding: 36px; }
       .board-fixture-header { align-items: end; display: flex; justify-content: space-between; margin-bottom: 24px; }
       .board-fixture-header span { color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .15em; }
@@ -361,6 +367,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "attachments" &&
     value !== "board" &&
     value !== "code-fences" &&
+    value !== "dashboards" &&
     value !== "goal" &&
     value !== "swarm" &&
     value !== "update-available" &&
@@ -1349,6 +1356,21 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
       "Refactored the render guard and reran the suite; all 12 tests pass.",
       workTurnBase + 172_000,
     ),
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "mock-work-yield",
+          name: "yield",
+          arguments: {
+            message:
+              "Waiting for the two visible implementation owners; resume on progress/completion to coordinate shared review and verification.",
+          },
+        },
+      ],
+      timestamp: workTurnBase + 173_000,
+    },
   );
 
   return messages;
@@ -1700,6 +1722,37 @@ async function createChatPickerScenario(
   const workboardMocks = buildWorkboardMocks(baseTime);
   const activityTime = Date.now();
   const activitySessions = buildActivitySessionRows(activityTime);
+  const dashboardGallerySessions =
+    fixture === "dashboards"
+      ? [
+          sessionRow("agent:main:dashboard:release-health", "Release health", baseTime - 3_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+            hasActiveRun: true,
+            status: "running",
+          }),
+          sessionRow("agent:main:dashboard:model-spend", "Model spend", baseTime - 8_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+          sessionRow("agent:main:dashboard:support-radar", "Support radar", baseTime - 18_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+          }),
+          sessionRow("agent:main:dashboard:ci-signal", "CI signal", baseTime - 42_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+          sessionRow("agent:main:dashboard:community-pulse", "Community pulse", baseTime - 75_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+          }),
+          sessionRow("agent:main:dashboard:gateway-fleet", "Gateway fleet", baseTime - 130_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+        ]
+      : [];
   const activeGoal = {
     schemaVersion: 1 as const,
     id: "goal-mobile-parity",
@@ -1716,6 +1769,7 @@ async function createChatPickerScenario(
   };
   const sessions = [
     ...activitySessions,
+    ...dashboardGallerySessions,
     ...(fixture === "workboard"
       ? [
           sessionRow(workboardMocks.sessionKey, "Product operations dashboard", baseTime, {
@@ -2076,19 +2130,7 @@ async function createChatPickerScenario(
           ]
         : []),
     ],
-    controlUiTabs:
-      fixture === "workboard"
-        ? [
-            {
-              group: "control",
-              icon: "kanban",
-              id: "workboard",
-              label: "Workboard",
-              placement: "route:workboard",
-              pluginId: "workboard",
-            },
-          ]
-        : [],
+    ...(fixture === "workboard" ? workboardUi : {}),
     controlUiWidgetKinds: [
       { pluginId: "session", kind: "session:progress", label: "Session progress" },
       ...(fixture === "workboard"
@@ -2177,12 +2219,7 @@ async function createChatPickerScenario(
               configured: true,
               defaultModel: "gpt-realtime-2.1",
               transports: ["webrtc", "gateway-relay"],
-              models: [
-                "gpt-realtime-2.1",
-                "gpt-realtime-2.1-mini",
-                "gpt-realtime-2",
-                "gpt-live-1-codex",
-              ],
+              models: ["gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"],
               voices: [
                 "alloy",
                 "ash",
@@ -2710,6 +2747,7 @@ async function createChatPickerScenario(
       },
       "node.list": {
         nodes: [
+          createOfflineDeviceNode(),
           {
             nodeId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
             displayName: "Mac Studio",
@@ -3136,16 +3174,17 @@ function escapeScriptContent(script: string): string {
   return script.replaceAll("</script", "<\\/script");
 }
 
-function createMockGatewayPlugin(
+async function createMockGatewayPlugin(
   scenario: ControlUiMockGatewayScenario,
   fixture?: CliOptions["fixture"],
-): Plugin {
-  const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
+): Promise<Plugin> {
+  const prepared = await prepareControlUiMockGatewayScenario(scenario);
+  const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(prepared.scenario));
   const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
   const statefulInitScript = escapeScriptContent(
-    createControlUiPreviewInitScript() + skillLibraryMockInitScript(scenario.models),
+    createControlUiPreviewInitScript() + skillLibraryMockInitScript(prepared.scenario.models),
   );
-  const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
+  const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario));
   const pluginIconIds = new Set(
     buildPluginCatalogMock()
       .plugins.filter((plugin) => plugin.hasIcon)
@@ -3210,6 +3249,19 @@ function createMockGatewayPlugin(
         res.statusCode = 200;
         res.setHeader("content-type", "image/png");
         res.end(fs.readFileSync(icon));
+      });
+      server.middlewares.use((req, res, next) => {
+        const pathname = req.url?.split("?", 1)[0];
+        if (!pathname?.startsWith(controlUiPluginAssetRoot())) {
+          next();
+          return;
+        }
+        const asset = prepared.assets.get(pathname);
+        res.statusCode = asset ? 200 : 404;
+        if (asset) {
+          res.setHeader("content-type", asset.contentType);
+        }
+        res.end(asset?.body);
       });
       server.middlewares.use(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (_req, res) => {
         res.statusCode = 200;
@@ -3317,7 +3369,7 @@ try {
     },
     plugins: [
       ...createStandaloneMockIsolationPlugins(),
-      createMockGatewayPlugin(scenario, options.fixture),
+      await createMockGatewayPlugin(scenario, options.fixture),
       createBoardFixturePlugin(),
       ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
     ],

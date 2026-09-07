@@ -341,11 +341,13 @@ function deleteIndexedKey(index: Map<string, Set<string>>, key: string, taskId: 
   }
 }
 
-function getTaskRelatedSessionIndexKeys(task: Pick<TaskRecord, "ownerKey" | "childSessionKey">) {
+type TaskSessionKeys = Pick<TaskRecord, "requesterSessionKey" | "ownerKey" | "childSessionKey">;
+
+function getTaskRelatedSessionIndexKeys(task: TaskSessionKeys) {
   return uniqueStrings(
-    [normalizeOptionalString(task.ownerKey), normalizeOptionalString(task.childSessionKey)].filter(
-      Boolean,
-    ) as string[],
+    [task.requesterSessionKey, task.ownerKey, task.childSessionKey]
+      .map(normalizeOptionalString)
+      .filter((key): key is string => Boolean(key)),
   );
 }
 
@@ -381,19 +383,13 @@ export function deleteParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "
   deleteIndexedKey(taskIdsByParentFlowId, key, taskId);
 }
 
-export function addRelatedSessionKeyIndex(
-  taskId: string,
-  task: Pick<TaskRecord, "ownerKey" | "childSessionKey">,
-) {
+export function addRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
   for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
     addIndexedKey(taskIdsByRelatedSessionKey, sessionKey, taskId);
   }
 }
 
-export function deleteRelatedSessionKeyIndex(
-  taskId: string,
-  task: Pick<TaskRecord, "ownerKey" | "childSessionKey">,
-) {
+export function deleteRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
   for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
     deleteIndexedKey(taskIdsByRelatedSessionKey, sessionKey, taskId);
   }

@@ -95,6 +95,10 @@ vi.mock("openclaw/plugin-sdk/node-selection-runtime", async (importOriginal) => 
 let tempDir: string;
 const hostCapabilityClosers: Array<() => void> = [];
 
+type OpenClawCodingToolsOptionsForTest = NonNullable<
+  Parameters<NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>>[0]
+>;
+
 function setOpenClawCodingToolsFactoryForTests(
   factory: NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>,
 ): void {
@@ -229,7 +233,7 @@ async function buildDynamicToolsForTest(
 }
 
 describe("Codex app-server dynamic tool build", () => {
-  it("forwards the explicit yield acknowledgment without exposing private context", async () => {
+  it("forwards private yield context and acknowledgment to the lifecycle owner", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -252,7 +256,33 @@ describe("Codex app-server dynamic tool build", () => {
       "Research started; results will follow.",
     );
 
-    expect(onYieldDetected).toHaveBeenCalledWith("Research started; results will follow.");
+    expect(onYieldDetected).toHaveBeenCalledWith(
+      "Resume after the fact-checker replies",
+      "Research started; results will follow.",
+    );
+  });
+
+  it("hands the question tools this run's own way to show a prompt", async () => {
+    // Codex dispatches dynamic tools itself, so no tool-start handler reserves the
+    // prompt for a blocking question. Without this the question is never shown and
+    // the turn waits out its full timeout.
+    const workspaceDir = path.join(tempDir, "question-prompt-workspace");
+    const params = createParams(path.join(tempDir, "question-prompt-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.messageChannel = "telegram";
+    const onToolResult = vi.fn();
+    params.onToolResult = onToolResult;
+    let capturedQuestionPrompt: OpenClawCodingToolsOptionsForTest["questionPrompt"];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      capturedQuestionPrompt = options?.questionPrompt;
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(capturedQuestionPrompt?.send).toBe(onToolResult);
+    expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
   });
 
   it("binds a resolver-backed constructed tool surface exactly once", async () => {
@@ -916,6 +946,9 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.clientCaps = ["tool-events", "inline-widgets"];
+    params.pinnedWidgetAuthoring = true;
+    params.toolBindings = { browser: { kind: "tab", tabId: 7, target: "host" } };
+    params.memberRoleIds = ["maintainer-role"];
     params.chatId = "native-chat-123";
     params.chatType = "direct";
     params.messageActionTurnCapability = "turn-capability-1";
@@ -929,6 +962,9 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(receivedOptions).toMatchObject({
       clientCaps: ["tool-events", "inline-widgets"],
+      pinnedWidgetAuthoring: true,
+      toolBindings: { browser: { kind: "tab", tabId: 7, target: "host" } },
+      memberRoleIds: ["maintainer-role"],
       chatType: "direct",
       nativeChannelId: "native-chat-123",
       messageActionTurnCapability: "turn-capability-1",
@@ -1034,7 +1070,7 @@ describe("Codex app-server dynamic tool build", () => {
       params.config = { tools: { exec: { mode: "ask" } } };
       setOpenClawCodingToolsFactoryForTests((options) =>
         createOpenClawCodingTools(options).filter((tool) =>
-          ["openclaw", "message"].includes(tool.name),
+          ["openclaw", "message", "session_status"].includes(tool.name),
         ),
       );
 
@@ -1042,12 +1078,16 @@ describe("Codex app-server dynamic tool build", () => {
         sandbox: null,
         isHostScopedToolActive: () => false,
       });
-      expect(tools.map((tool) => tool.name).toSorted()).toEqual(["message", "openclaw"]);
+      expect(tools.map((tool) => tool.name).toSorted()).toEqual([
+        "message",
+        "openclaw",
+        "session_status",
+      ]);
       const bridge = createCodexDynamicToolBridge({
         tools,
         signal: new AbortController().signal,
         loading,
-        directToolNames: resolveCodexDynamicToolDirectNames(params, false),
+        directToolNames: resolveCodexDynamicToolDirectNames(params, tools, false),
       });
 
       expect(bridge.specs).toContainEqual({
@@ -1056,7 +1096,10 @@ describe("Codex app-server dynamic tool build", () => {
         description: "",
         tools: [expect.objectContaining({ type: "function", name: "openclaw" })],
       });
-      const ordinarySpec = expect.objectContaining({ type: "function", name: "message" });
+      expect(bridge.specs).toContainEqual(
+        expect.objectContaining({ type: "function", name: "message" }),
+      );
+      const ordinarySpec = expect.objectContaining({ type: "function", name: "session_status" });
       expect(bridge.specs).toContainEqual(
         loading === "direct"
           ? ordinarySpec
@@ -1064,7 +1107,7 @@ describe("Codex app-server dynamic tool build", () => {
               type: "namespace",
               name: "openclaw",
               description: "",
-              tools: [expect.objectContaining({ name: "message", deferLoading: true })],
+              tools: [expect.objectContaining({ name: "session_status", deferLoading: true })],
             },
       );
     },
@@ -3071,7 +3114,30 @@ describe("Codex app-server dynamic tool build", () => {
     },
   );
 
-  it("preserves the core final delivery control only on message-tool-only schemas", async () => {
+  it.each([
+    { sessionKey: "agent:main:main", required: undefined, expected: false },
+    { sessionKey: "agent:main:subagent:child", required: undefined, expected: true },
+    { sessionKey: "agent:main:subagent:child", required: false, expected: false },
+    { sessionKey: "agent:main:main", required: true, expected: true },
+  ])(
+    "publishes the constructed target requirement for $sessionKey / $required",
+    async ({ sessionKey, required, expected }) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      params.sessionKey = sessionKey;
+      params.requireExplicitMessageTarget = required;
+      const factory = vi.fn((_options: Parameters<typeof createOpenClawCodingTools>[0]) => []);
+      const onMessageToolTargetResolved = vi.fn();
+      setOpenClawCodingToolsFactoryForTests(factory);
+      await buildDynamicToolsForTest(params, workspaceDir, { onMessageToolTargetResolved });
+      expect(factory.mock.calls[0]?.[0]?.requireExplicitMessageTarget).toBe(expected);
+      expect(onMessageToolTargetResolved).toHaveBeenCalledExactlyOnceWith(expected);
+    },
+  );
+
+  it("preserves the core final delivery control across delivery-mode schemas", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -3089,8 +3155,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(sourceReplySchema.properties).toMatchObject({
       final: {
         type: "boolean",
-        description:
-          "Set false for progress. Set true, or omit, for the completed current-source reply.",
+        description: expect.stringContaining("Ignored for other sends"),
       },
     });
 
@@ -3100,7 +3165,7 @@ describe("Codex app-server dynamic tool build", () => {
       properties?: Record<string, unknown>;
     };
 
-    expect(automaticSchema.properties).not.toHaveProperty("final");
+    expect(automaticSchema).toEqual(sourceReplySchema);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

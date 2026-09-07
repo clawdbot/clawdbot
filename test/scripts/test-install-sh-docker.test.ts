@@ -1051,6 +1051,23 @@ printf 'status=%s\\n' "$status"
     );
   });
 
+  it("verifies fs-safe native loading before and after Docker runtime assembly", () => {
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+    const verifier = readFileSync("scripts/docker/verify-native-addons.sh", "utf8");
+
+    expect(dockerfile).toContain(
+      "COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-native.mjs",
+    );
+    expect(dockerfile.match(/RUN sh scripts\/docker\/verify-native-addons\.sh/gu)).toHaveLength(2);
+    expect(dockerfile).toContain(
+      "node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require",
+    );
+    expect(verifier).toContain(
+      "node scripts/docker/verify-fs-safe-native.mjs --package-root /app --mode require",
+    );
+    expect(verifier).toContain("if grep -qx 'matrix' /tmp/openclaw-selected-plugin-dirs; then");
+  });
+
   it("passes the baked browser build arg through Docker setup", () => {
     const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
 
@@ -2400,6 +2417,13 @@ if [ "\${1:-}" = "pm" ] && [ "\${2:-}" = "-g" ] && [ "\${3:-}" = "untrusted" ]; 
 fi
 if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "--bun" ]; then
   echo "OpenClaw 2026.6.17"
+  exit 0
+fi
+if [[ "\${1:-}" == */verify-fs-safe-native.mjs ]]; then
+  test "\${2:-}" = "--package-root"
+  test -d "\${3:-}"
+  test "\${4:-}" = "--mode"
+  test "\${5:-}" = "require"
   exit 0
 fi
 if [[ "\${1:-}" == */openclaw.mjs ]]; then

@@ -29,7 +29,7 @@ import time
 import unicodedata
 import urllib.parse
 from pathlib import Path, PurePosixPath
-from typing import Any, BinaryIO, Callable, NamedTuple
+from typing import Any, BinaryIO, Callable, NamedTuple, Sequence
 
 
 ENGINES = ("codex", "claude", "amp", "pi", "kimi")
@@ -360,6 +360,7 @@ CODEX_TRUST_PATH_ENV_KEYS = {
     "SSL_CERT_DIR",
     "SSL_CERT_FILE",
 }
+CODEX_MACOS_SCRATCH_ROOTS = ("/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp")
 PROVIDER_CREDENTIAL_PATH_ENV_KEYS = {
     "AWS_CONFIG_FILE",
     "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
@@ -644,7 +645,7 @@ def safe_dbus_session_address(repo: Path, value: str) -> bool:
     return Path(path).is_absolute() and external_env_path(repo, path)
 
 
-def safe_temp_root(repo: Path) -> Path:
+def safe_temp_root(repo: Path, *, engine: str | None = None) -> Path:
     try:
         root = Path(tempfile.gettempdir()).resolve(strict=True)
     except OSError as exc:
@@ -653,6 +654,14 @@ def safe_temp_root(repo: Path) -> Path:
         raise SystemExit(
             "temporary directory must be outside the reviewed repository; "
             "unset or relocate TMPDIR/TMP/TEMP"
+        )
+    # Reject before Codex's probe or runtime can put file auth in shared scratch.
+    if engine == "codex" and sys.platform == "darwin" and any(
+        is_within(root, Path(scratch)) for scratch in CODEX_MACOS_SCRATCH_ROOTS
+    ):
+        raise SystemExit(
+            "Codex temporary directory must be outside shared scratch directories; "
+            "unset TMPDIR/TMP/TEMP to use the macOS private temporary directory"
         )
     return root
 
@@ -3701,17 +3710,26 @@ def write_json_temp(data: dict[str, Any], temp_root: Path) -> Path:
     return Path(handle.name)
 
 
-def toml_quoted_key_segment(value: str) -> str:
-    return json.dumps(value)
+def toml_string(value: str) -> str:
+    # TOML rejects JSON surrogate escapes and requires DEL to remain escaped.
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", r"\u007f")
 
 
 def toml_inline_string_table(values: dict[str, str]) -> str:
-    entries = ", ".join(f"{key}={json.dumps(value)}" for key, value in sorted(values.items()))
+    entries = ", ".join(f"{toml_key(key)}={toml_string(value)}" for key, value in sorted(values.items()))
     return "{" + entries + "}"
 
 
 def codex_config_isolation_flags(repo: Path, runtime_root: Path) -> list[str]:
     tool_env = toml_inline_string_table(codex_tool_git_env())
+    filesystem = {":minimal": "read", ":workspace_roots": "read"}
+    if sys.platform == "darwin":
+        # Codex's macOS process defaults otherwise grant shared scratch access.
+        # Glob denies cover the root's listing as well as its descendants.
+        filesystem.update({f"{root}{{,/**}}": "deny" for root in CODEX_MACOS_SCRATCH_ROOTS})
+    filesystem_config = ",".join(
+        f"{toml_string(path)}={toml_string(access)}" for path, access in filesystem.items()
+    )
     state_home = runtime_root / "state"
     log_dir = runtime_root / "log"
     state_home.mkdir(parents=True, exist_ok=True)
@@ -3720,9 +3738,9 @@ def codex_config_isolation_flags(repo: Path, runtime_root: Path) -> list[str]:
         "-c",
         "project_doc_max_bytes=0",
         "-c",
-        f"sqlite_home={json.dumps(str(state_home.resolve()))}",
+        f"sqlite_home={toml_string(str(state_home.resolve()))}",
         "-c",
-        f"log_dir={json.dumps(str(log_dir.resolve()))}",
+        f"log_dir={toml_string(str(log_dir.resolve()))}",
         "-c",
         "features.shell_snapshot=false",
         "-c",
@@ -3734,7 +3752,7 @@ def codex_config_isolation_flags(repo: Path, runtime_root: Path) -> list[str]:
         "-c",
         "skills.config=[]",
         "-c",
-        f"projects.{toml_quoted_key_segment(str(repo.resolve()))}.trust_level=\"untrusted\"",
+        f"projects.{toml_string(str(repo.resolve()))}.trust_level=\"untrusted\"",
         "-c",
         'shell_environment_policy.inherit="core"',
         "-c",
@@ -3748,7 +3766,7 @@ def codex_config_isolation_flags(repo: Path, runtime_root: Path) -> list[str]:
         "-c",
         'default_permissions="autoreview"',
         "-c",
-        'permissions.autoreview.filesystem={":minimal"="read",":workspace_roots"="read"}',
+        f"permissions.autoreview.filesystem={{{filesystem_config}}}",
     ]
 
 
@@ -3793,18 +3811,31 @@ def parse_codex_auth_config_fallback(text: str) -> dict[str, Any]:
     return config
 
 
-def load_codex_auth_config(path: Path) -> dict[str, Any]:
+def load_codex_auth_config(path: Path, *, strict: bool = False) -> dict[str, Any]:
     try:
-        text = path.read_text()
-    except OSError:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        if strict and path.is_symlink():
+            raise SystemExit("Codex inference configuration refused: operator TOML is unavailable")
+        return {}
+    except (OSError, UnicodeError):
+        if strict:
+            raise SystemExit("Codex inference configuration refused: operator TOML is unreadable")
         return {}
     try:
-        import tomllib
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            import tomli as tomllib
     except ModuleNotFoundError:
+        if strict:
+            raise SystemExit("Codex inference configuration refused: reading an operator route requires Python 3.11 or tomli")
         return parse_codex_auth_config_fallback(text)
     try:
         config = tomllib.loads(text)
     except ValueError:
+        if strict:
+            raise SystemExit("Codex inference configuration refused: operator TOML is invalid")
         return {}
     return config if isinstance(config, dict) else {}
 
@@ -3823,11 +3854,14 @@ def codex_source_home(repo: Path) -> Path | None:
     )
 
 
-def codex_auth_config_flags(repo: Path, *, force_file: bool = False) -> list[str]:
+def codex_auth_config_flags(
+    repo: Path, *, force_file: bool = False, config: dict[str, Any] | None = None,
+) -> list[str]:
     codex_home = codex_source_home(repo)
     if codex_home is None:
         return ["-c", 'cli_auth_credentials_store="file"'] if force_file else []
-    config = load_codex_auth_config(codex_home / "config.toml")
+    if config is None:
+        config = load_codex_auth_config(codex_home / "config.toml")
 
     allowed_values = {
         "forced_login_method": {"chatgpt", "api"},
@@ -3838,14 +3872,14 @@ def codex_auth_config_flags(repo: Path, *, force_file: bool = False) -> list[str
     if not force_file:
         value = config.get("cli_auth_credentials_store")
         if isinstance(value, str) and value in {"file", "keyring", "auto", "ephemeral"}:
-            flags.extend(["-c", f"cli_auth_credentials_store={json.dumps(value)}"])
+            flags.extend(["-c", f"cli_auth_credentials_store={toml_string(value)}"])
     for key, allowed in allowed_values.items():
         value = config.get(key)
         if isinstance(value, str) and value in allowed:
-            flags.extend(["-c", f"{key}={json.dumps(value)}"])
+            flags.extend(["-c", f"{key}={toml_string(value)}"])
     workspace_ids = config.get("forced_chatgpt_workspace_id")
     if isinstance(workspace_ids, str) and workspace_ids.strip():
-        flags.extend(["-c", f"forced_chatgpt_workspace_id={json.dumps(workspace_ids.strip())}"])
+        flags.extend(["-c", f"forced_chatgpt_workspace_id={toml_string(workspace_ids.strip())}"])
     elif isinstance(workspace_ids, list):
         normalized_workspace_ids = [
             value.strip()
@@ -3853,8 +3887,129 @@ def codex_auth_config_flags(repo: Path, *, force_file: bool = False) -> list[str
             if isinstance(value, str) and value.strip()
         ]
         if normalized_workspace_ids:
-            flags.extend(["-c", f"forced_chatgpt_workspace_id={json.dumps(normalized_workspace_ids)}"])
+            flags.extend(["-c", f"forced_chatgpt_workspace_id={toml_value(normalized_workspace_ids)}"])
     return flags
+
+
+def load_codex_inference_route(
+    repo: Path, overrides: Sequence[str] = (),
+) -> tuple[list[str], bytes | None]:
+    """Read the trusted client route without loading operator tool capabilities."""
+    def refuse(detail: str) -> None:
+        raise SystemExit(f"Codex inference configuration refused: {detail}")
+
+    selectors = [
+        value.strip()
+        for key, _, value in (item.partition("=") for item in overrides)
+        if key.strip() == "model_provider"
+    ]
+    if not selectors:
+        # Unselected provider/profile/tuning settings keep their historical
+        # auth-only behavior, including on hosts without a TOML parser.
+        return codex_auth_config_flags(repo), None
+    if len(selectors) != 1:
+        refuse("select exactly one model_provider")
+    match = re.fullmatch(r'''(["']?)([A-Za-z0-9_-]+)\1''', selectors[0])
+    if match is None:
+        refuse("model_provider must be a bare or quoted provider identifier")
+    provider_id = match[2]
+
+    def external_path(
+        value: Any, label: str, *, directory: bool = False, absolute: bool = False,
+    ) -> Path:
+        if not isinstance(value, str) or not value or (absolute and not Path(value).is_absolute()):
+            refuse(f"{label} must be {'an absolute ' if absolute else 'an '}external path")
+        try:
+            # Codex resolves path settings relative to their owning config file.
+            path = (source_home / Path(value).expanduser()).resolve(strict=True)
+        except (OSError, ValueError, RuntimeError):
+            refuse(f"{label} is unavailable")
+        if not external_env_path(repo, str(path)) or not (
+            path.is_dir() if directory else path.is_file()
+        ):
+            refuse(f"{label} must be outside the reviewed repository")
+        return path
+
+    source_home = codex_source_home(repo)
+    if source_home is None:
+        refuse("CODEX_HOME must be an available external directory")
+    config_path = source_home / "config.toml"
+    if not external_env_path(repo, str(config_path)):
+        refuse("operator config must be outside the reviewed repository")
+    config = load_codex_auth_config(config_path, strict=True)
+    flags = codex_auth_config_flags(repo, config=config)
+    context_keys = (
+        "model_context_window", "model_auto_compact_token_limit",
+        "model_auto_compact_token_limit_scope",
+    )
+    if config.get("model_provider") != provider_id:
+        refuse("selected model_provider must match the operator config")
+    if any(key in config for key in ("profile", "openai_base_url")):
+        refuse("profile or base URL overrides cannot be projected as one inference route")
+    if provider_id in {"openai", "ollama", "lmstudio", "amazon-bedrock", "amazon-bedrock-runtime"}:
+        refuse("command authentication requires a distinct named provider")
+    providers = config.get("model_providers", {})
+    provider = providers.get(provider_id) if isinstance(providers, dict) else None
+    if not isinstance(provider, dict) or set(provider) - {
+        "name", "base_url", "wire_api", "requires_openai_auth", "auth",
+    }:
+        refuse("unsupported provider fields")
+    if (
+        provider.get("base_url") != "https://api.openai.com/v1"
+        or provider.get("wire_api", "responses") != "responses"
+        or provider.get("requires_openai_auth", False) is not False
+        or not isinstance(provider.get("name", ""), str)
+    ):
+        refuse("only command-auth OpenAI Responses routes are supported")
+    auth = provider.get("auth")
+    if not isinstance(auth, dict) or set(auth) - {
+        "command", "args", "cwd", "timeout_ms", "refresh_interval_ms",
+    } or auth.get("args", []) != []:
+        refuse("unsupported provider authentication fields")
+    command = external_path(auth.get("command"), "authentication executable", absolute=True)
+    if not os.access(command, os.X_OK):
+        refuse("authentication executable is not executable")
+    auth_cwd = external_path(auth.get("cwd", str(source_home)), "authentication cwd", directory=True)
+    for key, minimum in (("timeout_ms", 1), ("refresh_interval_ms", 0)):
+        if key in auth and (type(auth[key]) is not int or not minimum <= auth[key] <= (1 << 64) - 1):
+            refuse(f"invalid authentication {key}")
+    if any(override.partition("=")[0].strip() in context_keys for override in overrides):
+        refuse("context overrides would split the operator inference route")
+
+    catalogue_bytes = None
+    if "model_catalog_json" in config:
+        catalogue = external_path(config["model_catalog_json"], "model catalogue")
+        try:
+            catalogue_bytes = catalogue.read_bytes()
+        except OSError:
+            refuse("model catalogue is unreadable")
+    # Codex owns catalogue parsing, optional defaults, model fallback and context
+    # clamping. Preserve the operator's bytes instead of rebuilding its metadata.
+    settings = {
+        "model_provider": provider_id,
+        **{key: config[key] for key in context_keys if key in config},
+        **{f"model_providers.{provider_id}.{key}": value for key, value in provider.items() if key != "auth"},
+        f"model_providers.{provider_id}.auth.command": str(command),
+        f"model_providers.{provider_id}.auth.cwd": str(auth_cwd),
+        **{f"model_providers.{provider_id}.auth.{key}": auth[key]
+           for key in ("timeout_ms", "refresh_interval_ms") if key in auth},
+    }
+    return flags + [part for key, value in settings.items() for part in ("-c", f"{key}={toml_value(value)}")], catalogue_bytes
+
+
+def prepare_codex_inference_config(
+    route: tuple[list[str], bytes | None], runtime_root: Path,
+) -> list[str]:
+    flags, catalogue_bytes = route
+    if catalogue_bytes is None:
+        return flags
+    # Client metadata stays outside the model's readable workspace and remains
+    # the same snapshot across the existing model-access retry.
+    catalogue = runtime_root / "model-catalog.json"
+    with catalogue.open("xb") as output:
+        output.write(catalogue_bytes)
+    catalogue.chmod(0o600)
+    return [*flags, "-c", f"model_catalog_json={toml_string(str(catalogue.resolve()))}"]
 
 
 def codex_file_auth_source(repo: Path) -> Path | None:
@@ -3959,7 +4114,7 @@ def ensure_codex_isolation_supported(
 ) -> str:
     selected_bin = args.codex_bin
     codex_bin = resolve_command(selected_bin, repo)
-    temp_root = safe_temp_root(repo)
+    temp_root = safe_temp_root(repo, engine="codex")
     with tempfile.TemporaryDirectory(
         prefix="autoreview-codex-probe-workspace.",
         dir=temp_root,
@@ -4349,7 +4504,7 @@ def prepare_kimi_runtime_auth(
 def toml_key(key: str) -> str:
     if re.fullmatch(r"[A-Za-z0-9_-]+", key):
         return key
-    return json.dumps(key)
+    return toml_string(key)
 
 
 def toml_value(value: Any) -> str:
@@ -4358,10 +4513,10 @@ def toml_value(value: Any) -> str:
     if isinstance(value, (int, float)):
         return repr(value)
     if isinstance(value, str):
-        return json.dumps(value)
+        return toml_string(value)
     if isinstance(value, list):
         return "[" + ", ".join(toml_value(item) for item in value) + "]"
-    raise SystemExit(f"kimi config contains a value autoreview cannot serialize: {value!r}")
+    raise SystemExit(f"TOML config contains a value autoreview cannot serialize: {value!r}")
 
 
 def dump_toml(data: dict[str, Any]) -> str:
@@ -4412,6 +4567,7 @@ def format_version(version: tuple[int, int, int]) -> str:
 
 SAFE_CODEX_CONFIG_KEYS = {
     "hide_agent_reasoning",
+    "model_provider",
     "model_auto_compact_token_limit",
     "model_auto_compact_token_limit_scope",
     "model_context_window",
@@ -4442,7 +4598,7 @@ def codex_config_overrides(args: argparse.Namespace) -> list[str]:
         if key not in SAFE_CODEX_CONFIG_KEYS:
             raise SystemExit(
                 f"unsafe Codex config override refused: {key}; "
-                "only model and response tuning keys are allowed"
+                "only model/response tuning and validated provider selection are allowed"
             )
         overrides.append(item)
     return overrides
@@ -4525,6 +4681,7 @@ def codex_command(
     model: str | None,
     *,
     force_file_auth: bool = False,
+    auth_config: list[str] | None = None,
 ) -> list[str]:
     cmd = [resolve_command(args.codex_bin, source_repo), "--ask-for-approval", "never"]
     if args.web_search:
@@ -4532,8 +4689,11 @@ def codex_command(
     if model:
         cmd.extend(["--model", model])
     # User overrides go before the isolation flags so isolation stays authoritative on conflicts.
-    for override in codex_config_overrides(args):
-        cmd.extend(["-c", override])
+    overrides = codex_config_overrides(args)
+    for override in overrides:
+        # Provider selection is emitted only by the validated route owner.
+        if override.partition("=")[0].strip() != "model_provider":
+            cmd.extend(["-c", override])
     # Dedicated settings win over the generic config escape hatch.
     if args.thinking:
         cmd.extend(["-c", f'model_reasoning_effort="{args.thinking}"'])
@@ -4542,7 +4702,13 @@ def codex_command(
     if speed_override is not None:
         cmd.extend(["-c", speed_override])
     cmd.extend(codex_config_isolation_flags(review_root, runtime_root))
-    cmd.extend(codex_auth_config_flags(source_repo, force_file=force_file_auth))
+    if auth_config is None:
+        auth_config = prepare_codex_inference_config(
+            load_codex_inference_route(source_repo, overrides), runtime_root,
+        )
+    cmd.extend(auth_config)
+    if force_file_auth:
+        cmd.extend(["-c", 'cli_auth_credentials_store="file"'])
     cmd.append("exec")
     if args.stream_engine_output:
         cmd.append("--json")
@@ -4566,7 +4732,7 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     if not args.tools:
         raise SystemExit("--no-tools is not supported by the Codex engine; use --engine claude --no-tools for a no-tools run")
     ensure_codex_isolation_supported(args, repo)
-    temp_root = safe_temp_root(repo)
+    temp_root = safe_temp_root(repo, engine="codex")
     schema_path = write_json_temp(SCHEMA, temp_root)
     with tempfile.NamedTemporaryFile(
         "w",
@@ -4594,6 +4760,8 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             review_root = Path(workspace_dir)
             runtime_root = Path(runtime_dir)
             runtime_codex_home = runtime_root / "codex-home"
+            route = load_codex_inference_route(repo, codex_config_overrides(args))
+            auth_config = prepare_codex_inference_config(route, runtime_root)
             file_auth_linked = prepare_codex_runtime_auth(repo, runtime_codex_home)
             for index, model in enumerate(models):
                 output_path.write_text("")
@@ -4606,6 +4774,7 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
                     output_path,
                     model,
                     force_file_auth=file_auth_linked,
+                    auth_config=auth_config,
                 )
                 if index:
                     # The initial send was scanned by run_reviewer; a retry is
@@ -6026,7 +6195,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--codex-config",
         action="append",
-        help='Safe Codex model/response tuning "-c key=value" override (TOML value), codex reviewer only. Repeatable. Capability-, command-, and path-bearing keys are refused. Env default: AUTOREVIEW_CODEX_CONFIG (semicolon-separated), e.g. service_tier="fast".',
+        help='Codex "-c key=value" tuning override (TOML value). Select model_provider=<id> to project the matching trusted external route. Repeatable; one provider selector. Command-, path-, and provider-definition keys are refused. Env default: AUTOREVIEW_CODEX_CONFIG (semicolon-separated).',
     )
     parser.add_argument(
         "--codex-speed",
@@ -6293,6 +6462,7 @@ def resolve_engine_binary(reviewer: argparse.Namespace, repo: Path) -> tuple[boo
         try:
             codex_config_keys(reviewer)
             codex_speed_override(reviewer)
+            load_codex_inference_route(repo, codex_config_overrides(reviewer))
         except SystemExit as exc:
             return False, str(exc.code)
     if engine == "claude" and getattr(reviewer, "tools", True):

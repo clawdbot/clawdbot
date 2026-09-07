@@ -7,6 +7,7 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import { abortPendingChannelReloads } from "../gateway/server-reload-generation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -143,15 +144,8 @@ function clearGatewayRestartTransientState(): void {
 
 export function resetGatewayRestartStateForInProcessRestart(): void {
   clearGatewayRestartTransientState();
-  // Cancel any in-progress deferred channel reload so it doesn't race with
-  // the restart to start the same channel (e.g. telegram double-spawn).
-  void import("../gateway/server-reload-handlers.js")
-    .then((mod) => {
-      mod.abortPendingChannelReloads();
-    })
-    .catch(() => {
-      // Best-effort: the module may not be loaded in minimal/test gateways.
-    });
+  // Fence the retiring lifecycle before a successor can create its reload generation.
+  abortPendingChannelReloads();
 }
 
 type RestartAuditInfo = {

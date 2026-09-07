@@ -187,7 +187,7 @@ struct GatewayChannelDisconnectTests {
         #expect(session.snapshotMakeCount() == 2)
     }
 
-    @Test func `request send failure notifies once before reconnect`() async throws {
+    @Test func `request send failure retains its cause through disconnect cleanup`() async throws {
         let (channel, session, disconnects, cleanupGate, snapshots) = try self.makeSendFailureChannel()
         try await channel.connect()
         await snapshots.waitForCount(1)
@@ -201,7 +201,21 @@ struct GatewayChannelDisconnectTests {
             }
         }
         await disconnects.waitForDisconnect()
-        #expect(session.snapshotMakeCount() == 1)
+        for requestAgain in [false, true] {
+            do {
+                if requestAgain {
+                    _ = try await channel.request(method: "test.retry", params: nil, timeoutMs: 500)
+                } else {
+                    try await channel.connect()
+                }
+                Issue.record("Disconnect cleanup must finish before reconnect")
+            } catch {
+                let failure = error as NSError
+                #expect(failure.domain == URLError.errorDomain)
+                #expect(failure.code == URLError.networkConnectionLost.rawValue)
+            }
+            #expect(session.snapshotMakeCount() == 1)
+        }
 
         await cleanupGate.open()
         #expect(await request.value)
@@ -327,13 +341,13 @@ struct GatewayChannelDisconnectTests {
         try await channel.connect()
         await snapshots.waitForCount(1)
         let firstTask = try #require(session.latestTask())
-        firstTask.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.eventData(seq: 1)))
+        firstTask.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(seq: 1)))
         await events.waitForCount(1)
         while !firstTask.hasPendingReceiveHandler() {
             await Task.yield()
         }
 
-        firstTask.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.eventData(seq: 3)))
+        firstTask.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(seq: 3)))
         await seqGapGate.waitForStart()
         await #expect(throws: (any Error).self) {
             try await channel.send(method: "force.disconnect", params: nil)

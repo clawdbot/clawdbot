@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
   createSessionManagementE2eSuite,
@@ -18,11 +19,7 @@ suite.define(() => {
       defaultBranch: "main",
       repositoryStatus: "git",
     };
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -185,11 +182,7 @@ suite.define(() => {
   it.each(["/home/peter/client-work", ""])(
     "blocks saving a worktree default until repository inspection succeeds (%s)",
     async (groupCwd) => {
-      const context = await suite.browser.newContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -253,11 +246,7 @@ suite.define(() => {
   );
 
   it("omits the group category for a legacy Gateway", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["sessions.create", "sessions.groups.list"],
@@ -288,11 +277,7 @@ suite.define(() => {
   it("revalidates an open group route when its defaults or identity change", async () => {
     const initialCwd = "/home/peter/client-work";
     const refreshedCwd = "/home/peter/refreshed-client-work";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -368,11 +353,7 @@ suite.define(() => {
   });
 
   it("fails an open group route closed while remote catalog invalidation is unresolved", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -435,11 +416,7 @@ suite.define(() => {
 
   it("keeps rejected group defaults editable and allows retry", async () => {
     const groupCwd = "/home/peter/client-work";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.update"],
@@ -506,11 +483,7 @@ suite.define(() => {
 
   it("offers retry when authoritative group defaults are unavailable", async () => {
     const groupCwd = "/home/peter/client-work";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.defaults"],
@@ -595,11 +568,7 @@ suite.define(() => {
   });
 
   it("blocks a missing group until a fresh catalog retry resolves it", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: { "sessions.list": sessionsListResponse([]) },

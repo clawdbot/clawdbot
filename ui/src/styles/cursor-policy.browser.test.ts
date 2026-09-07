@@ -57,6 +57,7 @@ const CURSOR_CASES: readonly CursorCase[] = [
   { expected: "pointer", selector: "#new-tab-button" },
   { expected: "pointer", selector: "#shadow-new-tab-button", shadow: true },
   { expected: "pointer", selector: ".markdown-file-link" },
+  { expected: "pointer", selector: ".markdown-github-item" },
   // Semantic cursors remain owned by their components.
   { expected: "text", selector: "#plain-text-input" },
   { expected: "text", selector: ".chat-pane__session-title-button" },
@@ -135,6 +136,7 @@ function fixtureDocument(): string {
       <div class="session-tokens"><span class="session-tokens__value">12k</span></div>
       <span class="agent-tools-runtime-chip--more">+3</span>
       <div class="chat-text"><a class="markdown-file-link">src/index.ts</a></div>
+      <div class="chat-text"><a class="markdown-github-link markdown-github-item" data-github-kind="pull" href="https://github.com/openclaw/openclaw/pull/3434" target="_blank">#3434</a></div>
       <div id="shadow-policy-host"><template shadowrootmode="open">
         <style>${dockPanelStyles.cssText}</style>
         <button id="shadow-new-tab-button" class="rail-header__action" type="button" data-new-tab-action>New tab</button>

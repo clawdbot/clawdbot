@@ -128,7 +128,7 @@ const saveRemoteMediaMock = vi.hoisted(() =>
     };
   }),
 );
-const fetchWithRuntimeDispatcherMock = vi.hoisted(() => vi.fn());
+const fetchWithRuntimeDispatcherMock = vi.hoisted(() => vi.fn<FetchMock>());
 const logVerboseMock = vi.hoisted(() => vi.fn());
 const mediaWarnMock = vi.hoisted(() => vi.fn());
 
@@ -142,18 +142,10 @@ vi.mock("./thread.runtime.js", () => ({
   logVerbose: logVerboseMock,
 }));
 
-function withFetchPreconnect(fetchMock: ReturnType<typeof vi.fn<FetchMock>>): typeof fetch {
-  return Object.assign(
-    ((input: RequestInfo | URL, init?: RequestInit) => fetchMock(input, init)) as typeof fetch,
-    { mock: fetchMock.mock },
-  );
-}
-
-// Store original fetch
-const originalFetch = globalThis.fetch;
 let mockFetch: ReturnType<typeof vi.fn<FetchMock>>;
 
 beforeEach(() => {
+  mockFetch = vi.fn();
   threadStarterIdentitySequence += 1;
   threadStarterIdentity = {
     channelId: `CMEDIA${threadStarterIdentitySequence}`,
@@ -164,7 +156,8 @@ beforeEach(() => {
     },
   };
   readRemoteMediaBufferMock.mockClear();
-  fetchWithRuntimeDispatcherMock.mockClear();
+  fetchWithRuntimeDispatcherMock.mockReset();
+  fetchWithRuntimeDispatcherMock.mockImplementation((input, init) => mockFetch(input, init));
   logVerboseMock.mockClear();
   mediaWarnMock.mockClear();
   saveMediaBufferMock.mockReset();
@@ -280,13 +273,7 @@ async function expectPrivateDownloadRedirect(params: {
 }
 
 describe("resolveSlackMedia", () => {
-  beforeEach(() => {
-    mockFetch = vi.fn();
-    globalThis.fetch = mockFetch as unknown as typeof fetch;
-  });
-
   afterEach(() => {
-    globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
@@ -996,48 +983,47 @@ describe("resolveSlackMedia", () => {
     expect([...unavailableFiles]).toEqual([[files[8], "omitted: 8-file limit"]]);
   });
 
-  it("routes dispatcher-backed Slack media requests through runtime fetch", async () => {
-    saveMediaBufferMock.mockResolvedValue(createSavedMedia("/tmp/test.jpg", "image/jpeg"));
-    globalThis.fetch = (async () => {
-      throw new Error("global fetch should not receive dispatcher-backed Slack media requests");
-    }) as typeof fetch;
-    fetchWithRuntimeDispatcherMock.mockImplementation(async () => {
-      return new Response(Buffer.from("image data"), {
-        status: 200,
-        headers: { "content-type": "image/jpeg" },
+  it.each([true, false])(
+    "selects the media transport by dispatcher presence even when global fetch is mocked (%s)",
+    async (hasDispatcher) => {
+      const globalFetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response("global"));
+      fetchWithRuntimeDispatcherMock.mockResolvedValue(new Response("runtime"));
+      const dispatcher = {};
+      saveRemoteMediaMock.mockImplementationOnce(async ({ url, fetchImpl, requestInit }) => {
+        await fetchImpl(url, {
+          ...requestInit,
+          ...(hasDispatcher ? { dispatcher } : {}),
+        });
+        return { ...createSavedMedia("/tmp/test.jpg", "image/jpeg"), fileName: "test.jpg" };
       });
-    });
 
-    const result = await resolveSlackMedia({
-      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
-    });
+      const result = await resolveSlackMedia({
+        files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+        token: "xoxb-test-token",
+        maxBytes: 1024 * 1024,
+      });
 
-    expectSlackMediaResult(result);
-    expect(fetchWithRuntimeDispatcherMock).toHaveBeenCalled();
-    const runtimeFetchInit = requireRecord(
-      requireMockCall(fetchWithRuntimeDispatcherMock, 0, "runtime fetch")[1],
-      "runtime fetch init",
-    ) as RequestInit & { dispatcher?: unknown };
-    expect(runtimeFetchInit.redirect).toBe("manual");
-    expect("dispatcher" in runtimeFetchInit).toBe(true);
-    expect(new Headers(runtimeFetchInit.headers).get("Authorization")).toBe(
-      "Bearer xoxb-test-token",
-    );
-  });
+      expectSlackMediaResult(result);
+      const selectedFetch = hasDispatcher ? fetchWithRuntimeDispatcherMock : globalFetchMock;
+      const unusedFetch = hasDispatcher ? globalFetchMock : fetchWithRuntimeDispatcherMock;
+      expect(selectedFetch).toHaveBeenCalledOnce();
+      expect(unusedFetch).not.toHaveBeenCalled();
+      const fetchInit = requireRecord(
+        requireMockCall(selectedFetch, 0, "selected fetch")[1],
+        "fetch init",
+      ) as RequestInit & { dispatcher?: unknown };
+      expect(fetchInit.redirect).toBe("manual");
+      expect("dispatcher" in fetchInit).toBe(hasDispatcher);
+      expect(fetchInit.dispatcher).toBe(hasDispatcher ? dispatcher : undefined);
+      expect(new Headers(fetchInit.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
+    },
+  );
 });
 
 describe("Slack media SSRF policy", () => {
-  const originalFetchLocal = globalThis.fetch;
-
-  beforeEach(() => {
-    mockFetch = vi.fn();
-    globalThis.fetch = withFetchPreconnect(mockFetch);
-  });
-
   afterEach(() => {
-    globalThis.fetch = originalFetchLocal;
     vi.restoreAllMocks();
   });
 
@@ -1216,18 +1202,16 @@ describe("Slack media SSRF policy", () => {
 
 describe("Slack message file intake", () => {
   beforeEach(() => {
-    mockFetch = vi.fn(
+    mockFetch.mockImplementation(
       async () =>
         new Response(Buffer.from("file contents"), {
           status: 200,
           headers: { "content-type": "image/png" },
         }),
     );
-    globalThis.fetch = mockFetch as unknown as typeof fetch;
   });
 
   afterEach(() => {
-    globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
@@ -1484,13 +1468,7 @@ describe("Slack message file intake", () => {
 });
 
 describe("resolveSlackAttachmentContent", () => {
-  beforeEach(() => {
-    mockFetch = vi.fn();
-    globalThis.fetch = mockFetch as unknown as typeof fetch;
-  });
-
   afterEach(() => {
-    globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 

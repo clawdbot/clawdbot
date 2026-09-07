@@ -1,5 +1,4 @@
 // Gateway assistant-avatar projection binds the selected value to effective metadata.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import {
   openLocalAgentAvatarFile,
@@ -15,7 +14,10 @@ import {
   isWindowsAbsolutePath,
   looksLikeAvatarPath,
 } from "../shared/avatar-policy.js";
-import { createGatewayAvatarDataUrlCache } from "./assistant-avatar-cache.js";
+import {
+  createGatewayAvatarDataUrlCache,
+  gatewayAvatarImageRevision,
+} from "./assistant-avatar-cache.js";
 import { DEFAULT_ASSISTANT_IDENTITY } from "./assistant-identity.js";
 import { buildControlUiResourcePath, matchControlUiResourceUrl } from "./control-ui-contract.js";
 
@@ -36,6 +38,21 @@ type OpenGatewayAssistantAvatarProjection = {
 };
 
 const gatewayAvatarDataUrlCache = createGatewayAvatarDataUrlCache();
+
+export function gatewayAssistantAvatarUrl(
+  projection: OpenGatewayAssistantAvatarProjection,
+  basePath: string,
+  agentId: string,
+): string | undefined {
+  const source = projection.openedFile
+    ? { file: projection.openedFile }
+    : projection.resolution?.kind === "data"
+      ? { dataUrl: projection.resolution.url }
+      : undefined;
+  return source
+    ? `${buildControlUiResourcePath("agentAvatar", basePath, agentId)}?v=${gatewayAvatarImageRevision(source)}`
+    : undefined;
+}
 
 function resolveSameOriginAvatarUrl(
   basePath: string | undefined,
@@ -91,7 +108,7 @@ export function openGatewayAssistantAvatar(params: {
 export function resolveGatewayAssistantAvatar(params: {
   cfg: OpenClawConfig;
   identity: GatewayAssistantIdentity;
-  /** HTTP bootstrap uses authenticated image bytes; RPC clients retain inline avatars. */
+  /** Browser clients use authenticated images; native/CLI RPC retains inline avatars. */
   httpBasePath?: string;
 }): GatewayAssistantAvatarProjection {
   const { cfg, identity } = params;
@@ -110,22 +127,17 @@ export function resolveGatewayAssistantAvatar(params: {
       resolution: opened.resolution,
     };
   }
-  if (!opened.openedFile) {
-    return { avatar: source, resolution: opened.resolution };
-  }
-
   if (params.httpBasePath !== undefined) {
-    fs.closeSync(opened.openedFile.fd);
-    // Opaque file identity invalidates the browser's authenticated blob cache
-    // after replacement, without exposing a path or reading image bytes at boot.
-    const revision = createHash("sha256")
-      .update(JSON.stringify([opened.openedFile.path, opened.openedFile.stat]))
-      .digest("hex")
-      .slice(0, 16);
+    if (opened.openedFile) {
+      fs.closeSync(opened.openedFile.fd);
+    }
     return {
-      avatar: `${buildControlUiResourcePath("agentAvatar", params.httpBasePath, identity.agentId)}?v=${revision}`,
+      avatar: gatewayAssistantAvatarUrl(opened, params.httpBasePath, identity.agentId) ?? source,
       resolution: opened.resolution,
     };
+  }
+  if (!opened.openedFile) {
+    return { avatar: source, resolution: opened.resolution };
   }
 
   const dataUrl = gatewayAvatarDataUrlCache.read(opened.openedFile);

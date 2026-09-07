@@ -336,8 +336,6 @@ describe("session sharing policy", () => {
       expect(creatorEntryFilter?.(foreignKey, foreignEntry)).toBe(true);
       expect(
         entryFilter?.(ownKey, {
-          sessionId: "session-team-own",
-          updatedAt: 1,
           createdActor: { type: "human", source: "profile", id: restrictedId },
         }),
       ).toBe(true);
@@ -666,7 +664,7 @@ describe("session sharing policy", () => {
     ]);
   });
 
-  it("keeps agent scope for indirect run and approval authorization", async () => {
+  it("keeps agent scope for progress cards and indirect run and approval authorization", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "global" },
@@ -701,11 +699,23 @@ describe("session sharing policy", () => {
       for (const [method, requestParams] of [
         ["sessions.abort", { runId: "run-1" }],
         ["exec.approval.resolve", { id: "approval-1" }],
+        ["progressCard.get", { sessionKey: "global", agentId: "work" }],
+        ["progressCard.put", { sessionKey: "global", agentId: "work" }],
       ] as const) {
         expect(
           resolveSessionMutationAuthorization({ client: outsider, method, requestParams, context })
             .error,
         ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+      }
+      for (const method of ["progressCard.get", "progressCard.put"]) {
+        expect(
+          resolveSessionMutationAuthorization({
+            client: outsider,
+            method,
+            requestParams: { sessionKey: "global", agentId: "main" },
+            context,
+          }).error,
+        ).toBeNull();
       }
       expect(
         resolveSessionMutationAuthorization({

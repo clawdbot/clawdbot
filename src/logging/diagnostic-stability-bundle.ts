@@ -18,6 +18,7 @@ import {
   type DiagnosticStabilitySnapshot,
 } from "./diagnostic-stability.js";
 import { redactSensitiveText } from "./redact.js";
+import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
 export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
 const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT = MAX_DIAGNOSTIC_STABILITY_LIMIT;
@@ -155,10 +156,6 @@ function normalizeReason(reason: string): string {
   return SAFE_REASON_CODE.test(reason) ? reason : "unknown";
 }
 
-function formatBundleTimestamp(now: Date): string {
-  return now.toISOString().replace(/[:.]/g, "-");
-}
-
 function readErrorCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object" || !("code" in error)) {
     return undefined;
@@ -225,7 +222,7 @@ function resolveDiagnosticStabilityBundleDir(
 function buildBundlePath(dir: string, now: Date, reason: string): string {
   return path.join(
     dir,
-    `${BUNDLE_PREFIX}${formatBundleTimestamp(now)}-${process.pid}-${normalizeReason(reason)}${BUNDLE_SUFFIX}`,
+    `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizeReason(reason)}${BUNDLE_SUFFIX}`,
   );
 }
 

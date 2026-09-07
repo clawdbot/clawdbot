@@ -83,8 +83,8 @@ describe("migrateLegacyNodePairingStore", () => {
       "node-kept",
     ]);
     await expect(fs.access(pairedPath)).rejects.toThrow();
-    await expect(fs.access(`${pairedPath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${pendingPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${pairedPath}.migrated`);
+    await fs.access(`${pendingPath}.migrated`);
     await expect(migrateLegacyNodePairingStore({ baseDir })).resolves.toBeNull();
   });
 

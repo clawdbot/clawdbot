@@ -1,4 +1,5 @@
 import path from "node:path";
+import { root as fsRoot } from "../infra/fs-safe.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { bindAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
@@ -24,6 +25,7 @@ import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js
 import type { SandboxContext } from "./sandbox.js";
 import { buildSandboxFsMounts } from "./sandbox/fs-paths.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
+import { createLsTool, type LsOperations } from "./sessions/tools/ls.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 
@@ -113,6 +115,42 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
 
   const base: AnyAgentTool[] = [];
   if (options.includeBaseCodingTools) {
+    const readDirectory = sandboxFsBridge?.readDirectory?.bind(sandboxFsBridge);
+    const listingOperations: LsOperations | undefined = readDirectory
+      ? {
+          readDirectory: (filePath, signal) =>
+            readDirectory({ filePath, cwd: sandbox?.containerWorkdir, signal }),
+        }
+      : options.workspaceOnly && !sandbox
+        ? {
+            readDirectory: async (filePath) => {
+              const root = await fsRoot(options.containmentRoot);
+              return (
+                await root.list(path.relative(options.containmentRoot, filePath), {
+                  withFileTypes: true,
+                })
+              ).map(({ name, isDirectory }) => ({ name, isDirectory }));
+            },
+          }
+        : undefined;
+    if (!sandbox || readDirectory) {
+      const ls = createLsTool(options.codingRoot, {
+        operations: listingOperations,
+        modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
+      });
+      // Skill-content read exceptions do not grant directory enumeration outside the workspace.
+      base.push(
+        options.workspaceOnly
+          ? wrapToolWorkspaceRootGuardWithOptions(
+              ls,
+              sandboxRoot ?? options.containmentRoot,
+              sandboxRoot
+                ? { containerWorkdir: sandbox.containerWorkdir, bridge: sandboxFsBridge }
+                : { resolutionCwd: options.codingRoot, normalizeGuardedPathParams: true },
+            )
+          : ls,
+      );
+    }
     const read = sandboxRoot
       ? createSandboxedReadTool({
           root: sandboxRoot,

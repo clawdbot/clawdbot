@@ -1,13 +1,6 @@
 // Google provider module implements model/runtime integration.
-import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
-import {
-  assertOkOrThrowProviderError,
-  postJsonRequest,
-  readProviderJsonResponse,
-  sanitizeConfiguredModelProviderRequest,
-} from "openclaw/plugin-sdk/provider-http";
+import type { sanitizeConfiguredModelProviderRequest } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -16,13 +9,12 @@ import type {
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import { retryAsync } from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
   normalizeOptionalString,
+  normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
-import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 
 const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
 const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
@@ -294,24 +286,6 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   }
 }
 
-function extractGoogleSpeechPcm(payload: GoogleGenerateSpeechResponse): Buffer {
-  for (const candidate of payload.candidates ?? []) {
-    for (const part of candidate.content?.parts ?? []) {
-      const inline = part.inlineData ?? part.inline_data;
-      const data = normalizeOptionalString(inline?.data);
-      if (!data) {
-        continue;
-      }
-      const canonicalAudio = canonicalizeGoogleProviderBase64(data);
-      if (!canonicalAudio) {
-        throw new Error("Google TTS response returned malformed base64 audio data");
-      }
-      return Buffer.from(canonicalAudio, "base64");
-    }
-  }
-  throw new Error("Google TTS response missing audio data");
-}
-
 function normalizePromptSectionText(value: string | undefined): string | undefined {
   const trimmed = trimToUndefined(value?.replace(/\r\n?/g, "\n"));
   if (!trimmed) {
@@ -413,6 +387,10 @@ async function synthesizeGoogleTtsPcmOnce(params: {
   speakerName?: string;
   timeoutMs: number;
 }): Promise<Buffer> {
+  const { assertOkOrThrowProviderError, postJsonRequest, readProviderJsonResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { resolveGoogleGenerativeAiHttpRequestConfig } = await import("./api.js");
+  const { canonicalizeGoogleProviderBase64 } = await import("./base64.js");
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveGoogleGenerativeAiHttpRequestConfig({
       apiKey: params.apiKey,
@@ -475,7 +453,21 @@ async function synthesizeGoogleTtsPcmOnce(params: {
         res,
         "Google TTS response",
       );
-      return extractGoogleSpeechPcm(payload);
+      for (const candidate of payload.candidates ?? []) {
+        for (const part of candidate.content?.parts ?? []) {
+          const inline = part.inlineData ?? part.inline_data;
+          const data = normalizeOptionalString(inline?.data);
+          if (!data) {
+            continue;
+          }
+          const canonicalAudio = canonicalizeGoogleProviderBase64(data);
+          if (!canonicalAudio) {
+            throw new Error("Google TTS response returned malformed base64 audio data");
+          }
+          return Buffer.from(canonicalAudio, "base64");
+        }
+      }
+      throw new Error("Google TTS response missing audio data");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new GoogleTtsRetryableError(message);
@@ -518,6 +510,8 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
   if (!apiKey) {
     throw new Error("Google API key missing");
   }
+  const { sanitizeConfiguredModelProviderRequest } =
+    await import("openclaw/plugin-sdk/provider-http");
   return synthesizeGoogleTtsPcm({
     text: req.text,
     apiKey,
@@ -594,6 +588,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     synthesize: async (req) => {
       const pcm = await synthesizeConfiguredGoogleTts(req);
       if (req.target === "voice-note") {
+        const { transcodeAudioBufferToOpus } = await import("openclaw/plugin-sdk/media-runtime");
         return {
           audioBuffer: await transcodeAudioBufferToOpus({
             audioBuffer: wrapPcm16MonoToWav(pcm),

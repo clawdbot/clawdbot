@@ -154,11 +154,12 @@ export function mergeMcpConnectCatalog(
   liveCatalog: McpToolCatalog,
   requesterConnect?: RequesterMcpConnect,
 ): McpToolCatalog {
-  if (!requesterConnect) {
+  const connectCatalog = requesterConnect?.catalog;
+  if (!connectCatalog) {
     return liveCatalog;
   }
   const missingServerNames = new Set(
-    Object.keys(requesterConnect.catalog.servers).filter(
+    Object.keys(connectCatalog.servers).filter(
       (serverName) => !Object.hasOwn(liveCatalog.servers, serverName),
     ),
   );
@@ -167,18 +168,18 @@ export function mergeMcpConnectCatalog(
   }
   return {
     ...liveCatalog,
-    generatedAt: Math.max(liveCatalog.generatedAt, requesterConnect.catalog.generatedAt),
+    generatedAt: Math.max(liveCatalog.generatedAt, connectCatalog.generatedAt),
     servers: {
       ...liveCatalog.servers,
       ...Object.fromEntries(
-        Object.entries(requesterConnect.catalog.servers).filter(([serverName]) =>
+        Object.entries(connectCatalog.servers).filter(([serverName]) =>
           missingServerNames.has(serverName),
         ),
       ),
     },
     tools: [
       ...liveCatalog.tools,
-      ...requesterConnect.catalog.tools.filter((tool) => missingServerNames.has(tool.serverName)),
+      ...connectCatalog.tools.filter((tool) => missingServerNames.has(tool.serverName)),
     ].toSorted(
       (left, right) =>
         left.safeServerName.localeCompare(right.safeServerName) ||

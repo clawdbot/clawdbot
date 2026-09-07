@@ -329,6 +329,10 @@ To short-circuit an agent turn with a synthetic reply or silence, use
 | `before_compaction` / `after_compaction` | Observe | Observe compaction boundaries; no rewrite or veto result     |
 | `before_reset`                           | Observe | Observe session-reset events (`/reset`, programmatic resets) |
 
+Successful engine-owned compaction attempts emit `after_compaction` even when
+no history changes, with `compactedCount: 0`. Failed or aborted attempts do not
+emit that completion hook.
+
 `session_end.reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`,
 `deleted`, `shutdown`, `restart`, or `unknown`. `session_start` has no reason
 field; it can include `resumedFrom`. Shutdown/restart events come from the
@@ -700,7 +704,7 @@ harness-native shell. It receives:
 - `event.sessionKey`
 - `event.toolName`, currently always `"exec"`
 - `event.host`, one of `"gateway"`, `"sandbox"`, or `"node"`
-- context fields such as `ctx.agentId`, `ctx.sessionKey`,
+- context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.messageProvider`, and `ctx.channelId`
 
 Return a `Record<string, string>` to merge into the exec environment. Handlers

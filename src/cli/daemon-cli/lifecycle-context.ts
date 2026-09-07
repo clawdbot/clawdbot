@@ -3,6 +3,10 @@ import { createConfigIO } from "../../config/io.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
+import {
+  createManagedUpdateRequesterAuthority,
+  type UpdateRequester,
+} from "../../infra/update-requester-authority.js";
 import { waitForGatewayHealthyRestart } from "./restart-health.js";
 
 export async function resolveGatewayLifecycleContext(
@@ -53,5 +57,11 @@ export async function waitForGatewayUpdateRecovery(
     expectedVersion,
     expectedBuildId,
     requireRunningService: true,
+    settle: { probes: 12 },
   });
+}
+
+// The helper rechecks external chat authority at update admission and activation.
+export async function isManagedUpdateRequesterOwner(requester: UpdateRequester) {
+  return (await createManagedUpdateRequesterAuthority(requester)).isCurrent();
 }

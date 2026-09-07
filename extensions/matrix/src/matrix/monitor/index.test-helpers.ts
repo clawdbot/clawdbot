@@ -282,7 +282,6 @@ vi.mock("../accounts.js", async () => {
 vi.mock("../client.js", () => ({
   acquireSharedMatrixClient: hoisted.acquireSharedMatrixClient,
   backfillMatrixAuthDeviceIdAfterStartup: hoisted.backfillMatrixAuthDeviceIdAfterStartup,
-  isBunRuntime: () => false,
   resolveMatrixAuth: vi.fn(async () => ({
     accountId: "default",
     homeserver: "https://matrix.example.org",

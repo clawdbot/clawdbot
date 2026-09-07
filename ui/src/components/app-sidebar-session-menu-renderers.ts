@@ -127,31 +127,33 @@ function renderSidebarOwnerFilter(params: {
       checked: involvingMe,
       label: t("sessionsView.involvingMe"),
     })}
-    ${owners.length > 0
-      ? params.compact
-        ? renderCompactSessionMenuNavigationItem({
-            value: "compact:open-specific-owner",
-            label: t("sessionsView.specificOwner"),
-            icon: icons.users,
-            details: html`<span class="session-menu__shortcut sidebar-session-owner-selection"
-              >${details}</span
-            >`,
-            accessibleLabel,
-          })
-        : html`<wa-dropdown-item
-            class="sidebar-session-sort-menu__item sidebar-session-owner-submenu"
-            aria-label=${accessibleLabel}
-          >
-            <span class="session-menu__text">${t("sessionsView.specificOwner")}</span>
-            <span
-              slot="details"
-              class="session-menu__shortcut sidebar-session-owner-selection"
-              aria-hidden="true"
-              >${details}</span
+    ${
+      owners.length > 0
+        ? params.compact
+          ? renderCompactSessionMenuNavigationItem({
+              value: "compact:open-specific-owner",
+              label: t("sessionsView.specificOwner"),
+              icon: icons.users,
+              details: html`<span class="session-menu__shortcut sidebar-session-owner-selection"
+                >${details}</span
+              >`,
+              accessibleLabel,
+            })
+          : html`<wa-dropdown-item
+              class="sidebar-session-sort-menu__item sidebar-session-owner-submenu"
+              aria-label=${accessibleLabel}
             >
-            ${renderSidebarOwnerOptions({ ...params, submenu: true })}
-          </wa-dropdown-item>`
-      : nothing}
+              <span class="session-menu__text">${t("sessionsView.specificOwner")}</span>
+              <span
+                slot="details"
+                class="session-menu__shortcut sidebar-session-owner-selection"
+                aria-hidden="true"
+                >${details}</span
+              >
+              ${renderSidebarOwnerOptions({ ...params, submenu: true })}
+            </wa-dropdown-item>`
+        : nothing
+    }
   `;
 }
 
@@ -212,15 +214,18 @@ export function renderSidebarSessionGroupMenu(params: {
         <wa-dropdown-item
           class="session-menu__item"
           value="group-defaults"
-          ?disabled=${!params.connected ||
-          Boolean(params.actionDisabledReasons?.["group-defaults"])}
+          ?disabled=${
+            !params.connected || Boolean(params.actionDisabledReasons?.["group-defaults"])
+          }
           title=${params.actionDisabledReasons?.["group-defaults"] ?? nothing}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.settings}</span>
           <span class="session-menu__text"
-            >${params.groupDefaultsUnavailable
-              ? `${t("common.retry")}: ${t("sessionsView.groupDefaultsMenu")}`
-              : t("sessionsView.groupDefaultsMenu")}</span
+            >${
+              params.groupDefaultsUnavailable
+                ? `${t("common.retry")}: ${t("sessionsView.groupDefaultsMenu")}`
+                : t("sessionsView.groupDefaultsMenu")
+            }</span
           >
         </wa-dropdown-item>
         <wa-dropdown-item
@@ -309,21 +314,23 @@ export function renderSidebarCatalogViewMenu(params: {
         @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
       >
         ${renderSidebarMenuTrigger(position, t("chat.sidebar.catalogViewOptions"))}
-        ${params.compact && params.view === "specific-owner"
-          ? renderCompactSidebarOwnerFilter(params)
-          : html`<div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
-              ${groupingOptions.map((option) =>
-                renderSidebarMenuRadioItem({
-                  value: `grouping:${option.grouping}`,
-                  checked: params.grouping === option.grouping,
-                  label: option.label,
-                }),
-              )}
-              ${renderSidebarOwnerFilter(params)}
-              <div class="session-menu__separator" role="separator"></div>
-              <wa-dropdown-item class="sidebar-session-sort-menu__item" value="hide-catalog">
-                <span class="session-menu__text">${t("chat.sidebar.hideFromSidebar")}</span>
-              </wa-dropdown-item>`}
+        ${
+          params.compact && params.view === "specific-owner"
+            ? renderCompactSidebarOwnerFilter(params)
+            : html`<div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
+                ${groupingOptions.map((option) =>
+                  renderSidebarMenuRadioItem({
+                    value: `grouping:${option.grouping}`,
+                    checked: params.grouping === option.grouping,
+                    label: option.label,
+                  }),
+                )}
+                ${renderSidebarOwnerFilter(params)}
+                <div class="session-menu__separator" role="separator"></div>
+                <wa-dropdown-item class="sidebar-session-sort-menu__item" value="hide-catalog">
+                  <span class="session-menu__text">${t("chat.sidebar.hideFromSidebar")}</span>
+                </wa-dropdown-item>`
+        }
       </wa-dropdown>
     `,
   );
@@ -406,89 +413,91 @@ export function renderSidebarSessionSortMenu(params: {
         @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
       >
         ${renderSidebarMenuTrigger(position, t("chat.sidebar.sortSessions"))}
-        ${params.compact && params.view === "specific-owner"
-          ? renderCompactSidebarOwnerFilter(params)
-          : html`<div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
-              ${groupingOptions
-                .filter((option) => option.grouping !== "person" || params.peopleSortAvailable)
-                .map((option) =>
+        ${
+          params.compact && params.view === "specific-owner"
+            ? renderCompactSidebarOwnerFilter(params)
+            : html`<div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
+                ${groupingOptions
+                  .filter((option) => option.grouping !== "person" || params.peopleSortAvailable)
+                  .map((option) =>
+                    renderSidebarMenuRadioItem({
+                      value: `grouping:${option.grouping}`,
+                      checked: params.grouping === option.grouping,
+                      label: option.label,
+                    }),
+                  )}
+                <div class="session-menu__separator" role="separator"></div>
+                <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
+                ${SIDEBAR_SESSION_SORT_OPTIONS.filter(
+                  (option) => option.mode !== "people" || params.peopleSortAvailable,
+                ).map((option) =>
                   renderSidebarMenuRadioItem({
-                    value: `grouping:${option.grouping}`,
-                    checked: params.grouping === option.grouping,
-                    label: option.label,
+                    value: `sort:${option.mode}`,
+                    checked: params.sortMode === option.mode,
+                    label: t(option.labelKey),
                   }),
                 )}
-              <div class="session-menu__separator" role="separator"></div>
-              <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
-              ${SIDEBAR_SESSION_SORT_OPTIONS.filter(
-                (option) => option.mode !== "people" || params.peopleSortAvailable,
-              ).map((option) =>
-                renderSidebarMenuRadioItem({
-                  value: `sort:${option.mode}`,
-                  checked: params.sortMode === option.mode,
-                  label: t(option.labelKey),
-                }),
-              )}
-              <div class="session-menu__separator" role="separator"></div>
-              <div class="sidebar-session-sort-menu__title">${t("sessionsView.status")}</div>
-              ${SIDEBAR_SESSION_STATUS_OPTIONS.map((statusFilter) =>
-                renderSidebarMenuRadioItem({
-                  value: `status:${statusFilter}`,
-                  checked: params.statusFilter === statusFilter,
-                  label:
-                    statusFilter === "active"
-                      ? t("common.active")
-                      : statusFilter === "archived"
-                        ? t("sessionsView.archived")
-                        : t("sessionsView.all"),
-                }),
-              )}
-              ${renderSidebarOwnerFilter(params)}
-              <div class="session-menu__separator" role="separator"></div>
-              <wa-dropdown-item
-                class="sidebar-session-sort-menu__item"
-                type="checkbox"
-                value="show-preview"
-                .checked=${params.showPreview}
-              >
-                <span class="session-menu__text">${t("sessionsView.showSessionPreview")}</span>
-                <span slot="details" class="session-menu__check" aria-hidden="true"
-                  >${params.showPreview ? icons.check : nothing}</span
+                <div class="session-menu__separator" role="separator"></div>
+                <div class="sidebar-session-sort-menu__title">${t("sessionsView.status")}</div>
+                ${SIDEBAR_SESSION_STATUS_OPTIONS.map((statusFilter) =>
+                  renderSidebarMenuRadioItem({
+                    value: `status:${statusFilter}`,
+                    checked: params.statusFilter === statusFilter,
+                    label:
+                      statusFilter === "active"
+                        ? t("common.active")
+                        : statusFilter === "archived"
+                          ? t("sessionsView.archived")
+                          : t("sessionsView.all"),
+                  }),
+                )}
+                ${renderSidebarOwnerFilter(params)}
+                <div class="session-menu__separator" role="separator"></div>
+                <wa-dropdown-item
+                  class="sidebar-session-sort-menu__item"
+                  type="checkbox"
+                  value="show-preview"
+                  .checked=${params.showPreview}
                 >
-              </wa-dropdown-item>
-              <wa-dropdown-item
-                class="sidebar-session-sort-menu__item"
-                type="checkbox"
-                value="show-cron"
-                .checked=${params.showCron}
-              >
-                <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
-                <span slot="details" class="session-menu__check" aria-hidden="true"
-                  >${params.showCron ? icons.check : nothing}</span
+                  <span class="session-menu__text">${t("sessionsView.showSessionPreview")}</span>
+                  <span slot="details" class="session-menu__check" aria-hidden="true"
+                    >${params.showPreview ? icons.check : nothing}</span
+                  >
+                </wa-dropdown-item>
+                <wa-dropdown-item
+                  class="sidebar-session-sort-menu__item"
+                  type="checkbox"
+                  value="show-cron"
+                  .checked=${params.showCron}
                 >
-              </wa-dropdown-item>
-              <wa-dropdown-item
-                class="sidebar-session-sort-menu__item"
-                type="checkbox"
-                value="show-system"
-                .checked=${params.showSystem}
-              >
-                <span class="session-menu__text">${t("sessionsView.showSystemSessions")}</span>
-                <span slot="details" class="session-menu__check" aria-hidden="true"
-                  >${params.showSystem ? icons.check : nothing}</span
+                  <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
+                  <span slot="details" class="session-menu__check" aria-hidden="true"
+                    >${params.showCron ? icons.check : nothing}</span
+                  >
+                </wa-dropdown-item>
+                <wa-dropdown-item
+                  class="sidebar-session-sort-menu__item"
+                  type="checkbox"
+                  value="show-system"
+                  .checked=${params.showSystem}
                 >
-              </wa-dropdown-item>
-              <wa-dropdown-item
-                class="sidebar-session-sort-menu__item"
-                type="checkbox"
-                value="hide-empty-groups"
-                .checked=${params.hideEmptyGroups}
-              >
-                <span class="session-menu__text">${t("sessionsView.hideEmptyGroups")}</span>
-                <span slot="details" class="session-menu__check" aria-hidden="true"
-                  >${params.hideEmptyGroups ? icons.check : nothing}</span
+                  <span class="session-menu__text">${t("sessionsView.showSystemSessions")}</span>
+                  <span slot="details" class="session-menu__check" aria-hidden="true"
+                    >${params.showSystem ? icons.check : nothing}</span
+                  >
+                </wa-dropdown-item>
+                <wa-dropdown-item
+                  class="sidebar-session-sort-menu__item"
+                  type="checkbox"
+                  value="hide-empty-groups"
+                  .checked=${params.hideEmptyGroups}
                 >
-              </wa-dropdown-item>`}
+                  <span class="session-menu__text">${t("sessionsView.hideEmptyGroups")}</span>
+                  <span slot="details" class="session-menu__check" aria-hidden="true"
+                    >${params.hideEmptyGroups ? icons.check : nothing}</span
+                  >
+                </wa-dropdown-item>`
+        }
       </wa-dropdown>
     `,
   );

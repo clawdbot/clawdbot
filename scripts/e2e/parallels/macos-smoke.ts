@@ -25,7 +25,6 @@ import {
   resolveLatestVersion,
   resolveProviderAuth,
   resolveSnapshot,
-  run,
   say,
   shouldSkipSnapshotRestore,
   shellQuote,
@@ -44,6 +43,7 @@ import {
 import { MacosGuest } from "./guest-transports.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { MacosDiscordSmoke } from "./macos-discord.ts";
+import { runMacosHostCommand as run } from "./macos-exec.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {

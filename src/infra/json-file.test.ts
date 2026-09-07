@@ -8,10 +8,6 @@ import { loadJsonFileThroughSymlink, writeJsonTarget } from "./json-file.js";
 const SAVED_PAYLOAD = { enabled: true, count: 2 };
 const PREVIOUS_JSON = '{"enabled":false}\n';
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function writeExistingJson(pathname: string) {
   fs.writeFileSync(pathname, PREVIOUS_JSON, "utf8");
 }
@@ -123,8 +119,10 @@ describe("json-file helpers", () => {
       writeJsonTarget(pathname, SAVED_PAYLOAD);
 
       const renameCall = renameSpy.mock.calls.find(([, target]) => target === pathname);
-      expect(renameCall?.[0]).toMatch(new RegExp(`^${escapeRegExp(pathname)}\\..+\\.tmp$`));
-      expect(renameSpy).toHaveBeenCalledWith(renameCall?.[0], pathname);
+      expect(renameCall).toEqual([expect.any(String), pathname]);
+      const temporaryPath = String(renameCall?.[0]);
+      expect(path.dirname(temporaryPath)).toBe(path.dirname(pathname));
+      expect(temporaryPath).not.toBe(pathname);
       expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
     });
   });
