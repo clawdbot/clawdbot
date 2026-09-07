@@ -17,11 +17,18 @@ export function isAppleDoubleMetadataFile(pathname: string): boolean {
     return false;
   }
   try {
+    const stat = fs.lstatSync(pathname);
+    if (!stat.isFile()) {
+      return false;
+    }
     const descriptor = fs.openSync(pathname, "r");
-    const header = Buffer.alloc(APPLE_DOUBLE_MAGIC.length);
-    const bytesRead = fs.readSync(descriptor, header, 0, header.length, 0);
-    fs.closeSync(descriptor);
-    return bytesRead === header.length && header.equals(APPLE_DOUBLE_MAGIC);
+    try {
+      const header = Buffer.alloc(APPLE_DOUBLE_MAGIC.length);
+      const bytesRead = fs.readSync(descriptor, header, 0, header.length, 0);
+      return bytesRead === header.length && header.equals(APPLE_DOUBLE_MAGIC);
+    } finally {
+      fs.closeSync(descriptor);
+    }
   } catch {
     return false;
   }

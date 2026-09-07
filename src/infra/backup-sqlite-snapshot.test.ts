@@ -40,6 +40,23 @@ describe("backup SQLite AppleDouble classification", () => {
     );
   });
 
+  it("does not open a matching directory as a file", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-classify-dir-"));
+    tempDirs.push(dir);
+    const directoryPath = path.join(dir, "._example.sqlite");
+    await fs.mkdir(directoryPath);
+    expect(() => classifyBackupSqliteSource(directoryPath, createInventory(dir))).not.toThrow();
+  });
+
+  it("does not follow a matching symlink to AppleDouble metadata", async () => {
+    const filePath = await writeFixture("._target.sqlite", APPLE_DOUBLE_MAGIC);
+    const linkPath = path.join(path.dirname(filePath), "._link.sqlite");
+    await fs.symlink(filePath, linkPath);
+    expect(classifyBackupSqliteSource(linkPath, createInventory(path.dirname(filePath)))).toBe(
+      "sqlite",
+    );
+  });
+
   it("keeps a matching-name SQLite hardlink alias on the sanitized snapshot path", async () => {
     const filePath = await writeFixture("._alias.sqlite", Buffer.from("SQLite format 3\0"));
     expect(classifyBackupSqliteSource(filePath, createInventory(path.dirname(filePath)))).toBe(
