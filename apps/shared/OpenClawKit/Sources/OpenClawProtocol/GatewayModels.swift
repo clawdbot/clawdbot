@@ -335,6 +335,7 @@ public enum ChatRunStartupPhase: String, Codable, Sendable {
     case runningSetup = "running_setup"
     case provisioningEnvironment = "provisioning_environment"
     case preparingContext = "preparing_context"
+    case memoryFlushing = "memory_flushing"
     case startingModel = "starting_model"
 }
 

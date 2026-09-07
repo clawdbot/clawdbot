@@ -45,6 +45,7 @@ const STARTUP_LABEL_KEYS = {
   running_setup: "chat.startupStatus.runningSetup",
   provisioning_environment: "chat.startupStatus.provisioningEnvironment",
   preparing_context: "chat.startupStatus.preparingContext",
+  memory_flushing: "chat.startupStatus.memoryFlushing",
   starting_model: "chat.startupStatus.startingModel",
 } as const satisfies Record<ChatRunStartupPhase, Parameters<typeof t>[0]>;
 

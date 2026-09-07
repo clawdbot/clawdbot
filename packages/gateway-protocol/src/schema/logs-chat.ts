@@ -321,6 +321,7 @@ export const ChatRunStartupPhaseSchema = Type.Union([
   Type.Literal("running_setup"),
   Type.Literal("provisioning_environment"),
   Type.Literal("preparing_context"),
+  Type.Literal("memory_flushing"),
   Type.Literal("starting_model"),
 ]);
 
