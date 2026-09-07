@@ -73,6 +73,11 @@ let missing = 0;
       join(consumerRoot, "index.ts"),
       `import { buildChannelConfigSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import type {
+  EmbeddingBatchChunk,
+  EmbeddingBatchOptions,
+  EmbeddingProviderBatchRuntime,
+} from "openclaw/plugin-sdk/embedding-provider-runtime-contract";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { identityEntryAuthenticationClassifier, meetsIdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type {
@@ -123,6 +128,23 @@ const classifyEntryAuthentication = identityEntryAuthenticationClassifier({
 });
 const entryAuthentication: IdentifierAuthentication | undefined = classifyEntryAuthentication("provider-user-id");
 void entryAuthentication;
+
+const batchEmbed: EmbeddingProviderBatchRuntime["batchEmbed"] = async (options: EmbeddingBatchOptions) => {
+  const chunks: EmbeddingBatchChunk[] = options.chunks;
+  return chunks.map(() => [1]);
+};
+const batchRuntimes: EmbeddingProviderBatchRuntime[] = [
+  { batchEmbed },
+  { batchEmbed, sourceWideBatchEmbed: true },
+  { batchEmbed, sourceWideBatchEmbed: false },
+];
+const batchRuntimeWithInternalPolicy = {
+  batchEmbed,
+  // @ts-expect-error Cache identity is not part of the public batch contract.
+  cacheKeyData: {},
+} satisfies EmbeddingProviderBatchRuntime;
+void batchRuntimes;
+void batchRuntimeWithInternalPolicy;
 
 const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
   pluginId: "package-consumer",

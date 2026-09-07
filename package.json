@@ -725,6 +725,10 @@
     "./plugin-sdk/embedding-providers": {
       "default": "./dist/plugin-sdk/embedding-providers.js"
     },
+    "./plugin-sdk/embedding-provider-runtime-contract": {
+      "types": "./dist/plugin-sdk/embedding-provider-runtime-contract.d.ts",
+      "default": "./dist/plugin-sdk/embedding-provider-runtime-contract.js"
+    },
     "./plugin-sdk/embedding-provider-adapter": {
       "default": "./dist/plugin-sdk/embedding-provider-adapter.js"
     },
