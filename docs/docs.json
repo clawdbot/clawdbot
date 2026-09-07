@@ -2325,6 +2325,7 @@
               {
                 "group": "Templates",
                 "pages": [
+                  "reference/agent-templates",
                   "reference/AGENTS.default",
                   "reference/templates/AGENTS",
                   "reference/templates/BOOT",

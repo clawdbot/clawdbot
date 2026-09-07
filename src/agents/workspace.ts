@@ -1204,6 +1204,7 @@ export async function ensureAgentWorkspace(params?: {
         })
       : false;
     if (
+      params?.templates ||
       hasRecentAttestedCustomization ||
       (await workspaceProfileLooksConfigured({
         dir,

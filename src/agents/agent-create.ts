@@ -17,6 +17,7 @@ import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-ses
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
@@ -26,7 +27,11 @@ import { resolveUserPath } from "../utils.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
 import { toAgentEntriesRecord } from "./agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
-import { loadAgentTemplate } from "./agent-templates.js";
+import {
+  AGENT_TEMPLATE_MAX_FILE_BYTES,
+  loadAgentTemplate,
+  type AgentTemplate,
+} from "./agent-templates.js";
 import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import {
   createAgentIdentityConfig,
@@ -73,6 +78,7 @@ type ConfigCommitRollback = () => void | Promise<void>;
 type CreateAgentParams = {
   name?: string;
   role?: string;
+  template?: AgentTemplate;
   entry?: CreateAgentEntry;
   /** Internal authorization for onboarding to materialize the sole implicit `main` agent. */
   bootstrapMain?: boolean;
@@ -254,7 +260,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   const agentId = validation.agentId;
   const isBootstrapMain = agentId === BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
 
-  const template = params.role ? await loadAgentTemplate(params.role) : undefined;
+  const template = params.role ? await loadAgentTemplate(params.role) : params.template;
   const safeName = sanitizeAgentIdentityLine(rawName);
   const model = normalizeOptionalString(params.model);
   const identity = template?.manifest.identity ??
@@ -433,6 +439,22 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           const skipBootstrap = template
             ? false
             : (params.skipBootstrap ?? nextConfig.agents?.defaults?.skipBootstrap);
+          if (params.template) {
+            // Imported programs must never merge with an existing workspace.
+            const existing = await fs.lstat(workspaceDir).catch((error: unknown) => {
+              if (!hasErrnoCode(error, "ENOENT")) {
+                throw error;
+              }
+            });
+            if (
+              existing &&
+              (!existing.isDirectory() ||
+                existing.isSymbolicLink() ||
+                (await fs.readdir(workspaceDir)).length)
+            ) {
+              throw new Error("Template import requires a new or empty workspace directory.");
+            }
+          }
           params.beforePersistentApply?.();
           const workspace = await ensureAgentWorkspace({
             dir: workspaceDir,
@@ -446,6 +468,20 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           });
           if (template && workspace.bootstrapPending) {
             throw new UnfinishedRoleBootstrapError();
+          }
+          if (params.template) {
+            const workspaceRoot = await root(workspace.dir);
+            for (const file of params.template.manifest.files) {
+              const { buffer } = await workspaceRoot.read(file, {
+                symlinks: "reject",
+                hardlinks: "reject",
+                maxBytes: AGENT_TEMPLATE_MAX_FILE_BYTES,
+                nonBlockingRead: true,
+              });
+              if (buffer.toString("utf8") !== params.template.files[file]) {
+                throw new Error(`Template workspace file changed during import: ${file}`);
+              }
+            }
           }
           if (workspace.dir !== workspaceDir) {
             const entries = listAgentEntries(nextConfig);

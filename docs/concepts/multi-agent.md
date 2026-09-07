@@ -159,6 +159,38 @@ separate workspaces. All ids are checked for conflicts before creation. See
 [`agents team create`](/cli/agents#agents-team-create) for flags and examples,
 or use the team choice during [onboarding](/start/wizard#choose-one-agent-or-a-team).
 
+## Sharing an agent
+
+Export an agent's reusable instructions and settings as a portable template:
+
+```bash
+openclaw agents export researcher --out ./research-template
+```
+
+Review the bundle and omissions report before sharing the directory. It contains
+the agent's identity, `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, explicit skills and
+model settings, delegation settings, and supported agent-turn automations.
+Personal files, `USER.md`, memory, credentials, sessions, and routing bindings
+are excluded. Probable secrets and embedded absolute local paths cause export
+to fail so you can remove them first.
+
+On the receiving installation, import into a new agent and workspace:
+
+```bash
+openclaw agents import ./research-template --id research-copy --workspace ~/agents/research-copy
+openclaw agents list
+```
+
+Import confirms a summary before writing. It preserves only delegation target
+ids that already exist locally and warns about the others; it does not resolve
+roles or create missing specialists. Skills are an allowlist, not bundled skill
+code, and model credentials must already be available on the receiving install.
+Imported automations start disabled and require review before enabling. The
+workspace has its identity set and needs no bootstrap ceremony.
+
+See [Template commands](/cli/agents#agents-export) for flags and
+[Agent template format](/reference/agent-templates) for the portable contract.
+
 ## Quick start
 
 <Steps>

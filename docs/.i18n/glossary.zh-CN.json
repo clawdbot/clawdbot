@@ -1308,6 +1308,10 @@
     "target": "智能体"
   },
   {
+    "source": "Agent templates",
+    "target": "智能体模板"
+  },
+  {
     "source": "fs-safe Cleanup Plan",
     "target": "fs-safe Cleanup Plan"
   },

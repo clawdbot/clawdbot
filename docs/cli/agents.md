@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw agents` (roles, teams, workspaces, routing
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
   - You want to create an agent from a role or set up a coordinated team
+  - You want to export or import a portable agent template
 title: "Agents"
 ---
 
@@ -25,6 +26,8 @@ openclaw agents add work --workspace ~/.openclaw/workspace-work
 openclaw agents add work --workspace ~/.openclaw/workspace-work --bind telegram:*
 openclaw agents add ops --workspace ~/.openclaw/workspace-ops --bind telegram:ops --non-interactive
 openclaw agents add research --role researcher --non-interactive
+openclaw agents export research --out ./research-template
+openclaw agents import ./research-template --id research-copy --non-interactive
 openclaw agents team create --non-interactive
 openclaw agents bindings
 openclaw agents bind --agent work --bind telegram:ops
@@ -76,6 +79,56 @@ standard specialist ids; use the team command to create and wire all four agents
 Unknown roles are rejected with the available role names. A workspace with an
 unfinished bootstrap cannot adopt a role; complete its bootstrap or choose a
 new workspace.
+
+<a id="agents-export" />
+
+### `agents export <id>`
+
+Options: `--out <dir>` (required), `--force`, `--json`.
+
+Exports a portable template directory containing `manifest.json`,
+`workspace/AGENTS.md`, `workspace/SOUL.md`, `workspace/IDENTITY.md`, and optional
+`automations.json`. The manifest carries identity, explicit agent-level skills
+and model settings, and delegation settings. It does not copy inherited skills
+or model defaults.
+
+The output directory must be empty unless `--force` is supplied. The omissions
+report identifies excluded material, including `USER.md`, memory, credentials,
+sessions, and unsupported automations. Only `agentTurn` jobs both owned by and
+executed by the exported agent qualify; `systemEvent`, `command`, and `script`
+payloads are skipped. Automations omit delivery destinations and runtime state.
+
+Export refuses probable secrets in Markdown or JSON and reports the file and
+line without printing the matched value. Remove the secret from the source and
+retry; there is no `--allow-secrets` bypass. Detection is a conservative check,
+so review the bundle for sensitive content before sharing it. Embedded absolute
+local paths must also be removed for portability.
+
+### `agents import <dir>`
+
+Options: `--id <newId>`, `--workspace <dir>`, `--non-interactive`, `--json`.
+
+When omitted, `--id` defaults to the normalized identity name from the manifest;
+`--workspace` uses the normal workspace default for that agent id.
+
+Validates a template, shows a summary, and confirms before writing in interactive
+mode. Use `--non-interactive` for unattended import. `--json` returns a structured
+summary. Import refuses an existing agent id or a workspace containing files;
+choose a new id and workspace instead of overwriting an existing agent.
+
+The new agent receives the template identity and workspace program files,
+explicit skills and model settings, and `delegationMode` unchanged. Delegation
+targets remain agent ids: import keeps only ids already present in the target
+installation and warns with the dropped ids. If all targets are dropped,
+`subagents.allowAgents` is omitted. No role-name matching occurs.
+
+Imported automations are created **disabled**, with their owner and execution
+agent retargeted to the new id. Review their instructions and schedules before
+enabling them. Import skips the identity ceremony and creates no `BOOTSTRAP.md`.
+
+Both commands enforce file size and path restrictions. See the
+[Agent template format](/reference/agent-templates) for the exact manifest,
+automation fields, exclusions, and limits.
 
 ### `agents team create`
 

@@ -207,6 +207,42 @@ export function registerAgentsCommands(program: Command): void {
     });
 
   agents
+    .command("export <id>")
+    .description("Export a portable, secret-free agent template")
+    .requiredOption("--out <dir>", "Output bundle directory")
+    .option("--force", "Replace a non-empty output directory", false)
+    .option("--json", "Output JSON summary", false)
+    .action(
+      async (id: string, opts: { out: string; force: boolean; json: boolean }): Promise<void> => {
+        await runAgentsCommandAction(async (runtime) => {
+          const { agentsExportCommand } =
+            await import("../../commands/agents.commands.templates.js");
+          await agentsExportCommand({ id, ...opts }, runtime);
+        });
+      },
+    );
+
+  agents
+    .command("import <dir>")
+    .description("Create an agent from a portable template")
+    .option("--id <newId>", "Agent id (defaults to the template identity name)")
+    .option("--workspace <dir>", "New or empty workspace directory")
+    .option("--non-interactive", "Import without confirmation", false)
+    .option("--json", "Output JSON summary", false)
+    .action(
+      async (
+        directory: string,
+        opts: { id?: string; workspace?: string; nonInteractive: boolean; json: boolean },
+      ): Promise<void> => {
+        await runAgentsCommandAction(async (runtime) => {
+          const { agentsImportCommand } =
+            await import("../../commands/agents.commands.templates.js");
+          await agentsImportCommand({ directory, ...opts }, runtime);
+        });
+      },
+    );
+
+  agents
     .command("team")
     .description("Create a coordinated team of agents")
     .command("create")
