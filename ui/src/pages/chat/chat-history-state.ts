@@ -8,6 +8,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { clearChatPendingInputs } from "./chat-pending-inputs.ts";
+import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 
@@ -181,6 +182,7 @@ export function acceptsHistoryResult(
 }
 
 export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+  retirePullRequestRefreshes(state);
   clearChatPendingInputs(state);
   const requests = chatHistoryRequests(state);
   // A destructive reset keeps the session key, so invalidate both the old

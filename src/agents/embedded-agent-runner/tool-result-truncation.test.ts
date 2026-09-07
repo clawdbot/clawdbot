@@ -937,7 +937,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
 
     expect(first.aggregateTruncatedCount).toBe(0);
-    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(second.aggregateTruncatedCount).toBe(0);
     expect(
       second.messages.slice(0, history.length).map((message) => JSON.stringify(message)),
     ).toEqual(frozenBytes);
@@ -945,7 +945,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       (message): message is ToolResultMessage =>
         message.role === "toolResult" && message.toolCallId === "current",
     );
-    expect(current && getToolResultTextLength(current)).toBeLessThan(6_000);
+    expect(current && getFirstToolResultText(current)).toBe("c".repeat(6_000));
   });
 
   it("shrinks #99495 frozen bytes monotonically only under a tighter hard cap", () => {
@@ -1014,7 +1014,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(totalChars).toBeLessThanOrEqual(32_100);
   });
 
-  it("recovers from a fresh tool result before frozen history through a runtime carrier", () => {
+  it("preserves fresh tool content through a runtime carrier under frozen pressure", () => {
     const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
@@ -1074,15 +1074,13 @@ describe("truncateOversizedToolResultsInMessages", () => {
       0,
     );
     expect(historicalResults).toEqual(firstHistoricalResults);
-    const freshNotice = freshResult ? getFirstToolResultText(freshResult) : "";
-    expect(freshNotice).not.toBe("");
-    expect(freshNotice).toContain("truncated");
-    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(freshResult && getFirstToolResultText(freshResult)).toBe(freshOutput);
+    expect(second.aggregateTruncatedCount).toBe(0);
     expect(second.aggregatePressureEngaged).toBe(true);
-    expect(totalChars).toBeLessThanOrEqual(32_100);
+    expect(totalChars).toBeLessThanOrEqual(32_000 + freshOutput.length);
   });
 
-  it("recovers from multiple fresh tool results before frozen history and queued steering", () => {
+  it("preserves fresh tool content through queued steering under frozen pressure", () => {
     const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
@@ -1129,13 +1127,10 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
 
     expect(second.messages.slice(0, history.length)).toEqual(first.messages);
-    for (const notice of freshResults.map(getFirstToolResultText)) {
-      expect(notice).not.toBe("");
-      expect(notice).toContain("truncated");
-    }
-    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(freshResults.map(getFirstToolResultText)).toEqual(freshOutputs);
+    expect(second.aggregateTruncatedCount).toBe(0);
     expect(second.aggregatePressureEngaged).toBe(true);
-    expect(totalChars).toBeLessThanOrEqual(32_200);
+    expect(totalChars).toBeLessThanOrEqual(32_000 + 234 + 4_000);
   });
 
   it("allows aggregate overflow rather than rewriting frozen history", () => {
@@ -1191,14 +1186,13 @@ describe("truncateOversizedToolResultsInMessages", () => {
         (message) => message.role === "toolResult" && message.toolCallId.startsWith("history_"),
       ),
     ).toEqual(first.messages.filter((message) => message.role === "toolResult"));
-    expect(freshText).not.toBe("");
-    expect(freshText).toContain("truncated");
-    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(freshText).toBe(freshOutput);
+    expect(second.aggregateTruncatedCount).toBe(0);
     expect(second.aggregatePressureEngaged).toBe(true);
     expect(totalChars).toBeGreaterThan(100);
   });
 
-  it("clears an oversized fresh result before rewriting saturated frozen history", () => {
+  it("bounds an oversized fresh result without clearing it under frozen pressure", () => {
     const projectionState = createPromptProjectionStateForTest();
     const runtimeContextMessage = buildRuntimeContextCustomMessage("runtime context refresh");
     if (!runtimeContextMessage) {
@@ -1241,9 +1235,10 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
     expect(freshResult?.role).toBe("toolResult");
     expect(second.messages.slice(0, history.length)).toEqual(first.messages);
-    expect(freshText).not.toBe("");
+    expect(freshText).toContain("z".repeat(2_000));
     expect(freshText).toContain("truncated");
-    expect(totalChars).toBeLessThanOrEqual(32_100);
+    expect(freshText.length).toBeLessThanOrEqual(8_000);
+    expect(totalChars).toBeLessThanOrEqual(32_000 + 8_000);
   });
 
   it("leaves fresh trailing batches intact when only they exceed the aggregate budget", () => {

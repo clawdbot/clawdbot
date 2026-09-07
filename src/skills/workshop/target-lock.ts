@@ -1,4 +1,7 @@
-import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import {
+  withOpenClawStateLease,
+  type OpenClawStateLeaseContext,
+} from "../../state/openclaw-state-lease.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import {
   databaseOptions,
@@ -20,7 +23,7 @@ function requireAgentId(options: SkillWorkshopStoreOptions): string {
 
 /** Each agent owns one collection lease; writers for different agents do not contend. */
 export async function withSkillCollectionLock<T>(
-  fn: () => Promise<T>,
+  fn: (lease: OpenClawStateLeaseContext) => Promise<T>,
   options: SkillWorkshopStoreOptions = {},
 ): Promise<T> {
   ensureSkillWorkshopSchema(options);
@@ -34,7 +37,7 @@ export async function withSkillCollectionLock<T>(
       leaseLabel: "skill collection lease",
       operationLabel: "skill-collection.commit",
     },
-    async () => await fn(),
+    fn,
   );
 }
 

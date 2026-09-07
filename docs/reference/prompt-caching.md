@@ -57,7 +57,8 @@ Merge order (later wins):
 
 1. `agents.defaults.params` - global default for all models
 2. `agents.defaults.models["provider/model"].params` - per-model override
-3. `agents.entries.*.params` - per-agent override, matched by agent id
+3. `agents.entries.*.models["provider/model"].params` - agent-specific per-model override
+4. `agents.entries.*.params` - agent-wide override, matched by agent id
 
 Source: `src/agents/embedded-agent-runner/extra-params.ts` (`resolveExtraParams`).
 
@@ -152,7 +153,7 @@ DeepSeek cache construction on OpenRouter is best-effort and can take a few seco
 
 - Direct Gemini transport (`api: "google-generative-ai"`) reports cache hits through upstream `cachedContentTokenCount`, mapped to `cacheRead`.
 - Eligible model families: `gemini-2.5*` and `gemini-3*` (excludes Live/preview variants outside that prefix match, for example `gemini-live-2.5-flash-preview`).
-- When `cacheRetention` is set on an eligible model, OpenClaw automatically creates, reuses, and refreshes a `cachedContents` resource for the system prompt - no manual cached-content handle needed. TTL is `300s` for `cacheRetention: "short"` and `3600s` for `"long"`.
+- When `cacheRetention` is set on an eligible model, OpenClaw automatically creates, reuses, and refreshes a `cachedContents` resource for the final assembled system prompt, including hook-added instructions - no manual cached-content handle needed. TTL is `300s` for `cacheRetention: "short"` and `3600s` for `"long"`.
 - You can still pass a pre-existing Gemini cached-content handle through as `params.cachedContent` (or legacy `params.cached_content`); an explicit handle skips the automatic cache-management path entirely.
 - This is separate from Anthropic/OpenAI prompt-prefix caching: OpenClaw manages a provider-native `cachedContents` resource for Gemini instead of injecting inline cache markers.
 
@@ -185,7 +186,10 @@ If you see unexpected `cacheWrite` spikes after a config or workspace change, ch
 
 ## OpenClaw cache-stability guards
 
+- Delivery instructions live after the system-prompt cache boundary. Native Codex carries the current delivery and target policy in late turn context, so alternating delivery modes does not rebuild its static prompt or message tool catalog when the available capabilities remain unchanged. Actual capability changes still update the catalog.
 - Bundled MCP tool catalogs are sorted deterministically (by server name, then tool name) before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
+- Message-tool action enums are sorted after policy filtering, keeping identical capabilities stable across channel discovery order changes.
+- Native Ollama requests sort tools by name so discovery order changes do not churn the tools prefix.
 - Legacy sessions with persisted image blocks keep the **3 most recent completed turns** intact (counting all completed turns, not just image-bearing ones). Older already-processed image blocks are replaced with a text marker so image-heavy follow-ups do not keep re-sending large stale payloads.
 
 ## Tuning patterns

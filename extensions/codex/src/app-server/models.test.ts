@@ -25,10 +25,16 @@ vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.authBridge.applyAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
   reconcileCodexComputerUseStartArtifacts: mocks.authBridge.reconcileComputerUseArtifacts,
-  resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
+  resolveCodexAppServerHomeDir: (agentDir: string) => `${agentDir}/codex-home`,
+}));
+
+vi.mock("./auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileIdForAgent: mocks.authBridge.authProfileId,
   resolveCodexAppServerAuthProfileStore: () => ({ version: 1, profiles: {} }),
-  resolveCodexAppServerHomeDir: (agentDir: string) => `${agentDir}/codex-home`,
+}));
+
+vi.mock("./auth-cache-key.js", () => ({
+  resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
 }));
 
 vi.mock("./managed-binary.js", async (importOriginal) => ({
@@ -37,7 +43,8 @@ vi.mock("./managed-binary.js", async (importOriginal) => ({
   resolveManagedCodexNativeCommand: mocks.managedBinary.nativeCommand,
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-harness-registration", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-registration")>()),
   resolveDefaultAgentDir: mocks.providerAuth.agentDir,
 }));
 

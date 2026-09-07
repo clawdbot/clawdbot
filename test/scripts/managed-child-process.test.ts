@@ -1,7 +1,6 @@
 // Managed Child Process tests cover managed child process script behavior.
-import childProcess, { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -28,6 +27,11 @@ import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/proce
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 const { createTempDir } = createScriptTestHarness();
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -506,6 +510,31 @@ setInterval(() => {}, 1_000);
     });
   });
 
+  it.each<{
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    signal: NodeJS.Signals;
+  }>([
+    { exitCode: 0, signalCode: null, signal: "SIGTERM" },
+    { exitCode: null, signalCode: "SIGTERM", signal: "SIGKILL" },
+  ])(
+    "does not target a known-exited Windows child ($exitCode/$signalCode)",
+    ({ exitCode, signalCode, signal }) => {
+      const child = { exitCode, signalCode, kill: vi.fn(() => true), pid: 12345 };
+      const runTaskkill = vi.fn(() => ({ status: 0 }));
+
+      const result = terminateManagedChild(child, signal, {
+        platform: "win32",
+        runTaskkill,
+      });
+
+      expect(runTaskkill).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
+      // Exit retires PID authority, not proof that inherited descendants are gone.
+      expect(result).toEqual({ processTreeState: "indeterminate" });
+    },
+  );
+
   it("force-kills Windows managed process trees when graceful taskkill fails", () => {
     withDefaultWindowsSystemRoot(() => {
       const child = {
@@ -709,32 +738,34 @@ setInterval(() => {}, 1_000);
         }
         return true;
       });
-      const ps = vi.spyOn(childProcess, "spawnSync").mockImplementation((...call) => {
-        inspected = true;
-        // Mirror /proc reporting: without -L, ps collapses a pthread_exit leader
-        // with a live sibling thread into one Z process row; -L exposes the thread.
-        const threadRows = Array.isArray(call[1]) && call[1].includes("-L");
-        const stdout =
-          snapshot === "zombie-leader"
-            ? threadRows
-              ? "12345 Z\n12345 S\n"
-              : "12345 Z\n"
-            : snapshot === "zombie"
-              ? "12345 Z\n"
-              : snapshot === "live"
-                ? "12345 S\n"
-                : "";
-        return {
-          pid: 12346,
-          output: [],
-          signal: null,
-          status: snapshot === "empty" ? 1 : 0,
-          stdout,
-          stderr: "",
-          ...(snapshot === "failed" ? { error: new Error("ps unavailable") } : {}),
-        };
-      });
-      syncBuiltinESMExports();
+      const ps = vi
+        .mocked(spawnSync)
+        .mockClear()
+        .mockImplementation((...call) => {
+          inspected = true;
+          // Mirror /proc reporting: without -L, ps collapses a pthread_exit leader
+          // with a live sibling thread into one Z process row; -L exposes the thread.
+          const threadRows = Array.isArray(call[1]) && call[1].includes("-L");
+          const stdout =
+            snapshot === "zombie-leader"
+              ? threadRows
+                ? "12345 Z\n12345 S\n"
+                : "12345 Z\n"
+              : snapshot === "zombie"
+                ? "12345 Z\n"
+                : snapshot === "live"
+                  ? "12345 S\n"
+                  : "";
+          return {
+            pid: 12346,
+            output: [],
+            signal: null,
+            status: snapshot === "empty" ? 1 : 0,
+            stdout,
+            stderr: "",
+            ...(snapshot === "failed" ? { error: new Error("ps unavailable") } : {}),
+          };
+        });
       try {
         expect(
           inspectManagedProcessGroup(
@@ -742,10 +773,10 @@ setInterval(() => {}, 1_000);
             { errorPolicy: policy, platform },
           ),
         ).toBe(expected);
+        expect(ps).toHaveBeenCalledTimes(platform === "linux" && !running ? 1 : 0);
       } finally {
         ps.mockRestore();
         kill.mockRestore();
-        syncBuiltinESMExports();
       }
     },
   );
@@ -1450,9 +1481,9 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
             }
           },
           async () => {
-            if (child?.exitCode === null && child.signalCode === null) {
+            if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) {
               child.kill("SIGKILL");
-              await waitForDead(expectProcessPid(child.pid), 2_000);
+              await waitForDead(child.pid, 2_000);
             }
           },
         );

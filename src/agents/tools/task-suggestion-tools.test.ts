@@ -46,11 +46,13 @@ describe("task suggestion tools", () => {
     expect(suggestTask?.description).toContain(
       "Nothing is spawned or started: this only records a card.",
     );
-    expect(suggestTask?.description).toContain("absolute path inside a git checkout");
+    expect(suggestTask?.description).toContain("without requiring Git or creating a worktree");
+    expect(suggestTask?.description).toContain("ask the user first");
     expect(suggestTask?.parameters).toMatchObject({
       properties: {
         cwd: {
-          description: "Absolute path inside a git checkout; defaults to the current project.",
+          description:
+            "Absolute working directory for the follow-up; defaults to the current folder. Git is not required.",
         },
       },
     });

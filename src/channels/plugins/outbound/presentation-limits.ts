@@ -384,17 +384,14 @@ function countRenderableSelectBlocks(
   if (capabilities?.selects === false) {
     return 0;
   }
-  return blocks.filter((block) => {
-    if (block.type !== "select") {
-      return false;
+  let count = 0;
+  for (const block of blocks) {
+    // A valid maxOptions is at least one, so one accepted option reserves the slot.
+    if (block.type === "select" && block.options.some((option) => adaptOption(option, limits))) {
+      count += 1;
     }
-    const maxOptions = positiveInteger(limits?.maxOptions);
-    const renderableOptions = block.options
-      .map((option) => adaptOption(option, limits))
-      .filter(Boolean)
-      .slice(0, maxOptions ?? undefined);
-    return renderableOptions.length > 0;
-  }).length;
+  }
+  return count;
 }
 
 function createGlobalButtonSelection(params: {

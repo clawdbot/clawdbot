@@ -15,7 +15,7 @@ enum OnboardingProviderAuthLink {
     }
 
     static func displayHost(_ rawValue: String?) -> String? {
-        guard let host = self.safeURL(rawValue)?.host()?.lowercased() else { return nil }
+        guard let host = safeURL(rawValue)?.host()?.lowercased() else { return nil }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 }
@@ -242,20 +242,6 @@ struct OnboardingAISetupView: View {
                 message: providerCatalogError,
                 docsSlug: "start/onboarding",
                 retryTitle: "Try again")
-            {
-                self.model.retryFromScratch()
-            }
-        }
-
-        if self.model.exhaustedAutoCandidates {
-            OnboardingErrorCard(
-                title: "None of the found options worked",
-                message: """
-                The details are listed on each option above. \
-                You can fix the login and retry, or connect with an API key or token below.
-                """,
-                docsSlug: "concepts/model-providers",
-                retryTitle: "Check again")
             {
                 self.model.retryFromScratch()
             }
@@ -489,11 +475,31 @@ struct OnboardingAISetupView: View {
     private var providerAuthSection: some View {
         if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Sign in with a provider")
+                if self.model.nativeSessionCatalogPreferenceRequired,
+                   !self.model.nativeSessionCatalogs.isEmpty
+                {
+                    Toggle(isOn: self.$model.nativeSessionCatalogsEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show existing native conversations")
+                                .font(.callout.weight(.semibold))
+                            Text(String(
+                                format: String(localized: """
+                                Include existing %@ conversations in the sidebar. \
+                                This discovers them in place; it does not copy transcripts.
+                                """),
+                                self.model.nativeSessionCatalogSummary))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                    .padding(.bottom, 6)
+                }
+                Text("Connect an AI provider")
                     .font(.headline)
                 Text(
-                    "Use an existing subscription or provider account. " +
-                        "OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply.")
+                    "Choose any supported provider. OpenClaw asks before installing a provider plugin, " +
+                        "then continues into its own sign-in or API-key flow and verifies a real reply.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -555,16 +561,26 @@ struct OnboardingAISetupView: View {
     }
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
-        Button {
+        let fallbackSymbol = switch option.kind {
+        case "device-code": "link.badge.plus"
+        case "install": "puzzlepiece.extension"
+        case "custom": "point.3.connected.trianglepath.dotted"
+        default: "person.crop.circle.badge.checkmark"
+        }
+        let actionLabel: LocalizedStringKey = switch option.kind {
+        case "device-code": "Pair"
+        case "install": "Set up…"
+        case "custom": "Configure…"
+        default: "Sign in"
+        }
+        return Button {
             self.model.startProviderAuth(option)
         } label: {
             HStack(spacing: 10) {
                 OnboardingProviderArtwork(
                     icon: option.icon,
                     brandCandidates: [option.brandId, option.id],
-                    fallbackSymbol: option.kind == "device-code"
-                        ? "link.badge.plus"
-                        : "person.crop.circle.badge.checkmark")
+                    fallbackSymbol: fallbackSymbol)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                         .font(.callout.weight(.semibold))
@@ -576,7 +592,7 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 Spacer(minLength: 0)
-                Text(option.kind == "device-code" ? "Pair" : "Sign in")
+                Text(actionLabel)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }

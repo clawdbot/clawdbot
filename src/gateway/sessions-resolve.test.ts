@@ -270,6 +270,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     expect(result).toEqual({ ok: true, key: "agent:main:target", agentId: "main" });
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
       agentId: "main",
+      projection: "list",
     });
     expect(rowSpy).not.toHaveBeenCalled();
   });
@@ -621,6 +622,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
 
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
       agentId: undefined,
+      projection: "list",
     });
     expect(result).toEqual({
       ok: false,

@@ -30,7 +30,17 @@ import {
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
 } from "./realtime-provider-shared.js";
-import { OPENAI_GPT_LIVE_MODELS, OPENAI_GPT_LIVE_VOICES } from "./realtime-quicksilver.js";
+import {
+  OPENAI_GPT_LIVE_AUTH_REQUIRED,
+  OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
+  OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED,
+  OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
+} from "./realtime-quicksilver-redaction.js";
+import {
+  OPENAI_GPT_LIVE_MODELS,
+  OPENAI_GPT_LIVE_VOICES,
+  isSupportedOpenAIGptLiveModel,
+} from "./realtime-quicksilver.js";
 
 export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
 
@@ -258,10 +268,6 @@ type OpenAIRealtimeApiKeyResolution =
 
 export const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
   "OpenAI Realtime voice requires an OpenAI Platform API key";
-const OPENAI_GPT_LIVE_AUTH_REQUIRED =
-  "GPT-Live Talk requires either an OpenAI Platform API key or a ChatGPT OAuth subscription profile";
-const OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE =
-  "GPT-Live Talk requires a working OpenAI Platform API key or ChatGPT OAuth subscription profile. The selected Platform API-key source could not be resolved, so OAuth fallback was not used; fix or remove it.";
 export const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
 export const OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED =
   "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source";
@@ -550,20 +556,23 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
     configuredApiKey: string | undefined;
     cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
     agentId?: string;
+    model: string;
   },
   runtime: OpenAIRealtimeHost,
 ) {
-  const { resolveAgentDir } = runtime;
-  const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
-    {
-      cfg: params.cfg,
-      agentDir:
-        params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-    },
-    runtime,
-  );
-  if (subscriptionAuth) {
-    return subscriptionAuth;
+  if (isSupportedOpenAIGptLiveModel(params.model)) {
+    const { resolveAgentDir } = runtime;
+    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
+      {
+        cfg: params.cfg,
+        agentDir:
+          params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
+      },
+      runtime,
+    );
+    if (subscriptionAuth) {
+      return subscriptionAuth;
+    }
   }
   const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
   if (platformAuth.status === "available") {
@@ -579,9 +588,17 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
       runtime,
     )
   ) {
-    throw new Error(OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE);
+    throw new Error(
+      isSupportedOpenAIGptLiveModel(params.model)
+        ? OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE
+        : OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
+    );
   }
-  throw new Error(OPENAI_GPT_LIVE_AUTH_REQUIRED);
+  throw new Error(
+    isSupportedOpenAIGptLiveModel(params.model)
+      ? OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED
+      : OPENAI_GPT_LIVE_AUTH_REQUIRED,
+  );
 }
 
 export function hasOpenAIRealtimePlatformAuthInput(

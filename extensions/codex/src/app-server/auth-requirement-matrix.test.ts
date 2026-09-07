@@ -5,7 +5,7 @@ import {
   applyCodexAppServerAuthProfile,
   resolveCodexAppServerPreparedAuthHandoff,
 } from "./auth-bridge.js";
-import type { CodexAppServerHomeScope } from "./config.js";
+import type { CodexAppServerHomeScope } from "./config-contracts.js";
 
 const AGENT_DIR = "/tmp/openclaw-codex-auth-matrix";
 const SUBSCRIPTION_REQUIRED_ERROR = "subscription profile required";

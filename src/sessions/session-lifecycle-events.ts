@@ -17,7 +17,10 @@ export type SessionIdentityMutationTarget = {
   sessionKeys: readonly string[];
 };
 
-export type SessionIdentityMutation =
+export type SessionIdentityMutation = {
+  /** Resolved operation scope for bare keys; qualified keys retain their own agent. */
+  agentId: string;
+} & (
   | {
       kind: "create" | "move" | "replace" | "reset";
       previous: SessionIdentityMutationTarget;
@@ -26,7 +29,8 @@ export type SessionIdentityMutation =
   | {
       kind: "delete";
       previous: SessionIdentityMutationTarget;
-    };
+    }
+);
 
 export type SessionIdentityMutationListener = (mutation: SessionIdentityMutation) => void;
 

@@ -168,7 +168,7 @@ export XDG_CACHE_HOME="$cache"
 apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins"
 apps/linux/scripts/tauri-appimage-tools.sh prepare
 apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
-export LDAI_RUNTIME_FILE="$cache/tauri/.appimage-runtime-x86_64"
+export LDAI_RUNTIME_FILE="$(apps/linux/scripts/tauri-appimage-tools.sh runtime-path)"
 (
   cd apps/linux/src-tauri
   GSTREAMER_PLUGINS_DIR="$plugins" \
@@ -333,7 +333,7 @@ TimeoutStopSec=330
 TimeoutStartSec=30
 SuccessExitStatus=0 143
 OOMPolicy=continue
-KillMode=control-group
+KillMode=mixed
 
 [Install]
 WantedBy=default.target

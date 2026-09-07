@@ -151,8 +151,11 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: vi.fn(async () => undefined),
 }));
 
-vi.mock("../provider-secret-egress.js", () => ({
+vi.mock("../provider-runtime-auth-protection.js", () => ({
   protectPreparedProviderRuntimeAuth: (value: unknown) => value,
+}));
+
+vi.mock("../provider-secret-egress.js", () => ({
   unwrapSecretSentinelsForProviderEgress: (value: unknown) => value,
 }));
 

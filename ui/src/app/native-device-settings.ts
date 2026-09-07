@@ -21,6 +21,7 @@ export type NativeDeviceSettingsSnapshot = {
   };
   app: {
     showDockIcon: boolean;
+    iconStyle?: { selectedId: string; available: Array<{ id: string; name: string }> }; // advertised by hosts with Dock icon selection
     iconAnimationsEnabled: boolean;
     launchAtLogin: boolean;
     launchAtLoginAvailable: boolean; // false when SMAppService cannot be used (named profile, unbundled)
@@ -78,6 +79,7 @@ export type NativeDeviceSettingsSnapshot = {
 
 export type SettingKey =
   | "app.showDockIcon"
+  | "app.iconStyle"
   | "app.iconAnimationsEnabled"
   | "app.launchAtLogin"
   | "app.quickChatEnabled"
@@ -120,16 +122,24 @@ type NativeDeviceSettingsMessage =
   | { type: "request-permission"; id: PermissionId }
   | { type: "open-system-settings"; id: PermissionId }
   | { type: "open"; panel: NativePanel }
-  | { type: "check-for-updates" };
+  | { type: "check-for-updates" }
+  | { type: "install-chrome-extension" };
+
+export type NativeChromeExtensionSetupResult = {
+  nativeHostRegistered: boolean;
+  installRequested: boolean;
+  discoveredProfiles: number;
+};
 
 export type NativeDeviceSettingsCapability = {
   readonly snapshot: NativeDeviceSettingsSnapshot | null;
   subscribe(listener: (snapshot: NativeDeviceSettingsSnapshot) => void): () => void;
-  set(key: SettingKey, value: boolean | string | string[] | null): void;
+  set(key: SettingKey, value: boolean | string | string[] | null, onSettled?: () => void): void;
   requestPermission(id: PermissionId): void;
   openSystemSettings(id: PermissionId): void;
   openPanel(panel: NativePanel): void;
   checkForUpdates(): void;
+  installChromeExtension(): Promise<NativeChromeExtensionSetupResult>;
   refresh(): void;
   dispose(): void;
 };
@@ -138,7 +148,9 @@ type NativeDeviceSettingsWindow = Window & {
   __OPENCLAW_NATIVE_DEVICE_SETTINGS__?: unknown;
   webkit?: {
     messageHandlers?: {
-      openclawDeviceSettings?: { postMessage(message: NativeDeviceSettingsMessage): void };
+      openclawDeviceSettings?: {
+        postMessage(message: NativeDeviceSettingsMessage): Promise<unknown>;
+      };
     };
   };
 };
@@ -209,6 +221,10 @@ function isSnapshot(value: unknown): value is NativeDeviceSettingsSnapshot {
       "debugPaneEnabled",
     ].every((key) => typeof app[key] === "boolean") &&
     nullableString(app.quickChatShortcut) &&
+    (app.iconStyle === undefined ||
+      (isRecord(app.iconStyle) &&
+        typeof app.iconStyle.selectedId === "string" &&
+        namedDevices(app.iconStyle.available))) &&
     [
       "canvasEnabled",
       "cameraEnabled",
@@ -274,6 +290,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   const post = handler.postMessage.bind(handler);
   const initial = nativeWindow["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"];
   let snapshot = isSnapshot(initial) ? initial : null;
+  let disposed = false;
   const listeners = new Set<(snapshot: NativeDeviceSettingsSnapshot) => void>();
   const onChange = (event: Event) => {
     if (!(event instanceof CustomEvent)) {
@@ -286,8 +303,32 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     snapshot = next;
     listeners.forEach((listener) => listener(next));
   };
+  const send = async (message: NativeDeviceSettingsMessage, onSettled?: () => void) => {
+    try {
+      const reply = await post(message);
+      if (disposed) {
+        return;
+      }
+      if (message.type === "set") {
+        if (!isSnapshot(reply)) {
+          throw new Error("Native settings returned an invalid edit result");
+        }
+        snapshot = reply;
+      }
+    } catch (error) {
+      console.warn("Native device settings request failed", error);
+    }
+    if (!disposed && message.type === "set") {
+      // Clear the originating draft before notifying whichever page is now mounted.
+      onSettled?.();
+      const current = snapshot;
+      if (current) {
+        listeners.forEach((listener) => listener(current));
+      }
+    }
+  };
   // System Settings can change permissions while the app is backgrounded.
-  const refresh = () => post({ type: "status" });
+  const refresh = () => void send({ type: "status" });
   window.addEventListener(CHANGE_EVENT, onChange);
   window.addEventListener("focus", refresh);
   refresh();
@@ -299,13 +340,36 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    set: (key, value) => post({ type: "set", key, value }),
-    requestPermission: (id) => post({ type: "request-permission", id }),
-    openSystemSettings: (id) => post({ type: "open-system-settings", id }),
-    openPanel: (panel) => post({ type: "open", panel }),
-    checkForUpdates: () => post({ type: "check-for-updates" }),
+    set: (key, value, onSettled) => void send({ type: "set", key, value }, onSettled),
+    requestPermission: (id) => void send({ type: "request-permission", id }),
+    openSystemSettings: (id) => void send({ type: "open-system-settings", id }),
+    openPanel: (panel) => void send({ type: "open", panel }),
+    checkForUpdates: () => void send({ type: "check-for-updates" }),
+    async installChromeExtension() {
+      if (disposed) {
+        throw new Error("Native device settings is unavailable");
+      }
+      const reply = await post({ type: "install-chrome-extension" });
+      if (
+        disposed ||
+        !isRecord(reply) ||
+        typeof reply.nativeHostRegistered !== "boolean" ||
+        typeof reply.installRequested !== "boolean" ||
+        typeof reply.discoveredProfiles !== "number" ||
+        !Number.isSafeInteger(reply.discoveredProfiles) ||
+        reply.discoveredProfiles < 0
+      ) {
+        throw new Error("Native Chrome setup returned an invalid result");
+      }
+      return {
+        nativeHostRegistered: reply.nativeHostRegistered,
+        installRequested: reply.installRequested,
+        discoveredProfiles: reply.discoveredProfiles,
+      };
+    },
     refresh,
     dispose() {
+      disposed = true;
       window.removeEventListener(CHANGE_EVENT, onChange);
       window.removeEventListener("focus", refresh);
       listeners.clear();

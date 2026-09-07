@@ -25,6 +25,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackClassifiedResult } from "../../agents/model-fallback-attempt.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
+import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
@@ -79,6 +80,7 @@ import {
   runWithModelFallback,
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
+import { assertCronExecutionRootRuntime } from "./run-prepare-runtime.js";
 import {
   type CronLiveSelection,
   type MutableCronSession,
@@ -265,6 +267,7 @@ type CronRunExecutionParams = {
   runSessionKey: string;
   usesDetachedRunSession?: boolean;
   workspaceDir: string;
+  executionRoot?: string;
   pluginRegistry?: PluginRegistry;
   lane?: string;
   agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
@@ -423,13 +426,14 @@ function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
+    const runId = params.cronSession.sessionEntry.sessionId;
     const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
+      identity: { runId, sessionId: runId },
       config: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
     let acceptedContextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
-    const runId = params.cronSession.sessionEntry.sessionId;
     const basePreparedRunAdmission = prepareAgentRunAdmission({
       operationalRunInstance: createOperationalRunInstanceRef(runId),
       cfg: params.cfgWithAgentDefaults,
@@ -518,7 +522,7 @@ function createCronPromptExecutor(
           agentId: params.agentId,
           sessionKey: params.runSessionKey,
           agentHarnessRuntimeOverride,
-          workspaceDir: params.workspaceDir,
+          workspaceDir: params.executionRoot ?? params.workspaceDir,
           pluginRegistry: params.pluginRegistry,
         });
       },
@@ -566,10 +570,12 @@ function createCronPromptExecutor(
           sessionKey: params.runSessionKey,
           sessionEntry: params.cronSession.sessionEntry,
         });
+        assertCronExecutionRootRuntime(params.executionRoot, candidateRuntime);
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({
             cfg: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
             provider: providerOverride,
             model: modelOverride,
           });
@@ -592,6 +598,7 @@ function createCronPromptExecutor(
           candidateConfiguredThinkLevel ??
           resolveThinkingDefault({
             cfg: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
             provider: providerOverride,
             model: modelOverride,
             catalog: thinkingCatalog,
@@ -803,7 +810,7 @@ function createCronPromptExecutor(
           messageThreadId: params.resolvedDelivery.threadId,
           currentChannelId,
           agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
+          ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
           config: params.cfgWithAgentDefaults,
           skillsSnapshot: params.skillsSnapshot,
           prompt: promptText,
@@ -978,6 +985,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     runSessionKey: params.runSessionKey,
     usesDetachedRunSession: params.usesDetachedRunSession,
     workspaceDir: params.workspaceDir,
+    executionRoot: params.executionRoot,
     pluginRegistry: params.pluginRegistry,
     lane: params.lane,
     resolvedVerboseLevel,

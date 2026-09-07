@@ -276,7 +276,8 @@ vi.mock("./bot/delivery.replies.js", () => ({
   emitTelegramMessageSentHooks: emitTelegramMessageSentHooksHoisted,
 }));
 
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async () => ({
+  buildInlineKeyboard: (await import("./inline-keyboard.js")).buildInlineKeyboard,
   createForumTopicTelegram: createForumTopicTelegramHoisted,
   deleteMessageTelegram: deleteMessageTelegramHoisted,
   editForumTopicTelegram: editForumTopicTelegramHoisted,
@@ -534,6 +535,7 @@ export function telegramProgressPreview(_plainText: string, html: string) {
   return {
     text: html.replaceAll("\n", "<br>"),
     parseMode: "HTML" as const,
+    complete: true as const,
   };
 }
 

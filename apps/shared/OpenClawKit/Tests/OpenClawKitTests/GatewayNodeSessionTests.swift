@@ -928,12 +928,14 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connectForTest(testURL("wss://gateway.example.invalid"), options: options, session: session)
 
-        async let first = gateway.refreshCanvasHostUrl(replacing: nil)
-        async let second = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
-        async let third = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 2)
+        async let first = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
         try await waitUntil("single surface refresh sent") {
             session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
         }
+        // Followers may start after the response; retain their original observation
+        // so they reuse that rotation instead of requesting another one.
+        async let second = gateway.refreshCanvasHostUrl(replacing: nil)
+        async let third = gateway.refreshPluginSurfaceUrl(surface: "canvas", replacing: nil)
         let task = try #require(session.latestTask())
         let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
         let requestID = try #require(request["id"] as? String)
@@ -972,7 +974,6 @@ struct GatewayNodeSessionTests {
         let shortValue = await shortWait
         #expect(shortValue == nil)
 
-        async let joinedWait = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 8)
         let task = try #require(session.latestTask())
         #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
         let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
@@ -985,9 +986,7 @@ struct GatewayNodeSessionTests {
                 ],
             ])
 
-        let values = await (longWait, joinedWait)
-        #expect(values.0 == values.1)
-        #expect(values.0?.hasSuffix("/new-token") == true)
+        #expect(await longWait?.hasSuffix("/new-token") == true)
         #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
         await gateway.disconnect()
     }

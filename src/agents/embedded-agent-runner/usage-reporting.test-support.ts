@@ -3,6 +3,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedAcquireAgentRunPreparedModelRuntime,
@@ -60,16 +61,7 @@ describe("runEmbeddedAgent usage reporting", () => {
   });
 
   it("bootstraps runtime plugins with the resolved workspace before running", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/test-model",
-            fallbacks: ["openai/gpt-5.5"],
-          },
-        },
-      },
-    };
+    const config = createModelFallbackConfig("anthropic/test-model", ["openai/gpt-5.5"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Response 1"],
@@ -139,16 +131,7 @@ describe("runEmbeddedAgent usage reporting", () => {
   });
 
   it("preserves an explicitly pinned harness across fallback plugin planning", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "codex/test-model",
-            fallbacks: ["openai/gpt-5.5"],
-          },
-        },
-      },
-    };
+    const config = createModelFallbackConfig("codex/test-model", ["openai/gpt-5.5"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({ assistantTexts: ["Response 1"] }),
     );

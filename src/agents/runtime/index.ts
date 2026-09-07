@@ -16,7 +16,6 @@ export {
   openClawAgentCoreRuntime,
   prepareBranchEntries,
   prepareCompaction,
-  runAgentLoop,
   serializeConversation,
   shouldCompact,
   uuidv7,

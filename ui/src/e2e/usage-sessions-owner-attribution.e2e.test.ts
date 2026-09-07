@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
@@ -18,10 +17,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() || ".artifacts/control-ui-e2e",
-  "usage-sessions-owner-attribution",
-);
 const viewport = { height: 900, width: 1_440 };
 
 const PROOF_SESSION_ID = "tg-dm-owner-attribution-proof";
@@ -32,11 +27,10 @@ async function capture(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(proofDir, name),
+    path: path.join(suite.artifactDir, name),
   });
 }
 
@@ -179,10 +173,7 @@ suite.define(() => {
               await otherRow.waitFor();
               await expect.poll(() => otherRow.count()).toBe(1);
               await otherRow.scrollIntoViewIfNeeded();
-              await capture(
-                page,
-                resetCurrentSession ? "02-empty-current-family.png" : "01-same-id-owners.png",
-              );
+              await capture(page, "01-other-owner.png");
 
               // The named family stays visible before its new current instance has a transcript.
               const row = page.locator(`.session-bar-row[title="${PROOF_STORE_KEY}"]`);
@@ -201,10 +192,7 @@ suite.define(() => {
               await expect.poll(() => page.locator(".session-bar-row").count()).toBe(2);
 
               await row.scrollIntoViewIfNeeded();
-              await capture(
-                page,
-                resetCurrentSession ? "02-empty-current-family.png" : "01-same-id-owners.png",
-              );
+              await capture(page, "02-current-owner.png");
               expect(pageErrors).toEqual([]);
             },
           );

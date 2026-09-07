@@ -81,6 +81,8 @@ export type GatewayServerOptions = {
   /** Test-only: override the channel-setup wizard runner (wizard.start flow "channels"). */
   channelWizardRunner?: import("./server-methods/wizard.js").ChannelSetupWizardRunner;
   sidecarStartup?: GatewaySidecarStartupMode;
+  /** Internal update rehearsal: load plugins without starting autonomous work. */
+  updateCanary?: boolean;
   channelAutostartSuppression?: ChannelAutostartSuppression;
   /** Internal lifecycle callback that re-proves and records crash-loop recovery. */
   tryRecoverChannelAutostartSuppression?: () => boolean;

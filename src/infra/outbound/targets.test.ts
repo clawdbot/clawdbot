@@ -773,6 +773,47 @@ describe("resolveSessionDeliveryTarget", () => {
     },
   );
 
+  it("keeps owner discovery fail-closed for unresolved store SecretRefs and resolves once the credential is materialized", () => {
+    const telegram = createOwnerAllowlistTargetTestPlugin({
+      id: "telegram",
+      label: "Telegram",
+      ownerId: "123456789",
+      inferTargetChatType: ({ to }) => (/^\d+$/.test(to) ? "direct" : undefined),
+    });
+    telegram.config = {
+      ...telegram.config,
+      listAccountIds: () => ["default"],
+      inspectAccount: (cfg: OpenClawConfig) => {
+        const botToken = cfg.channels?.telegram?.botToken;
+        return typeof botToken === "string" && botToken.trim()
+          ? { enabled: true, configured: true, token: botToken, tokenStatus: "available" }
+          : { enabled: true, configured: true, tokenStatus: "configured_unavailable" };
+      },
+    };
+    setActivePluginRegistry(createTargetsTestRegistry([telegram]));
+
+    // A store-backed SecretRef that this command path could not resolve must keep
+    // owner discovery fail-closed instead of reporting a phantom route.
+    const unresolvedCfg: OpenClawConfig = {
+      commands: { ownerAllowFrom: ["telegram:123456789"] },
+      channels: {
+        telegram: {
+          enabled: true,
+          botToken: { source: "store", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    };
+    expect(hasResolvableHeartbeatOwnerRoute({ cfg: unresolvedCfg })).toBe(false);
+
+    // Once the read-only resolution contract materializes the credential, the
+    // configured owner route resolves without any other config change (#137217).
+    const resolvedCfg: OpenClawConfig = {
+      commands: { ownerAllowFrom: ["telegram:123456789"] },
+      channels: { telegram: { enabled: true, botToken: "8905123456:AAF-example-bDTs" } },
+    };
+    expect(hasResolvableHeartbeatOwnerRoute({ cfg: resolvedCfg })).toBe(true);
+  });
+
   it("reuses an exact direct owner route with its account and thread", () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
     setActivePluginRegistry(createTargetsTestRegistry([alpha]));

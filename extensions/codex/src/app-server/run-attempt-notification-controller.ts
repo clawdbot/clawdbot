@@ -127,7 +127,7 @@ export function createCodexAttemptNotificationController(
             }
           }
           if (item?.type === "userMessage" && typeof item.clientId === "string") {
-            await steeringQueueRef.current?.confirmConsumed(item.clientId);
+            steeringQueueRef.current?.confirmConsumed(item.clientId);
           }
         }
         if (
@@ -195,6 +195,10 @@ export function createCodexAttemptNotificationController(
     }
     projector.recordMcpToolCallReceipt(notification);
     if (isTerminalTurnNotificationForTurn(notification, turnId)) {
+      const completed = readCodexTurnCompletedNotification(notification.params);
+      if (completed) {
+        projector.settlement.terminalReceipt = completed.turn;
+      }
       state.terminalTurnNotificationQueued = true;
       steeringQueueRef.current?.sealAdmission();
       deadlines.beginSettlement(receivedAtMs);
@@ -206,6 +210,8 @@ export function createCodexAttemptNotificationController(
       }
       const nativeItem = readCodexNotificationItem(notification.params);
       if (nativeItem?.type === "webSearch") {
+        // Native result provenance must survive an abandoned transcript projection.
+        projector.settlement.turnTainted ||= notification.method === "item/completed";
         projector.recordNativeToolOutcome(nativeItem);
       }
     }

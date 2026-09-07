@@ -8,9 +8,11 @@ import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import { readOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
+import {
+  createOpenClawDatabaseVerificationError,
+  readOpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-store.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
-import { createOpenClawDatabaseVerificationError } from "./openclaw-state-db-maintenance.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();

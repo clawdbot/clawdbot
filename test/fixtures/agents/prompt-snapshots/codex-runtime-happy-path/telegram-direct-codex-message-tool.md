@@ -147,6 +147,10 @@
       "kind": "untrusted",
       "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
     },
+    "openclaw_source_delivery": {
+      "kind": "application",
+      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere."
+    },
     "openclaw_temporal_context": {
       "kind": "application",
       "value": "## Temporal Context\nCurrent date: 2026-01-01\nTime zone: UTC\nFor the exact current time, use `session_status`."
@@ -182,7 +186,7 @@
 
 ## Reconstructed Model-Bound Prompt Layers
 
-This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
+This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
 
 ### Layer Metadata
 
@@ -207,9 +211,11 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
   },
   "limitations": [
     "This is a reconstructed prompt-layer snapshot, not a byte-for-byte raw OpenAI request captured from Codex core.",
+    "Additional context shows this turn's supplied values; native truncation, deduplication and retained history are not simulated.",
     "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API."
   ],
   "openClawRuntime": {
+    "additionalContextFrom": "extensions/codex app-server turn/start additionalContext",
     "collaborationModeDeveloperInstructionsFrom": "extensions/codex app-server turn/start collaborationMode.settings.developer_instructions",
     "configInstructionsFrom": "extensions/codex app-server thread/start config.instructions",
     "developerInstructionsFrom": "extensions/codex app-server thread/start developerInstructions",
@@ -224,6 +230,10 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 
 ```json
 {
+  "additionalContext": {
+    "chars": 882,
+    "roughTokens": 221
+  },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 1433,
     "roughTokens": 359
@@ -241,20 +251,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 57597,
-    "roughTokens": 14400
+    "chars": 57821,
+    "roughTokens": 14456
   },
   "openClawDeveloperInstructions": {
-    "chars": 3843,
-    "roughTokens": 961
+    "chars": 3481,
+    "roughTokens": 871
   },
   "totalTextOnly": {
-    "chars": 27789,
-    "roughTokens": 6948
+    "chars": 28311,
+    "roughTokens": 7078
   },
   "totalWithDynamicToolsJson": {
-    "chars": 85388,
-    "roughTokens": 21347
+    "chars": 86134,
+    "roughTokens": 21534
   },
   "userInputText": {
     "chars": 863,
@@ -449,8 +459,6 @@ Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other 
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
-Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
-
 Complete the user's authorized task using existing access or the service's supported credential flow. Limit credential disclosure to what that flow requires for its intended recipient.
 For user-requested login or pairing, send its short-lived user-facing code and verification URL from trusted login output in a private conversation with that user. In a group conversation, move the handoff to private chat. Their request is sufficient authorization.
 Submit user-provided short-lived one-time codes or OAuth callbacks through the same pending flow's supported input, preserving state, PKCE, expiry, and account checks. Keep messages intact unless the user requests deletion. Confirm completion from the login result.
@@ -508,6 +516,30 @@ OpenClaw loaded these workspace instruction files from the active agent workspac
 ### /tmp/openclaw-happy-path/workspace/USER.md
 
 <USER.md contents will be here>
+```
+
+### User: OpenClaw Additional Context (openclaw_current_sender)
+
+```text
+<external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
+```
+
+### Developer: OpenClaw Additional Context (openclaw_source_delivery)
+
+```text
+<openclaw_source_delivery>Current source-delivery policy for this turn (replaces earlier source-delivery guidance):
+Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
+
+`send`: `message`; current source is default target. Set `target` only elsewhere.</openclaw_source_delivery>
+```
+
+### Developer: OpenClaw Additional Context (openclaw_temporal_context)
+
+```text
+<openclaw_temporal_context>## Temporal Context
+Current date: 2026-01-01
+Time zone: UTC
+For the exact current time, use `session_status`.</openclaw_temporal_context>
 ```
 
 ### User: Turn Input Text
@@ -636,6 +668,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "filename": {
           "type": "string"
+        },
+        "final": {
+          "description": "For admitted message-tool-only source turns, set false for progress; set true, or omit, for the completed reply. Ignored for other sends.",
+          "type": "boolean"
         },
         "forceDocument": {
           "description": "Send media as document; no compression.",

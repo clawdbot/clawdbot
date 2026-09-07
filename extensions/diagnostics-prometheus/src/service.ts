@@ -1,6 +1,7 @@
 // Diagnostics Prometheus plugin module implements service behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  isDiagnosticsEnabled,
   normalizeDiagnosticValue,
   normalizeDiagnosticLane,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -16,7 +17,7 @@ import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.j
 
 type LabelSet = Record<string, string>;
 
-type CounterSample = {
+type ScalarSample = {
   help: string;
   labels: LabelSet;
   value: number;
@@ -29,18 +30,6 @@ type HistogramSample = {
   help: string;
   labels: LabelSet;
   sum: number;
-};
-
-type GaugeSample = {
-  help: string;
-  labels: LabelSet;
-  value: number;
-};
-
-type MetricSnapshot = {
-  counters: Map<string, CounterSample>;
-  gauges: Map<string, GaugeSample>;
-  histograms: Map<string, HistogramSample>;
 };
 
 type PrometheusMetricStore = ReturnType<typeof createPrometheusMetricStore>;
@@ -63,7 +52,9 @@ function seconds(ms: number | undefined): number | undefined {
 }
 
 function sortedLabels(labels: LabelSet): [string, string][] {
-  return Object.entries(labels).toSorted(([left], [right]) => left.localeCompare(right));
+  const entries = Object.entries(labels);
+  entries.sort(([left], [right]) => left.localeCompare(right));
+  return entries;
 }
 
 function metricKey(name: string, labels: LabelSet): string {
@@ -78,12 +69,16 @@ function escapeLabelValue(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
 }
 
+function formatLabelEntry([key, value]: [string, string]): string {
+  return `${key}="${escapeLabelValue(value)}"`;
+}
+
 function formatLabels(labels: LabelSet): string {
   const entries = sortedLabels(labels);
   if (entries.length === 0) {
     return "";
   }
-  return `{${entries.map(([key, value]) => `${key}="${escapeLabelValue(value)}"`).join(",")}}`;
+  return `{${entries.map(formatLabelEntry).join(",")}}`;
 }
 
 function formatPrometheusNumber(value: number): string {
@@ -94,16 +89,13 @@ function formatPrometheusNumber(value: number): string {
 }
 
 function createPrometheusMetricStore() {
-  const counters = new Map<string, CounterSample>();
-  const gauges = new Map<string, GaugeSample>();
+  const counters = new Map<string, ScalarSample>();
+  const gauges = new Map<string, ScalarSample>();
   const histograms = new Map<string, HistogramSample>();
   let droppedSeries = 0;
 
-  const canCreateSeries = <T>(map: Map<string, T>, key: string, metricName: string): boolean => {
+  const canCreateSeries = <T>(map: Map<string, T>, key: string): boolean => {
     if (map.has(key)) {
-      return true;
-    }
-    if (metricName === DROPPED_SERIES_COUNTER_NAME) {
       return true;
     }
     if (counters.size + gauges.size + histograms.size < MAX_PROMETHEUS_SERIES) {
@@ -118,7 +110,7 @@ function createPrometheusMetricStore() {
       return;
     }
     const key = metricKey(name, labels);
-    if (!canCreateSeries(counters, key, name)) {
+    if (!canCreateSeries(counters, key)) {
       return;
     }
     const existing = counters.get(key);
@@ -134,7 +126,7 @@ function createPrometheusMetricStore() {
       return;
     }
     const key = metricKey(name, labels);
-    if (!canCreateSeries(gauges, key, name)) {
+    if (!canCreateSeries(gauges, key)) {
       return;
     }
     gauges.set(key, { help, labels, value });
@@ -151,7 +143,7 @@ function createPrometheusMetricStore() {
       return;
     }
     const key = metricKey(name, labels);
-    if (!canCreateSeries(histograms, key, name)) {
+    if (!canCreateSeries(histograms, key)) {
       return;
     }
     let sample = histograms.get(key);
@@ -176,19 +168,22 @@ function createPrometheusMetricStore() {
     }
   };
 
-  const snapshot = (): MetricSnapshot => {
-    const counterSnapshot = new Map(counters);
+  const snapshot = () => {
+    const counterSnapshot = [...counters];
     if (droppedSeries > 0) {
-      counterSnapshot.set(metricKey(DROPPED_SERIES_COUNTER_NAME, {}), {
-        help: "Prometheus metric series dropped because the exporter series cap was reached.",
-        labels: {},
-        value: droppedSeries,
-      });
+      counterSnapshot.push([
+        metricKey(DROPPED_SERIES_COUNTER_NAME, {}),
+        {
+          help: "Prometheus metric series dropped because the exporter series cap was reached.",
+          labels: {},
+          value: droppedSeries,
+        },
+      ]);
     }
     return {
       counters: counterSnapshot,
-      gauges: new Map(gauges),
-      histograms: new Map(histograms),
+      gauges: [...gauges],
+      histograms: [...histograms],
     };
   };
 
@@ -230,46 +225,43 @@ function renderPrometheusMetrics(store: PrometheusMetricStore): string {
     lines.push(`# TYPE ${name} ${type}`);
   };
 
-  const counterEntries = [...snapshot.counters.entries()].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  for (const [key, sample] of counterEntries) {
-    const name = key.split("|", 1)[0] ?? "";
-    emitHeader(name, "counter", sample.help);
-    lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
+  for (const [type, entries] of [
+    ["counter", snapshot.counters],
+    ["gauge", snapshot.gauges],
+  ] as const) {
+    entries.sort(([left], [right]) => left.localeCompare(right));
+    for (const [key, sample] of entries) {
+      const name = key.split("|", 1)[0] ?? "";
+      emitHeader(name, type, sample.help);
+      lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
+    }
   }
 
-  const gaugeEntries = [...snapshot.gauges.entries()].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  for (const [key, sample] of gaugeEntries) {
-    const name = key.split("|", 1)[0] ?? "";
-    emitHeader(name, "gauge", sample.help);
-    lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
-  }
-
-  const histogramEntries = [...snapshot.histograms.entries()].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  for (const [key, sample] of histogramEntries) {
+  snapshot.histograms.sort(([left], [right]) => left.localeCompare(right));
+  for (const [key, sample] of snapshot.histograms) {
     const name = key.split("|", 1)[0] ?? "";
     emitHeader(name, "histogram", sample.help);
+    const labels = formatLabels(sample.labels);
+    const bucketLabels = sortedLabels({ ...sample.labels, le: "" });
+    const boundIndex = bucketLabels.findIndex(([labelKey]) => labelKey === "le");
+    const bucketFragments = bucketLabels.map(formatLabelEntry);
+    // Only the bound changes between buckets; reuse sorted, escaped labels within this scrape.
     for (let index = 0; index < sample.buckets.length; index += 1) {
       const bucket = sample.buckets[index];
       if (bucket === undefined) {
         continue;
       }
+      bucketFragments[boundIndex] = `le="${String(bucket)}"`;
       lines.push(
-        `${name}_bucket${formatLabels({ ...sample.labels, le: String(bucket) })} ${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
+        `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
       );
     }
+    bucketFragments[boundIndex] = 'le="+Inf"';
     lines.push(
-      `${name}_bucket${formatLabels({ ...sample.labels, le: "+Inf" })} ${formatPrometheusNumber(sample.count)}`,
+      `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.count)}`,
     );
-    lines.push(`${name}_sum${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.sum)}`);
-    lines.push(
-      `${name}_count${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.count)}`,
-    );
+    lines.push(`${name}_sum${labels} ${formatPrometheusNumber(sample.sum)}`);
+    lines.push(`${name}_count${labels} ${formatPrometheusNumber(sample.count)}`);
   }
 
   lines.push("");
@@ -545,6 +537,14 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
+    case "diagnostic.gc":
+      store.histogram(
+        "openclaw_gc_duration_seconds",
+        "Elapsed garbage collection duration in seconds for the hosting JavaScript isolate.",
+        {},
+        seconds(evt.durationMs),
+      );
+      return;
     case "gateway.event_loop.sample":
       store.histogram(
         "openclaw_gateway_event_loop_delay_max_seconds",
@@ -679,23 +679,25 @@ function recordDiagnosticEvent(
         harnessLabels(evt),
       );
       return;
-    case "message.processed":
-      store.counter("openclaw_message_processed_total", "Inbound messages processed by outcome.", {
+    case "message.processed": {
+      const labels = {
         channel: normalizeDiagnosticValue(evt.channel),
         outcome: evt.outcome,
         reason: normalizeDiagnosticValue(evt.reason, "none"),
-      });
+      };
+      store.counter(
+        "openclaw_message_processed_total",
+        "Inbound messages processed by outcome.",
+        labels,
+      );
       store.histogram(
         "openclaw_message_processed_duration_seconds",
         "Inbound message processing duration in seconds.",
-        {
-          channel: normalizeDiagnosticValue(evt.channel),
-          outcome: evt.outcome,
-          reason: normalizeDiagnosticValue(evt.reason, "none"),
-        },
+        labels,
         seconds(evt.durationMs),
       );
       return;
+    }
     case "webhook.received":
       store.counter(
         "openclaw_webhook_received_total",
@@ -744,59 +746,50 @@ function recordDiagnosticEvent(
         },
       );
       return;
-    case "message.dispatch.completed":
+    case "message.dispatch.completed": {
+      const labels = {
+        channel: normalizeDiagnosticValue(evt.channel),
+        outcome: evt.outcome,
+        reason: normalizeDiagnosticValue(evt.reason, "none"),
+        source: normalizeDiagnosticValue(evt.source),
+      };
       store.counter(
         "openclaw_message_dispatch_completed_total",
         "Inbound message dispatch attempts completed by outcome.",
-        {
-          channel: normalizeDiagnosticValue(evt.channel),
-          outcome: evt.outcome,
-          reason: normalizeDiagnosticValue(evt.reason, "none"),
-          source: normalizeDiagnosticValue(evt.source),
-        },
+        labels,
       );
       store.histogram(
         "openclaw_message_dispatch_duration_seconds",
         "Inbound message dispatch duration in seconds.",
-        {
-          channel: normalizeDiagnosticValue(evt.channel),
-          outcome: evt.outcome,
-          reason: normalizeDiagnosticValue(evt.reason, "none"),
-          source: normalizeDiagnosticValue(evt.source),
-        },
+        labels,
         seconds(evt.durationMs),
       );
       return;
+    }
     case "message.delivery.completed":
-    case "message.delivery.error":
+    case "message.delivery.error": {
+      const labels = {
+        channel: normalizeDiagnosticValue(evt.channel),
+        delivery_kind: normalizeDiagnosticValue(evt.deliveryKind, "other"),
+        error_category:
+          evt.type === "message.delivery.error"
+            ? normalizeDiagnosticValue(evt.errorCategory, "other")
+            : "none",
+        outcome: evt.type === "message.delivery.error" ? "error" : "completed",
+      };
       store.counter(
         "openclaw_message_delivery_total",
         "Outbound message delivery attempts by outcome.",
-        {
-          channel: normalizeDiagnosticValue(evt.channel),
-          delivery_kind: normalizeDiagnosticValue(evt.deliveryKind, "other"),
-          error_category:
-            evt.type === "message.delivery.error"
-              ? normalizeDiagnosticValue(evt.errorCategory, "other")
-              : "none",
-          outcome: evt.type === "message.delivery.error" ? "error" : "completed",
-        },
+        labels,
       );
       store.histogram(
         "openclaw_message_delivery_duration_seconds",
         "Outbound message delivery duration in seconds.",
-        {
-          channel: normalizeDiagnosticValue(evt.channel),
-          delivery_kind: normalizeDiagnosticValue(evt.deliveryKind, "other"),
-          error_category:
-            evt.type === "message.delivery.error"
-              ? normalizeDiagnosticValue(evt.errorCategory, "other")
-              : "none",
-          outcome: evt.type === "message.delivery.error" ? "error" : "completed",
-        },
+        labels,
         seconds(evt.durationMs),
       );
       return;
+    }
     case "talk.event":
       store.counter("openclaw_talk_event_total", "Talk events emitted by type.", talkLabels(evt));
       store.histogram(
@@ -883,24 +876,18 @@ function recordDiagnosticEvent(
       });
       return;
     case "diagnostic.memory.sample":
-      store.gauge(
-        "openclaw_memory_bytes",
-        "Latest process memory usage by memory kind.",
-        { kind: "rss" },
-        evt.memory.rssBytes,
-      );
-      store.gauge(
-        "openclaw_memory_bytes",
-        "Latest process memory usage by memory kind.",
-        { kind: "heap_total" },
-        evt.memory.heapTotalBytes,
-      );
-      store.gauge(
-        "openclaw_memory_bytes",
-        "Latest process memory usage by memory kind.",
-        { kind: "heap_used" },
-        evt.memory.heapUsedBytes,
-      );
+      for (const [kind, field] of [
+        ["rss", "rssBytes"],
+        ["heap_total", "heapTotalBytes"],
+        ["heap_used", "heapUsedBytes"],
+      ] as const) {
+        store.gauge(
+          "openclaw_memory_bytes",
+          "Latest process memory usage by memory kind.",
+          { kind },
+          evt.memory[field],
+        );
+      }
       store.histogram(
         "openclaw_memory_rss_bytes",
         "RSS memory sample distribution in bytes.",
@@ -925,24 +912,14 @@ function recordDiagnosticEvent(
         "Diagnostic liveness warning events.",
         livenessLabels(evt),
       );
-      store.gauge(
-        "openclaw_liveness_sessions",
-        "Latest session counts reported with diagnostic liveness warnings.",
-        { state: "active" },
-        numericValue(evt.active),
-      );
-      store.gauge(
-        "openclaw_liveness_sessions",
-        "Latest session counts reported with diagnostic liveness warnings.",
-        { state: "waiting" },
-        numericValue(evt.waiting),
-      );
-      store.gauge(
-        "openclaw_liveness_sessions",
-        "Latest session counts reported with diagnostic liveness warnings.",
-        { state: "queued" },
-        numericValue(evt.queued),
-      );
+      for (const state of ["active", "waiting", "queued"] as const) {
+        store.gauge(
+          "openclaw_liveness_sessions",
+          "Latest session counts reported with diagnostic liveness warnings.",
+          { state },
+          numericValue(evt[state]),
+        );
+      }
       store.histogram(
         "openclaw_liveness_event_loop_delay_p99_seconds",
         "P99 event-loop delay reported by diagnostic liveness warnings in seconds.",
@@ -971,34 +948,20 @@ function recordDiagnosticEvent(
       );
       return;
     case "diagnostic.async_queue.dropped":
-      store.counter(
-        "openclaw_diagnostic_async_queue_dropped_total",
-        "Async diagnostic queue drops by dropped event class.",
-        { drop_class: "total" },
-        numericValue(evt.droppedEvents),
-      );
-      if (evt.droppedTrustedEvents !== undefined) {
+      for (const [dropClass, field] of [
+        ["total", "droppedEvents"],
+        ["trusted", "droppedTrustedEvents"],
+        ["untrusted", "droppedUntrustedEvents"],
+        ["priority", "droppedPriorityEvents"],
+      ] as const) {
+        if (field !== "droppedEvents" && evt[field] === undefined) {
+          continue;
+        }
         store.counter(
           "openclaw_diagnostic_async_queue_dropped_total",
           "Async diagnostic queue drops by dropped event class.",
-          { drop_class: "trusted" },
-          numericValue(evt.droppedTrustedEvents),
-        );
-      }
-      if (evt.droppedUntrustedEvents !== undefined) {
-        store.counter(
-          "openclaw_diagnostic_async_queue_dropped_total",
-          "Async diagnostic queue drops by dropped event class.",
-          { drop_class: "untrusted" },
-          numericValue(evt.droppedUntrustedEvents),
-        );
-      }
-      if (evt.droppedPriorityEvents !== undefined) {
-        store.counter(
-          "openclaw_diagnostic_async_queue_dropped_total",
-          "Async diagnostic queue drops by dropped event class.",
-          { drop_class: "priority" },
-          numericValue(evt.droppedPriorityEvents),
+          { drop_class: dropClass },
+          numericValue(evt[field]),
         );
       }
       store.gauge(
@@ -1094,6 +1057,21 @@ export function createDiagnosticsPrometheusExporter() {
       if (!subscribe) {
         ctx.logger.error("diagnostics-prometheus: internal diagnostics capability unavailable");
         return;
+      }
+      const identity = isDiagnosticsEnabled(ctx.config)
+        ? ctx.internalDiagnostics?.getRuntimeIdentity?.()
+        : undefined;
+      if (identity) {
+        // Reserve one sample before event traffic; runtime identity must survive saturation.
+        store.gauge(
+          "openclaw_gateway_build_info",
+          "Identity of the hosting process and its loaded build; not a health or exporter epoch.",
+          {
+            process_instance_id: identity.processInstanceId,
+            ...(identity.buildId ? { build_id: identity.buildId } : {}),
+          },
+          1,
+        );
       }
       unsubscribe = subscribe((event, metadata) => {
         try {

@@ -64,7 +64,7 @@ struct TalkModeGatewayConfigTests {
                         "speakerVoice": "alloy",
                     ],
                 ],
-                "model": " gpt-live-1-codex ",
+                "model": " gpt-live-test-canary ",
                 "speakerVoice": " cedar ",
                 "mode": " Realtime ",
                 "transport": " Gateway-Relay ",
@@ -75,7 +75,7 @@ struct TalkModeGatewayConfigTests {
         let parsed = Self.parse(snapshot)
 
         #expect(parsed.realtimeProvider == "OpenAI")
-        #expect(parsed.realtimeModelId == "gpt-live-1-codex")
+        #expect(parsed.realtimeModelId == "gpt-live-test-canary")
         #expect(parsed.realtimeSpeakerVoice == "cedar")
         #expect(parsed.realtimeMode == "realtime")
         #expect(parsed.realtimeTransport == "gateway-relay")
@@ -113,7 +113,7 @@ struct TalkModeGatewayConfigTests {
                 "provider": "OPENAI",
                 "providers": [
                     "openai": [
-                        "model": "gpt-live-1-codex",
+                        "model": "gpt-live-test-canary",
                         "speakerVoice": "cedar",
                     ],
                 ],
@@ -123,7 +123,7 @@ struct TalkModeGatewayConfigTests {
         let parsed = Self.parse(snapshot)
 
         #expect(parsed.realtimeProvider == "OPENAI")
-        #expect(parsed.realtimeModelId == "gpt-live-1-codex")
+        #expect(parsed.realtimeModelId == "gpt-live-test-canary")
         #expect(parsed.realtimeSpeakerVoice == "cedar")
     }
 
@@ -141,6 +141,50 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.realtimeMode == nil)
         #expect(parsed.realtimeTransport == nil)
         #expect(parsed.realtimeBrain == nil)
+    }
+
+    @Test func `redacted gateway model remains omitted`() {
+        let snapshot = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: [
+                "talk": AnyCodable([
+                    "realtime": [
+                        "provider": "openai",
+                        "mode": "realtime",
+                        "transport": "gateway-relay",
+                    ],
+                ]),
+                "clientHints": AnyCodable([
+                    "realtime": [
+                        "modelSource": "gateway",
+                        "gatewayRelaySupported": false,
+                    ],
+                ]),
+            ],
+            issues: nil)
+
+        #expect(Self.parse(snapshot).realtimeModelId == nil)
+    }
+
+    @Test func `released realtime model remains available`() {
+        let snapshot = Self.snapshot(talk: [
+            "realtime": [
+                "provider": "openai",
+                "model": "gpt-live-1-codex",
+                "speakerVoice": "spruce",
+                "mode": "realtime",
+                "transport": "gateway-relay",
+            ],
+        ])
+
+        let parsed = Self.parse(snapshot)
+        #expect(parsed.realtimeModelId == "gpt-live-1-codex")
+        #expect(parsed.realtimeSpeakerVoice == "spruce")
     }
 
     private static func snapshot(talk: [String: Any]) -> ConfigSnapshot {

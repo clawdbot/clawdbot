@@ -22,86 +22,33 @@ type SandboxToolPolicyConfig = {
   deny?: string[];
 };
 
-function buildSource(params: {
-  scope: "agent" | "global" | "default";
-  key: string;
-}): SandboxToolPolicySource {
-  return {
-    source: params.scope,
-    key: params.key,
-  } satisfies SandboxToolPolicySource;
-}
-
-function pickConfiguredList(params: { agent?: string[]; global?: string[] }): {
+function pickConfiguredList(
+  field: keyof SandboxToolPolicyConfig,
+  agent?: SandboxToolPolicyConfig,
+  global?: SandboxToolPolicyConfig,
+): {
   values?: string[];
   source: SandboxToolPolicySource;
 } {
-  if (Array.isArray(params.agent)) {
+  const agentValues = agent?.[field];
+  const globalValues = global?.[field];
+  const key = `tools.sandbox.tools.${field}`;
+  if (Array.isArray(agentValues)) {
     return {
-      values: params.agent,
-      source: buildSource({
-        scope: "agent",
-        key: "agents.entries.*.tools.sandbox.tools.allow",
-      }),
+      values: agentValues,
+      source: { source: "agent", key: `agents.entries.*.${key}` },
     };
   }
-  if (Array.isArray(params.global)) {
+  if (Array.isArray(globalValues)) {
     return {
-      values: params.global,
-      source: buildSource({ scope: "global", key: "tools.sandbox.tools.allow" }),
+      values: globalValues,
+      source: { source: "global", key },
     };
   }
   return {
     values: undefined,
-    source: buildSource({ scope: "default", key: "tools.sandbox.tools.allow" }),
+    source: { source: "default", key },
   };
-}
-
-function pickConfiguredDeny(params: { agent?: string[]; global?: string[] }): {
-  values?: string[];
-  source: SandboxToolPolicySource;
-} {
-  if (Array.isArray(params.agent)) {
-    return {
-      values: params.agent,
-      source: buildSource({
-        scope: "agent",
-        key: "agents.entries.*.tools.sandbox.tools.deny",
-      }),
-    };
-  }
-  if (Array.isArray(params.global)) {
-    return {
-      values: params.global,
-      source: buildSource({ scope: "global", key: "tools.sandbox.tools.deny" }),
-    };
-  }
-  return {
-    values: undefined,
-    source: buildSource({ scope: "default", key: "tools.sandbox.tools.deny" }),
-  };
-}
-
-function pickConfiguredAlsoAllow(params: { agent?: string[]; global?: string[] }): {
-  values?: string[];
-  source?: SandboxToolPolicySource;
-} {
-  if (Array.isArray(params.agent)) {
-    return {
-      values: params.agent,
-      source: buildSource({
-        scope: "agent",
-        key: "agents.entries.*.tools.sandbox.tools.alsoAllow",
-      }),
-    };
-  }
-  if (Array.isArray(params.global)) {
-    return {
-      values: params.global,
-      source: buildSource({ scope: "global", key: "tools.sandbox.tools.alsoAllow" }),
-    };
-  }
-  return { values: undefined, source: undefined };
 }
 
 function mergeAllowlist(
@@ -245,18 +192,9 @@ export function resolveSandboxToolPolicyForAgent(
   const agentPolicy = agentConfig?.tools?.sandbox?.tools as SandboxToolPolicyConfig | undefined;
   const globalPolicy = cfg?.tools?.sandbox?.tools as SandboxToolPolicyConfig | undefined;
 
-  const allowConfig = pickConfiguredList({
-    agent: agentPolicy?.allow,
-    global: globalPolicy?.allow,
-  });
-  const alsoAllowConfig = pickConfiguredAlsoAllow({
-    agent: agentPolicy?.alsoAllow,
-    global: globalPolicy?.alsoAllow,
-  });
-  const denyConfig = pickConfiguredDeny({
-    agent: agentPolicy?.deny,
-    global: globalPolicy?.deny,
-  });
+  const allowConfig = pickConfiguredList("allow", agentPolicy, globalPolicy);
+  const alsoAllowConfig = pickConfiguredList("alsoAllow", agentPolicy, globalPolicy);
+  const denyConfig = pickConfiguredList("deny", agentPolicy, globalPolicy);
 
   const explicitAllowPatterns = resolveExplicitSandboxReAllowPatterns({
     allow: allowConfig.values,

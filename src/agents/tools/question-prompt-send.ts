@@ -9,22 +9,84 @@
  */
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  durableMessageBatchMayHaveReachedRecipient,
+  sendDurableMessageBatchCore,
+  type DurableMessageBatchSendResult,
+} from "../../channels/message/runtime.js";
 import { resolveControlUiSessionLinkBase } from "../../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel-normalize.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../harness/user-input-bridge.js";
 
 /** Tools whose call opens a question a person must answer before the turn continues. */
 export type QuestionPromptToolName = "ask_user" | "secrets";
 
 /** Publishes one prompt into the originating conversation. */
-export type QuestionPromptSend = (payload: ReplyPayload) => void | Promise<void>;
+export type QuestionPromptSend = (
+  payload: ReplyPayload,
+  options?: { signal?: AbortSignal },
+) => void | Promise<void>;
 
 /** A run's own way to show a question prompt, plus the channel it would appear in. */
 export type QuestionPromptDelivery = {
   send: QuestionPromptSend;
   messageChannel?: string;
 };
+
+/** Builds a portable prompt sender for Gateway-scoped / loopback tool construction. */
+export function createChannelQuestionPromptDelivery(params: {
+  cfg: OpenClawConfig;
+  channel?: string | null;
+  to?: string | number | null;
+  accountId?: string;
+  threadId?: string | number | null;
+}): QuestionPromptDelivery | undefined {
+  const cfg = params.cfg;
+  const channel = normalizeMessageChannel(params.channel);
+  const to = params.to?.toString().trim();
+  if (!channel || !to || !isDeliverableMessageChannel(channel)) {
+    return undefined;
+  }
+  return {
+    messageChannel: channel,
+    send: async (payload, options) => {
+      const send = await sendDurableMessageBatchCore({
+        cfg,
+        channel,
+        to,
+        accountId: params.accountId,
+        threadId: params.threadId ?? undefined,
+        payloads: [payload],
+        bestEffort: false,
+        durability: "required",
+        deliveryRetryOwner: "caller",
+        signal: options?.signal,
+      });
+      settleChannelQuestionPromptSend(send);
+    },
+  };
+}
+
+function settleChannelQuestionPromptSend(send: DurableMessageBatchSendResult): void {
+  // Fail closed when the durable batch did not reach the chat. ask_user then
+  // cancels instead of waiting on Control UI after a suppressed or failed send.
+  if (durableMessageBatchMayHaveReachedRecipient(send)) {
+    return;
+  }
+  if (send.status === "failed") {
+    throw send.error;
+  }
+  throw new Error(
+    send.status === "suppressed"
+      ? `question prompt delivery was suppressed: ${send.reason}`
+      : "question prompt delivery did not reach the conversation",
+  );
+}
 
 /**
  * Publishes the prompt for an already-committed gateway question record.
@@ -38,10 +100,13 @@ export async function sendQuestionToolPrompt(params: {
   questions: readonly QuestionRequestQuestion[];
   config?: OpenClawConfig;
   send: QuestionPromptSend;
+  signal?: AbortSignal;
 }): Promise<void> {
   const { questionId, questions } = params;
   const send: QuestionPromptSend = (payload) =>
-    runWithQuestionChannelDeliveries([questionId], () => params.send(payload));
+    runWithQuestionChannelDeliveries([questionId], () =>
+      params.signal ? params.send(payload, { signal: params.signal }) : params.send(payload),
+    );
   if (params.toolName === "secrets") {
     const binding = questions[0]?.secretStore;
     if (!binding) {

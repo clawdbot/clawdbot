@@ -15,13 +15,15 @@ export function buildStaticChutesProvider(): ModelProviderConfig {
 
 /**
  * Build the Chutes provider with dynamic model discovery.
- * Falls back to the static catalog on failure.
  * Accepts an optional access token (API key or OAuth access token) for authenticated discovery.
  */
-export async function buildChutesProvider(accessToken?: string): Promise<ModelProviderConfig> {
+export async function buildChutesProvider(
+  accessToken?: string,
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelProviderConfig> {
   return {
     baseUrl: CHUTES_BASE_URL,
     api: "openai-completions",
-    models: await discoverChutesModels(accessToken),
+    models: await discoverChutesModels(accessToken, options),
   };
 }

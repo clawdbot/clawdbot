@@ -47,6 +47,7 @@ export type NormalizedOutboundPayload = {
 /** JSON-safe outbound payload projection used for envelopes and diagnostics. */
 export type OutboundPayloadJson = {
   text: string;
+  isError?: boolean;
   mediaUrl: string | null;
   mediaUrls?: string[];
   audioAsVoice?: boolean;
@@ -336,6 +337,7 @@ export function projectOutboundPayloadPlanForJson(
     const payload = entry.payload;
     normalized.push({
       text: entry.parts.text,
+      isError: payload.isError,
       mediaUrl: payload.mediaUrl ?? null,
       mediaUrls: entry.parts.mediaUrls.length ? entry.parts.mediaUrls : undefined,
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,

@@ -1,6 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
-import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflight.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {

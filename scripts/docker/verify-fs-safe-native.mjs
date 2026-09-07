@@ -25,7 +25,16 @@ function parseArgs(argv) {
       "usage: verify-fs-safe-native.mjs --package-root <path> --mode <require|fallback>",
     );
   }
-  return { mode, packageRoot: path.resolve(packageRoot) };
+  // createRequire keeps symlinked bases; pnpm dependencies belong to the physical package.
+  return { mode, packageRoot: fs.realpathSync(packageRoot) };
+}
+
+const fsSafeNativeContract = process.env.OPENCLAW_FS_SAFE_NATIVE_CONTRACT ?? "required";
+if (fsSafeNativeContract === "not-applicable") {
+  console.log(
+    "Skipping fs-safe native proof: selected source has the published pre-native contract.",
+  );
+  process.exit(0);
 }
 
 const { mode, packageRoot } = parseArgs(process.argv.slice(2));

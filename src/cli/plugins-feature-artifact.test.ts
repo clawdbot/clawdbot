@@ -6,6 +6,11 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { extract } from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  validatePackageExtensionEntriesForInstall,
+  resolvePackageRuntimeExtensionSources,
+  resolvePackageSetupSource,
+} from "../plugins/package-entry-resolution.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getCachedPluginSourceModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
@@ -132,6 +137,154 @@ describe("plugin artifact authoring", () => {
     await fs.writeFile(path.join(rootDir, "src/control-ui.ts"), "export default null;");
     expect(await fs.readFile(archive)).toEqual(bytes);
   });
+
+  it.each([
+    {
+      id: "inferred-tools",
+      filename: "inferred-tools.tgz",
+      runtime: false,
+      inferred: true,
+      setup: true,
+    },
+    { id: "@author/tools", filename: "@author__tools.tgz", runtime: false, setup: false },
+    { id: "runtime-tools", filename: "runtime-tools.tgz", runtime: true, setup: false },
+    { id: "setup-tools", filename: "setup-tools.tgz", runtime: true, setup: true },
+  ])(
+    "packs $id with its installed runtime and metadata intact",
+    async ({ id, filename, runtime, setup, inferred = false }) => {
+      const parent = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-pack-")),
+      );
+      directories.push(parent);
+      const rootDir = path.join(parent, "project");
+      await fs.mkdir(path.join(rootDir, "dist"), { recursive: true });
+      await fs.symlink(path.resolve("node_modules"), path.join(rootDir, "node_modules"), "dir");
+      const packageManifest = {
+        name: id,
+        version: "1.0.0",
+        type: "module",
+        openclaw: {
+          extensions: [inferred ? "./src/index.ts" : "./dist/index.js"],
+          ...(runtime ? { runtimeExtensions: ["./dist/compiled.js"] } : {}),
+          ...(setup
+            ? {
+                setupEntry: "./dist/setup-source.js",
+                ...(runtime ? { runtimeSetupEntry: "./dist/setup-runtime.js" } : {}),
+              }
+            : {}),
+          compat: { pluginApi: ">=2026.5.17" },
+        },
+      };
+      await fs.writeFile(path.join(rootDir, "package.json"), JSON.stringify(packageManifest));
+      await fs.writeFile(
+        path.join(rootDir, "dist/shared.js"),
+        "export const shared = { ready: false };",
+      );
+      const entry = (
+        marker: string,
+        sharedPath = "./shared.js",
+      ) => `import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { shared } from ${JSON.stringify(sharedPath)}; shared.ready = true;
+export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name: "Packed tool", description: "Artifact fixture", tools: (tool) => [tool({ name: "artifact_echo", description: "Echo", optional: true, parameters: { type: "object", properties: {} }, execute: async () => ({ ok: true }) })] }), { artifactMarker: ${JSON.stringify(marker)}, shared });`;
+      await fs.writeFile(
+        path.join(rootDir, "dist/index.js"),
+        entry(inferred ? "runtime" : "source"),
+      );
+      if (inferred) {
+        await fs.mkdir(path.join(rootDir, "src"));
+        await fs.writeFile(
+          path.join(rootDir, "src/index.ts"),
+          entry("source", "../dist/shared.js"),
+        );
+      }
+      if (runtime) {
+        await fs.writeFile(path.join(rootDir, "dist/compiled.js"), entry("runtime"));
+      }
+      if (setup) {
+        await fs.writeFile(
+          path.join(rootDir, "dist/setup-source.js"),
+          'import { shared } from "./shared.js"; export default { artifactMarker: "setup-source", shared };',
+        );
+        await fs.writeFile(
+          path.join(rootDir, "dist/setup-runtime.js"),
+          'import { shared } from "./shared.js"; export default { artifactMarker: "setup-runtime", shared };',
+        );
+      }
+      await runPluginsBuildCommand({ root: rootDir });
+      const sourceManifest = await fs.readFile(path.join(rootDir, "openclaw.plugin.json"));
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      await runPluginsPackCommand({ root: rootDir, json: true });
+      const archive = path.join(rootDir, filename);
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ pluginId: id, path: archive }),
+      );
+      const extracted = path.join(parent, "extracted");
+      await fs.mkdir(extracted);
+      await extract({ file: archive, cwd: extracted, strict: true });
+      const packageDir = path.join(extracted, "package");
+      const manifest = JSON.parse(await fs.readFile(path.join(packageDir, "package.json"), "utf8"));
+      expect(await fs.readFile(path.join(packageDir, "openclaw.plugin.json"))).toEqual(
+        sourceManifest,
+      );
+      expect(manifest.openclaw.compat).toEqual(packageManifest.openclaw.compat);
+      expect(
+        await validatePackageExtensionEntriesForInstall({
+          packageDir,
+          manifest,
+          extensions: manifest.openclaw.extensions,
+        }),
+      ).toEqual({ ok: true });
+      const resolution = {
+        packageDir,
+        manifest,
+        origin: "global" as const,
+        sourceLabel: packageDir,
+        diagnostics: [],
+      };
+      const [entryPath] = resolvePackageRuntimeExtensionSources({
+        ...resolution,
+        extensions: manifest.openclaw.extensions,
+      });
+      const loaded = await loadToolPlugin({ rootDir: packageDir, entryPath: entryPath! });
+      expect(loaded.entry).toMatchObject({
+        artifactMarker: runtime || inferred ? "runtime" : "source",
+      });
+      expect(loaded.metadata).toMatchObject({
+        id,
+        tools: [{ name: "artifact_echo", optional: true }],
+      });
+      if (setup) {
+        const setupPath = resolvePackageSetupSource(resolution);
+        expect(setupPath).toBeTruthy();
+        withPluginCache(createPluginCache(), () => {
+          const load = getCachedPluginSourceModuleLoader({
+            modulePath: entryPath!,
+            rootDir: packageDir,
+            importerUrl: import.meta.url,
+            aliasMap: buildPluginLoaderAliasMap(
+              entryPath!,
+              process.argv[1],
+              import.meta.url,
+              "src",
+            ),
+            transformOpenClawDependencies: true,
+          });
+          expect(load(entryPath!)).toMatchObject({ default: { shared: { ready: true } } });
+          expect(load(setupPath!)).toMatchObject({
+            default: {
+              artifactMarker: runtime ? "setup-runtime" : "setup-source",
+              shared: { ready: true },
+            },
+          });
+        });
+      }
+      const files = await fs.readdir(path.join(packageDir, "dist"));
+      expect(files.filter((file) => !file.startsWith("chunk-")).toSorted()).toEqual(
+        setup ? ["index.js", "setup.js"] : ["index.js"],
+      );
+      expect(files.filter((file) => file.startsWith("chunk-"))).toHaveLength(setup ? 1 : 0);
+    },
+  );
 
   it("rejects opaque prebundles with guidance to use the regular package-install flow", async () => {
     const { rootDir, parent } = await fixture();

@@ -127,7 +127,9 @@ const DEFAULT_REDACT_PREFILTER_SOURCES: string[] = [
   // filler), but at least one key character must follow a splice so bare `+=` or line-leading
   // `===` separators do not trip the fast path.
   String.raw`%[0-9A-Fa-f]{2}[A-Za-z0-9_%.-]*=`,
-  String.raw`(?:\+|[${FORM_BODY_KEY_INVISIBLE_CHARS}])(?:[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*[A-Za-z0-9_%.-])+[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*=`,
+  // Search at the required assignment separator, not at every invisible character.
+  // Look behind it to retain the same obfuscated-key language without rescanning blank runs.
+  String.raw`=(?<=(?:\+|[${FORM_BODY_KEY_INVISIBLE_CHARS}])(?:[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*[A-Za-z0-9_%.-])+[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*=)`,
 ];
 const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
   `(?:${DEFAULT_REDACT_PREFILTER_SOURCES.join("|")})`,
@@ -1047,6 +1049,12 @@ export function isSensitiveFieldKey(key: string): boolean {
   return STRUCTURED_SECRET_FIELD_RE.test(key) || STRUCTURED_SECRET_ENV_FIELD_RE.test(key);
 }
 
+function isPublicShareIdPath(path: readonly string[]): boolean {
+  const idKey = path.at(-1)?.toLowerCase();
+  const parentKey = path.at(-2)?.toLowerCase().replaceAll("-", "").replaceAll("_", "");
+  return idKey === "id" && parentKey === "publicshare";
+}
+
 function redactSensitiveFieldValueWithOptions(
   key: string,
   value: string,
@@ -1054,6 +1062,9 @@ function redactSensitiveFieldValueWithOptions(
   path: readonly string[] = [key],
 ): string {
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
+  if (isPublicShareIdPath(path)) {
+    return maskToken(exactRedacted);
+  }
   const sensitiveKey = isSensitiveFieldKey(key);
   const fieldOptions =
     sensitiveKey && options.sensitiveFieldPatterns
@@ -1166,7 +1177,11 @@ function shouldRedactStructuredAuthorizationCode(
 
 function shouldRedactStructuredPrimitiveField(key: string, path: readonly string[]): boolean {
   const normalizedKey = key.toLowerCase();
-  return shouldRedactStructuredAuthorizationCode(normalizedKey, path) || isSensitiveFieldKey(key);
+  return (
+    isPublicShareIdPath(path) ||
+    shouldRedactStructuredAuthorizationCode(normalizedKey, path) ||
+    isSensitiveFieldKey(key)
+  );
 }
 
 function isPlainRedactableObject(value: object): value is Record<string, unknown> {

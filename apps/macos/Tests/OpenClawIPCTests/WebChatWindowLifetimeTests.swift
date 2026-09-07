@@ -181,6 +181,8 @@ func withWebChatManagerLifetime(
     primaryConnection: GatewayConnection = .shared,
     _ body: (WebChatManager) async throws -> Void) async throws
 {
+    // Callers inspect NSApp before opening their first window.
+    _ = AppKitTestSupport.application
     weak var retiredManager: WebChatManager?
     let suiteName = "WebChatSelectionTests.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))

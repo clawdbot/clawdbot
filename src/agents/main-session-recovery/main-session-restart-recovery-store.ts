@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type InternalSessionEntry as SessionEntry,
@@ -14,13 +13,8 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
-import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
-import {
-  LEGACY_IMPLICIT_AGENT_ID,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -58,6 +52,7 @@ import {
   normalizeStringSet,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
+import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
 
 function pendingFinalRecoveryAction(
   pending: NonNullable<SessionEntry["pendingFinalDelivery"]>,
@@ -190,34 +185,6 @@ export function loadExpectedRestartRecoveryTarget(params: {
     isMainRestartRecoveryCandidate(entry, params.expected.sessionKey)
     ? entry
     : undefined;
-}
-
-function resolveRestartRecoveryDispatchTarget(params: {
-  cfg?: OpenClawConfig;
-  sessionKey: string;
-  storePath: string;
-}): { agentId: string; sessionKey: string } | undefined {
-  if (!params.cfg) {
-    return {
-      agentId: resolveAgentIdFromSessionKey(params.sessionKey, LEGACY_IMPLICIT_AGENT_ID),
-      sessionKey: params.sessionKey,
-    };
-  }
-  try {
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: params.sessionKey,
-    });
-    return !params.cfg.session?.store ||
-      path.resolve(target.storePath) === path.resolve(params.storePath)
-      ? { agentId: target.agentId, sessionKey: target.canonicalKey }
-      : undefined;
-  } catch (err) {
-    mainSessionRecoveryLog.warn(
-      `failed to resolve recovery store for ${params.sessionKey}: ${String(err)}`,
-    );
-    return undefined;
-  }
 }
 
 export async function recoverStore(params: {
