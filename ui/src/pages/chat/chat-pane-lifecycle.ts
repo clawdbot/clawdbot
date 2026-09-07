@@ -27,6 +27,11 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import * as chatAvatars from "./chat-avatar.ts";
+import {
+  chatHistoryRequests,
+  retireInitialChatSnapshot,
+  type InitialChatSnapshotHydration,
+} from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
   type ChatAttachmentGatewayOwner,
@@ -113,22 +118,41 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       return;
     }
     const cacheKey = resolveChatSnapshotKey(state, { sessionKey });
-    void store.read(cacheKey).then((snapshot) => {
-      if (
-        !snapshot ||
-        this.state !== state ||
-        !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-        readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
-      ) {
-        return;
-      }
-      // The memory miss fences network replacement; the pane projection merges
-      // live and pending rows that arrived while IndexedDB was pending.
-      applyChatCacheSnapshot(state, snapshot);
-      const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-      cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, mergedSnapshot);
-      state.requestUpdate?.();
-    });
+    const requests = chatHistoryRequests(state);
+    const hydration: InitialChatSnapshotHydration = {
+      sessionKey,
+      promise: store
+        .read(cacheKey)
+        .then((snapshot) => {
+          if (
+            !snapshot ||
+            requests.initialSnapshotHydration !== hydration ||
+            this.state !== state ||
+            !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+            readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
+          ) {
+            return;
+          }
+          // The memory miss fences network replacement; the pane projection merges
+          // live and pending rows that arrived while IndexedDB was pending.
+          applyChatCacheSnapshot(state, snapshot);
+          const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
+          cacheChatSessionSnapshot(
+            state.chatMessagesBySession,
+            state,
+            { sessionKey },
+            mergedSnapshot,
+          );
+          state.requestUpdate?.();
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
+            delete requests.initialSnapshotHydration;
+          }
+        }),
+    };
+    requests.initialSnapshotHydration = hydration;
   }
 
   public discardStagedAttachments(): void {
@@ -598,6 +622,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.composerPresentation?.dispose();
     this.composerPresentation = undefined;
     if (this.state) {
+      retireInitialChatSnapshot(this.state);
       chatAvatars.invalidateChatAvatarCache(this.state);
       retireChatMetadataRequests(this.state);
       if (this.suppressStagedAttachmentHandoffOnDisconnect) {

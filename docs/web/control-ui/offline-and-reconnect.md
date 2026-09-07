@@ -16,6 +16,8 @@ without live run state, and custom groups in browser storage. Recent transcripts
 use the existing chat cache. On reload, the shell, sidebar, and cached conversation
 can appear while the Gateway is still connecting. Live state replaces the cached
 roster on connect, and chat requests changes from its saved transcript cursor.
+The first chat request waits up to 300 ms after connecting for the stored transcript,
+then falls back to live history if it is not ready.
 
 Warm reload records belong to the Gateway credential scope and signed-in profile.
 Changing credentials or clearing site data clears the cached boot state. Agent and
