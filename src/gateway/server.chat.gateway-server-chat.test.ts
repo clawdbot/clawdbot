@@ -1302,7 +1302,6 @@ describe("gateway server chat", () => {
           });
           markGatewayRestartDraining();
           rejectDispatch.resolve();
-          await errorPromise;
           await persistenceEntered.promise;
           const restartInspectors = {
             getQueueSize: () => 0,
@@ -1318,6 +1317,7 @@ describe("gateway server chat", () => {
             counts: { rootRequests: 1 },
           });
           releasePersistence.resolve();
+          await errorPromise;
           const changed = await sessionChangedPromise;
           await waitForFast(() => {
             expect(createSafeGatewayRestartPreflight(restartInspectors).safe).toBe(true);
