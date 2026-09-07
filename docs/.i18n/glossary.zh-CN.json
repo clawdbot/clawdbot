@@ -2332,40 +2332,68 @@
     "target": "Gateway 协议身份验证"
   },
   {
-    "source": "Run Codex on another machine",
-    "target": "在其他机器上运行 Codex"
+    "source": "Config and utilities",
+    "target": "配置与实用工具"
   },
   {
-    "source": "Codex routing and deployment",
-    "target": "Codex 路由与部署"
+    "source": "Agent and sessions",
+    "target": "Agent 与会话"
   },
   {
-    "source": "Codex harness configuration",
-    "target": "Codex harness 配置"
+    "source": "Model helpers",
+    "target": "模型辅助方法"
   },
   {
-    "source": "Codex app-server policy",
-    "target": "Codex app-server 策略"
+    "source": "Background work",
+    "target": "后台工作"
   },
   {
-    "source": "Codex plugin config fields",
-    "target": "Codex 插件配置字段"
+    "source": "Gateway and nodes",
+    "target": "Gateway 与节点"
   },
   {
-    "source": "Codex commands and diagnostics",
-    "target": "Codex 命令与诊断"
+    "source": "Media helpers",
+    "target": "媒体辅助方法"
   },
   {
-    "source": "Codex runtime behavior",
-    "target": "Codex 运行时行为"
+    "source": "State and system",
+    "target": "状态与系统"
   },
   {
-    "source": "Native Codex state and features",
-    "target": "原生 Codex 状态与功能"
+    "source": "Channel helpers",
+    "target": "频道辅助方法"
   },
   {
-    "source": "Codex harness troubleshooting",
-    "target": "Codex harness 故障排查"
+    "source": "Plugin runtime config and utilities",
+    "target": "插件运行时配置与实用工具"
+  },
+  {
+    "source": "Plugin runtime agent helpers",
+    "target": "插件运行时 Agent 辅助方法"
+  },
+  {
+    "source": "Plugin runtime model helpers",
+    "target": "插件运行时模型辅助方法"
+  },
+  {
+    "source": "Plugin runtime background work",
+    "target": "插件运行时后台工作"
+  },
+  {
+    "source": "Plugin runtime Gateway and nodes",
+    "target": "插件运行时 Gateway 与节点"
+  },
+  {
+    "source": "Plugin runtime media helpers",
+    "target": "插件运行时媒体辅助方法"
+  },
+  {
+    "source": "Plugin runtime state and system",
+    "target": "插件运行时状态与系统"
+  },
+  {
+    "source": "Plugin runtime channel helpers",
+    "target": "插件运行时频道辅助方法"
   },
   {
     "source": "Slack setup",
@@ -2418,5 +2446,41 @@
   {
     "source": "PDF tool",
     "target": "PDF 工具"
+  },
+  {
+    "source": "Run Codex on another machine",
+    "target": "在其他机器上运行 Codex"
+  },
+  {
+    "source": "Codex routing and deployment",
+    "target": "Codex 路由与部署"
+  },
+  {
+    "source": "Codex harness configuration",
+    "target": "Codex harness 配置"
+  },
+  {
+    "source": "Codex app-server policy",
+    "target": "Codex app-server 策略"
+  },
+  {
+    "source": "Codex plugin config fields",
+    "target": "Codex 插件配置字段"
+  },
+  {
+    "source": "Codex commands and diagnostics",
+    "target": "Codex 命令与诊断"
+  },
+  {
+    "source": "Codex runtime behavior",
+    "target": "Codex 运行时行为"
+  },
+  {
+    "source": "Native Codex state and features",
+    "target": "原生 Codex 状态与功能"
+  },
+  {
+    "source": "Codex harness troubleshooting",
+    "target": "Codex harness 故障排查"
   }
 ]

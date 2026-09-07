@@ -2195,6 +2195,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps hosted tooling within the GitHub job cap when its inventory grows", async () => {
+    // The checkout is fixed; keep real discovery caches while rebuilding each planner snapshot.
+    const unitFastPaths = await vi.importActual<
+      typeof import("../vitest/vitest.unit-fast-paths.mjs")
+    >("../vitest/vitest.unit-fast-paths.mjs");
+    const trackedTestFiles = new Map<string, readonly string[]>();
     const options = {
       compactMode: "pull-request" as const,
       runnerBackend: "github",
@@ -2219,15 +2224,20 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       extraFiles: string[] = [],
     ) => {
       vi.resetModules();
+      vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => unitFastPaths);
       vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => {
         const actual =
           await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>();
         return {
           ...actual,
-          listTrackedTestFiles(rootDir: string, suffix?: string) {
-            const files = actual
-              .listTrackedTestFiles(rootDir, suffix)
-              .filter((file) => !growthFiles.has(file));
+          listTrackedTestFiles(rootDir: string, suffix = ".test.ts") {
+            const key = JSON.stringify([rootDir, suffix]);
+            let rawFiles = trackedTestFiles.get(key);
+            if (rawFiles === undefined) {
+              rawFiles = actual.listTrackedTestFiles(rootDir, suffix);
+              trackedTestFiles.set(key, rawFiles);
+            }
+            const files = rawFiles.filter((file) => !growthFiles.has(file));
             return rootDir === "test" && (includeGrowthFile || extraFiles.length > 0)
               ? [
                   ...new Set([
@@ -2246,6 +2256,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         return createPlan(options);
       } finally {
         vi.doUnmock("../../scripts/lib/list-test-files.mts");
+        vi.doUnmock("../vitest/vitest.unit-fast-paths.mjs");
         vi.resetModules();
       }
     };
