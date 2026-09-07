@@ -99,6 +99,27 @@ describe("resolveAuthProfileOrder", () => {
         includePendingOAuthRefresh: true,
       }),
     ).toEqual([]);
+    expect(
+      resolveAuthProfileOrder({
+        store: { version: 1, profiles: { [profileId]: pending } },
+        provider: "anthropic",
+        includePendingOAuthRefresh: true,
+      }),
+    ).toEqual([]);
+    expect(
+      resolveAuthProfileOrder({
+        cfg: {
+          auth: {
+            profiles: {
+              [profileId]: { provider: "openai", mode: "api_key" },
+            },
+          },
+        },
+        store: { version: 1, profiles: { [profileId]: pending } },
+        provider: "openai",
+        includePendingOAuthRefresh: true,
+      }),
+    ).toEqual([]);
   });
 
   it("accepts aliased provider credentials from manifest metadata", async () => {

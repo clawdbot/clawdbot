@@ -317,6 +317,7 @@ export function resolveAuthProfileOrderWithMetadata(
     return (
       eligibility.eligible ||
       (params.includePendingOAuthRefresh === true &&
+        eligibility.reasonCode === "expired" &&
         credential?.type === "oauth" &&
         isPendingOAuthRefreshFence(credential)) ||
       (params.readinessMode === "read-only" && eligibility.reasonCode === "unresolved_ref")
