@@ -30,7 +30,6 @@ import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { createLiveActivity } from "../pages/activity/live-activity.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
-import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
 import {
@@ -44,6 +43,7 @@ import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./appr
 import { persistBootRecord, readBootRecord } from "./boot-record.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { subscribeWarmBootConnection } from "./bootstrap-warm-boot.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
@@ -229,26 +229,10 @@ export function bootstrapApplication(): ApplicationRuntime {
       ),
     );
   }
-  const bootConnectionRevision = gateway.connectionRevision;
-  let pendingBootProfileId =
-    startsApplicationRouter && !hasPendingGateway ? bootRecord?.profileId : undefined;
-  const stopBootProfileValidation = gateway.subscribe((snapshot) => {
-    if (gateway.connectionRevision !== bootConnectionRevision) {
-      pendingBootProfileId = undefined;
-    }
-    if (snapshot.phase !== "connected" || pendingBootProfileId === undefined) {
-      return;
-    }
-    const profileMismatch = pendingBootProfileId !== (snapshot.selfUser?.id ?? null);
-    pendingBootProfileId = undefined;
-    if (profileMismatch) {
-      // Invalidate visible history and its cursor before pane subscribers resume startup.
-      void clearStoredChatSnapshots();
-      void import("../lib/sessions/session-roster-cache.runtime.ts").then(
-        ({ clearCachedBootState }) => clearCachedBootState(),
-      );
-    }
-  });
+  const stopWarmBootConnection = subscribeWarmBootConnection(
+    gateway,
+    startsApplicationRouter && !hasPendingGateway ? bootRecord?.profileId : undefined,
+  );
   const agents = createAgentCapability(gateway, {
     cachedList: bootRecord?.agents ?? null,
     cachedProfileId: bootRecord?.profileId ?? null,
@@ -714,7 +698,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
     stop: () => {
       startupLifecycle.stop();
-      stopBootProfileValidation();
+      stopWarmBootConnection();
       stopBootRecordPersistence.forEach((stop) => stop());
       stopPostConnect();
       connectionBootstrap.reset();

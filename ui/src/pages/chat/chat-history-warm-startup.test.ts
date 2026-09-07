@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   resetChatHistoryProjection,
@@ -14,6 +14,8 @@ import {
 } from "./chat-pane.test-support.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import type { ChatMessageCache, ChatSessionSnapshot } from "./session-message-cache.ts";
+import * as snapshotDatabase from "./session-snapshot-database.ts";
+import { markPrewarmedChatSnapshotReady, prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import "./chat-pane.ts";
 
@@ -27,13 +29,18 @@ const stored: ChatSessionSnapshot = {
 const liveMessages = [nativeHistoryMessage(2, "Live conversation")];
 const panes: TestChatPane[] = [];
 
-function mountPane(withStore = true, key = sessionKey, connectedAtMount = false) {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
+function mountPane(
+  withStore = true,
+  key = sessionKey,
+  connectedAtMount = false,
+  snapshotStore?: SessionSnapshotStore,
+) {
   const read = createDeferred<ChatSessionSnapshot | null>();
   const memory: ChatMessageCache = new Map();
-  const store = new SessionSnapshotStore(memory);
-  vi.spyOn(store, "read").mockReturnValue(read.promise);
+  const store = snapshotStore ?? new SessionSnapshotStore(memory);
+  if (!snapshotStore) {
+    vi.spyOn(store, "read").mockReturnValue(read.promise);
+  }
   const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
   panes.push(pane);
   vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
@@ -76,6 +83,11 @@ function mountPane(withStore = true, key = sessionKey, connectedAtMount = false)
     },
   };
 }
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+});
 
 afterEach(() => {
   for (const pane of panes.splice(0)) {
@@ -201,6 +213,57 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.request).toHaveBeenCalledOnce();
     await loading;
     h.read.resolve(stored);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.chatMessages).toEqual(liveMessages);
+  });
+
+  it("waits for a boot prewarm consumed by a pane mounted after readiness", async () => {
+    const record = createDeferred<unknown>();
+    vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(record.promise);
+    prewarmChatSnapshot(sessionKey);
+    markPrewarmedChatSnapshotReady();
+    const h = mountPane(true, sessionKey, true, new SessionSnapshotStore());
+    h.connect();
+    const loading = h.start();
+    expect(h.request).not.toHaveBeenCalled();
+    record.resolve({
+      savedAt: Date.now(),
+      sessionKey,
+      sessionId: stored.sessionId,
+      snapshot: stored,
+    });
+    await loading;
+    expect(h.request).toHaveBeenCalledExactlyOnceWith(
+      "chat.startup",
+      expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
+    );
+  });
+
+  it("keeps the prewarm deadline anchored to hello when the pane mounts later", async () => {
+    const record = createDeferred<unknown>();
+    vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(record.promise);
+    prewarmChatSnapshot(sessionKey);
+    await vi.advanceTimersByTimeAsync(50);
+    markPrewarmedChatSnapshotReady();
+    await vi.advanceTimersByTimeAsync(100);
+    markPrewarmedChatSnapshotReady();
+    const h = mountPane(true, sessionKey, true, new SessionSnapshotStore());
+    h.connect();
+    const loading = h.start();
+    await vi.advanceTimersByTimeAsync(199);
+    expect(h.request).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.request).toHaveBeenCalledExactlyOnceWith(
+      "chat.startup",
+      expect.not.objectContaining({ cursor: expect.anything() }),
+    );
+    await loading;
+    record.resolve({
+      savedAt: Date.now(),
+      sessionKey,
+      sessionId: stored.sessionId,
+      snapshot: stored,
+    });
     await vi.advanceTimersByTimeAsync(0);
     expect(h.state.chatMessages).toEqual(liveMessages);
   });

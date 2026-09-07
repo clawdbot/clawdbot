@@ -15,6 +15,7 @@ import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
   openSessionSnapshotDatabase,
+  readStoredChatSnapshotRecord,
   resetSessionSnapshotDatabase,
 } from "./session-snapshot-database.ts";
 import {
@@ -141,38 +142,6 @@ function createSnapshotRecord(
     snapshot: sanitizedSnapshot,
   });
   return parsed.success ? parsed.data : null;
-}
-
-export async function readStoredChatSnapshot(
-  sessionKey: string,
-): Promise<ChatSessionSnapshot | null> {
-  const database = await openSessionSnapshotDatabase();
-  if (!database) {
-    return null;
-  }
-  try {
-    const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
-    const value = await requestResult(
-      transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey),
-    );
-    await transactionDone(transaction);
-    if (value === undefined) {
-      return null;
-    }
-    const record = parseSnapshotRecord(value, sessionKey);
-    if (record) {
-      return record.snapshot;
-    }
-    debugSnapshotStore("resetting cache after record shape mismatch");
-    await resetSessionSnapshotDatabase(database);
-    return null;
-  } catch (error) {
-    debugSnapshotStore("IndexedDB read failed", error);
-    await resetSessionSnapshotDatabase(database);
-    return null;
-  } finally {
-    database.close();
-  }
 }
 
 async function readSnapshotMetadata(): Promise<SessionSnapshotMetadata[] | null> {
@@ -321,15 +290,28 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       generation === snapshotStoreGeneration && revision === (this.revisions.get(sessionKey) ?? 0);
   }
 
-  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
+  async read(
+    sessionKey: string,
+    onPrewarm?: (readyAt: number | undefined) => void,
+  ): Promise<ChatSessionSnapshot | null> {
     const isCurrent = this.captureReadScope(sessionKey);
-    const snapshot = await (consumePrewarmedChatSnapshot(sessionKey) ??
-      readStoredChatSnapshot(sessionKey));
-    if (!snapshot || !isCurrent()) {
+    const prewarm = consumePrewarmedChatSnapshot(sessionKey);
+    if (prewarm) {
+      // The pane must know the read's origin before deciding whether startup can wait.
+      onPrewarm?.(prewarm.readyAt);
+    }
+    const value = await (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey));
+    if (value === undefined || !isCurrent()) {
       return null;
     }
-    setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(snapshot));
-    return snapshot;
+    const record = parseSnapshotRecord(value, sessionKey);
+    if (!record) {
+      debugSnapshotStore("resetting cache after record shape mismatch");
+      await resetSessionSnapshotDatabase();
+      return null;
+    }
+    setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(record.snapshot));
+    return record.snapshot;
   }
 
   async loadSavedAtIndex(): Promise<void> {

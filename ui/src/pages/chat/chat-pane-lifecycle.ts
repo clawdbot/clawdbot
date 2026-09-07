@@ -119,11 +119,17 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     }
     const cacheKey = resolveChatSnapshotKey(state, { sessionKey });
     const requests = chatHistoryRequests(state);
+    let startedBeforeReady = this.context.gateway.snapshot.phase !== "connected";
+    let readyAt: number | undefined;
+    const reading = store.read(cacheKey, (prewarmReadyAt) => {
+      startedBeforeReady = true;
+      readyAt = prewarmReadyAt;
+    });
     const hydration: InitialChatSnapshotHydration = {
       sessionKey,
-      startedBeforeReady: this.context.gateway.snapshot.phase !== "connected",
-      promise: store
-        .read(cacheKey)
+      startedBeforeReady,
+      readyAt,
+      promise: reading
         .then((snapshot) => {
           if (
             !snapshot ||

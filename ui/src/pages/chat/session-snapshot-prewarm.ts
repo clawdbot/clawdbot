@@ -1,4 +1,4 @@
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
+import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
   snapshotStoreGeneration,
   subscribeSnapshotInvalidation,
@@ -7,7 +7,8 @@ import {
 type PrewarmedSnapshot = {
   cacheKey: string;
   cancelled: boolean;
-  promise: Promise<ChatSessionSnapshot | null>;
+  promise: Promise<unknown>;
+  readyAt?: number;
 };
 
 let pending: PrewarmedSnapshot | undefined;
@@ -25,29 +26,29 @@ export function prewarmChatSnapshot(cacheKey: string): void {
   const entry: PrewarmedSnapshot = {
     cacheKey,
     cancelled: false,
-    promise: import("./session-snapshot-store.ts")
-      .then(async ({ readStoredChatSnapshot }) => {
-        if (entry.cancelled || generation !== snapshotStoreGeneration) {
-          return null;
-        }
-        const snapshot = await readStoredChatSnapshot(cacheKey);
-        return entry.cancelled || generation !== snapshotStoreGeneration ? null : snapshot;
-      })
-      .catch(() => null),
+    promise: readStoredChatSnapshotRecord(cacheKey)
+      .then((record) =>
+        entry.cancelled || generation !== snapshotStoreGeneration ? undefined : record,
+      )
+      .catch(() => undefined),
   };
   pending = entry;
 }
 
 export function consumePrewarmedChatSnapshot(
   cacheKey: string,
-): Promise<ChatSessionSnapshot | null> | undefined {
+): Pick<PrewarmedSnapshot, "promise" | "readyAt"> | undefined {
   if (pending?.cacheKey !== cacheKey) {
     return undefined;
   }
-  const { promise } = pending;
+  const prewarm = pending;
   pending = undefined;
-  return promise;
+  return prewarm;
 }
 
-// Subscribe before the lazy reader loads so invalidation also fences its import.
+export function markPrewarmedChatSnapshotReady(): void {
+  if (pending) {
+    pending.readyAt ??= Date.now();
+  }
+}
 subscribeSnapshotInvalidation(({ sessionKey }) => discardPrewarmedChatSnapshot(sessionKey));
