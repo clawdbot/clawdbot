@@ -118,6 +118,8 @@ export default definePluginEntry({
         displayTimezone: initial.displayTimezone,
         getStore: () => store,
         status: () => requireScheduler().status(),
+        health: () => requireScheduler().health(),
+        orgs: initial.github.orgs,
         people: () => scheduler?.people() ?? initial.people ?? [],
       }),
     });

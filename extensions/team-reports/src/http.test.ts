@@ -143,6 +143,8 @@ beforeAll(async () => {
     displayTimezone: "UTC",
     getStore,
     status: () => ({ running: false, lastRun: "fixture-run" }),
+    health: () => ({ running: false, warnings: 1 }),
+    orgs: ["example"],
     people: () => [
       {
         github: ["alice", "alice-alias"],
@@ -183,6 +185,8 @@ describe("Team Reports HTTP responses", () => {
       runtimeScopeMock.mockReturnValue(scopes ? { client: { connect: { scopes } } } : undefined);
       for (const url of [
         "/reports/",
+        "/reports/assets/crab.avif",
+        "/reports/assets/icon.png",
         "/reports/status",
         "/reports/index.json",
         "/reports/latest/",
@@ -230,7 +234,7 @@ describe("Team Reports HTTP responses", () => {
     },
   );
 
-  it("serves no-script escaped HTML with nonce-based CSP and safe navigation", async () => {
+  it("serves escaped HTML with one nonce-authorized script and safe navigation", async () => {
     const response = await fetchPath("/reports/day/2026-08-20/", "GET", {
       "x-forwarded-proto": "https",
     });
@@ -244,31 +248,27 @@ describe("Team Reports HTTP responses", () => {
     const nonce = typeof csp === "string" ? /style-src 'nonce-([^']+)'/.exec(csp)?.[1] : undefined;
     expect(nonce).toBeTruthy();
     expect(csp).toBe(
-      `default-src 'none'; style-src 'nonce-${nonce}'; img-src https://avatars.githubusercontent.com data:; base-uri 'none'; form-action 'none'`,
+      `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src 'self' https://avatars.githubusercontent.com data:; base-uri 'none'; form-action 'none'`,
     );
     expect(response.body).toContain(`<style nonce="${nonce}">`);
     expect(response.body).toContain("&lt;script&gt;alert(&quot;report&quot;)&lt;/script&gt;");
-    expect(response.body).not.toContain("<script>");
+    expect(response.body.match(/<script\b/g)).toHaveLength(1);
+    expect(response.body).toContain(`<script nonce="${nonce}">`);
     expect(response.body).not.toContain('href="javascript:');
     expect(response.body).toContain(
-      `href="https://127.0.0.1:${port}/reports/day/2026-08-20/" target="_blank" rel="noopener">Open in a new window`,
+      `href="https://127.0.0.1:${port}/reports/day/2026-08-20/" target="_blank" rel="noopener" aria-label="Open in a new window"`,
     );
     expect(response.body).toContain('href="/reports/people/alice/"');
     expect(response.body).toContain("Deterministic summary");
     expect(response.body).toContain("Fixture coverage warning");
     expect(response.body).toContain("Model summary unavailable: completion failed");
-    expect(response.body).toMatch(
-      /class="[^"]*oc-banner-warning[^"]*"[^>]*>[\s\S]*?Coverage notes/,
-    );
-    expect(response.body).toMatch(
-      /class="[^"]*oc-banner-info[^"]*"[^>]*>[\s\S]*?<p>Deterministic summary/,
-    );
+    expect(response.body).toContain("GitHub coverage is incomplete");
   });
 
   it.each([
     { url: "/reports/day/2026-08-20/", login: "alice", size: 40, variant: "md" },
     { url: "/reports/day/2026-08-20/", login: "bob", size: 20, variant: "xs" },
-    { url: "/reports/people/", login: "alice", size: 40, variant: "md" },
+    { url: "/reports/people/", login: "alice", size: 36, variant: "sm" },
     { url: "/reports/people/alice-alias/", login: "alice", size: 72, variant: "xl" },
   ])(
     "renders a $size px GitHub avatar for $login on $url",
@@ -338,16 +338,6 @@ describe("Team Reports HTTP responses", () => {
     expect(response.body).not.toContain(hostileDisplay);
   });
 
-  it.each([
-    { key: "2026-08-20", status: "closed", variant: "success" },
-    { key: "2026-08-21", status: "partial", variant: "warning" },
-  ])("renders the $status report status as a $variant badge", async ({ key, status, variant }) => {
-    const response = await fetchPath(`/reports/day/${key}/`);
-    expect(response.body).toMatch(
-      new RegExp(`class="oc-badge oc-badge-${variant}">${status}</span>`, "i"),
-    );
-  });
-
   it("serves dark and light semantic tokens with CSS-only avatar initials", async () => {
     const response = await fetchPath("/reports/");
     const styles = /<style nonce="[^"]+">([\s\S]*?)<\/style>/.exec(response.body)?.[1];
@@ -369,6 +359,25 @@ describe("Team Reports HTTP responses", () => {
     expect(styles).not.toMatch(/@import|@font-face/);
   });
 
+  it.each([
+    ["crab.avif", "image/avif"],
+    ["icon.png", "image/png"],
+  ])("serves authenticated %s bytes with private caching and HEAD", async (asset, contentType) => {
+    const get = await fetchPath(`/reports/assets/${asset}`);
+    const head = await fetchPath(`/reports/assets/${asset}`, "HEAD");
+    for (const response of [get, head]) {
+      expect(response.status).toBe(200);
+      expect(response.headers["content-type"]).toBe(contentType);
+      expect(response.headers["cache-control"]).toBe("private, max-age=86400");
+      expect(Number(response.headers["content-length"])).toBe(
+        fs.statSync(new URL(`../assets/${asset}`, import.meta.url)).size,
+      );
+    }
+    expect(get.body.length).toBeGreaterThan(0);
+    expect(head.body).toBe("");
+    expect(head.headers["content-length"]).toBe(get.headers["content-length"]);
+  });
+
   it("supports HEAD without a body and rejects writes", async () => {
     const head = await fetchPath("/reports/day/2026-08-20/", "HEAD");
     expect(head.status).toBe(200);
@@ -381,6 +390,8 @@ describe("Team Reports HTTP responses", () => {
   });
 
   it.each([
+    "/reports/assets/unknown.png",
+    "/reports/assets/crab.avif/extra",
     "/reports/missing/",
     "/reports/day/2026-02-30/",
     "/reports/week/2026-W54/",
@@ -423,15 +434,15 @@ describe("Team Reports HTTP responses", () => {
   it("renders stored trends, history, archived people, index, and status", async () => {
     const index = await fetchPath("/reports/");
     expect(index.status).toBe(200);
-    expect(index.body).toMatch(/<svg\b[^>]*viewBox="0 0 780 185"/);
+    expect(index.body).toContain('aria-label="Activity dateline"');
     expect(index.body).toContain('href="/reports/week/2026-W34/"');
     const people = await fetchPath("/reports/people/");
-    expect(people.body).toContain('class="oc-table"');
+    expect(people.body).toContain("Member Activity Timelines");
     expect(people.body).toMatch(/class="oc-badge oc-badge-neutral">Archived<\/span>/);
     const person = await fetchPath("/reports/people/alice-alias/");
     expect(person.status).toBe(200);
     expect(person.body).toContain("Archived on 2026-08-22");
-    expect(person.body).toContain('href="/reports/day/2026-08-20/"');
+    expect(person.body).toContain('href="/reports/day/2026-08-20/?person=alice"');
     const machineIndex = await fetchPath("/reports/index.json");
     expect(JSON.parse(machineIndex.body)).toMatchObject({
       latest: { day: "2026-08-21", week: "2026-W34", month: "2026-08" },
