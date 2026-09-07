@@ -188,6 +188,7 @@ import {
   registerCodexTestSessionIdentity,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import { frameCodexGenericPolicy } from "./thread-policy.js";
 
 setupRunAttemptTestHooks();
 
@@ -249,6 +250,7 @@ function createCronAuthorityCapabilityFixture(
 }
 
 function admitLocalOperatorCronAuthority(params: ReturnType<typeof createParams>): void {
+  params.trigger = "user";
   params.cronCreatorAuthorityCapability = createCronAuthorityCapabilityFixture(params.runId);
 }
 
@@ -868,7 +870,6 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       path.join(tempDir, "workspace-local-operator-mutation"),
     );
     configureFakeMcp(params);
-    params.trigger = "user";
     params.senderIsOwner = false;
     admitLocalOperatorCronAuthority(params);
 
@@ -912,7 +913,6 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       path.join(tempDir, "workspace-local-operator-incomplete-mcp"),
     );
     configureFakeMcp(params);
-    params.trigger = "user";
     params.senderIsOwner = true;
     admitLocalOperatorCronAuthority(params);
     mcpMocks.staticDiagnosticNotice =
@@ -938,7 +938,6 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       path.join(tempDir, "workspace-local-operator-aborted-mutation"),
     );
     configureFakeMcp(params);
-    params.trigger = "user";
     params.senderIsOwner = true;
     admitLocalOperatorCronAuthority(params);
 
@@ -970,7 +969,6 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       path.join(tempDir, "workspace-local-operator-concurrent-mutation"),
     );
     configureFakeMcp(params);
-    params.trigger = "user";
     params.senderIsOwner = true;
     admitLocalOperatorCronAuthority(params);
 
@@ -982,8 +980,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     const secondResolution = resolver({ signal: new AbortController().signal });
 
     expect(secondResolution).toBe(firstResolution);
-    const [first, second] = await Promise.all([firstResolution, secondResolution]);
-    expect(second).toBe(first);
+    await firstResolution;
     expect(mcpMocks.staticCalls).toHaveLength(1);
     expect(mcpMocks.dispose).toHaveBeenCalledOnce();
 
@@ -998,7 +995,6 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       path.join(tempDir, "workspace-local-operator-unrelated-timeout"),
     );
     configureFakeMcp(params);
-    params.trigger = "user";
     params.senderIsOwner = true;
     admitLocalOperatorCronAuthority(params);
     const failureGate = createDeferred<void>();
@@ -1045,20 +1041,24 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       params.trigger = "cron";
       params.toolsAllow = ["*"];
       params.scheduledToolPolicy = { version: 1, mode: "trusted" };
-      mcpMocks.staticDiagnosticNotice =
+      const diagnosticNotice =
         "Configured MCP is incomplete for this scheduled run: fake: authentication required. " +
         "Do not claim MCP-backed work succeeded; report this blocker to the operator.";
+      mcpMocks.staticDiagnosticNotice = diagnosticNotice;
+      const promptReport = vi.spyOn(attemptContext, "buildCodexSystemPromptReport");
 
       const harness = createStartedThreadHarness();
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
 
       const threadStart = harness.requests.find((request) => request.method === "thread/start");
-      expect(threadStart?.params).toMatchObject({
-        developerInstructions: [systemPrompt, mcpMocks.staticDiagnosticNotice]
-          .filter(Boolean)
-          .join("\n\n"),
-      });
+      const configuredPolicy = frameCodexGenericPolicy(
+        [systemPrompt, diagnosticNotice].filter(Boolean).join("\n\n"),
+      );
+      expect(threadStart?.params).toMatchObject({ developerInstructions: configuredPolicy });
+      const reportedPolicy = promptReport.mock.calls.at(-1)?.[0].developerInstructions;
+      expect(reportedPolicy?.startsWith(configuredPolicy)).toBe(true);
+      expect(reportedPolicy?.split(diagnosticNotice)).toHaveLength(2);
       expect(harness.requests.some((request) => request.method === "thread/inject_items")).toBe(
         false,
       );

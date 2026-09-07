@@ -42,6 +42,7 @@ import {
 } from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
+import { frameCodexGenericPolicy } from "./thread-policy.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
 import {
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
@@ -494,9 +495,10 @@ function buildPendingSupervisionProbeForkParams(
       ? { serviceTier: params.appServer.serviceTier }
       : {}),
     config: runtimeConfig,
-    developerInstructions:
+    developerInstructions: frameCodexGenericPolicy(
       params.developerInstructions ??
-      buildDeveloperInstructions(params.attempt, { dynamicTools: params.dynamicTools }),
+        buildDeveloperInstructions(params.attempt, { dynamicTools: params.dynamicTools }),
+    ),
     ephemeral: true,
     threadSource: "appServer",
     excludeTurns: true,

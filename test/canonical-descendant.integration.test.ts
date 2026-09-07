@@ -73,14 +73,22 @@ afterEach(() => {
 
 type CanonicalForkFixture = Awaited<ReturnType<typeof createCanonicalForkFixtureForTest>>;
 
+const GENERIC_POLICY_NOTICE =
+  "The following is the complete current OpenClaw-supplied generic instruction policy. It replaces earlier OpenClaw-supplied generic policy, including OpenClaw-carried workspace text and sections now absent. Independently supplied native managed, guardian, security, collaboration, and project instructions retain their authority. User requests retain their own authority.\n\n";
+const GENERIC_POLICY_FRAME_PREFIX = `<openclaw_generic_policy>\n${GENERIC_POLICY_NOTICE}This policy applies only until a later OpenClaw generic policy replaces or withdraws it, even if this block remains in history. Independently supplied native child-role instructions retain their authority.\n\n`;
+
 function expectPolicyHandoff(
   calls: CanonicalForkFixture["native"]["calls"],
   threadId: string,
-  body: unknown,
+  configuredPolicy: unknown,
 ) {
-  if (typeof body !== "string") {
+  if (typeof configuredPolicy !== "string") {
     throw new Error("Expected the complete generic policy, including an explicit empty body");
   }
+  const text =
+    configuredPolicy === ""
+      ? `${GENERIC_POLICY_NOTICE}The current OpenClaw generic policy is empty; earlier OpenClaw generic policy is withdrawn.`
+      : configuredPolicy;
   const refreshes = calls.filter((call) => call.method === "thread/inject_items");
   expect(refreshes).toHaveLength(1);
   expect(refreshes[0]?.params).toEqual({
@@ -89,12 +97,7 @@ function expectPolicyHandoff(
       {
         type: "message",
         role: "developer",
-        content: [
-          {
-            type: "input_text",
-            text: expect.stringContaining(body || "current OpenClaw generic policy is empty"),
-          },
-        ],
+        content: [{ type: "input_text", text }],
       },
     ],
   });
@@ -470,8 +473,10 @@ describe("canonical descendant lifecycle through real owners", () => {
           calls.find((call) => call.method === "thread/resume"),
           "cold configuration",
         );
-        expect(resume.params.developerInstructions).toBe(body);
-        expectPolicyHandoff(calls, binding.threadId, body);
+        const expectedPolicy =
+          body === "" ? "" : `${GENERIC_POLICY_FRAME_PREFIX}${body}\n</openclaw_generic_policy>`;
+        expect(resume.params.developerInstructions).toBe(expectedPolicy);
+        expectPolicyHandoff(calls, binding.threadId, resume.params.developerInstructions);
         expect(calls.findIndex((call) => call.method === "thread/inject_items")).toBeLessThan(
           calls.findIndex((call) => call.method === "turn/start"),
         );

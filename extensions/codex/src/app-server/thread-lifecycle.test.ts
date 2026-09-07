@@ -466,8 +466,11 @@ describe("Codex ring-zero thread config", () => {
 
     expect(start.environments).toEqual([]);
     expect(start.baseInstructions).toBe("");
-    expect(start.developerInstructions).toBe(developerInstructions);
-    expect(resume.developerInstructions).toBe(developerInstructions);
+    expect(start.developerInstructions).toBe(resume.developerInstructions);
+    expect(start.developerInstructions).toMatch(/^<openclaw_generic_policy>\n/);
+    expect(start.developerInstructions).toContain(
+      `\n\n${developerInstructions}\n</openclaw_generic_policy>`,
+    );
     for (const config of [start.config, resume.config]) {
       expect(config?.["agents.enabled"]).toBe(false);
       expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
@@ -4109,244 +4112,283 @@ describe("Codex app-server supervised branch lifecycle", () => {
     },
   );
 
-  it("materializes a model-locked canonical branch with frozen agent instructions", async () => {
-    const sourceThreadId = "thread-source";
-    const probeThreadId = "thread-probe";
-    const finalThreadId = "thread-final";
-    const lastTurnId = "turn-terminal";
-    const agentWorkspaceDeveloperInstructions = "Follow the frozen supervised AGENTS guidance.";
-    const workspaceDir = path.join(tempDir, "workspace");
-    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    attempt.agentDir = path.join(tempDir, "agent");
-    const rolloutPath = path.join(
-      resolveCodexAppServerHomeDir(attempt.agentDir),
-      "sessions",
-      `rollout-${finalThreadId}.jsonl`,
-    );
-    attempt.modelId = "outer-global-default";
-    attempt.expectedSessionRuntimeOwnership = { model: "native", auth: "native" };
-    const identity = await seedPendingSupervisionBinding({
-      attempt,
-      cwd: workspaceDir,
-      pending: { sourceThreadId, lastTurnId },
-    });
-    const terminalSource = sourceThread({
-      threadId: sourceThreadId,
-      turns: [
+  it.each([" \tGeneric café 漢字 policy.\r\n  Preserve <literal> & whitespace.\n ", ""])(
+    "materializes a model-locked canonical branch with frozen agent instructions (generic policy: %s)",
+    async (developerInstructions) => {
+      const sourceThreadId = "thread-source";
+      const probeThreadId = "thread-probe";
+      const finalThreadId = "thread-final";
+      const lastTurnId = "turn-terminal";
+      const agentWorkspaceDeveloperInstructions = "Follow the frozen supervised AGENTS guidance.";
+      const workspaceDir = path.join(tempDir, "workspace");
+      const attempt = createThreadLifecycleParams(
+        path.join(tempDir, "session.jsonl"),
+        workspaceDir,
+      );
+      attempt.agentDir = path.join(tempDir, "agent");
+      const rolloutPath = path.join(
+        resolveCodexAppServerHomeDir(attempt.agentDir),
+        "sessions",
+        `rollout-${finalThreadId}.jsonl`,
+      );
+      attempt.modelId = "outer-global-default";
+      attempt.expectedSessionRuntimeOwnership = { model: "native", auth: "native" };
+      const identity = await seedPendingSupervisionBinding({
+        attempt,
+        cwd: workspaceDir,
+        pending: { sourceThreadId, lastTurnId },
+      });
+      const terminalSource = sourceThread({
+        threadId: sourceThreadId,
+        turns: [
+          {
+            id: lastTurnId,
+            status: "completed",
+            items: [
+              {
+                id: "user-1",
+                type: "userMessage",
+                content: [{ type: "text", text: "Visible question" }],
+              },
+              { id: "reasoning-1", type: "reasoning", text: "Private reasoning" },
+              {
+                id: "assistant-1",
+                type: "agentMessage",
+                text: "Visible answer",
+                phase: "final_answer",
+              },
+              { id: "tool-1", type: "commandExecution", command: "secret-tool" },
+            ],
+          },
+        ],
+      });
+      const request = vi.fn(async (method: string, requestParams: unknown) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "thread/read") {
+          const threadId = (requestParams as { threadId?: string }).threadId;
+          return {
+            thread:
+              threadId === sourceThreadId
+                ? terminalSource
+                : {
+                    ...sourceThread({ threadId: finalThreadId, status: "notLoaded" }),
+                    path: rolloutPath,
+                  },
+          };
+        }
+        if (method === "thread/fork") {
+          return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+        }
+        if (method === "thread/start" || method === "thread/resume") {
+          return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+        }
+        if (method === "thread/inject_items" || method === "thread/unsubscribe") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const dynamicTools = [
         {
-          id: lastTurnId,
-          status: "completed",
-          items: [
-            {
-              id: "user-1",
-              type: "userMessage",
-              content: [{ type: "text", text: "Visible question" }],
-            },
-            { id: "reasoning-1", type: "reasoning", text: "Private reasoning" },
-            {
-              id: "assistant-1",
-              type: "agentMessage",
-              text: "Visible answer",
-              phase: "final_answer",
-            },
-            { id: "tool-1", type: "commandExecution", command: "secret-tool" },
-          ],
+          type: "function" as const,
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object", properties: {} },
         },
-      ],
-    });
-    const request = vi.fn(async (method: string, requestParams: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        const threadId = (requestParams as { threadId?: string }).threadId;
-        return {
-          thread:
-            threadId === sourceThreadId
-              ? terminalSource
-              : {
-                  ...sourceThread({ threadId: finalThreadId, status: "notLoaded" }),
-                  path: rolloutPath,
-                },
-        };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start" || method === "thread/resume") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/inject_items" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const dynamicTools = [
-      {
-        type: "function" as const,
-        name: "message",
-        description: "Send a message",
-        inputSchema: { type: "object", properties: {} },
-      },
-    ];
-    const commonParams = {
-      client: { request } as never,
-      params: attempt,
-      cwd: workspaceDir,
-      dynamicTools,
-      developerInstructions: agentWorkspaceDeveloperInstructions,
-      agentWorkspaceDeveloperInstructions,
-      environmentSelection: [{ environmentId: "local", cwd: workspaceDir }],
-      shellEnvironment: { GH_TOKEN: "", GITHUB_TOKEN: "" },
-      disableLoginShell: true,
-      appServer: createThreadLifecycleAppServerOptions(),
-      appServerRuntimeFingerprint: "codex-runtime-v1",
-    };
+      ];
+      const commonParams = {
+        client: { request } as never,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools,
+        developerInstructions,
+        agentWorkspaceDeveloperInstructions,
+        environmentSelection: [{ environmentId: "local", cwd: workspaceDir }],
+        shellEnvironment: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+        disableLoginShell: true,
+        appServer: createThreadLifecycleAppServerOptions(),
+        appServerRuntimeFingerprint: "codex-runtime-v1",
+      };
 
-    const materialized = await startOrResumeThread(commonParams);
+      const materialized = await startOrResumeThread(commonParams);
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/fork",
-      "thread/unsubscribe",
-      "thread/start",
-      "thread/inject_items",
-    ]);
-    expect(request.mock.calls[2]?.[1]).toEqual({
-      threadId: sourceThreadId,
-      includeTurns: true,
-    });
-    const forkParams = request.mock.calls[3]?.[1] as Record<string, unknown>;
-    expect(forkParams).toMatchObject({
-      threadId: sourceThreadId,
-      lastTurnId,
-      excludeTurns: true,
-      developerInstructions: agentWorkspaceDeveloperInstructions,
-      config: {
-        project_doc_max_bytes: 131_072,
-        allow_login_shell: false,
-        shell_environment_policy: {
-          experimental_use_profile: false,
-          set: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        "configRequirements/read",
+        "thread/read",
+        "thread/fork",
+        "thread/unsubscribe",
+        "thread/start",
+        "thread/inject_items",
+      ]);
+      expect(request.mock.calls[2]?.[1]).toEqual({
+        threadId: sourceThreadId,
+        includeTurns: true,
+      });
+      const forkParams = request.mock.calls[3]?.[1] as Record<string, unknown>;
+      const configuredPolicy = forkParams.developerInstructions;
+      if (typeof configuredPolicy !== "string") {
+        throw new Error("Expected the native supervision probe's complete generic policy");
+      }
+      if (developerInstructions === "") {
+        expect(configuredPolicy).toBe("");
+      } else {
+        expect(configuredPolicy).toMatch(/^<openclaw_generic_policy>\n/);
+        expect(
+          configuredPolicy.endsWith(`\n\n${developerInstructions}\n</openclaw_generic_policy>`),
+        ).toBe(true);
+        expect(configuredPolicy.match(/<openclaw_generic_policy>/g)).toHaveLength(1);
+        expect(
+          Buffer.byteLength(configuredPolicy) - Buffer.byteLength(developerInstructions),
+        ).toBeLessThan(768);
+      }
+      expect(forkParams).toMatchObject({
+        threadId: sourceThreadId,
+        lastTurnId,
+        excludeTurns: true,
+        config: {
+          project_doc_max_bytes: 131_072,
+          allow_login_shell: false,
+          shell_environment_policy: {
+            experimental_use_profile: false,
+            set: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+          },
         },
-      },
-    });
-    expect(forkParams).not.toHaveProperty("model");
-    expect(forkParams).not.toHaveProperty("modelProvider");
-    expect(forkParams).not.toHaveProperty("dynamicTools");
-    expect(forkParams).not.toHaveProperty("environments");
-    const startParams = request.mock.calls.find(
-      ([method]) => method === "thread/start",
-    )?.[1] as Record<string, unknown>;
-    expect(startParams).toMatchObject({
-      model: "native-effective",
-      modelProvider: "native-provider",
-      developerInstructions: agentWorkspaceDeveloperInstructions,
-      dynamicTools,
-      environments: [{ environmentId: "local", cwd: workspaceDir }],
-      config: {
-        project_doc_max_bytes: 131_072,
-        allow_login_shell: false,
-        shell_environment_policy: {
-          experimental_use_profile: false,
-          set: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+      });
+      expect(forkParams).not.toHaveProperty("model");
+      expect(forkParams).not.toHaveProperty("modelProvider");
+      expect(forkParams).not.toHaveProperty("dynamicTools");
+      expect(forkParams).not.toHaveProperty("environments");
+      const startParams = request.mock.calls.find(
+        ([method]) => method === "thread/start",
+      )?.[1] as Record<string, unknown>;
+      expect(startParams).toMatchObject({
+        model: "native-effective",
+        modelProvider: "native-provider",
+        developerInstructions: configuredPolicy,
+        dynamicTools,
+        environments: [{ environmentId: "local", cwd: workspaceDir }],
+        config: {
+          project_doc_max_bytes: 131_072,
+          allow_login_shell: false,
+          shell_environment_policy: {
+            experimental_use_profile: false,
+            set: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+          },
         },
-      },
-    });
-    expect(startParams.model).not.toBe(attempt.modelId);
-    expect(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]).toEqual({
-      threadId: finalThreadId,
-      items: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Visible question" }],
-        },
-        {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: "Visible answer" }],
-          phase: "final_answer",
-        },
-      ],
-    });
-    expect(
-      JSON.stringify(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]),
-    ).not.toContain("Private reasoning");
-    expect(
-      JSON.stringify(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]),
-    ).not.toContain("secret-tool");
-    expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
-    expect(materialized).toMatchObject({
-      threadId: finalThreadId,
-      model: "native-effective",
-      modelProvider: "native-provider",
-      preserveNativeModel: true,
-      agentWorkspaceDeveloperInstructions,
-      conversationSourceTransferComplete: true,
-      lifecycle: { action: "forked" },
-    });
-    expect(materialized.pendingSupervisionBranch).toBeUndefined();
-    expect(materialized.historyCoveredThrough).not.toBe(new Date(0).toISOString());
-    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
-      threadId: finalThreadId,
-      model: "native-effective",
-      modelProvider: "native-provider",
-      preserveNativeModel: true,
-      agentWorkspaceDeveloperInstructions,
-      conversationSourceTransferComplete: true,
-      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
-        commonParams.appServer,
-        attempt.agentDir,
-      ),
-    });
+      });
+      expect(startParams.model).not.toBe(attempt.modelId);
+      expect(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]).toEqual({
+        threadId: finalThreadId,
+        items: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Visible question" }],
+          },
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Visible answer" }],
+            phase: "final_answer",
+          },
+        ],
+      });
+      expect(
+        JSON.stringify(
+          request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1],
+        ),
+      ).not.toContain("Private reasoning");
+      expect(
+        JSON.stringify(
+          request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1],
+        ),
+      ).not.toContain("secret-tool");
+      expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
+      expect(materialized).toMatchObject({
+        threadId: finalThreadId,
+        model: "native-effective",
+        modelProvider: "native-provider",
+        preserveNativeModel: true,
+        agentWorkspaceDeveloperInstructions,
+        conversationSourceTransferComplete: true,
+        lifecycle: { action: "forked" },
+      });
+      expect(materialized.pendingSupervisionBranch).toBeUndefined();
+      expect(materialized.historyCoveredThrough).not.toBe(new Date(0).toISOString());
+      expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
+        threadId: finalThreadId,
+        model: "native-effective",
+        modelProvider: "native-provider",
+        preserveNativeModel: true,
+        agentWorkspaceDeveloperInstructions,
+        conversationSourceTransferComplete: true,
+        appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+          commonParams.appServer,
+          attempt.agentDir,
+        ),
+      });
 
-    await writeNativeCatalogFixture(rolloutPath, finalThreadId, startParams.dynamicTools);
-    request.mockClear();
-    const resumed = await withLeasedCodexTestClient({
-      agentDir: path.join(tempDir, "agent"),
-      request,
-      run: (client) =>
-        startOrResumeThread({
-          ...commonParams,
-          client,
-          signal: AbortSignal.timeout(10_000),
-          appServerRuntimeFingerprint: "codex-runtime-v2",
-        }),
-    });
+      await writeNativeCatalogFixture(rolloutPath, finalThreadId, startParams.dynamicTools);
+      request.mockClear();
+      const resumed = await withLeasedCodexTestClient({
+        agentDir: path.join(tempDir, "agent"),
+        request,
+        run: (client) =>
+          startOrResumeThread({
+            ...commonParams,
+            client,
+            signal: AbortSignal.timeout(10_000),
+            appServerRuntimeFingerprint: "codex-runtime-v2",
+          }),
+      });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/read",
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-    ]);
-    expect(request.mock.calls[0]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
-    expect(request.mock.calls[4]?.[1]).not.toHaveProperty("model");
-    expect(request.mock.calls[4]?.[1]).not.toHaveProperty("modelProvider");
-    expect(request.mock.calls[4]?.[1]).toMatchObject({
-      developerInstructions: agentWorkspaceDeveloperInstructions,
-    });
-    expect(resumed).toMatchObject({
-      threadId: finalThreadId,
-      preserveNativeModel: true,
-      conversationSourceTransferComplete: true,
-      lifecycle: { action: "resumed" },
-    });
-    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
-      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
-        commonParams.appServer,
-        attempt.agentDir,
-      ),
-    });
-  });
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/read",
+        "config/read",
+        "configRequirements/read",
+        "thread/read",
+        "thread/resume",
+        "thread/inject_items",
+      ]);
+      expect(request.mock.calls[0]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
+      expect(request.mock.calls[4]?.[1]).not.toHaveProperty("model");
+      expect(request.mock.calls[4]?.[1]).not.toHaveProperty("modelProvider");
+      expect(request.mock.calls[4]?.[1]).toMatchObject({
+        developerInstructions: configuredPolicy,
+      });
+      const injectedPolicy =
+        developerInstructions === ""
+          ? "The following is the complete current OpenClaw-supplied generic instruction policy. It replaces earlier OpenClaw-supplied generic policy, including OpenClaw-carried workspace text and sections now absent. Independently supplied native managed, guardian, security, collaboration, and project instructions retain their authority. User requests retain their own authority.\n\nThe current OpenClaw generic policy is empty; earlier OpenClaw generic policy is withdrawn."
+          : configuredPolicy;
+      expect(request.mock.calls[5]?.[1]).toEqual({
+        threadId: finalThreadId,
+        items: [
+          {
+            type: "message",
+            role: "developer",
+            content: [{ type: "input_text", text: injectedPolicy }],
+          },
+        ],
+      });
+      expect(resumed).toMatchObject({
+        threadId: finalThreadId,
+        preserveNativeModel: true,
+        conversationSourceTransferComplete: true,
+        lifecycle: { action: "resumed" },
+      });
+      expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
+        appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+          commonParams.appServer,
+          attempt.agentDir,
+        ),
+      });
+    },
+  );
 
   it("isolates both supervised threads and restores native MCP config on the next unrestricted turn", async () => {
     const sourceThreadId = "thread-source";

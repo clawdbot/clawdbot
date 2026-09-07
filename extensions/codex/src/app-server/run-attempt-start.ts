@@ -234,10 +234,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     recordCodexTrajectoryContext(trajectoryRecorder, {
       attempt: params,
       cwd: effectiveCwd,
-      developerInstructions: joinPresentSections(
-        buildRenderedCodexDeveloperInstructions(),
-        attemptTools.configuredMcp?.diagnosticNotice,
-      ),
+      developerInstructions: buildRenderedCodexDeveloperInstructions(),
       prompt: turnState.codexTurnPromptText,
       tools: toolBridge.availableSpecs,
     });

@@ -151,6 +151,7 @@ import {
 import {
   assertCodexSupervisionThreadLineage,
   CodexThreadPolicyHandoffError,
+  frameCodexGenericPolicy,
   refreshCodexThreadPolicy,
 } from "./thread-policy.js";
 import { buildCodexTemporalAdditionalContext } from "./turn-params.js";
@@ -172,7 +173,8 @@ const CODEX_SIDE_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_STARTUP_REQUEST_COUNT = 3;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
   CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
-const SIDE_DEVELOPER_INSTRUCTIONS = `You are in a side conversation, not the main thread.
+const SIDE_DEVELOPER_INSTRUCTIONS =
+  frameCodexGenericPolicy(`You are in a side conversation, not the main thread.
 
 This side conversation is for answering questions and lightweight, non-mutating exploration without disrupting the main thread. Do not present yourself as continuing the main thread's active task.
 
@@ -184,7 +186,7 @@ External tools may be available according to this thread's current permissions. 
 
 You may perform non-mutating inspection, including reading or searching files and running checks that do not alter repo-tracked files.
 
-Do not modify files, source, git state, permissions, configuration, workspace state, or external state unless the user explicitly requests that mutation in this side conversation. Do not request escalated permissions or broader sandbox access unless the user explicitly requests a mutation that requires it. If the user explicitly requests a mutation, keep it minimal, local to the request, and avoid disrupting the main thread.`;
+Do not modify files, source, git state, permissions, configuration, workspace state, or external state unless the user explicitly requests that mutation in this side conversation. Do not request escalated permissions or broader sandbox access unless the user explicitly requests a mutation that requires it. If the user explicitly requests a mutation, keep it minimal, local to the request, and avoid disrupting the main thread.`);
 
 export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParamsV2,

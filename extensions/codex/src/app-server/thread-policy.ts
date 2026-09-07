@@ -11,6 +11,19 @@ import {
 } from "./request.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
+const CODEX_GENERIC_POLICY_NOTICE =
+  "The following is the complete current OpenClaw-supplied generic instruction policy. It replaces earlier OpenClaw-supplied generic policy, including OpenClaw-carried workspace text and sections now absent. Independently supplied native managed, guardian, security, collaboration, and project instructions retain their authority. User requests retain their own authority.\n\n";
+
+/** Frame final policy once; the empty string must still clear native generic configuration. */
+export function frameCodexGenericPolicy(instructions: string): string {
+  if (instructions === "") {
+    return "";
+  }
+  // Native child forks replace the exact configured string. Keep the notice inside
+  // that same frame so replacement cannot leave it around an independent child override.
+  return `<openclaw_generic_policy>\n${CODEX_GENERIC_POLICY_NOTICE}This policy applies only until a later OpenClaw generic policy replaces or withdraws it, even if this block remains in history. Independently supplied native child-role instructions retain their authority.\n\n${instructions}\n</openclaw_generic_policy>`;
+}
+
 /** A refusal, not a failed native write: the ephemeral conversation must stay alive. */
 export class CodexIncognitoPolicyChangeError extends AgentHarnessPreflightError {
   constructor() {
@@ -44,13 +57,10 @@ export async function refreshCodexThreadPolicy(params: {
   signal?: AbortSignal;
   assertCurrent: () => void;
 }): Promise<void> {
-  const notice =
-    "The following is the complete current OpenClaw-supplied generic instruction policy. It replaces earlier OpenClaw-supplied generic policy, including OpenClaw-carried workspace text and sections now absent. Independently supplied native managed, guardian, security, collaboration, and project instructions retain their authority. User requests retain their own authority.\n\n";
   const text =
-    notice +
-    (params.developerInstructions === ""
-      ? "The current OpenClaw generic policy is empty; earlier OpenClaw generic policy is withdrawn."
-      : params.developerInstructions);
+    params.developerInstructions === ""
+      ? `${CODEX_GENERIC_POLICY_NOTICE}The current OpenClaw generic policy is empty; earlier OpenClaw generic policy is withdrawn.`
+      : params.developerInstructions;
   let outcome: CodexThreadPolicyHandoffError["outcome"] = "unknown";
   try {
     await requestCodexAppServerClientJson({
