@@ -9,7 +9,6 @@ import { defaultRuntime } from "../../../runtime.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
-  shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../../sessions/input-provenance.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
@@ -64,15 +63,14 @@ import {
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
-  dispatchSubagentAnnounceAgent,
   getSubagentAnnounceRuntimeConfig,
   resolveSubagentRequesterSessionAbandonment,
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
 } from "./subagent-announce-delivery.runtime.js";
+import { runAnnounceAgentCall } from "./subagent-announce-direct-agent-call.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
-import type { SubagentCompletionToolHandoffRegistration } from "./subagent-announce-handoff.js";
 import {
   resolveCompletionDeliveryOrigins,
   type DeliveryContext,
@@ -80,55 +78,6 @@ import {
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 export { clearRetainedCompletionHandoffKeysForTest } from "./subagent-announce-completion-handoff-retention.js";
-
-async function runAnnounceAgentCall(params: {
-  agentParams: Record<string, unknown>;
-  delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
-  expectFinal?: boolean;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  isExecutionAllowed: () => boolean;
-  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
-}): Promise<unknown> {
-  const deadline = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, deadline.signal])
-    : deadline.signal;
-  const timer =
-    params.timeoutMs === undefined
-      ? undefined
-      : setTimeout(
-          () => deadline.abort(new Error("gateway request timeout for agent")),
-          params.timeoutMs,
-        );
-  timer?.unref?.();
-  try {
-    return await dispatchSubagentAnnounceAgent(params.agentParams, {
-      cancelOnDeadline: true,
-      expectFinal: params.expectFinal,
-      forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
-        params.agentParams.inputProvenance,
-      ),
-      operatorRoleActor: { kind: "system" },
-      delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
-      signal,
-      // Accepted queue waits belong to session admission; execution belongs to
-      // the requester runtime budget, not the announcement handoff deadline.
-      onAccepted: () => clearTimeout(timer),
-      onExecutionStarted: () => {
-        signal.throwIfAborted();
-        if (!params.isExecutionAllowed()) {
-          throw new SourceOwnerChangedError();
-        }
-        // Execution can be observed before acceptance on an already-running replay.
-        clearTimeout(timer);
-      },
-      resolveGatewayContext: params.resolveGatewayContext,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 export async function sendSubagentAnnounceDirectly(
   params: Parameters<typeof sendSubagentAnnounceDirectlyUnchecked>[0],
