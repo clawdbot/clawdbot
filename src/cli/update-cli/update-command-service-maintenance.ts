@@ -544,7 +544,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     params.shouldRestart &&
     serviceState.loadState.status === "loaded" &&
     (process.platform === "darwin"
-      ? (await service.isEnabled?.({ env: serviceState.env })) === true
+      ? (await service.isEnabled?.({ env: serviceState.env, timeoutMs: params.timeoutMs })) === true
       : process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1");
   assertCurrent();
   if (!params.shouldRestart || (!serviceState.running && !supervisorMayRespawn)) {

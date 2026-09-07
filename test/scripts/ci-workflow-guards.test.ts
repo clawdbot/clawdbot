@@ -5136,6 +5136,7 @@ setImmediate(() => {
   fs.appendFileSync(process.env.CONTRACT_COMMAND_LOG, JSON.stringify({ ...record, phase: "end" }) + "\n");
   process.exitCode = files[0] === "first.test.ts" ? Number(process.env.CONTRACT_FIRST_EXIT) : 0;
 });
+
 `,
       );
       chmodSync(pnpm, 0o755);
@@ -16987,9 +16988,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const compatibilityScenarioBlock = smokeRunStep.run.match(
       /const compatibilityScenarioIds = new Set\(\[([\s\S]*?)\]\);/u,
     )?.[1];
-    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(11);
+    expect(compatibilityScenarioBlock?.match(/^\s+"[^"]+",$/gmu)).toHaveLength(10);
     expect(compatibilityScenarioBlock).not.toContain('"dreaming-shadow-trial-report"');
-    expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
+    expect(compatibilityScenarioBlock).not.toContain('"control-ui-chat-flow-playwright"');
     expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
     expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');
     expect(smokeRunStep.run).toContain(
@@ -18900,5 +18901,19 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
     group:
       "${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}",
     "cancel-in-progress": false,
+  });
+});
+
+describe("frozen CI compatibility contracts", () => {
+  it("skips current-only launcher and QA contracts for frozen targets", () => {
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    expect(source).toContain(
+      `if: \${{ needs.preflight.outputs.frozen_target != 'true' }}\n        run: |\n          bun openclaw.mjs --help`,
+    );
+    expect(source).toContain(
+      "[skip] ${partId} is not declared by this checkout's legacy smoke plan",
+    );
+    expect(source).not.toContain('"control-ui-chat-flow-playwright",');
+    expect(source).toContain("if (!source.includes(marker)) process.exit(0);");
   });
 });

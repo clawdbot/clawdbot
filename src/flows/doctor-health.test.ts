@@ -720,7 +720,9 @@ describe("runDoctorHealthFlow", () => {
           );
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
           expect(runtime.error).toHaveBeenCalledWith(
-            expect.stringMatching(/Doctor.*database readiness.*schema version 17/),
+            expect.stringMatching(
+              /Doctor could not enter maintenance.*Agent main database is still open.*stop that process/,
+            ),
           );
           expect(maintenanceOutcome()).toEqual({ outcome: "startup_failed" });
           expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
@@ -728,9 +730,6 @@ describe("runDoctorHealthFlow", () => {
             result: { status: "error", configHash: "unchanged" },
           });
           expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
-          expect(runtime.log).toHaveBeenCalledWith(
-            expect.stringContaining("still open in another process"),
-          );
           expect(fs.readFileSync(initial.path)).toEqual(before);
           expect(
             openOpenClawStateDatabase({ env: state.env })
@@ -820,6 +819,7 @@ describe("runDoctorHealthFlow", () => {
   it("keeps archive repair failures advisory after required database migration succeeds", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      closeOpenClawAgentDatabasesForTest();
       const archive = await state.writeText(
         "agents/main/sessions/corrupt.jsonl.deleted.2026-07-24T01-02-04.000Z",
         "invalid JSON\n",

@@ -3,9 +3,7 @@ import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
-import { guardUpdateDoctorSchemaUpgrade } from "../commands/doctor-update-schema-guard.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -30,9 +28,25 @@ async function assertDoctorDatabaseSchemasCompatible(scope?: "state") {
     import("../state/openclaw-agent-db-contract.js"),
     import("../state/openclaw-state-db-contract.js"),
   ]);
+  const [{ createConfigIO }, targets] = await Promise.all([
+    import("../config/io.js"),
+    import("../config/sessions/targets.js"),
+  ]);
+  const snapshot = await createConfigIO({
+    env: { ...process.env },
+    observe: false,
+    pluginValidation: "core-only",
+  }).readConfigFileSnapshot();
+  const cfg = snapshot.sourceConfig ?? snapshot.config;
   const databaseSchemas = await databasePreflight.preflightOpenClawDatabaseSchemas({
     env: process.env,
     scope,
+    configuredAgentDatabaseTargets: (registeredDatabases) =>
+      targets.resolveConfiguredAgentDatabaseTargets(cfg, { env: process.env, registeredDatabases }),
+    configuredAgentDatabaseCandidatePaths: targets.resolveConfiguredAgentDatabaseCandidatePaths(
+      cfg,
+      { env: process.env },
+    ),
     supportedVersions: {
       state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
       agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -86,13 +100,6 @@ async function runDoctorHealthFlowWithResult(
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
   intro("OpenClaw doctor");
 
-  const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
-  const prompter = createDoctorPrompter({ runtime: effectiveRuntime, options });
-
-  // Update admission writes its ledger in shared state. A stale Doctor cannot
-  // offer an update that requires opening a database this build cannot read.
-  await assertDoctorDatabaseSchemasCompatible("state");
-
   const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
@@ -100,32 +107,46 @@ async function runDoctorHealthFlowWithResult(
     cwd: process.cwd(),
   });
 
-  const { maybeOfferUpdateBeforeDoctor } = await import("../commands/doctor-update.js");
-  const offeredUpdate = await maybeOfferUpdateBeforeDoctor({
-    runtime: effectiveRuntime,
-    options,
-    root,
-    confirm: (p) => prompter.confirm(p),
-    outro,
-  });
-  if (offeredUpdate.handled) {
-    return;
-  }
-
-  // A readable shared database still permits updating past newer agent schemas.
-  // The surviving Doctor must understand every database before diagnostics or repair.
-  const schemas = await assertDoctorDatabaseSchemasCompatible();
-  await guardUpdateDoctorSchemaUpgrade({ schemas, runtime: effectiveRuntime, json: options.json });
   if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
-    const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
+    const { assertConfigWriteAllowedInCurrentMode } =
+      await import("../config/nix-mode-write-guard.js");
     assertConfigWriteAllowedInCurrentMode();
   }
-
-  const { beginDoctorMaintenance } = await import("../commands/doctor-maintenance.js");
-  const maintenance = await beginDoctorMaintenance({ options, root, runtime: effectiveRuntime });
+  let maintenance: Awaited<
+    ReturnType<typeof import("../commands/doctor-maintenance.js").beginDoctorMaintenance>
+  >;
   let exitCode: number | undefined;
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
   try {
+    const { beginDoctorMaintenance } = await import("../commands/doctor-maintenance.js");
+    maintenance = await beginDoctorMaintenance({ options, root, runtime: effectiveRuntime });
+    const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
+    const prompter = createDoctorPrompter({ runtime: effectiveRuntime, options });
+    // Explicit repair never offers an update. Acquire its owners before any
+    // snapshot; diagnostic Doctor still checks state before update admission.
+    if (!maintenance) {
+      await assertDoctorDatabaseSchemasCompatible("state");
+      const { maybeOfferUpdateBeforeDoctor } = await import("../commands/doctor-update.js");
+      const offeredUpdate = await maybeOfferUpdateBeforeDoctor({
+        runtime: effectiveRuntime,
+        options,
+        root,
+        confirm: (p) => prompter.confirm(p),
+        outro,
+      });
+      if (offeredUpdate.handled) {
+        return;
+      }
+    }
+    const schemas = await assertDoctorDatabaseSchemasCompatible();
+    const { guardUpdateDoctorSchemaUpgrade } =
+      await import("../commands/doctor-update-schema-guard.js");
+    await guardUpdateDoctorSchemaUpgrade({
+      schemas,
+      runtime: effectiveRuntime,
+      json: options.json,
+    });
+
     // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
     const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
     const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
@@ -208,10 +229,14 @@ async function runDoctorHealthFlowWithResult(
       return;
     }
   } catch (error) {
-    if (maintenance && !(error instanceof DoctorStateMigrationRefusalError)) {
-      effectiveRuntime.error(
-        "Doctor could not complete maintenance. Check the reported service state and resolve the failure.",
-      );
+    if (maintenance) {
+      const { DoctorStateMigrationRefusalError } =
+        await import("../infra/state-migrations.messages.js");
+      if (!(error instanceof DoctorStateMigrationRefusalError)) {
+        effectiveRuntime.error(
+          "Doctor could not complete maintenance. Check the reported service state and resolve the failure.",
+        );
+      }
     }
     throw error;
   } finally {

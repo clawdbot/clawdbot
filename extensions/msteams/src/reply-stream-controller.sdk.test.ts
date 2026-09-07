@@ -1,5 +1,6 @@
 import { createServer, request as requestHttp } from "node:http";
 import { HttpStream } from "@microsoft/teams.apps/dist/http/http-stream.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 
@@ -10,14 +11,6 @@ type TeamsLoopbackRequest = {
   status: number;
   entities?: unknown[];
 };
-
-function createOneShot() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
-}
 
 const acknowledgedPrefix = "a".repeat(4_000);
 const completeReply = `${acknowledgedPrefix}${"b".repeat(200)}`;
@@ -136,8 +129,8 @@ function createLoopbackController(
     }
     return result.body;
   };
-  const firstAcknowledgement = createOneShot();
-  const firstFlushFailure = createOneShot();
+  const firstAcknowledgement = createDeferred<void>();
+  const firstFlushFailure = createDeferred<void>();
   const logger = {
     child: vi.fn(),
     debug: vi.fn(),
@@ -184,6 +177,7 @@ function createLoopbackController(
   return {
     acknowledgements,
     controller,
+    sendActivity: send,
     firstAcknowledgement: firstAcknowledgement.promise,
     firstFlushFailure: firstFlushFailure.promise,
     logger,
@@ -375,6 +369,34 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
 });
 
 describe("Teams native final text preparation", () => {
+  it("preserves all progress final payloads at the wire boundary", async () => {
+    const scenario = "progress-multiple-final";
+    const { controller, sendActivity } = createLoopbackController(scenario, {
+      streaming: { mode: "progress" },
+    });
+    const texts = ["First distinct result.\n\n", "# Second distinct result"];
+    const prepared = texts.map((text) => controller.preparePayload({ text }));
+    const result = await controller.finalize();
+    for (const payload of [
+      ...prepared,
+      result.fallbackPayload,
+      ...(result.postNativePayloads ?? []),
+    ]) {
+      if (payload?.text) {
+        await sendActivity({ type: "message", text: payload.text });
+      }
+    }
+    const wire = requests.filter(
+      (request) => request.scenario === scenario && request.type === "message",
+    );
+    const deliveredText = wire
+      .filter((request) => request.status >= 200 && request.status < 300)
+      .map((request) => request.text)
+      .join("\n");
+    expect(deliveredText.split("First distinct result.").length - 1).toBe(1);
+    expect(deliveredText.split("Second distinct result").length - 1).toBe(1);
+  });
+
   it("preserves required AI metadata when the SDK completes a timed-out stream by update", async () => {
     const { controller, firstAcknowledgement } = createLoopbackController("presentation-timeout");
     const text = "# Status";

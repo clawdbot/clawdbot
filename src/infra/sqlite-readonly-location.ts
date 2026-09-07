@@ -310,6 +310,7 @@ function removeTempDirectory(tempDir: string): boolean {
 function adoptPreparedLocation(
   location: string,
   ownedRoot?: string,
+  requireCleanup = false,
 ): PreparedSqliteReadOnlyLocation {
   const tempDir = ownedRoot ?? path.dirname(location);
   let active = true;
@@ -322,7 +323,7 @@ function adoptPreparedLocation(
       const removed = removeTempDirectory(tempDir);
       if (removed) {
         active = false;
-      } else if (ownedRoot) {
+      } else if (requireCleanup) {
         throw new Error(`SQLite read-only worker snapshot cleanup failed: ${tempDir}`);
       }
       return removed;
@@ -636,9 +637,7 @@ export async function prepareSqliteReadOnlyLocation(
     }
     // A stopped worker may never publish its random snapshot path. Allocate its
     // private parent first so cancellation can join the child and remove all copies.
-    if (options.signal) {
-      stagingRoot = await createSqliteSnapshotStagingDirectory();
-    }
+    stagingRoot = await createSqliteSnapshotStagingDirectory();
     options.signal?.throwIfAborted();
     const location = await runSqliteReadOnlyWorker(pathname, {
       mode: options.preserveSourceArtifacts ? "sync" : "async",
@@ -646,7 +645,9 @@ export async function prepareSqliteReadOnlyLocation(
       stagingRoot,
     });
     options.signal?.throwIfAborted();
-    return adoptPreparedLocation(location, stagingRoot);
+    // Cancellable maintenance must retain its fence on cleanup failure; ordinary
+    // read-only handles report false so their owner can retry close.
+    return adoptPreparedLocation(location, stagingRoot, options.signal !== undefined);
   } catch (error) {
     if (stagingRoot && !removeTempDirectory(stagingRoot)) {
       throw new Error(`SQLite read-only worker snapshot cleanup failed: ${stagingRoot}`, {
@@ -661,9 +662,23 @@ export async function prepareSqliteReadOnlyLocation(
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
 ): PreparedSqliteReadOnlyLocation {
-  return hasStateDatabaseSourceExclusion(pathname)
-    ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
-    : adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname));
+  if (hasStateDatabaseSourceExclusion(pathname)) {
+    return prepareSqliteReadOnlyLocationSyncInProcess(pathname);
+  }
+  const stagingRoot = createPrivateSqliteTempDirectorySync(
+    resolvePrivateSqliteSnapshotStagingRoot(),
+    SQLITE_SNAPSHOT_STAGING_PREFIX,
+  );
+  try {
+    return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname, stagingRoot), stagingRoot);
+  } catch (error) {
+    if (!removeTempDirectory(stagingRoot)) {
+      throw new Error(`SQLite read-only worker snapshot cleanup failed: ${stagingRoot}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
 }
 
 export function prepareSqliteReadOnlyLocationInProcess(pathname: string, stagingRoot?: string) {

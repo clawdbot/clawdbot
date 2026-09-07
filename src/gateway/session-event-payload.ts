@@ -116,6 +116,7 @@ export function buildGatewaySessionEventFields(params: {
     totalTokensFresh: sessionRow.totalTokensFresh,
     ...(omitUnscopedGlobalGoal ? {} : { goal: sessionRow.goal ?? null }),
     contextTokens: sessionRow.contextTokens,
+    contextBudgetStatus: sessionRow.contextBudgetStatus ?? null,
     estimatedCostUsd: sessionRow.estimatedCostUsd,
     responseUsage: sessionRow.responseUsage,
     effectiveResponseUsage: sessionRow.effectiveResponseUsage,
