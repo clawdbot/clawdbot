@@ -32,10 +32,8 @@ export function preparedPluginGenerationSupportsSelections(
     selections: input.runtimePluginSelections,
     metadataSnapshot: generation.pluginMetadataSnapshot,
   });
-  // Failed and disabled loads are recorded generation outcomes, not missing owners. Preserve
-  // their diagnostics without making unrelated configured harnesses a condition of borrowing.
-  // Primary admission also records disabled plugins without requiring successful model
-  // resolution, so the borrow path must not reject what admission already accepted.
+  // Failed and disabled loads are recorded generation outcomes, not missing owners.
+  // Borrowing preserves those outcomes; downstream model resolution owns availability.
   return (
     registry !== undefined &&
     (plan.pluginIds ?? []).every(
