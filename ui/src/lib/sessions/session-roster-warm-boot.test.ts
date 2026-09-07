@@ -136,7 +136,7 @@ describe("session capability warm roster", () => {
     void h.sessions.whenCachedRosterSettled().then(() => {
       settled = true;
     });
-    await Promise.resolve();
+    await vi.dynamicImportSettled();
     expect(settled).toBe(false);
     cached.resolve(roster());
     await h.sessions.whenCachedRosterSettled();

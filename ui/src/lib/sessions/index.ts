@@ -28,10 +28,8 @@ import {
 import { createSessionMutations } from "./session-mutations.ts";
 import { createSessionPermissionProjection } from "./session-permission-projection.ts";
 import { sessionRetryDelayMs } from "./session-retry.ts";
-import {
-  createSessionRosterCacheLifecycle,
-  type SessionRosterCacheOptions,
-} from "./session-roster-cache-lifecycle.ts";
+import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
+import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { SwarmActivityTracker } from "./swarm-activity.ts";

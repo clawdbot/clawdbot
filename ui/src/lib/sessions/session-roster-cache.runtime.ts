@@ -1,39 +1,26 @@
 import { clearBootRecords } from "../../app/boot-record.ts";
 import { isPrimarySessionListQuery } from "./session-list-query.ts";
 import {
-  invalidateSessionRosterCache,
   openSessionRosterDatabase,
   parseSessionRosterRecord,
+  resetSessionRosterDatabase,
   rosterRequestResult,
   rosterTransactionDone,
-  SESSION_ROSTER_DB_NAME,
+  sessionRosterQuery,
+  stripVolatileSessionRowFields,
+} from "./session-roster-cache.reader.ts";
+import {
+  invalidateSessionRosterCache,
   SESSION_ROSTER_MAX_AGE_MS,
   SESSION_ROSTER_MAX_BYTES,
   SESSION_ROSTER_STORE_NAME,
   sessionRosterCacheGeneration,
-  sessionRosterQuery,
-  stripVolatileSessionRowFields,
   type SessionRosterRecord,
 } from "./session-roster-cache.ts";
 
 const pending = new Map<string, SessionRosterRecord>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let writeChain = Promise.resolve();
-
-export async function resetSessionRosterDatabase(): Promise<void> {
-  try {
-    if (globalThis.indexedDB) {
-      await new Promise<void>((resolve) => {
-        const request = indexedDB.deleteDatabase(SESSION_ROSTER_DB_NAME);
-        request.addEventListener("success", () => resolve());
-        request.addEventListener("error", () => resolve());
-        request.addEventListener("blocked", () => resolve());
-      });
-    }
-  } catch {
-    // Storage access can be denied independently of the Gateway connection.
-  }
-}
 
 function boundedRecord(record: SessionRosterRecord): SessionRosterRecord | null {
   try {

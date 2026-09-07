@@ -1,16 +1,6 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import type { BootRecord } from "../../app/boot-record.ts";
 import type { SessionGateway, SessionListOptions, SessionState } from "./session-capability.ts";
-import {
-  rosterRecordMatches,
-  sessionRosterCache,
-  type SessionRosterCache,
-} from "./session-roster-cache.ts";
-
-export type SessionRosterCacheOptions = {
-  rosterCache?: SessionRosterCache;
-  bootRecord?: BootRecord | null;
-};
+import { sessionRosterCache, type SessionRosterCacheOptions } from "./session-roster-cache.ts";
 
 export function createSessionRosterCacheLifecycle(
   gateway: SessionGateway,
@@ -39,9 +29,16 @@ export function createSessionRosterCacheLifecycle(
   let disposed = false;
   const settled =
     options.bootRecord && startupScope && !retired && host.readState().result === null
-      ? cache
-          .read(startupScope, expected)
-          .then((record) => {
+      ? Promise.allSettled([
+          import("./session-roster-cache.reader.ts"),
+          cache.read(startupScope, expected),
+        ])
+          .then(([reader, cached]) => {
+            if (reader.status !== "fulfilled" || cached.status !== "fulfilled") {
+              return;
+            }
+            const { rosterRecordMatches } = reader.value;
+            const record = cached.value;
             if (
               !record ||
               disposed ||

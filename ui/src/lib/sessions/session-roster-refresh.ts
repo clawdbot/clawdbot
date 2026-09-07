@@ -666,9 +666,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
     },
     refresh,
-    bootstrap(options: SessionRefreshOptions) {
-      return refreshInternal(options, true);
-    },
+    bootstrap: (options: SessionRefreshOptions) => refreshInternal(options, true),
     refreshReplacement: (agentId?: string | null) => refreshReplacementOwned(agentId),
     refreshReplacementResult,
     publishedSession,
