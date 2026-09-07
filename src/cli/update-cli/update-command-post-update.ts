@@ -1,4 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -21,7 +22,6 @@ import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { printResult } from "./progress.js";
 import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js";
@@ -36,6 +36,7 @@ import {
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   UpdateCommandFailure,
+  resolveAutomaticUpdateTriage,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
@@ -58,10 +59,10 @@ import {
 } from "./update-command-service.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
-const CLI_NAME = resolveCliName();
-
 export type FinishUpdateParams = UpdateRestartParams & {
   failure?: { cause: unknown; detail: string };
+  mutationStarted: boolean;
+  expectedVersion?: string;
   previousInstallRoot?: string;
   installKindChanged: boolean;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -83,11 +84,39 @@ export type FinishUpdateParams = UpdateRestartParams & {
 };
 
 export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRunResult> {
+  let gateway: TriageFailureContext["gateway"] = "preserve";
+  let triageAllowed = true;
+  const createFailure = (
+    result: UpdateRunResult,
+    exitCode = 1,
+    detail?: string,
+    options?: ErrorOptions,
+  ) =>
+    new UpdateCommandFailure(result, exitCode, detail, {
+      ...options,
+      automaticTriage: triageAllowed
+        ? resolveAutomaticUpdateTriage(result, detail, { ...params, gateway })
+        : undefined,
+    });
   let rollbackAttempted = false;
   let postVerificationRepairAttempted = false;
   let rollbackStopState: PreManagedServiceStop | undefined;
   // Rollback and later plugin maintenance can replace the suspension owner.
   const currentServiceStop = () => rollbackStopState ?? params.preManagedServiceStop;
+  const resumeWindowsAutoStart = async (result: UpdateRunResult) => {
+    const stopped = currentServiceStop();
+    await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
+      stopped,
+      true,
+      stopped
+        ? createWindowsTaskAutoStartGuard({
+            root: result.root ?? params.root,
+            before: stopped,
+            timeoutMs: params.updateStepTimeoutMs,
+          })
+        : undefined,
+    );
+  };
   let rolledBack = false;
   let completedDowntimeMs: number | undefined;
   let pendingRestartAtMs =
@@ -257,18 +286,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         ) {
           await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
         } else {
-          const stopped = currentServiceStop();
-          await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-            stopped,
-            true,
-            stopped
-              ? createWindowsTaskAutoStartGuard({
-                  root: finalResult.root ?? params.root,
-                  before: stopped,
-                  timeoutMs: params.updateStepTimeoutMs,
-                })
-              : undefined,
-          );
+          await resumeWindowsAutoStart(finalResult);
         }
       } catch (cause) {
         restoreFailure = { cause };
@@ -340,6 +358,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       });
       if (service) {
         finalResult.recovery = { ...finalResult.recovery, service };
+        if (service === "healthy" && params.shouldRestart) {
+          gateway = "verify-running";
+        }
         if (service === "failed") {
           finalResult.status = "error";
           try {
@@ -379,7 +400,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
             cause: restoreFailure.cause,
           })
         : restoreFailure.cause;
-      throw new UpdateCommandFailure(
+      throw createFailure(
         reportedResult,
         resolveManagedServiceUpdateFailureExitCode(reportedResult),
         detail,
@@ -389,19 +410,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     return reportedResult;
   };
   const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
-    const stopped = currentServiceStop();
     try {
-      await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-        stopped,
-        true,
-        stopped
-          ? createWindowsTaskAutoStartGuard({
-              root: result.root ?? params.root,
-              before: stopped,
-              timeoutMs: params.updateStepTimeoutMs,
-            })
-          : undefined,
-      );
+      await resumeWindowsAutoStart(result);
     } catch (cause) {
       // The attempted restore already failed; reporting must not attempt it again.
       await reportResult(result, false, { cause });
@@ -414,7 +424,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         { ...params.result, status: "error" },
         params.result.recovery?.serviceRestartSafe === true,
       );
-      throw new UpdateCommandFailure(
+      throw createFailure(
         reported,
         resolveManagedServiceUpdateFailureExitCode(reported),
         params.failure?.detail,
@@ -427,7 +437,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         params.result,
         params.result.recovery?.serviceRestartSafe === true,
       );
-      throw new UpdateCommandFailure(
+      throw createFailure(
         reported,
         classifyUpdateOutcome(reported) === "failed"
           ? resolveManagedServiceUpdateFailureExitCode(reported)
@@ -439,8 +449,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
       const convergence = await convergeUpdatePlugins({ ...params, beforeDoctor });
       if (convergence.resultWithPostUpdate.status === "error") {
+        triageAllowed = !convergence.cancelled;
         const reported = await reportResult(convergence.resultWithPostUpdate);
-        throw new UpdateCommandFailure(
+        throw createFailure(
           reported,
           resolveManagedServiceUpdateFailureExitCode(reported),
           convergence.detail,
@@ -482,12 +493,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         status: "error",
         reason: "service-revalidation-failed",
       });
-      throw new UpdateCommandFailure(
-        reported,
-        resolveManagedServiceUpdateFailureExitCode(reported),
-        message,
-        { cause: error },
-      );
+      throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
+        cause: error,
+      });
     }
     let { restartScriptPath, refreshGatewayServiceEnv, gatewayServiceEnv, serviceUpdateVerdict } =
       restartContext;
@@ -535,6 +543,16 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       if (restarted === "ok") {
         return;
       }
+      triageAllowed = serviceMutationAllowed;
+      if (
+        restarted === "restart-health-failed" &&
+        params.shouldRestart &&
+        serviceMutationAllowed &&
+        (params.preManagedServiceStop?.running !== false || params.preManagedServiceStop.stopped) &&
+        !skipLegacyServiceRestart
+      ) {
+        gateway = "verify-running";
+      }
       const failure: UpdateRunResult = {
         ...resultWithPostUpdate,
         status: "error",
@@ -579,10 +597,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           jsonMode: Boolean(params.opts.json),
         });
         const reported = await reportResult(recovered.result, false, undefined, false);
-        throw new UpdateCommandFailure(
-          reported,
-          resolveManagedServiceUpdateFailureExitCode(reported),
-        );
+        throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
       }
     };
     await restart();
@@ -648,10 +663,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       await tryWriteCompletionCache(postUpdateRoot, Boolean(params.opts.json));
     } catch (err) {
       if (!params.opts.json) {
-        const completionCacheRefreshCommand = replaceCliName(
-          formatCliCommand("openclaw completion --write-state"),
-          CLI_NAME,
-        );
+        const completionCacheRefreshCommand = formatCliCommand("openclaw completion --write-state");
         defaultRuntime.log(
           theme.warn(
             `Completion cache update failed: ${formatErrorMessage(err)}. Update will continue; retry with: ${completionCacheRefreshCommand}`,
@@ -685,7 +697,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           undefined,
           false,
         );
-        throw new UpdateCommandFailure(reported, 1, retirement.error);
+        throw createFailure(reported, 1, retirement.error);
       }
     }
 
@@ -712,11 +724,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         },
       ],
     });
-    throw new UpdateCommandFailure(
-      reported,
-      resolveManagedServiceUpdateFailureExitCode(reported),
-      message,
-      { cause: error },
-    );
+    throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
+      cause: error,
+    });
   }
 }

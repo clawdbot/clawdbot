@@ -643,7 +643,6 @@ extensions/matrix/src/matrix/actions/verification.ts	1
 extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	5
 extensions/matrix/src/matrix/client/logging.ts	3
-extensions/matrix/src/matrix/client/runtime.ts	1
 extensions/matrix/src/matrix/config-update.ts	4
 extensions/matrix/src/matrix/credentials-state.ts	2
 extensions/matrix/src/matrix/delivery-plan.ts	1
@@ -2500,7 +2499,6 @@ src/commands/models/list.persisted-catalog.ts	2
 src/commands/models/list.probe.ts	2
 src/commands/models/list.registry.ts	3
 src/commands/models/list.rows.ts	3
-src/commands/models/list.status-command.ts	1
 src/commands/models/shared.ts	3
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
@@ -3291,7 +3289,7 @@ src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3
-src/plugin-sdk/provider-onboard.ts	6
+src/plugin-sdk/provider-onboard.ts	5
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	10

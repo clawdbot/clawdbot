@@ -17,9 +17,6 @@ export type CliPluginRegistryScope =
   | "memory"
   | "sandbox-backends"
   | "sandbox-management";
-export type CliPluginRegistryPolicy = {
-  scope: CliPluginRegistryScope;
-};
 export type CliNetworkProxyPolicy = "default" | "bypass";
 type CliNetworkProxyPolicyResolver =
   | CliNetworkProxyPolicy
@@ -45,7 +42,9 @@ export type CliCommandPathPolicy = {
   configGuard: CliConfigGuardPolicy;
   stateStoreGuard: "run" | "skip";
   loadPlugins: CliCommandPluginLoadPolicy;
-  pluginRegistry: CliPluginRegistryPolicy;
+  pluginRegistry: {
+    scope: CliPluginRegistryScope;
+  };
   ownsProtocolStdout: boolean;
   hideBanner: boolean;
   ensureCliPath: boolean;

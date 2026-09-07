@@ -1,6 +1,9 @@
+import { createRequire } from "node:module";
 import net from "node:net";
+import path from "node:path";
 import type { Duplex } from "node:stream";
-import { WebSocket, type ClientOptions, type RawData } from "ws";
+import { pathToFileURL } from "node:url";
+import type { ClientOptions, RawData, WebSocket } from "ws";
 import {
   buildCloudflareAccessHeaders,
   type CloudflareAccessCredentials,
@@ -8,6 +11,17 @@ import {
 import { applyGatewayWebSocketTlsPin } from "../../packages/gateway-client/src/websocket-transport.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
+const require = createRequire(import.meta.url);
+let webSocketConstructor: Promise<typeof WebSocket> | undefined;
+function loadWebSocketConstructor(): Promise<typeof WebSocket> {
+  // Pin validation needs ws's real ClientRequest/TLSSocket, not Bun's built-in adapter.
+  return (webSocketConstructor ??= import(
+    pathToFileURL(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")).href
+  ).then((module: typeof import("ws")) => module.default));
+}
+
+const WEBSOCKET_CONNECTING = 0;
+const WEBSOCKET_OPEN = 1;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const PAUSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESUME_CHECK_MS = 25;
@@ -146,7 +160,7 @@ function createNodeStreamSplice(params: {
     params.ws.on("message", onMessage);
     params.socket.on("drain", resumeWebSocket);
     params.socket.on("data", (chunk) => {
-      if (params.ws.readyState !== WebSocket.OPEN) {
+      if (params.ws.readyState !== WEBSOCKET_OPEN) {
         return;
       }
       params.ws.send(chunk, { binary: true }, (error) => error && finish("send-error", error));
@@ -168,7 +182,7 @@ function createNodeStreamSplice(params: {
     params.socket.once("close", () => {
       params.diagnostics.trigger ??= "target-close";
       stopInbound();
-      if (params.socket.readableEnded && params.ws.readyState === WebSocket.OPEN) {
+      if (params.socket.readableEnded && params.ws.readyState === WEBSOCKET_OPEN) {
         // Let the Gateway receive the last frames and close acknowledgement before
         // the control-channel invocation can retire its desktop/portal stream.
         params.ws.close();
@@ -182,7 +196,7 @@ function createNodeStreamSplice(params: {
   return {
     done,
     start() {
-      if (params.socket.destroyed || params.ws.readyState !== WebSocket.OPEN) {
+      if (params.socket.destroyed || params.ws.readyState !== WEBSOCKET_OPEN) {
         finish("splice-unavailable");
         return;
       }
@@ -230,7 +244,11 @@ export async function runNodeStreamTransport(params: {
     if (aborted) {
       return;
     }
-    ws = new WebSocket(
+    const NpmWebSocket = await Promise.race([loadWebSocketConstructor(), abort]);
+    if (aborted || !NpmWebSocket) {
+      return;
+    }
+    ws = new NpmWebSocket(
       attachWebSocketUrl(params),
       websocketOptions(params.gatewayTlsFingerprint, params.gatewayCloudflareAccess),
     );
@@ -279,7 +297,7 @@ export async function runNodeStreamTransport(params: {
   } finally {
     params.signal.removeEventListener("abort", onAbort);
     socket.destroy();
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    if (ws && (ws.readyState === WEBSOCKET_OPEN || ws.readyState === WEBSOCKET_CONNECTING)) {
       ws.close();
     }
   }

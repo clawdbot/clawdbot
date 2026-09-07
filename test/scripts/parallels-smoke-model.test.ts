@@ -29,6 +29,7 @@ import {
   parseMacosDsclUserHomeLine,
   readGitCommitEnv,
   readPositiveIntEnv,
+  resolveHostIp,
   resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
   resolveProviderAuth as resolveProviderAuthDirect,
@@ -165,6 +166,47 @@ function writeNodeFakePrlctl(tempDir: string, body: string): void {
     tempDir,
     `#!/usr/bin/env node\n${program}\n`,
     `import { basename } from "node:path"; if ([process.argv0, process.execPath].some((value) => basename(value).toLowerCase() === "prlctl.exe")) { ${program} }`,
+  );
+}
+
+function writeFakeHostIpCommand(tempDir: string, name: string, body: string): void {
+  const commandPath = join(tempDir, name);
+  writeFileSync(commandPath, `#!/bin/sh\n${body}\n`);
+  chmodSync(commandPath, 0o755);
+}
+
+function withFakeHostIpCommands<T>(
+  input: {
+    ifconfigOutput?: string;
+    ifconfigStatus?: number;
+    prlsrvctlOutput?: string;
+    prlsrvctlStatus?: number;
+  },
+  runTest: (callsPath: string) => T,
+): T {
+  const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-ip-");
+  const callsPath = join(tempDir, "calls.log");
+  writeFakeHostIpCommand(
+    tempDir,
+    "prlsrvctl",
+    'printf "prlsrvctl:%s:%s\\n" "$LC_ALL" "$*" >>"$OPENCLAW_HOST_IP_CALLS"\nprintf "%b" "$OPENCLAW_PRLSRVCTL_OUTPUT"\nexit "$OPENCLAW_PRLSRVCTL_STATUS"',
+  );
+  writeFakeHostIpCommand(
+    tempDir,
+    "ifconfig",
+    'printf "ifconfig:%s\\n" "$*" >>"$OPENCLAW_HOST_IP_CALLS"\nprintf "%b" "$OPENCLAW_IFCONFIG_OUTPUT"\nexit "$OPENCLAW_IFCONFIG_STATUS"',
+  );
+  return withEnv(
+    {
+      LC_ALL: "fixture-locale",
+      OPENCLAW_HOST_IP_CALLS: callsPath,
+      OPENCLAW_IFCONFIG_OUTPUT: input.ifconfigOutput ?? "",
+      OPENCLAW_IFCONFIG_STATUS: String(input.ifconfigStatus ?? 0),
+      OPENCLAW_PRLSRVCTL_OUTPUT: input.prlsrvctlOutput ?? "",
+      OPENCLAW_PRLSRVCTL_STATUS: String(input.prlsrvctlStatus ?? 0),
+      PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}`,
+    },
+    () => runTest(callsPath),
   );
 }
 
@@ -903,6 +945,74 @@ ensure_vm_running`,
       12,
     );
     expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
+  });
+
+  describe.skipIf(process.platform === "win32")("Parallels host IP detection", () => {
+    it("keeps an explicit host IP above both detectors", () => {
+      withFakeHostIpCommands({}, (callsPath) => {
+        expect(resolveHostIp("192.0.2.10")).toBe("192.0.2.10");
+        expect(existsSync(callsPath)).toBe(false);
+      });
+    });
+
+    it("reads the configured Shared adapter before any live interface exists", () => {
+      const output = `Network ID: Shared
+Type: shared
+Parallels adapter:
+\tIPv4 address: 10.211.55.2
+\tIPv4 subnet mask: 255.255.255.0
+DHCPv4 server:
+\tServer address: 10.211.55.1
+`;
+      withFakeHostIpCommands({ ifconfigStatus: 1, prlsrvctlOutput: output }, (callsPath) => {
+        expect(resolveHostIp()).toBe("10.211.55.2");
+        expect(readFileSync(callsPath, "utf8")).toBe("prlsrvctl:C:net info Shared\n");
+      });
+    });
+
+    it("accepts CRLF and harmless whitespace in Shared network output", () => {
+      const output =
+        "Network ID: Shared\r\n  Parallels adapter:  \r\n    IPv4 address:   10.211.55.3  \r\nDHCPv4 server:\r\n";
+      withFakeHostIpCommands({ prlsrvctlOutput: output }, () => {
+        expect(resolveHostIp()).toBe("10.211.55.3");
+      });
+    });
+
+    it.each(["", "    IPv4 address: not-an-ip\n"])(
+      "falls back to ifconfig when the adapter address is missing or malformed",
+      (adapterLine) => {
+        const output = `Network ID: Shared
+Parallels adapter:
+${adapterLine}DHCPv4 server:
+    Server address: 10.211.55.1
+`;
+        withFakeHostIpCommands(
+          {
+            ifconfigOutput: "vnic0: flags=8843<UP>\n\tinet 10.211.55.9 netmask 0xffffff00\n",
+            prlsrvctlOutput: output,
+          },
+          (callsPath) => {
+            expect(resolveHostIp()).toBe("10.211.55.9");
+            expect(readFileSync(callsPath, "utf8")).toBe(
+              "prlsrvctl:C:net info Shared\nifconfig:\n",
+            );
+          },
+        );
+      },
+    );
+
+    it("preserves ifconfig fallback when Shared network lookup fails", () => {
+      withFakeHostIpCommands(
+        {
+          ifconfigOutput: "bridge100: flags=8863<UP>\n\tinet 10.211.55.7 netmask 0xffffff00\n",
+          prlsrvctlStatus: 1,
+        },
+        (callsPath) => {
+          expect(resolveHostIp()).toBe("10.211.55.7");
+          expect(readFileSync(callsPath, "utf8")).toBe("prlsrvctl:C:net info Shared\nifconfig:\n");
+        },
+      );
+    });
   });
 
   it("accepts npm 10/11 array and npm 12 workspace result shapes", () => {

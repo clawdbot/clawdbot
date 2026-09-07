@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -114,13 +115,14 @@ export type MigratedUpdateFinalizationResult = {
   result: UpdateRunResult;
   exitCode: number;
   terminalRunId: string;
+  automaticTriage?: TriageFailureContext;
 };
 
 /** After migration, only candidate code may reopen state or finish the run. */
 export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
-): Promise<{ result: UpdateRunResult; exitCode: number }> {
+): Promise<Omit<MigratedUpdateFinalizationResult, "terminalRunId">> {
   const run = params.opts.run;
   if (!run) {
     throw new Error("Migrated update continuation requires its admitted run.");
@@ -238,7 +240,11 @@ export async function continueMigratedUpdateInFreshProcess(
       response.result.steps.push(retained);
       defaultRuntime.error(retained.stderrTail);
     }
-    return { result: response.result, exitCode: response.exitCode };
+    return {
+      result: response.result,
+      exitCode: response.exitCode,
+      automaticTriage: response.automaticTriage,
+    };
   } catch (error) {
     try {
       await windowsRecovery?.complete(false);
