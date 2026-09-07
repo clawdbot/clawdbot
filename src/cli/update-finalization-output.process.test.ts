@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listUpdateRuns } from "../infra/update-run-ledger.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,7 +30,7 @@ const scenarios = [
 
 describe.each(["repair", "finalize"])("update %s process output", (command) => {
   // Both spellings share the finalization action; one matrix covers its output modes.
-  it.each(command === "repair" ? scenarios : ["json"])(
+  it.each(command === "repair" ? scenarios : ["json", "phase-hang", "handle-hang"])(
     "%s preserves the output and exit contract without restarting",
     async (scenario) => {
       const root = tempDirs.make("openclaw-update-json-");
@@ -70,10 +71,39 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         "--yes",
         "--no-restart",
         "--timeout",
-        "9",
+        scenario === "phase-hang" ? "1" : "9",
         ...(json && scenario !== "inherited-json" ? ["--json"] : []),
       ];
+      const readRun = () =>
+        listUpdateRuns({ limit: 1 }, { env: { HOME: root, OPENCLAW_STATE_DIR: state } })[0];
+      let observedPhaseStart: ReturnType<typeof readRun> | undefined;
       const result = await runCliProcessChild({
+        ...(scenario === "phase-hang"
+          ? {
+              interact: async (
+                child: import("node:child_process").ChildProcessWithoutNullStreams,
+              ) => {
+                child.stdin.end();
+                await new Promise<void>((resolve, reject) => {
+                  let stderr = "";
+                  const onData = (chunk: string) => {
+                    stderr += chunk;
+                    if (!stderr.includes("fixture configSnapshot entered")) {
+                      return;
+                    }
+                    child.stderr.off("data", onData);
+                    try {
+                      observedPhaseStart = readRun();
+                      resolve();
+                    } catch (error) {
+                      reject(new Error("Could not read the phase-start ledger", { cause: error }));
+                    }
+                  };
+                  child.stderr.on("data", onData);
+                });
+              },
+            }
+          : {}),
         nodeArgs: ["--import", "tsx", fixture, scenario, ...args],
         env: {
           ESBUILD_WORKER_THREADS: "0",
@@ -98,7 +128,57 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       });
       const failure = formatCliProcessFailure({ reason: `${command} ${scenario}`, ...result });
       expect(result.signal, failure).toBeNull();
-      expect(result.code, failure).toBe(scenario.endsWith("error") ? 1 : 0);
+      expect(result.code, failure).toBe(
+        scenario.endsWith("error") || scenario === "phase-hang" ? 1 : 0,
+      );
+      if (scenario === "phase-hang") {
+        expect(observedPhaseStart?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "finalize:configSnapshot",
+            status: "in_progress",
+            startedAtMs: expect.any(Number),
+          }),
+        );
+        const output = JSON.parse(result.stdout);
+        expect(output).toMatchObject({
+          status: "failed",
+          stuckPhase: "configSnapshot",
+          restart: false,
+        });
+        expect(output.phaseTimings).toContainEqual(
+          expect.objectContaining({
+            phase: "configSnapshot",
+            outcome: "failed",
+            durationMs: expect.any(Number),
+          }),
+        );
+        expect(result.stderr).toContain("fixture configSnapshot entered");
+        expect(readRun()).toMatchObject({
+          status: "failed",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "finalize:configSnapshot",
+              status: "failed",
+              startedAtMs: expect.any(Number),
+              endedAtMs: expect.any(Number),
+            }),
+          ]),
+        });
+        return;
+      }
+      if (scenario === "handle-hang") {
+        expect(result.stderr).toContain("activeResources");
+        expect(result.stderr).toContain("unsettledDisposers");
+        expect(readRun()).toMatchObject({
+          status: "succeeded",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "finalize:exit",
+              detail: expect.stringContaining("activeResources"),
+            }),
+          ]),
+        });
+      }
       const diagnostics = json ? result.stderr : result.stdout;
       for (const diagnostic of doctorDiagnostics) {
         expect(diagnostics, failure).toContain(diagnostic);

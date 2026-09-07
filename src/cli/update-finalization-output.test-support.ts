@@ -87,7 +87,9 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-config-snapshot.ts"),
-    "export const createUpdateConfigSnapshot = async () => {};",
+    scenario === "phase-hang"
+      ? 'export const createUpdateConfigSnapshot = async () => { console.error("fixture configSnapshot entered"); setInterval(() => {}, 1000); await new Promise(() => {}); };'
+      : "export const createUpdateConfigSnapshot = async () => {};",
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
@@ -137,6 +139,9 @@ await runCliWithExitFinalization({
         });
         registerUpdateCli(program);
         await program.parseAsync(process.argv);
+        if (scenario === "handle-hang") {
+          setInterval(() => {}, 1000);
+        }
       },
       { retainRoutingUntilProcessExit: true },
     ),

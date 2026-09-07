@@ -263,7 +263,7 @@ openclaw update repair --accept-capabilities
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--channel <stable\|extended-stable\|beta\|dev>` | Persist the core update channel before repair. For extended-stable, eligible official npm and trusted official ClawHub plugins that follow bare/default or `latest` intent target the exact installed core version. Extended-stable repair is rejected on Git checkouts without changing config. |
 | `--json`                                         | Print machine-readable finalization JSON.                                                                                                                                                                                                                                                        |
-| `--timeout <seconds>`                            | Timeout for repair steps. Default `1800`.                                                                                                                                                                                                                                                        |
+| `--timeout <seconds>`                            | Override each repair phase deadline in seconds. Defaults vary by phase (see below).                                                                                                                                                                                                              |
 | `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                                                       |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                                                          |
@@ -301,6 +301,23 @@ healthy managed package.
 With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.
+
+Finalization (including the supervisor-facing `update finalize` command) records
+phase starts and finishes immediately on stderr and in the update run ledger.
+The defaults are 30 seconds for config validation, config backup, and completion
+cache work; 120 seconds for Doctor migrations; 600 seconds for plugin registry
+and installation work; and 180 seconds for post-plugin Doctor and validation.
+`--timeout` overrides each phase budget.
+
+A phase deadline produces exit code 1 and JSON with `status: "failed"`,
+`stuckPhase`, `elapsedMs`, `error`, and the existing `phaseTimings` array. Owned
+command trees are stopped before the finalizer exits so the supervisor can
+recover. Preserve the phase diagnostic when reporting a stalled update.
+Shared CLI disposers have individual five-second deadlines. If the finalizer
+remains alive ten seconds after its terminal output, stderr and the ledger
+record active resource types and unsettled disposer names, then the process
+exits with its recorded outcome. A retained handle cannot withhold the
+supervisor's result indefinitely.
 
 Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not
