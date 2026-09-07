@@ -47,9 +47,7 @@ describe("Web Awesome control ownership", () => {
     // This inventory tracks literal ARIA roles, not Web Awesome elements that own roles internally.
     expect(matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette.ts",
-      "pages/chat/components/chat-composer-mention-menu.ts",
-      "pages/chat/components/chat-composer-skill-menu.ts",
-      "pages/chat/components/chat-composer-slash-menu.ts",
+      "components/composer-menu.ts",
       "pages/chat/components/chat-model-picker-options.ts",
       "pages/chat/components/chat-model-picker.ts",
       "pages/new-session/place-browser.ts",
