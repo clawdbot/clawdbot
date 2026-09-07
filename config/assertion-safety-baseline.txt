@@ -2186,7 +2186,7 @@ src/channels/plugins/bundled-setup-policy.ts	2
 src/channels/plugins/bundled.ts	4
 src/channels/plugins/chat-target-prefixes.ts	2
 src/channels/plugins/config-helpers.ts	7
-src/channels/plugins/config-schema.ts	14
+src/channels/plugins/config-schema.ts	12
 src/channels/plugins/config-write-policy-shared.ts	1
 src/channels/plugins/config-writes.ts	1
 src/channels/plugins/configured-binding-compiler.ts	1
