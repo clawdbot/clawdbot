@@ -60,6 +60,7 @@ import {
   resolveServiceRefreshEnv,
 } from "./update-command-service-env.js";
 import {
+  GatewayServiceUpdateOwnershipError,
   gatewayServiceCommandUsesRoot,
   isGatewayServiceManagementAllowedForUpdate,
   resolveManagedServicePackageUpdatePlan,
@@ -85,16 +86,28 @@ export async function admitUpdateCommandRun(params: {
     !env[UPDATE_RUN_ID_ENV] &&
     isGatewayServiceManagementAllowedForUpdate(env)
   ) {
-    const command = await resolveGatewayService()
-      .readCommand(env, { requireEffective: true })
-      .catch(() => null);
-    if (command && (await gatewayServiceCommandUsesRoot({ root: params.root, command }))) {
-      env = resolveOwnedManagedUpdateEnv({
-        processEnv: env,
-        serviceEnv: mergeGatewayServiceEnv(env, command),
-        serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment,
-        invocationCwd: params.invocationCwd,
-      });
+    // Admission must not load native units or turn unavailable ownership into
+    // an absent service and a write to the caller's unrelated profile.
+    const command = await resolveGatewayService().readCommand(env, {
+      requireEffective: true,
+      requireLoaded: true,
+    });
+    if (command) {
+      const usesRoot = await gatewayServiceCommandUsesRoot({ root: params.root, command });
+      if (usesRoot === null) {
+        throw new GatewayServiceUpdateOwnershipError(
+          "Gateway service package ownership could not be resolved before update admission; inspect the service from its owning account and retry.",
+          undefined,
+        );
+      }
+      if (usesRoot) {
+        env = resolveOwnedManagedUpdateEnv({
+          processEnv: env,
+          serviceEnv: mergeGatewayServiceEnv(env, command),
+          serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment,
+          invocationCwd: params.invocationCwd,
+        });
+      }
     }
   }
   // A previous invocation may have died with a sealed restoration plan. Detect
