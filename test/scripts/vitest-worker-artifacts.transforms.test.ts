@@ -20,7 +20,7 @@ describe("fresh compiled subprocess invocation", { concurrent }, () => {
     "preserves filesystem transforms for $invariant ($layout)",
     ({ layout, invariant }, { workerArtifacts }) =>
       workerArtifacts.fixtureLifetime.run(async () => {
-        const { node } = workerArtifacts.createFixtureCommands();
+        const { node } = workerArtifacts.createFixtureCommands({ layout, invariant });
         const directory = workerArtifacts.fixtureDirectory();
         const { config, value, configuredValue, parent, cacheDirectory } = workerProbe(
           directory,
@@ -44,14 +44,19 @@ describe("fresh compiled subprocess invocation", { concurrent }, () => {
           expectedValue = "first",
           configValue = "first",
         ) => {
-          const result = await node([
-            mode === "compiled" ? "scripts/run-vitest.mjs" : "node_modules/vitest/vitest.mjs",
-            "run",
-            "--config",
-            config,
-            "--project",
-            "first",
-          ]);
+          const result = await node(
+            [
+              mode === "compiled" ? "scripts/run-vitest.mjs" : "node_modules/vitest/vitest.mjs",
+              "run",
+              "--config",
+              config,
+              "--project",
+              "first",
+            ],
+            root,
+            process.env,
+            mode,
+          );
           expect(result.code, result.stderr + result.stdout).toBe(0);
           const generation: string = JSON.parse(readLines("generations.jsonl").at(-1)!);
           const observed = JSON.parse(readLines("observations.jsonl").at(-1)!);
@@ -92,7 +97,13 @@ describe("fresh compiled subprocess invocation", { concurrent }, () => {
           }
           console.log(
             "cache transport",
-            JSON.stringify({ mode, ...observed, generation, transforms: counts() }),
+            JSON.stringify({
+              ...result.diagnostic,
+              mode,
+              ...observed,
+              generation,
+              transforms: counts(),
+            }),
           );
         };
         await launch("compiled");
