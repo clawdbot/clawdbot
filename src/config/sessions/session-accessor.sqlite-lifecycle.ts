@@ -51,6 +51,7 @@ import {
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
+import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import {
   createHistoricalGenerationReclamationPlan,
   createLifecycleArtifactReclamationPlan,
@@ -320,6 +321,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   expectedPluginOwnerId: string | undefined,
   recordCommit: (database: OpenClawAgentDatabase) => void,
   markCommitted: () => void,
+  worker?: SqliteReclamationWorker,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   const prepared = await runExclusiveSqliteSessionWrite(resolved, async () => {
     // Opening a store can register durable ownership, even before the deletion transaction.
@@ -494,6 +496,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               forceInProcess: hasPreparedNativeSessionDeletion(),
               onInProcessCommit: recordCommit,
               plan: reclamationPlan,
+              worker,
             });
             if (reclaimed.kind !== reclamationPlan.kind) {
               throw new Error(
@@ -544,6 +547,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             forceInProcess: hasPreparedNativeSessionDeletion(),
             onInProcessCommit: recordCommit,
             plan: reclamationPlan,
+            worker,
           });
           if (reclaimed.kind !== reclamationPlan.kind) {
             throw new Error(
@@ -608,6 +612,7 @@ export async function deleteSessionEntryLifecycle(
 /** Disk-budget owner: delete one exact archived row without recursively scheduling another pass. */
 export async function deleteDiskBudgetSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
+  worker: SqliteReclamationWorker,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   const agentId = params.agentId ?? parseAgentSessionKey(params.target.canonicalKey)?.agentId;
   const resolved = resolveSqliteStoreScope(params.storePath, { agentId });
@@ -621,6 +626,7 @@ export async function deleteDiskBudgetSessionEntryLifecycle(
         undefined,
         recordCommit,
         markCommitted,
+        worker,
       ),
     { scheduleNext: false },
   );

@@ -367,6 +367,11 @@ the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
 Session reclamation keeps its deletion transaction on a worker connection.
+A physical disk-pressure sweep lazily opens one reclamation worker and retains its
+validated connection across victims. Each victim still has a separate transaction
+and current-owner check in that request's captured async context. The sweep closes
+and joins the worker before releasing its maintenance queue and reporting final
+physical usage; standalone reclamation owns the same lifetime for one request.
 Archive publication and cascading deletion remain atomic. Before COMMIT, the
 worker publishes its authorization request in shared memory and waits for the
 parent's current owner check. Synchronous writers service that request at the shared

@@ -1,10 +1,12 @@
 /** Worker entrypoint for SQLite transcript archive materialization off the gateway event loop. */
 import { randomUUID } from "node:crypto";
+import { on } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { isDeepStrictEqual } from "node:util";
 import { parentPort, workerData } from "node:worker_threads";
 import zlib from "node:zlib";
 import {
@@ -15,6 +17,8 @@ import {
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
+  borrowOpenClawAgentDatabase,
+  getOpenClawAgentDatabaseIfOpen,
   settleOpenClawAgentDatabaseWorkerClose,
   type OpenClawAgentDatabaseWorkerCloseResult,
 } from "../../state/openclaw-agent-db.js";
@@ -39,10 +43,13 @@ import {
   markSqliteReclamationSettled,
   waitForSqliteReclamationCommit,
 } from "./session-accessor.sqlite-reclamation-commit.js";
+import type {
+  SqliteReclamationWorkerMessage,
+  SqliteReclamationWorkerRequest,
+} from "./session-accessor.sqlite-reclamation-worker.js";
 import {
   reclaimSqliteSessionInTransaction,
-  type SqliteSessionReclamationWorkerData,
-  type SqliteSessionReclamationWorkerResult,
+  type SqliteSessionReclamationPlan,
 } from "./session-accessor.sqlite-reclamation.js";
 
 type TranscriptArchiveDatabase = Pick<
@@ -421,33 +428,59 @@ function runPublishWorkerPort(
 
 async function runReclamationWorkerPort(
   port: NonNullable<typeof parentPort>,
-  data: SqliteSessionReclamationWorkerData,
+  databaseOptions: SqliteSessionReclamationPlan["databaseOptions"],
 ): Promise<void> {
-  let result: ReturnType<typeof reclaimSqliteSessionInTransaction>;
-  const commitGate = data.commitGate;
+  let borrowed: ReturnType<typeof borrowOpenClawAgentDatabase> | undefined;
+  let commitGate: SharedArrayBuffer | undefined;
+  let operationId = 0;
   try {
-    let transactionDatabase: DatabaseSync | undefined;
-    try {
-      result = reclaimSqliteSessionInTransaction(data.plan, {
-        onCommit: commitGate
-          ? (database) => {
-              transactionDatabase = database.db;
-              waitForSqliteReclamationCommit(commitGate, () =>
-                port.postMessage({ type: "commit-request" }),
-              );
-            }
-          : undefined,
-      });
-    } finally {
-      if (
-        transactionDatabase &&
-        (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
-      ) {
-        markSqliteReclamationSettled(commitGate);
+    // Full validation belongs to the physical open. Pin that exact handle across victims;
+    // explicit disposal still revokes it, and cannot silently supply a successor.
+    borrowed = borrowOpenClawAgentDatabase(databaseOptions);
+    for await (const [message] of on(port, "message")) {
+      // SAFETY: this private port receives only the typed parent owner's requests.
+      const request = message as SqliteReclamationWorkerRequest | { type: "close" };
+      if (request.type === "close") {
+        break;
       }
+      commitGate = request.commitGate;
+      if (
+        request.type !== "reclaim" ||
+        request.operationId !== ++operationId ||
+        !isDeepStrictEqual(request.plan.databaseOptions, databaseOptions) ||
+        !borrowed.db.isOpen ||
+        getOpenClawAgentDatabaseIfOpen(databaseOptions)?.db !== borrowed.db
+      ) {
+        throw new Error("SQLite session reclamation database owner is no longer current");
+      }
+      let result: ReturnType<typeof reclaimSqliteSessionInTransaction>;
+      try {
+        result = reclaimSqliteSessionInTransaction(request.plan, {
+          onCommit: () =>
+            waitForSqliteReclamationCommit(request.commitGate, () =>
+              port.postMessage({
+                type: "commit-request",
+                operationId,
+              } satisfies SqliteReclamationWorkerMessage),
+            ),
+        });
+      } finally {
+        if (!borrowed.db.isOpen || !borrowed.db.isTransaction) {
+          markSqliteReclamationSettled(commitGate);
+        }
+      }
+      // Release transferred archive buffers before waiting for the next victim.
+      request.plan.materializedPlans.length = 0;
+      port.postMessage({
+        type: "reclaimed",
+        operationId,
+        result,
+      } satisfies SqliteReclamationWorkerMessage);
+      commitGate = undefined;
     }
   } catch (error) {
-    const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
+    const cleanup = await settleReclamationDatabase(databaseOptions.path);
+    port.postMessage({ type: "closed", ...cleanup } satisfies SqliteReclamationWorkerMessage);
     if (cleanup.settled) {
       markSqliteReclamationSettled(commitGate);
     } else {
@@ -458,14 +491,11 @@ async function runReclamationWorkerPort(
       );
     }
     throw error;
+  } finally {
+    borrowed?.release();
   }
-  const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
-  const workerResult: SqliteSessionReclamationWorkerResult = {
-    result,
-    ...(cleanup.cleanupWarnings.length > 0 ? { cleanupWarnings: cleanup.cleanupWarnings } : {}),
-    ...(!cleanup.settled ? { cleanupIncomplete: true } : {}),
-  };
-  port.postMessage({ type: "reclaimed", results: [workerResult] });
+  const cleanup = await settleReclamationDatabase(databaseOptions.path);
+  port.postMessage({ type: "closed", ...cleanup } satisfies SqliteReclamationWorkerMessage);
   port.close();
 }
 
@@ -487,8 +517,12 @@ if (isSqliteTranscriptArchiveWorkerData(workerData)) {
     }
     runPublishWorkerPort(parentPort, plans);
   } else if (operation === "reclaim") {
-    // SAFETY: the parent creates this internal structured-clone payload from the typed plan.
-    await runReclamationWorkerPort(parentPort, workerData as SqliteSessionReclamationWorkerData);
+    await runReclamationWorkerPort(
+      parentPort,
+      // SAFETY: the private parent creates these boot options from its canonical plan.
+      (workerData as { databaseOptions: SqliteSessionReclamationPlan["databaseOptions"] })
+        .databaseOptions,
+    );
   } else {
     throw new Error("SQLite transcript archive worker requires a supported operation");
   }

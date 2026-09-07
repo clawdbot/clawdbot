@@ -293,23 +293,21 @@ function resolveSourceWorkerExecArgv(): string[] {
   return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
 }
 
+export function createSqliteTranscriptArchiveWorker(workerData: object): Worker {
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
+  return new Worker(workerUrl, {
+    workerData,
+    execArgv: workerUrl.pathname.endsWith(".ts") ? resolveSourceWorkerExecArgv() : undefined,
+  });
+}
+
 function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
-  expectedMessageType: "done" | "published" | "reclaimed";
-  onCommitRequest?: () => void;
-  transferList?: ArrayBuffer[];
+  expectedMessageType: "done" | "published";
   workerData: object;
 }): Promise<Result[]> {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
   let worker: Worker;
   try {
-    const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts")
-      ? resolveSourceWorkerExecArgv()
-      : undefined;
-    worker = new Worker(workerUrl, {
-      workerData: params.workerData,
-      execArgv: sourceWorkerExecArgv,
-      transferList: params.transferList,
-    });
+    worker = createSqliteTranscriptArchiveWorker(params.workerData);
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
   }
@@ -318,13 +316,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
     let results: Result[] | undefined;
     let workerError: Error | undefined;
     worker.on("message", (message: { results: Result[]; type: string }) => {
-      if (message.type === "commit-request") {
-        try {
-          params.onCommitRequest?.();
-        } catch (error) {
-          workerError = toStringifiedError(error);
-        }
-      } else if (message.type === params.expectedMessageType) {
+      if (message.type === params.expectedMessageType) {
         (results ??= []).push(...message.results);
       }
     });
@@ -357,15 +349,19 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
 const sqliteTranscriptArchiveWorkerQueue = new KeyedAsyncQueue();
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
-export function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
-  expectedMessageType: "done" | "published" | "reclaimed";
-  onCommitRequest?: () => void;
-  transferList?: ArrayBuffer[];
-  workerData: object;
-}): Promise<Result[]> {
+export function runExclusiveSqliteTranscriptArchiveWorker<T>(run: () => Promise<T>): Promise<T> {
   return sqliteTranscriptArchiveWorkerQueue.enqueue(
     SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-    () => spawnSqliteTranscriptArchiveWorkerOperation<Result>(params),
+    run,
+  );
+}
+
+function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
+  expectedMessageType: "done" | "published";
+  workerData: object;
+}): Promise<Result[]> {
+  return runExclusiveSqliteTranscriptArchiveWorker(() =>
+    spawnSqliteTranscriptArchiveWorkerOperation<Result>(params),
   );
 }
 
