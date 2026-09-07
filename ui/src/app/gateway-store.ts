@@ -377,6 +377,9 @@ export function createApplicationGateway(
     if (credentialsChanged) {
       connectionRevision += 1;
       void clearStoredChatSnapshots();
+      void import("../lib/sessions/session-roster-cache.runtime.ts").then(
+        ({ clearCachedBootState }) => clearCachedBootState(),
+      );
     }
     // Only a gateway URL that differs from the current connection counts as an
     // explicit selection. The login gate always resubmits its prefilled URL, so

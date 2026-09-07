@@ -15,7 +15,14 @@ function stubBuildReloadDocument(href = "http://127.0.0.1:18789/chat/main") {
   const replace = vi.fn<(url: string) => void>();
   const location = Object.assign(new URL(href), { replace });
   vi.stubGlobal("location", location);
-  vi.stubGlobal("window", { location });
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location }));
+  vi.stubGlobal(
+    "document",
+    Object.assign(new EventTarget(), {
+      documentElement: { getAttribute: () => null },
+      querySelector: () => null,
+    }),
+  );
   const probe = createDeferred<Response>();
   const fetchMock = vi.fn<typeof fetch>(() => probe.promise);
   vi.stubGlobal("fetch", fetchMock);
