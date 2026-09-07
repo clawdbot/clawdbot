@@ -18,10 +18,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
-import {
-  resolveWorkerPlacementExecutionMode,
-  resolveWorkerPlacementSessionRuntime,
-} from "../worker-environments/placement-session-runtime.js";
+import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../worker-environments/placement-session-runtime.js";
 import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 export { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
@@ -77,19 +74,18 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   ) {
     return undefined;
   }
-  const runtime = resolveWorkerPlacementSessionRuntime({
+  const { executionMode } = resolveWorkerPlacementSessionRuntimeCapabilities({
     cfg: params.cfg,
     entry: params.entry,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const executionMode = resolveWorkerPlacementExecutionMode(runtime);
   if (executionMode === placement.executionMode) {
     return undefined;
   }
   return executionMode
     ? `Session ${params.key} cannot change cloud placement execution mode while placement is ${placement.state}.`
-    : `Session ${params.key} cannot select the ${runtime} runtime while cloud worker placement is ${placement.state}.`;
+    : `Session ${params.key} cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
 }
 
 export const loadSessionsRuntimeModule = createLazyRuntimeModule(

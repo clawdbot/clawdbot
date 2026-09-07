@@ -30,6 +30,8 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
+import { resolveSessionWorkerPlacementContext } from "../gateway/session-worker-placement-context.js";
+import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
 import {
@@ -148,6 +150,41 @@ function rejectNotAllowed(provider: string, model: string): ApplySessionModelSel
 }
 
 /** Applies one validated picker selection to the authoritative live session. */
+
+/**
+ * Rejects a model selection when the candidate runtime is incompatible with an
+ * active cloud-worker placement. Mirrors the sessions.patch guard so directive
+ * model changes are validated before they persist.
+ */
+function resolveActivePlacementModelSelectionError(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  entry: SessionEntry;
+}): string | undefined {
+  const sessionId = params.entry.sessionId;
+  if (!sessionId) {
+    return undefined;
+  }
+  const placementService = resolveSessionWorkerPlacementContext().workerSessionPlacementService;
+  const placement = placementService?.getMany([sessionId]).get(sessionId);
+  if (!placement || placement.state === "local") {
+    return undefined;
+  }
+  const { executionMode } = resolveWorkerPlacementSessionRuntimeCapabilities({
+    cfg: params.cfg,
+    entry: params.entry,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  if (executionMode === placement.executionMode) {
+    return undefined;
+  }
+  return executionMode
+    ? `Session cannot change cloud placement execution mode while placement is ${placement.state}.`
+    : `Session cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
+}
+
 export async function applySessionModelSelection(
   params: ApplySessionModelSelectionParams,
 ): Promise<ApplySessionModelSelectionResult> {
@@ -263,9 +300,37 @@ export async function applySessionModelSelection(
       };
     }
   }
+  const placementError = resolveActivePlacementModelSelectionError({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    entry: nextEntry,
+  });
+  if (placementError) {
+    return { status: "rejected", reason: "invalid-runtime", message: placementError };
+  }
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;
+  // The pre-persistence read above can be overtaken by placement activation before the
+  // durable write commits. Revalidate placement inside the synchronous commit boundary so an
+  // override that became incompatible during that window is rejected without mutating state.
+  const validateCommit = () => {
+    const authError = params.validateAuthProfileSelection?.();
+    if (authError) {
+      return authError;
+    }
+    const revalidatedPlacementError = resolveActivePlacementModelSelectionError({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      entry: nextEntry,
+    });
+    if (revalidatedPlacementError) {
+      return revalidatedPlacementError;
+    }
+    return undefined;
+  };
   if (params.storePath) {
     const persistence = await persistReplySessionEntry({
       storePath: params.storePath,
@@ -276,7 +341,7 @@ export async function applySessionModelSelection(
       reassertLiveModelSwitchPending: applied.changed && nextEntry.liveModelSwitchPending === true,
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
-      validateCommit: params.validateAuthProfileSelection,
+      validateCommit,
     });
     if (persistence.entry) {
       params.sessionStore[params.sessionKey] = persistence.entry;

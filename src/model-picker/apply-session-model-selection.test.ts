@@ -27,6 +27,11 @@ const effects = vi.hoisted(() => ({
   triggerSessionPatchHook: vi.fn(),
   warn: vi.fn(),
 }));
+const placementMocks = vi.hoisted(() => ({
+  getMany: vi.fn(),
+  resolveWorkerPlacementSessionRuntimeCapabilities: vi.fn(),
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let lifecycleEvents: SessionLifecycleEvent[];
 let unsubscribeLifecycle: () => void;
@@ -57,6 +62,18 @@ vi.mock("../logging/subsystem.js", async () => {
         : actual.createSubsystemLogger(subsystem),
   };
 });
+
+vi.mock("../gateway/session-worker-placement-context.js", () => ({
+  resolveSessionWorkerPlacementContext: () => ({
+    workerSessionPlacementService: {
+      getMany: placementMocks.getMany,
+    },
+  }),
+}));
+vi.mock("../gateway/worker-environments/placement-session-runtime.js", () => ({
+  resolveWorkerPlacementSessionRuntimeCapabilities:
+    placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities,
+}));
 
 import {
   applySessionModelSelection,
@@ -122,6 +139,8 @@ beforeEach(() => {
   });
   effects.refreshQueuedFollowupSession.mockReset();
   effects.triggerSessionPatchHook.mockReset();
+  placementMocks.getMany.mockReset().mockReturnValue(new Map());
+  placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReset();
 });
 
 afterEach(() => unsubscribeLifecycle());
