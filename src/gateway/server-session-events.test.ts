@@ -43,12 +43,18 @@ function createHandler(projectSessionActive: boolean) {
   return { broadcastToConnIds, handler };
 }
 
-async function emitAssistantTranscriptUpdate(projectSessionActive: boolean) {
+async function emitAssistantTranscriptUpdate(
+  projectSessionActive: boolean,
+  message: Record<string, unknown> = {
+    role: "assistant",
+    content: [{ type: "text", text: "Final answer" }],
+  },
+) {
   const { broadcastToConnIds, handler } = createHandler(projectSessionActive);
   handler({
     sessionFile: "/tmp/sess-main.jsonl",
     sessionKey: "agent:main:main",
-    message: { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
+    message,
     messageId: "message-1",
     messageSeq: 1,
   });
@@ -77,6 +83,17 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       sessionKey: "agent:main:main",
       hasActiveRun: false,
       session: { hasActiveRun: false },
+    });
+  });
+  it("broadcasts the authenticated sender ownership decision", async () => {
+    await expect(
+      emitAssistantTranscriptUpdate(false, {
+        role: "user",
+        content: [{ type: "text", text: "Owner turn" }],
+        __openclaw: { senderIsOwner: true },
+      }),
+    ).resolves.toMatchObject({
+      senderIsOwner: true,
     });
   });
 });

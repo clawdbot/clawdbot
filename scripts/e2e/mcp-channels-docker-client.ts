@@ -1,5 +1,6 @@
 // Mcp Channels Docker Client script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   assert,
   ClaudeChannelNotificationSchema,
@@ -28,6 +29,8 @@ function summarizeSessionRows(rows: Array<Record<string, unknown>> | undefined) 
     lastThreadId: entry.lastThreadId,
   }));
 }
+
+const NON_OWNER_PERMISSION_QUIET_WINDOW_MS = 1_000;
 
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
@@ -96,6 +99,7 @@ async function main() {
   assert(gatewayToken, "missing GW_TOKEN");
 
   const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
+  let nonOwnerGateway: GatewayRpcClient | undefined;
   let mcpHandle: Awaited<ReturnType<typeof connectMcpClient>> | undefined;
   const mcpTempState = createMcpClientTempState({ gatewayToken });
 
@@ -349,6 +353,36 @@ async function main() {
       },
     });
 
+    nonOwnerGateway = await connectGateway({
+      url: gatewayUrl,
+      token: gatewayToken,
+      scopes: ["operator.read", "operator.write"],
+    });
+    await nonOwnerGateway.request("chat.send", {
+      sessionKey: "agent:main:main",
+      message: "yes abcde",
+      idempotencyKey: randomUUID(),
+    });
+    await waitFor(
+      "non-owner reply forwarded as an ordinary Claude channel message",
+      () =>
+        mcpHandle.rawMessages
+          .map((entry) => ClaudeChannelNotificationSchema.safeParse(entry))
+          .find(
+            (entry) =>
+              entry.success &&
+              entry.data.params.meta.session_key === "agent:main:main" &&
+              entry.data.params.content === "yes abcde",
+          )?.data.params,
+      60_000,
+    );
+    await delay(NON_OWNER_PERMISSION_QUIET_WINDOW_MS);
+    const nonOwnerPermission = mcpHandle.rawMessages
+      .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
+      .find((entry) => entry.success && entry.data.params.request_id === "abcde");
+    assert(!nonOwnerPermission, "non-owner reply must not resolve the Claude permission");
+
+    const ownerNotificationStart = mcpHandle.rawMessages.length;
     await gateway.request("chat.send", {
       sessionKey: "agent:main:main",
       message: "yes abcde",
@@ -360,6 +394,7 @@ async function main() {
         "Claude permission notification",
         () =>
           mcpHandle.rawMessages
+            .slice(ownerNotificationStart)
             .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
             .find((entry) => entry.success && entry.data.params.request_id === "abcde")?.data
             .params,
@@ -389,6 +424,9 @@ async function main() {
         {
           ok: true,
           sessionKey: "agent:main:main",
+          nonOwnerReplyForwarded: true,
+          nonOwnerPermissionBlocked: true,
+          ownerPermissionAllowed: permission.behavior === "allow",
           rawNotifications: mcpHandle.rawMessages.filter(
             (entry) =>
               ClaudeChannelNotificationSchema.safeParse(entry).success ||
@@ -401,6 +439,9 @@ async function main() {
     );
   } finally {
     const closeTasks: Array<Promise<unknown>> = [gateway.close()];
+    if (nonOwnerGateway) {
+      closeTasks.push(nonOwnerGateway.close());
+    }
     if (mcpHandle) {
       closeTasks.push(mcpHandle.client.close(), mcpHandle.transport.close());
     }

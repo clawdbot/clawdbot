@@ -272,6 +272,7 @@ describe("user turn transcript persistence", () => {
           text: "What is in this image?",
           media: [{ path: "/tmp/image.png", contentType: "image/png" }],
           timestamp: 123,
+          senderIsOwner: true,
           provenance,
         },
         updateMode: "none",
@@ -287,6 +288,7 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "What is in this image?",
           MediaPath: "/tmp/image.png",
+          __openclaw: { senderIsOwner: true },
           provenance,
           MediaType: "image/png",
         }),
@@ -398,6 +400,7 @@ describe("user turn transcript persistence", () => {
         input: {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
+          senderIsOwner: true,
           provenance,
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -407,6 +410,7 @@ describe("user turn transcript persistence", () => {
         input: {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
+          senderIsOwner: true,
           provenance,
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -417,6 +421,7 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "[redacted by hook]",
           idempotencyKey: "chat-run-1:user",
+          __openclaw: { senderIsOwner: true },
           provenance,
         }),
       ]);

@@ -23,6 +23,7 @@ export type UserTurnInput = {
   media?: readonly PersistedUserTurnMediaInput[] | null;
   timestamp?: number;
   idempotencyKey?: string;
+  senderIsOwner?: boolean;
   provenance?: InputProvenance;
   mediaOnlyText?: string;
 };

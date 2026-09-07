@@ -324,6 +324,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
+            senderIsOwner: true,
             lastChannel: "imessage",
             lastTo: "+15551234567",
             messageId: "msg-user-1",
@@ -358,6 +359,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
+            senderIsOwner: true,
             lastChannel: "imessage",
             lastTo: "+15551234567",
             messageId: "msg-user-2",

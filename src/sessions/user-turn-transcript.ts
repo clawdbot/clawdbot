@@ -243,6 +243,9 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
     content,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.senderIsOwner === undefined
+      ? {}
+      : { __openclaw: { senderIsOwner: params.senderIsOwner } }),
     ...mediaFields,
   } as PersistedUserTurnMessage;
   return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
@@ -317,12 +320,26 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  return idempotencyKey
-    ? ({
-        ...(nextUserMessage as unknown as Record<string, unknown>),
-        idempotencyKey,
-      } as unknown as PersistedUserTurnMessage)
-    : nextUserMessage;
+  const originalOpenClaw = (message as unknown as { __openclaw?: unknown })["__openclaw"];
+  const senderIsOwner =
+    originalOpenClaw && typeof originalOpenClaw === "object"
+      ? (originalOpenClaw as { senderIsOwner?: unknown }).senderIsOwner
+      : undefined;
+  if (!idempotencyKey && typeof senderIsOwner !== "boolean") {
+    return nextUserMessage;
+  }
+  const nextRecord = nextUserMessage as unknown as Record<string, unknown>;
+  const nextOpenClaw =
+    nextRecord["__openclaw"] && typeof nextRecord["__openclaw"] === "object"
+      ? (nextRecord["__openclaw"] as Record<string, unknown>)
+      : {};
+  return {
+    ...nextRecord,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(typeof senderIsOwner === "boolean"
+      ? { __openclaw: { ...nextOpenClaw, senderIsOwner } }
+      : {}),
+  } as unknown as PersistedUserTurnMessage;
 }
 
 export async function appendUserTurnTranscriptMessage(

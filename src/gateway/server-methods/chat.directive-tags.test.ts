@@ -4350,6 +4350,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       content: "bench update",
       timestamp: expect.any(Number),
       idempotencyKey: "idem-system-provenance-acp:user",
+      __openclaw: { senderIsOwner: true },
       provenance: {
         ...provenance,
         sourceSessionKey: undefined,
