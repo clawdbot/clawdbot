@@ -9,6 +9,7 @@ import {
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-exec.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { formatCliCommand } from "../command-format.js";
@@ -125,6 +126,27 @@ export function filterDaemonEnv(env: Record<string, string> | undefined): Record
     filtered[key] = value.trim();
   }
   return filtered;
+}
+
+export function projectDaemonServiceForJson<
+  T extends { command?: GatewayServiceCommandConfig | null },
+>(service: T, { includeDefinitionPaths }: { includeDefinitionPaths: boolean }) {
+  const command = service.command;
+  if (!command) {
+    return service;
+  }
+  const environment = filterDaemonEnv(command.environment);
+  const publicCommand = {
+    ...command,
+    environment: Object.keys(environment).length > 0 ? environment : undefined,
+  };
+  delete publicCommand.managedDefinition;
+  delete publicCommand.managedOverrides;
+  // Node status retains definition paths in its shipped JSON contract.
+  if (!includeDefinitionPaths) {
+    delete publicCommand.definitionPaths;
+  }
+  return { ...service, command: publicCommand };
 }
 
 /** Format safe daemon env entries for status output. */
