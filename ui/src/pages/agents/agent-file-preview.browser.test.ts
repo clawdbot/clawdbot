@@ -4,7 +4,6 @@ import "../../styles.css";
 import "../../styles/settings.css";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
-import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderAgentFiles } from "./panels-status-files.ts";
 
@@ -22,35 +21,18 @@ afterEach(() => {
   container.remove();
 });
 
-function afterOwnTransition(
-  dialog: HTMLElement,
-  type: "wa-after-show" | "wa-after-hide",
-): Promise<void> {
+function afterOwnHide(dialog: HTMLElement): Promise<void> {
   return new Promise((resolve) => {
-    const completed = (event: Event) => {
+    const hidden = (event: Event) => {
       if (event.target !== dialog) {
         return;
       }
-      dialog.removeEventListener(type, completed);
+      dialog.removeEventListener("wa-after-hide", hidden);
       // The real dialog and adapter queue return focus before this observer's task.
       setTimeout(resolve, 0);
     };
-    dialog.addEventListener(type, completed);
+    dialog.addEventListener("wa-after-hide", hidden);
   });
-}
-
-async function finishTransition(dialog: Element, transition: Promise<void>): Promise<void> {
-  let completed = false;
-  void transition.then(() => {
-    completed = true;
-  });
-  // Web Awesome starts its animation after a frame; an early animation snapshot can miss it.
-  await expect
-    .poll(() => {
-      finishElementAnimations(dialog);
-      return completed;
-    })
-    .toBe(true);
 }
 
 function requireButton(selector: string): HTMLButtonElement {
@@ -102,19 +84,18 @@ describe.runIf(browserMode)("agent file preview focus", () => {
 
       for (let opening = 0; opening < 2; opening += 1) {
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-        const shown = afterOwnTransition(webAwesomeDialog, "wa-after-show");
         preview.focus();
         await userEvent.keyboard("{Enter}");
         await getRenderedModalDialog(container);
         await expect.poll(() => dialog.open).toBe(true);
-        await finishTransition(dialog, shown);
-        const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");
+        await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+        const closed = afterOwnHide(webAwesomeDialog);
         await userEvent.click(
           requireButton(
             action === "edit" ? '[aria-label="Edit file"]' : '[aria-label="Close preview"]',
           ),
         );
-        await finishTransition(dialog, closed);
+        await closed;
         expect(dialog.open).toBe(false);
         expect(modal.isConnected).toBe(true);
 
