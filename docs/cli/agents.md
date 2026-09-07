@@ -102,7 +102,9 @@ Export refuses probable secrets in Markdown or JSON and reports the file and
 line without printing the matched value. Remove the secret from the source and
 retry; there is no `--allow-secrets` bypass. Detection is a conservative check,
 so review the bundle for sensitive content before sharing it. Embedded absolute
-local paths must also be removed for portability.
+local paths produce warnings while export proceeds: `Review before sharing:`
+lines in human output and a `warnings` array with `--json`. Replace
+machine-specific paths before sharing. Import preserves embedded paths.
 
 ### `agents import <dir>`
 

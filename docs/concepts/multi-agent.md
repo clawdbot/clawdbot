@@ -171,8 +171,9 @@ Review the bundle and omissions report before sharing the directory. It contains
 the agent's identity, `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, explicit skills and
 model settings, delegation settings, and supported agent-turn automations.
 Personal files, `USER.md`, memory, credentials, sessions, and routing bindings
-are excluded. Probable secrets and embedded absolute local paths cause export
-to fail so you can remove them first.
+are excluded. Probable secrets cause export to fail so you can remove them
+first. Embedded absolute local paths produce review warnings; export and import
+preserve the content. Replace machine-specific references before sharing.
 
 On the receiving installation, import into a new agent and workspace:
 

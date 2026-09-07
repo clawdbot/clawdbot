@@ -85,14 +85,14 @@ describe("portable agent templates", () => {
       expect(entry).toBeDefined();
       Object.assign(entry!, {
         identity,
-        description: "A careful research assistant",
+        description: "Research notes in /opt/research/notes",
         skills: ["notes"],
         model: { primary: "local/research", fallbacks: [] },
         subagents: { allowAgents: ["ambient", "missing"], delegationMode: "prefer" },
       });
       await fs.writeFile(configPath, JSON.stringify(initial));
       resetConfigRuntimeState();
-      const program = "# Program\nPreserve sources and distinguish claims from evidence.\n";
+      const program = "# Program\nRead /opt/research/notes and distinguish claims from evidence.\n";
       await fs.writeFile(path.join(workspace, "AGENTS.md"), program);
       await fs.writeFile(path.join(workspace, "USER.md"), "Personal owner biography");
       await fs.writeFile(path.join(workspace, "MEMORY.md"), "Personal long-term memory");
@@ -119,7 +119,7 @@ describe("portable agent templates", () => {
         wakeMode: "now",
         payload: {
           kind: "agentTurn",
-          message: "Review the sources",
+          message: "Review /opt/research/notes",
           model: "local/research",
           thinking: "low",
           timeoutSeconds: 30,
@@ -154,6 +154,11 @@ describe("portable agent templates", () => {
       await agentsExportCommand({ id: "source", out, json: true }, exported.runtime);
       expect(JSON.parse(exported.logs.join("\n"))).toMatchObject({
         automations: 1,
+        warnings: [
+          expect.stringMatching(/^manifest.json:\d+: absolute local path/),
+          expect.stringContaining("workspace/AGENTS.md:2: absolute local path"),
+          expect.stringMatching(/^automations.json:\d+: absolute local path/),
+        ],
         omissions: expect.arrayContaining([
           "USER.md not exported",
           "3 automation(s) skipped: unsupported payload for portable templates",
@@ -189,7 +194,7 @@ describe("portable agent templates", () => {
       expect(next.valid).toBe(true);
       expect(next.config.agents?.entries?.copy).toMatchObject({
         identity,
-        description: "A careful research assistant",
+        description: "Research notes in /opt/research/notes",
         skills: ["notes"],
         model: { primary: "local/research", fallbacks: [] },
         subagents: { allowAgents: ["ambient"], delegationMode: "prefer" },
@@ -213,7 +218,7 @@ describe("portable agent templates", () => {
         owner: { agentId: "copy" },
         sessionTarget: "isolated",
         delivery: { mode: "none" },
-        payload: { kind: "agentTurn", message: "Review the sources", timeoutSeconds: 30 },
+        payload: { kind: "agentTurn", message: "Review /opt/research/notes", timeoutSeconds: 30 },
       });
       expect(importedJobs[0]?.id).not.toBe(job.id);
     });
@@ -263,7 +268,12 @@ describe("portable agent templates", () => {
         /not empty/,
       );
       expect(await fs.readFile(path.join(out, "old.txt"), "utf8")).toBe("Prior output");
-      await agentsExportCommand({ id: "source", out, force: true }, runtime);
+      await fs.writeFile(path.join(workspace, "SOUL.md"), "Read /opt/research/notes\n");
+      const exported = createCapturingTestRuntime();
+      await agentsExportCommand({ id: "source", out, force: true }, exported.runtime);
+      expect(exported.logs).toContain(
+        "Review before sharing: workspace/SOUL.md:1: absolute local path; replace it with a relative path",
+      );
       expect(await fs.readdir(out)).toEqual(["manifest.json", "workspace"]);
       const { template } = await loadAgentTemplateBundle(out);
       expect(template.manifest.skills).toBeUndefined();
@@ -272,25 +282,23 @@ describe("portable agent templates", () => {
     });
   });
 
-  it("rejects secrets and local paths in decoded JSON before writing an imported agent", async () => {
+  it("rejects secrets in decoded JSON before writing an imported agent", async () => {
     await withState(async (directory, configPath) => {
       const { bundle, template } = await makeBundle(directory);
       const before = await fs.readFile(configPath, "utf8");
-      const key = ["sk", "proj", "a".repeat(40)].join("-");
-      for (const summary of [key, "Local instructions\n/private/work/notes"]) {
-        const serialized = JSON.stringify({ ...template.manifest, summary }).replace(
-          "sk-proj",
-          "\\u0073k-proj",
-        );
-        await fs.writeFile(path.join(bundle, "manifest.json"), serialized);
-        await expect(
-          agentsImportCommand(
-            { directory: bundle, id: "copy", nonInteractive: true },
-            createCapturingTestRuntime().runtime,
-          ),
-        ).rejects.toThrow(/probable secret|absolute local path/);
-        expect(await fs.readFile(configPath, "utf8")).toBe(before);
-      }
+      const summary = ["sk", "proj", "a".repeat(40)].join("-");
+      const serialized = JSON.stringify({ ...template.manifest, summary }).replace(
+        "sk-proj",
+        "\\u0073k-proj",
+      );
+      await fs.writeFile(path.join(bundle, "manifest.json"), serialized);
+      await expect(
+        agentsImportCommand(
+          { directory: bundle, id: "copy", nonInteractive: true },
+          createCapturingTestRuntime().runtime,
+        ),
+      ).rejects.toThrow(/probable secret/);
+      expect(await fs.readFile(configPath, "utf8")).toBe(before);
     });
   });
 
@@ -444,14 +452,18 @@ describe("portable agent templates", () => {
     { reference: "https://example.org/%2C/docs", portable: true },
     { reference: "_https://example.org/docs_", portable: true },
   ])("checks portability of embedded reference $reference", async ({ reference, portable }) => {
-    const directory = await tempDirs.make();
-    const { bundle } = await makeBundle(directory);
-    const content = `Read ${reference}\n`;
-    await fs.writeFile(path.join(bundle, "workspace", "AGENTS.md"), content);
-    if (portable) {
-      expect((await loadAgentTemplateBundle(bundle)).template.files["AGENTS.md"]).toBe(content);
-    } else {
-      await expect(loadAgentTemplateBundle(bundle)).rejects.toThrow(/absolute local path/);
-    }
+    await withState(async (directory) => {
+      const workspace = path.join(directory, "source");
+      await createAgent({ name: "source", role: "researcher", workspace });
+      const content = `Read ${reference}\n`;
+      await fs.writeFile(path.join(workspace, "AGENTS.md"), content);
+      const out = path.join(directory, "portable");
+      const { runtime, logs } = createCapturingTestRuntime();
+      await agentsExportCommand({ id: "source", out, json: true }, runtime);
+      expect(JSON.parse(logs.join("\n")).warnings).toEqual(
+        portable ? [] : [expect.stringContaining("workspace/AGENTS.md:1: absolute local path")],
+      );
+      expect(await fs.readFile(path.join(out, "workspace", "AGENTS.md"), "utf8")).toBe(content);
+    });
   });
 });

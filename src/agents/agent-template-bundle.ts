@@ -47,9 +47,10 @@ function bundleContents({ template, automations }: Bundle): Map<string, string> 
   return contents;
 }
 
-function assertPortableContents(contents: Map<string, string>): void {
+function checkPortableContents(contents: Map<string, string>): string[] {
   let total = 0;
   const problems: string[] = [];
+  const warnings: string[] = [];
   if (contents.size > AGENT_TEMPLATE_MAX_FILES) {
     throw new Error("Template exceeds 32 files.");
   }
@@ -64,7 +65,7 @@ function assertPortableContents(contents: Map<string, string>): void {
         problems.push(`${file}:${finding.line}: probable secret; remove it before exporting`);
       }
     }
-    // Portable programs cannot retain machine-local paths embedded in prose or JSON strings.
+    // Embedded paths need review before sharing, but do not prevent a round-trip.
     for (const [line, text] of content.split("\n").entries()) {
       const localText = text.replace(
         /(?<![\p{L}\p{M}\p{N}])(?!file:)[a-z][a-z\d+.-]{1,31}:\/\/[\p{L}\p{M}\p{N}.%:/?#=&-]+/giu,
@@ -75,13 +76,14 @@ function assertPortableContents(contents: Map<string, string>): void {
           localText,
         )
       ) {
-        problems.push(`${file}:${line + 1}: absolute local path; replace it with a relative path`);
+        warnings.push(`${file}:${line + 1}: absolute local path; replace it with a relative path`);
       }
     }
   }
   if (problems.length) {
     throw new Error(`Template is not portable:\n${problems.join("\n")}`);
   }
+  return warnings;
 }
 
 export async function loadAgentTemplateBundle(directory: string): Promise<Bundle> {
@@ -142,7 +144,7 @@ export async function loadAgentTemplateBundle(directory: string): Promise<Bundle
     automations = result.data;
   }
   const bundle = { template, automations };
-  assertPortableContents(bundleContents(bundle));
+  checkPortableContents(bundleContents(bundle));
   return bundle;
 }
 
@@ -192,7 +194,7 @@ export async function exportAgentTemplateBundle(
   );
   const { automations, omissions } = exportAgentTemplateAutomations(loaded.store.jobs, agentId);
   const contents = bundleContents({ template: { manifest, files }, automations });
-  assertPortableContents(contents);
+  const warnings = checkPortableContents(contents);
   await validateAgentTemplateAutomations(cfg, agentId, automations);
   const destination = resolveUserPath(out);
   // A forced export may replace its output directory, never the source or installation root.
@@ -256,6 +258,7 @@ export async function exportAgentTemplateBundle(
     out: output,
     files: [...contents.keys()],
     automations: automations.length,
+    warnings,
     omissions: [
       "USER.md not exported",
       "MEMORY.md and memory/ not exported",

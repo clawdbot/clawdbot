@@ -101,14 +101,17 @@ run history, and execution state are not transferred.
 
 Bundles are limited to 32 regular files including metadata, 256 KiB per file,
 and 2 MiB total. Version 1 accepts only the files in the directory layout above.
-Paths must be relative and contained in the bundle: absolute paths, `..`
-segments, symlinks, and unexpected files are rejected. Embedded absolute local
-paths are also refused to keep the template portable.
+Bundle file paths must be relative and contained in the bundle: absolute paths,
+`..` segments, symlinks, and unexpected files are rejected. Absolute local paths
+embedded in Markdown or JSON content are preserved by export and import. Export
+reports them with file and line in the summary: `Review before sharing:` lines
+in human output and a `warnings` array with `--json` (empty when none are found).
+Review these references and replace machine-specific paths before sharing.
 
 Path checks are conservative around prose punctuation. Use percent-encoded
 punctuation in a legitimate URL if it is mistaken for a local path.
 
-Export scans Markdown and JSON for probable secrets. A refusal identifies the
+Export and import scan Markdown and JSON for probable secrets. A refusal identifies the
 file and line without echoing the suspected value; remove it from the source and
 retry. There is no secret-check bypass. Pattern matching cannot prove the absence
 of sensitive content, so inspect the bundle before sharing it.

@@ -46,6 +46,9 @@ export async function agentsExportCommand(
   runtime.log(`Exported agent "${summary.agentId}" to ${summary.out}`);
   runtime.log(`Files: ${summary.files.join(", ")}`);
   runtime.log(`Automations: ${summary.automations}`);
+  for (const warning of summary.warnings) {
+    runtime.log(`Review before sharing: ${warning}`);
+  }
   runtime.log(`Omissions:\n${summary.omissions.map((line) => `- ${line}`).join("\n")}`);
 }
 
