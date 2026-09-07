@@ -12028,28 +12028,37 @@ describe("update-cli", () => {
 
   it("updateFinalizeCommand capability env applies only to the hidden finalizer", async () => {
     pathExists.mockResolvedValue(false);
-    await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE: "1" }, async () => {
-      const run = async (command: "repair" | "finalize") => {
-        vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
-        vi.mocked(defaultRuntime.writeJson).mockClear();
-        const program = new Command();
-        program.name("openclaw");
-        program.exitOverride();
-        registerUpdateCli(program);
-        await program.parseAsync(["node", "openclaw", "update", command, "--json", "--yes"]);
-        const output = lastWriteJsonCall() as
-          | { phaseTimings?: Array<{ phase?: string; outcome?: string }> }
-          | undefined;
-        return output?.phaseTimings?.at(-1);
-      };
+    // Option wiring needs an idle installation; earlier workflow cases retain parent runs.
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_STATE_DIR: tempDirs.make("openclaw-finalizer-options-"),
+      },
+      async () => {
+        const run = async (command: "repair" | "finalize") => {
+          vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
+            FRESH_POST_UPDATE_ENTRYPOINT,
+          );
+          vi.mocked(defaultRuntime.writeJson).mockClear();
+          const program = new Command();
+          program.name("openclaw");
+          program.exitOverride();
+          registerUpdateCli(program);
+          await program.parseAsync(["node", "openclaw", "update", command, "--json", "--yes"]);
+          const output = lastWriteJsonCall() as
+            | { phaseTimings?: Array<{ phase?: string; outcome?: string }> }
+            | undefined;
+          return output?.phaseTimings?.at(-1);
+        };
 
-      expect(await run("repair")).toEqual(
-        expect.objectContaining({ phase: "completionCache", outcome: "skipped" }),
-      );
-      expect(await run("finalize")).toEqual(
-        expect.objectContaining({ phase: "completionCache", outcome: "deferred" }),
-      );
-    });
+        expect(await run("repair"), getErrorOutput()).toEqual(
+          expect.objectContaining({ phase: "completionCache", outcome: "skipped" }),
+        );
+        expect(await run("finalize")).toEqual(
+          expect.objectContaining({ phase: "completionCache", outcome: "deferred" }),
+        );
+      },
+    );
   });
 
   it.each(
@@ -12067,21 +12076,25 @@ describe("update-cli", () => {
       program.exitOverride();
       registerUpdateCli(program);
 
-      await program.parseAsync([
-        "node",
-        "openclaw",
-        "update",
-        ...(position === "before" ? ["--accept-capabilities"] : []),
-        leaf,
-        ...(position === "after" ? ["--accept-capabilities"] : []),
-        "--json",
-        "--yes",
-      ]);
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-capability-options-") },
+        () =>
+          program.parseAsync([
+            "node",
+            "openclaw",
+            "update",
+            ...(position === "before" ? ["--accept-capabilities"] : []),
+            leaf,
+            ...(position === "after" ? ["--accept-capabilities"] : []),
+            "--json",
+            "--yes",
+          ]),
+      );
 
       const handler = syncPluginCall()?.onCapabilityConsent as
         | ((review: { reviewToken: string }) => Promise<{ reviewToken: string }>)
         | undefined;
-      expect(syncPluginsForUpdateChannel).toHaveBeenCalledOnce();
+      expect(syncPluginsForUpdateChannel, getErrorOutput()).toHaveBeenCalledOnce();
       expect(lastWriteJsonCall()).toMatchObject({ status: "ok", mode: "finalize" });
       if (position === "absent") {
         expect(handler).toBeUndefined();

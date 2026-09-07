@@ -91,6 +91,8 @@ const repositoryScriptEntries = [
   // systemd-sealed-service-definition.sh executes these via Node stdin and a container path.
   "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
   "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
+  // abandoned-update.sh invokes the upgrade ledger assertions through Node.
+  "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
   // Capture runs in the container; sanitization runs only on the trusted host.
   "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",

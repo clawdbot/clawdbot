@@ -46,6 +46,10 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 // This fixture proves lease ordering; process tests cover durable ledger writes.
 vi.mock("../../infra/update-run-ledger.js", () => ({
   createUpdateRun: vi.fn(() => ({ runId: "lease-order-fixture" })),
+  adoptUpdateRun: vi.fn(() => ({
+    origin: { driver: { host: "lease-order-fixture", pid: 1, startIdentity: "1" } },
+  })),
+  heartbeatUpdateRun: vi.fn(),
   recordUpdateRunStep: vi.fn(),
   finishUpdateRun: vi.fn(),
   recordUpdateRunDiagnostic: vi.fn(),

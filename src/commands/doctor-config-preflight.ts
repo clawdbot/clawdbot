@@ -120,7 +120,6 @@ export async function runDoctorConfigPreflight(
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
   const gatewayStartupCheckpointRequired = options.requireStartupMigrationCheckpoint === true;
-  noteStaleUpdateRuns({ gatewayStartup: gatewayStartupCheckpointRequired });
   // Startup publishes one aggregate report; ordinary Doctor calls keep their per-stage output.
   const migrationLog = gatewayStartupCheckpointRequired ? { info() {}, warn() {} } : undefined;
   if (gatewayStartupCheckpointRequired) {
@@ -134,6 +133,7 @@ export async function runDoctorConfigPreflight(
       env: process.env,
     });
   }
+  noteStaleUpdateRuns(options);
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
   const migrationCheckpointRequired =
