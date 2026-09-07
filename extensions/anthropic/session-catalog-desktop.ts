@@ -241,6 +241,7 @@ async function readDesktopMetadata(
 export type DesktopOverlay = Awaited<ReturnType<typeof readDesktopMetadata>>;
 type DesktopOverlayCacheEntry = {
   watch?: DirtyDirectoryWatch;
+  startingBudgetBytes: number | undefined;
   refreshedAt: number;
   refreshing: boolean;
   overlay: Promise<DesktopOverlay>;
@@ -318,8 +319,13 @@ export async function readDesktopOverlay(
   onIoFailure?: () => void,
 ): Promise<DesktopOverlay> {
   const entry = desktopOverlays.get(homeDir);
+  const startingBudgetBytes = budget?.remainingBytes;
   if (entry?.refreshing) {
     if (!forceRefresh) {
+      if (entry.startingBudgetBytes !== startingBudgetBytes) {
+        await entry.overlay;
+        return readDesktopOverlay(homeDir, true, budget, onIoFailure);
+      }
       const overlay = await entry.overlay;
       return replayDesktopReadStatus(overlay, budget, onIoFailure);
     }
@@ -332,6 +338,7 @@ export async function readDesktopOverlay(
   if (
     !forceRefresh &&
     entry &&
+    entry.startingBudgetBytes === startingBudgetBytes &&
     entry.refreshedAt + CLAUDE_DESKTOP_SCAN_TTL_MS > Date.now() &&
     !(dirty instanceof Set && dirty.size > 0)
   ) {
@@ -342,6 +349,7 @@ export async function readDesktopOverlay(
   const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir));
   const current: DesktopOverlayCacheEntry = {
     watch,
+    startingBudgetBytes,
     refreshedAt: Date.now(),
     refreshing: true,
     overlay: Promise.resolve(emptyDesktopOverlay),

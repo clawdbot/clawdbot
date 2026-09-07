@@ -286,6 +286,106 @@ describe("AppSidebar session catalog pagination", () => {
     },
   );
 
+  it("appends usable partial pages and advances their cursor", async () => {
+    vi.useFakeTimers();
+    try {
+      const partialPage = catalogPage([{ threadId: "thread-2", name: "Older" }], "page-3");
+      partialPage.catalogs[0]!.hosts[0]!.error = {
+        code: "LOCAL_CATALOG_PARTIAL",
+        message: "One metadata file was skipped",
+      };
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+        .mockResolvedValueOnce(partialPage)
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Oldest" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
+      expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-1", "thread-2"]);
+      expect(host?.nextCursor).toBe("page-3");
+      expect(host?.error?.message).toBe("One metadata file was skipped");
+      expect(sidebar.textContent).toContain("Older");
+
+      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.sessions).toHaveLength(3);
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.error).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("consumes usable partial pages during expanded refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const partialPage = catalogPage(
+        [{ threadId: "thread-2", name: "Older refreshed" }],
+        "page-3",
+      );
+      partialPage.catalogs[0]!.hosts[0]!.error = {
+        code: "LOCAL_CATALOG_PARTIAL",
+        message: "One metadata file was skipped",
+      };
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]))
+        .mockResolvedValueOnce(
+          catalogPage([{ threadId: "thread-1", name: "Newest refreshed" }], "page-2"),
+        )
+        .mockResolvedValueOnce(partialPage);
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await sidebar.updateComplete;
+      const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
+      expect(host?.sessions.map((session) => session.name)).toEqual([
+        "Newest refreshed",
+        "Older refreshed",
+      ]);
+      expect(host?.nextCursor).toBe("page-3");
+      expect(host?.error?.message).toBe("One metadata file was skipped");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   registerCatalogPageHostTests();
 
   it("discards a load-more response after a poll replaces its cursor", async () => {

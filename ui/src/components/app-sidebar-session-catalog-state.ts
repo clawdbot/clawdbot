@@ -23,6 +23,10 @@ function mergeCatalogSessionRows(
   return [...first, ...second.filter((session) => !seen.has(session.threadId))];
 }
 
+function hasUsableCatalogPage(host: SessionCatalogHost): boolean {
+  return !host.error || host.sessions.length > 0 || host.nextCursor !== undefined;
+}
+
 export function preserveExpandedCatalogHost(
   freshHost: SessionCatalogHost,
   previous: SessionCatalogHost | undefined,
@@ -52,11 +56,11 @@ export function mergeSessionCatalogPage(params: {
     if (requestedCursor === undefined || host.nextCursor !== requestedCursor || !pageHost) {
       return host;
     }
-    if (pageHost.error) {
+    if (!hasUsableCatalogPage(pageHost)) {
       return preserveExpandedCatalogHost(pageHost, host);
     }
     advancedHostIds.push(host.hostId);
-    const { nextCursor, sessions, error: _pageError, ...pageHostDetails } = pageHost;
+    const { nextCursor, sessions, ...pageHostDetails } = pageHost;
     const { nextCursor: _currentCursor, error: _currentError, ...currentHost } = host;
     return {
       ...currentHost,
@@ -101,11 +105,12 @@ export async function refetchExpandedSessionCatalogPages(params: {
             return host;
           }
           const previous = previousHosts.get(host.hostId);
-          if (host.error) {
+          if (!hasUsableCatalogPage(host)) {
             return preserveExpandedCatalogHost(host, previous);
           }
           let sessions = host.sessions;
           let nextCursor = host.nextCursor;
+          let hostError = host.error;
           for (let loadedPages = 0; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
             // Pausing automatic replay must retain the full visible window, not its partial prefix.
             if (!params.canRequestPage()) {
@@ -134,14 +139,22 @@ export async function refetchExpandedSessionCatalogPages(params: {
             if (!pageHost) {
               return previous ?? host;
             }
-            if (pageHost.error) {
+            if (!hasUsableCatalogPage(pageHost)) {
               return preserveExpandedCatalogHost({ ...host, ...pageHost }, previous ?? host);
             }
             sessions = mergeCatalogSessionRows(sessions, pageHost.sessions);
             nextCursor = pageHost.nextCursor;
+            if (pageHost.error) {
+              hostError = pageHost.error;
+            }
           }
           const { nextCursor: _cursor, sessions: _sessions, ...freshHost } = host;
-          return { ...freshHost, sessions, ...(nextCursor ? { nextCursor } : {}) };
+          return {
+            ...freshHost,
+            sessions,
+            ...(nextCursor ? { nextCursor } : {}),
+            ...(hostError ? { error: hostError } : {}),
+          };
         }),
       );
       return { ...catalog, hosts };
