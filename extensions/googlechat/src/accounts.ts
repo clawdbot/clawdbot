@@ -270,6 +270,7 @@ function isolateAccountCredentials(
   if (!Object.hasOwn(rawAccount, "serviceAccountFile")) {
     delete isolated.serviceAccountFile;
   }
+  // SAFETY: deleted fields are optional on GoogleChatAccountConfig, so the object is still well-formed.
   return isolated as GoogleChatAccountConfig;
 }
 
