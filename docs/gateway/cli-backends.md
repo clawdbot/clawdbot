@@ -398,6 +398,17 @@ omits the affected MCP server. A server whose restrictive catalog cannot be
 established is also omitted and reported instead of being passed through
 unfiltered.
 
+Every `claude-cli` run, restricted or not, is normalized to keep Claude Code's
+own memory surfaces out of the agent context OpenClaw composes. `--setting-sources
+user` excludes project and local _settings files_, and an appended
+`--settings {"autoMemoryEnabled":false,"claudeMdExcludes":[...]}` turns off the two
+mechanisms setting sources do not cover: `CLAUDE.md`/`CLAUDE.local.md`/`.claude/rules`
+loading and Claude Code's auto-memory. Those files address Claude Code as a coding
+assistant, so on this backend they would otherwise add instructions OpenClaw never
+composed and does not account for in its context budget. Supply your own
+`--settings` in the backend `args` to take ownership of the payload; OpenClaw then
+appends nothing.
+
 Restricted runs such as cron jobs with `toolsAllow` require an exact
 backend-owned translation. The bundled `claude-cli` backend disables Claude's
 native tools and user, project, and local customizations, including hooks,
