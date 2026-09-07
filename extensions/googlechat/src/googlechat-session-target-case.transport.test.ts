@@ -6,6 +6,14 @@
 // actually issued, not on a URL built by the test.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const loopback = vi.hoisted(() => ({ baseUrl: "" }));
@@ -27,19 +35,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../extensions/googlechat/src/auth.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../extensions/googlechat/src/auth.js")>()),
+vi.mock("./auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth.js")>()),
   getGoogleChatAccessToken: vi.fn(async () => "transport-proof-token"),
 }));
 
-import { googlechatPlugin } from "../extensions/googlechat/api.js";
-import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
-import type { OpenClawConfig } from "../src/config/config.js";
-import { upsertSessionEntryCore } from "../src/config/sessions/session-accessor.sqlite-entry.js";
-import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
-import { setActivePluginRegistry } from "../src/plugins/runtime.js";
-import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
-import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+import { googlechatPlugin } from "../api.js";
 
 const CANONICAL_SPACE = "spaces/AAQA1bC2dEf";
 const FOLDED_SPACE = "spaces/aaqa1bc2def";
@@ -50,7 +51,9 @@ let server: Server;
 beforeAll(async () => {
   server = createServer((request, response) => {
     const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("data", (chunk) => {
+      chunks.push(Buffer.from(chunk));
+    });
     request.on("end", () => {
       const path = request.url ?? "";
       requests.push({
@@ -68,7 +71,9 @@ beforeAll(async () => {
     });
   });
   await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
+    server.listen(0, "127.0.0.1", () => {
+      resolve();
+    });
   });
   loopback.baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -76,7 +81,9 @@ beforeAll(async () => {
 afterAll(async () => {
   setActivePluginRegistry(createTestRegistry([]));
   await new Promise<void>((resolve) => {
-    server.close(() => resolve());
+    server.close(() => {
+      resolve();
+    });
   });
 });
 
@@ -98,14 +105,19 @@ describe("session-derived Google Chat delivery", () => {
       } as OpenClawConfig;
 
       // The session recorded its canonical destination on the inbound turn.
-      await upsertSessionEntryCore({ agentId: "main", env: process.env, sessionKey: SESSION_KEY }, {
-        sessionId: "proof-session",
-        updatedAt: Date.now(),
-        delivery: {
-          kind: "external",
-          route: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
-          context: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
-          origin: { provider: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+      await upsertSessionEntry({
+        agentId: "main",
+        env: process.env,
+        sessionKey: SESSION_KEY,
+        entry: {
+          sessionId: "proof-session",
+          updatedAt: Date.now(),
+          delivery: {
+            kind: "external",
+            route: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+            context: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+            origin: { provider: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+          },
         },
       } as never);
 
@@ -119,36 +131,24 @@ describe("session-derived Google Chat delivery", () => {
 
       // The ambient surface is webchat; the destination exists only in the folded session
       // key and in the session's stored delivery metadata.
-      const tool = createMessageTool({
+      const tools = createOpenClawCodingTools({
         config,
         agentId: "main",
-        agentSessionKey: SESSION_KEY,
-        currentChannelProvider: "webchat",
+        sessionKey: SESSION_KEY,
+        messageProvider: "webchat",
         workspaceDir: state.workspaceDir,
-        runMessageAction,
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({
-          config: inputConfig,
-        }: {
-          config: OpenClawConfig;
-        }) => ({
-          resolvedConfig: inputConfig,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
       } as never);
+      const tool = tools.find((entry) => entry.name === "message");
+      expect(tool, "message tool present in the harness tool list").toBeDefined();
 
       // No explicit target: the tool must derive the destination from the session.
-      const result = await tool.execute("proof-1", {
+      await tool?.execute("proof-1", {
         action: "send",
         message: "session-derived reply",
       } as never);
 
       const sends = requests.filter((entry) => entry.method === "POST");
       expect(sends.length).toBeGreaterThan(0);
-      console.log("CAPTURED REQUESTS:", JSON.stringify(requests, null, 2));
-      console.log("TOOL RESULT:", JSON.stringify(result, null, 2));
       expect(sends[0]?.path).toBe(`/v1/${CANONICAL_SPACE}/messages`);
       expect(sends[0]?.path).not.toContain(FOLDED_SPACE);
     });
