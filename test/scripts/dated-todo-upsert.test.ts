@@ -38,7 +38,11 @@ function issue(number: number, options: { trusted: boolean; body?: string }) {
 function harness(
   searchItems: ReturnType<typeof issue>[],
   options: {
-    comments?: Array<{ body?: string; performed_via_github_app?: { id: number } }>;
+    comments?: Array<{
+      body?: string;
+      performed_via_github_app?: { id?: number; slug?: string };
+      user?: { login?: string; type?: string };
+    }>;
     commentError?: Error;
     searchError?: Error;
     searchResults?: ReturnType<typeof issue>[];
@@ -197,6 +201,39 @@ describe("dated TODO issue upsert", () => {
     const firstComment = first.calls.comment[0] as { body: string };
     const retry = harness([tracker], {
       comments: [{ body: firstComment.body, performed_via_github_app: { id: 2729701 } }],
+    });
+
+    await runDatedTodoUpsert({
+      github: retry.github,
+      context: { repo: { owner: "openclaw", repo: "openclaw" } },
+      core: retry.core,
+      report: REPORT,
+    });
+
+    expect(retry.calls.comment).toHaveLength(0);
+    expect(retry.calls.update).toHaveLength(1);
+  });
+
+  it("does not duplicate an urgent comment when the marker came from ClawSweeper", async () => {
+    const tracker = issue(10, {
+      trusted: true,
+      body: `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`,
+    });
+    const first = harness([tracker]);
+    await runDatedTodoUpsert({
+      github: first.github,
+      context: { repo: { owner: "openclaw", repo: "openclaw" } },
+      core: first.core,
+      report: REPORT,
+    });
+    const firstComment = first.calls.comment[0] as { body: string };
+    const retry = harness([tracker], {
+      comments: [
+        {
+          body: firstComment.body,
+          performed_via_github_app: { slug: "clawsweeper" },
+        },
+      ],
     });
 
     await runDatedTodoUpsert({

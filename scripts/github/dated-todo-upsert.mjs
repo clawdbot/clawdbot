@@ -2,12 +2,13 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isTrustedClawSweeperComment } from "./real-behavior-proof-policy.mjs";
 
 const MARKER = "<!-- dated-todo-sweep -->";
 const TITLE = "Dated TODO sweep";
 const TRACKER_LABEL = "dated-todo-sweep";
 const TRACKER_LABEL_COLOR = "5319e7";
-const BARNACLE_APP_IDS = new Set([2729701, 2971289]);
+const LEGACY_BARNACLE_APP_IDS = new Set([2729701, 2971289]);
 const REPORT_HEADINGS = ["## OVERDUE", "## DUE within 30 days", "## FUTURE"];
 const ITEM_PATTERN = /^- \[ \] (.+):([1-9]\d*) — (.+) \((20\d{2}-\d{2}-\d{2})\)$/u;
 const PLAIN_PATH_PATTERN = /^[\p{L}\p{N} ._+/-]+$/u;
@@ -18,6 +19,13 @@ const UNSAFE_UNDERSCORE_PATTERN = /(?:^|[^\p{L}\p{N}])_+|_+(?:$|[^\p{L}\p{N}])/u
 
 function labelName(label) {
   return typeof label === "string" ? label : label?.name;
+}
+
+function isTrustedDatedTodoNotificationComment(comment) {
+  if (LEGACY_BARNACLE_APP_IDS.has(comment?.performed_via_github_app?.id)) {
+    return true;
+  }
+  return isTrustedClawSweeperComment(comment);
 }
 
 function isTrustedTracker(issue) {
@@ -303,7 +311,7 @@ export async function runDatedTodoUpsert({
     if (
       !comments.some(
         (comment) =>
-          BARNACLE_APP_IDS.has(comment.performed_via_github_app?.id) &&
+          isTrustedDatedTodoNotificationComment(comment) &&
           comment.body?.includes(notificationMarker),
       )
     ) {

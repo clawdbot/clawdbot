@@ -20,6 +20,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
 
 jobs:
   analyze:
@@ -119,30 +120,23 @@ jobs:
         run: cat .artifacts/dated-todo-report.md
 
       # No permission-* subset here: requesting a permission the installation
-      # does not grant fails token minting outright. No inputs uses the app's
-      # full granted set, matching the proven Barnacle fallback workflow.
-      - name: Create Barnacle app token
+      # does not grant fails token minting outright. This sweep now uses the
+      # canonical ClawSweeper app credentials instead of legacy Barnacle secrets.
+      - name: Create ClawSweeper app token
         if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
         id: app-token
-        continue-on-error: true
         with:
-          app-id: "2729701"
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-
-      - name: Create fallback Barnacle app token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
-        id: app-token-fallback
-        if: (github.event_name != 'workflow_dispatch' || !inputs.dry_run) && steps.app-token.outcome == 'failure'
-        with:
-          app-id: "2971289"
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
 
       - name: Upsert dated TODO tracking issue
         if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const { pathToFileURL } = require("node:url");
             const moduleUrl = pathToFileURL(

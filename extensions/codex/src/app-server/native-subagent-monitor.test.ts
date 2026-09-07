@@ -175,12 +175,14 @@ function registerParent(
   monitor: CodexNativeSubagentMonitorInstance,
   parentThreadId = "parent-thread",
   requesterSessionKey = "agent:main:discord:channel:C123",
+  options: { isTurnYielded?: () => boolean } = {},
 ) {
   return monitor.registerParent({
     parentThreadId,
     requesterSessionKey,
     taskRuntimeScope: createTaskScope(requesterSessionKey),
     agentId: "main",
+    ...options,
   });
 }
 
@@ -651,6 +653,31 @@ describe("CodexNativeSubagentMonitor", () => {
         client.close();
       },
     );
+
+    it("delivers a completion observed after the parent yielded during teardown", async () => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+      const owner = registerParent(monitor, "parent-thread", "agent:main:discord:channel:C123", {
+        isTurnYielded: () => true,
+      });
+      owner.bindTurn("parent-turn");
+      await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+
+      try {
+        await client.notify(deliveredNativeCompletion());
+        await client.notify(completedChild());
+        expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+
+        owner.unregister();
+        await vi.waitFor(() =>
+          expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce(),
+        );
+      } finally {
+        owner.unregister();
+        client.close();
+      }
+    });
 
     it.each(["other-turn", "other-lineage"])(
       "does not acknowledge recovered delivery from %s",

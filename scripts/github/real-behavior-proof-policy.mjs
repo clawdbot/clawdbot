@@ -410,7 +410,7 @@ function extractMarkerField(marker, name) {
   return match?.[1] ?? "";
 }
 
-function isTrustedClawSweeperComment(comment) {
+export function isTrustedClawSweeperComment(comment) {
   const appSlug = String(
     comment?.performed_via_github_app?.slug ?? comment?.performedViaGithubApp?.slug ?? "",
   ).toLowerCase();

@@ -214,6 +214,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       requesterSessionKey: params.sessionKey,
       taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
       agentId: sessionAgentId,
+      isTurnYielded: () => attemptTools.toolState.yieldDetected,
       retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
       retainParentThread: (protectedThreadId) =>
         protectCodexAppServerLiveThread(state.client, protectedThreadId),

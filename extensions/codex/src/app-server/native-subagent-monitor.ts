@@ -58,6 +58,7 @@ type NativeSubagentMonitorClient = Pick<
 
 type ParentOwner = {
   turnId?: string;
+  isTurnYielded?: () => boolean;
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
   rejectPendingDirectChild?: (threadId: string, reason: string) => void;
   onDirectChildAccepted?: () => void;
@@ -200,6 +201,7 @@ function registerMonitor(params: {
   taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   agentId?: string;
   runtime?: NativeSubagentMonitorRuntime;
+  isTurnYielded?: () => boolean;
   retainClient?: () => (() => void) | undefined;
   retainParentThread?: (threadId: string) => (() => void) | undefined;
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
@@ -268,6 +270,7 @@ function registerMonitor(params: {
     requesterSessionKey: params.requesterSessionKey,
     taskRuntimeScope: params.taskRuntimeScope,
     agentId: params.agentId,
+    isTurnYielded: params.isTurnYielded,
     claimDirectChild: params.claimDirectChild,
     rejectPendingDirectChild: params.rejectPendingDirectChild,
     onDirectChildAccepted: params.onDirectChildAccepted,
@@ -373,6 +376,7 @@ class Monitor {
     requesterSessionKey?: string;
     taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
     agentId?: string;
+    isTurnYielded?: () => boolean;
     claimDirectChild?: (threadId: string) => (() => void) | undefined;
     rejectPendingDirectChild?: (threadId: string, reason: string) => void;
     onDirectChildAccepted?: () => void;
@@ -406,6 +410,7 @@ class Monitor {
     state.agentId ??= params.agentId;
     const owner = Symbol("codex-native-subagent-owner");
     state.owners.set(owner, {
+      isTurnYielded: params.isTurnYielded,
       claimDirectChild: params.claimDirectChild,
       rejectPendingDirectChild: params.rejectPendingDirectChild,
       onDirectChildAccepted: params.onDirectChildAccepted,
@@ -571,7 +576,12 @@ class Monitor {
       }
       this.resumeChild(childState);
     }
-    if (parent && parent.turnIds.has(readString(params, "turnId") ?? "")) {
+    const parentTurnId = readString(params, "turnId")?.trim() ?? "";
+    const parentOwner = parent ? this.resolveParentOwner(parent, parentTurnId) : undefined;
+    // A yielded turn can still own the monitor during async teardown. Codex
+    // queues its receipt in the dormant transcript; it was not consumed by a
+    // parent model turn, so leave the child eligible for detached delivery.
+    if (parent && parent.turnIds.has(parentTurnId) && parentOwner?.isTurnYielded?.() !== true) {
       this.recordNativeCompletionDelivery(parent, notification);
     }
     if (childState && !childState.terminal) {
