@@ -290,7 +290,7 @@ function normalizeManifestLane(value: unknown): QaConfidenceManifestLane {
   };
 }
 
-function normalizeQaConfidenceManifest(value: unknown): QaConfidenceManifest {
+export function normalizeQaConfidenceManifest(value: unknown): QaConfidenceManifest {
   if (!isRecord(value)) {
     throw new Error("confidence manifest must be an object");
   }
@@ -803,6 +803,14 @@ async function evaluateLane(
     }
     return resultForMissingLane(lane, artifactPath);
   }
+  return evaluateCapturedLane(lane, artifactPath, payload);
+}
+
+function evaluateCapturedLane(
+  lane: QaConfidenceManifestLane,
+  artifactPath: string,
+  payload: unknown,
+): QaConfidenceLaneResult {
   const evaluated = evaluateLaneArtifact(lane, payload);
   if (!evaluated.passed) {
     return {
@@ -887,7 +895,48 @@ export async function buildQaConfidenceReport(params: {
   for (const lane of params.manifest.lanes) {
     evaluatedLanes.push(await evaluateLane(lane, params.artifactRoot));
   }
-  const lanes = applySkipBackfillState(evaluatedLanes);
+  return summarizeQaConfidenceReport({ ...params, evaluatedLanes });
+}
+
+/** Classify captured bytes without consulting the producer's filesystem. */
+export function buildQaConfidenceReportFromArtifacts(params: {
+  manifest: QaConfidenceManifest;
+  artifacts: ReadonlyMap<string, Buffer | null>;
+  generatedAt: string;
+  strictZeroUnknowns?: boolean;
+  strictGlobalPass?: boolean;
+}): QaConfidenceReport {
+  const evaluatedLanes = params.manifest.lanes.map((lane) => {
+    const bytes = params.artifacts.get(lane.artifact);
+    if (bytes === undefined) {
+      throw new Error(`confidence bundle missing artifact entry: ${lane.artifact}`);
+    }
+    if (bytes === null) {
+      return resultForMissingLane(lane, lane.artifact);
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(bytes.toString("utf8")) as unknown;
+    } catch {
+      return {
+        ...baseLaneResult(lane, lane.artifact),
+        status: "unknown" as const,
+        details: "captured artifact is not valid JSON",
+      };
+    }
+    return evaluateCapturedLane(lane, lane.artifact, payload);
+  });
+  return summarizeQaConfidenceReport({ ...params, evaluatedLanes });
+}
+
+function summarizeQaConfidenceReport(params: {
+  manifest: QaConfidenceManifest;
+  evaluatedLanes: QaConfidenceLaneResult[];
+  generatedAt?: string;
+  strictZeroUnknowns?: boolean;
+  strictGlobalPass?: boolean;
+}): QaConfidenceReport {
+  const lanes = applySkipBackfillState(params.evaluatedLanes);
   const requiredLanes = lanes.filter((lane) => lane.required);
   const counts = countLaneResults(requiredLanes);
   const unclassifiedFailures = failuresForLaneResults(requiredLanes);
