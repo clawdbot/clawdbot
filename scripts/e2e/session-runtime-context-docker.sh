@@ -26,6 +26,7 @@ set +e
 docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e "OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE=$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE" \
   -e "OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE=$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" \
   "$IMAGE_NAME" \
   bash -lc 'set -euo pipefail; tsx scripts/e2e/session-runtime-context-docker-client.ts' \

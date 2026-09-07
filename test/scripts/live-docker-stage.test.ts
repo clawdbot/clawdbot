@@ -392,11 +392,16 @@ export function parseRegistryNpmSpec(spec: string) {
   it("derives frozen harness capabilities only from an authorized selected source", () => {
     const root = tempDirs.make("openclaw-frozen-target-core-dialects-");
     mkdirSync(path.join(root, "src/agents"), { recursive: true });
+    mkdirSync(path.join(root, "src/agents/embedded-agent-runner/run"), { recursive: true });
     mkdirSync(path.join(root, "src/commands"), { recursive: true });
     mkdirSync(path.join(root, "scripts"), { recursive: true });
     writeFileSync(
       path.join(root, "src/agents/code-mode-namespaces.ts"),
       'export const globals = ["ALL_TOOLS"];\n',
+    );
+    writeFileSync(
+      path.join(root, "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts"),
+      "import { extractInternalRuntimeContext } from '../../internal-runtime-context.js';\ntype Params = {\n  modelPrompt?: string;\n};\n",
     );
     writeFileSync(
       path.join(root, "src/commands/doctor-session-transcripts.ts"),
@@ -417,7 +422,7 @@ export function parseRegistryNpmSpec(spec: string) {
     }).trim();
     const resolveCoreDialects = [
       "-c",
-      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s %s %s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE"',
+      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s %s %s %s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE"',
       "test",
       stageScriptPath,
       root,
@@ -432,7 +437,7 @@ export function parseRegistryNpmSpec(spec: string) {
     });
 
     expect(strictResult.status, strictResult.stderr).toBe(0);
-    expect(strictResult.stdout.trim()).toBe("sqlite current current");
+    expect(strictResult.stdout.trim()).toBe("sqlite current current producer-fragments");
 
     const result = spawnSync("bash", resolveCoreDialects, {
       encoding: "utf8",
@@ -445,7 +450,72 @@ export function parseRegistryNpmSpec(spec: string) {
     });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("jsonl legacy legacy");
+    expect(result.stdout.trim()).toBe("jsonl legacy legacy legacy-marked-prompt");
+  });
+
+  it.each([
+    {
+      name: "producer fragments",
+      source:
+        "type Params = {\n  fragments?: RuntimeContextFragment[];\n};\nconst fragments = params.fragments?.filter(Boolean);\n",
+      expected: "producer-fragments",
+    },
+    {
+      name: "mixed producer and marker extraction",
+      source:
+        "import { extractInternalRuntimeContext } from '../../internal-runtime-context.js';\ntype Params = {\n  fragments?: RuntimeContextFragment[];\n  modelPrompt?: string;\n};\nconst fragments = params.fragments?.filter(Boolean);\n",
+      error: "unable to resolve frozen runtime-context input contract",
+    },
+    {
+      name: "unknown shape",
+      source: "export const runtimeContext = true;\n",
+      error: "unable to resolve frozen runtime-context input contract",
+    },
+  ])("classifies $name from the selected source", ({ source, expected, error }) => {
+    const root = tempDirs.make("openclaw-frozen-target-runtime-context-");
+    const sourcePath = path.join(
+      root,
+      "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
+    );
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, source);
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: root });
+    const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; printf "%s\\n" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE"',
+        "test",
+        stageScriptPath,
+        root,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_SELECTED_SHA: selectedSha,
+          OPENCLAW_TOOLING_SHA: "b".repeat(40),
+        },
+      },
+    );
+
+    if (expected) {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(expected);
+      return;
+    }
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(error);
   });
 
   it.each([

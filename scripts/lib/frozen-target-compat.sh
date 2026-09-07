@@ -110,6 +110,7 @@ openclaw_resolve_frozen_core_harness_capabilities() {
     OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE="current" \
     OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE="current" \
     OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE="current" \
+    OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE="producer-fragments" \
     OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE="sqlite"
 
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
@@ -140,6 +141,27 @@ openclaw_resolve_frozen_core_harness_capabilities() {
     openclaw_frozen_target_source_contains "$source_root" src/commands/doctor-session-transcripts.ts '.pre-doctor-branch-repair-'; then
     export OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE="jsonl"
   fi
+
+  local runtime_context_path="src/agents/embedded-agent-runner/run/runtime-context-prompt.ts"
+  local has_legacy_runtime_context=0 has_producer_runtime_context=0
+  if openclaw_frozen_target_source_contains "$source_root" "$runtime_context_path" 'extractInternalRuntimeContext' &&
+    openclaw_frozen_target_source_contains "$source_root" "$runtime_context_path" 'modelPrompt?: string;'; then
+    has_legacy_runtime_context=1
+  fi
+  if openclaw_frozen_target_source_contains "$source_root" "$runtime_context_path" 'fragments?: RuntimeContextFragment[];' &&
+    openclaw_frozen_target_source_contains "$source_root" "$runtime_context_path" 'const fragments = params.fragments?.filter'; then
+    has_producer_runtime_context=1
+  fi
+  case "$has_producer_runtime_context:$has_legacy_runtime_context" in
+    1:0) ;;
+    0:1)
+      export OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE="legacy-marked-prompt"
+      ;;
+    *)
+      echo "unable to resolve frozen runtime-context input contract from selected source" >&2
+      return 2
+      ;;
+  esac
 
   # The selected release exposes ALL_TOOLS to code mode but predates the
   # catalog global. Its fixture must use the global the package actually ships.

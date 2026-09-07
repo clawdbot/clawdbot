@@ -68,11 +68,27 @@ async function readJsonl(filePath: string): Promise<TranscriptEntry[]> {
 
 async function verifyRuntimeContextTranscriptShape() {
   const sessionManager = SessionManager.inMemory();
+  const inputMode =
+    process.env.OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE ?? "producer-fragments";
+  assert(
+    inputMode === "producer-fragments" || inputMode === "legacy-marked-prompt",
+    `invalid runtime-context input mode: ${inputMode}`,
+  );
   const fragments = [{ kind: "conversation-data" as const, text: "secret docker context" }];
+  const effectivePrompt =
+    inputMode === "legacy-marked-prompt"
+      ? [
+          "visible ask",
+          "",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "secret docker context",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n")
+      : "visible ask";
   const promptSubmission = resolveRuntimeContextPromptParts({
-    effectivePrompt: "visible ask",
+    effectivePrompt,
     transcriptPrompt: "visible ask",
-    fragments,
+    ...(inputMode === "producer-fragments" ? { fragments } : {}),
   });
 
   assert(promptSubmission.prompt === "visible ask", "visible prompt was not preserved");
@@ -83,7 +99,7 @@ async function verifyRuntimeContextTranscriptShape() {
 
   const runtimeContextMessage = buildRuntimeContextCustomMessage(
     promptSubmission.runtimeContext,
-    fragments,
+    inputMode === "producer-fragments" ? fragments : undefined,
   );
   assert(runtimeContextMessage, "runtime custom message was not built");
   sessionManager.appendMessage({
@@ -318,7 +334,9 @@ async function main() {
   try {
     await verifyRuntimeContextTranscriptShape();
     await verifyDoctorRepair(root);
-    console.log("session runtime context Docker E2E passed");
+    console.log(
+      `session runtime context Docker E2E passed (${process.env.OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE ?? "producer-fragments"})`,
+    );
   } finally {
     if (process.env.OPENCLAW_SESSION_RUNTIME_CONTEXT_KEEP_ARTIFACTS !== "1") {
       await fs.rm(root, { recursive: true, force: true });
