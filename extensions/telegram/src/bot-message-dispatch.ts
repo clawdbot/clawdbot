@@ -388,6 +388,7 @@ export const dispatchTelegramMessage = async (
     // ingress watchdog. Never enter the reply pipeline after that owner has
     // already fenced this attempt; the canonical spool row will retry it.
     if (isDispatchSuperseded()) {
+      status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
       return { kind: "completed" };
     }
     if (status.controller && !isRoomEvent) {
