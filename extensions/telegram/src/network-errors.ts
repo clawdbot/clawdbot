@@ -16,8 +16,8 @@ const TELEGRAM_SUPERGROUP_MIGRATION_DESCRIPTION =
   "Bad Request: group chat was upgraded to a supergroup chat";
 
 export class TelegramRequestNotStartedError extends Error {
-  constructor(message = "Telegram request did not start") {
-    super(message);
+  constructor(message = "Telegram request did not start", options?: ErrorOptions) {
+    super(message, options);
     this.name = "TelegramRequestNotStartedError";
   }
 }

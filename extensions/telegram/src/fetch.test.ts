@@ -1345,4 +1345,94 @@ describe("resolveTelegramFetch", () => {
     });
   });
 });
+
+describe("resolveTelegramTransport proxy tunnel failures", () => {
+  function buildProxyTunnelRejection(statusCode: number) {
+    const tunnelError = Object.assign(
+      new Error(`Proxy response (${statusCode}) !== 200 when HTTP Tunneling`),
+      { name: "AbortError", code: "UND_ERR_ABORTED" },
+    );
+    return Object.assign(new TypeError("fetch failed"), { cause: tunnelError });
+  }
+
+  async function captureTransportError(
+    transport: ReturnType<typeof resolveTelegramTransport>,
+  ): Promise<unknown> {
+    try {
+      await transport.fetch("https://api.telegram.org/botTOKEN/sendMessage");
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected the Telegram transport fetch to reject");
+  }
+
+  it("marks a CONNECT refused by the explicit proxy as request-not-started", async () => {
+    vi.stubEnv("OPENCLAW_PROXY_URL", "http://127.0.0.1:7788");
+    const rejection = buildProxyTunnelRejection(503);
+    undiciFetch.mockRejectedValue(rejection);
+
+    const transport = resolveTelegramTransport(undefined, {
+      network: { autoSelectFamily: false, dnsResultOrder: "ipv4first" },
+    });
+    const caught = await captureTransportError(transport);
+
+    expect(caught).toBeInstanceOf(TelegramRequestNotStartedError);
+    expect((caught as Error).message).toContain("503");
+    expect((caught as Error).cause).toBe(rejection);
+    expect(isSafeToRetrySendError(caught)).toBe(true);
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks a proxy connection failure while opening the tunnel as request-not-started", async () => {
+    vi.stubEnv("OPENCLAW_PROXY_URL", "http://127.0.0.1:7788");
+    const rejection = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("Proxy Connection failed"), {
+        name: "ProxyConnectionError",
+        code: "UND_ERR_PRX_CONN",
+      }),
+    });
+    undiciFetch.mockRejectedValue(rejection);
+
+    const transport = resolveTelegramTransport(undefined, {
+      network: { autoSelectFamily: false, dnsResultOrder: "ipv4first" },
+    });
+    const caught = await captureTransportError(transport);
+
+    expect(caught).toBeInstanceOf(TelegramRequestNotStartedError);
+    expect((caught as Error).cause).toBe(rejection);
+    expect(isSafeToRetrySendError(caught)).toBe(true);
+  });
+
+  it("keeps a generic abort on the explicit proxy dispatcher ambiguous", async () => {
+    vi.stubEnv("OPENCLAW_PROXY_URL", "http://127.0.0.1:7788");
+    const rejection = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("Request aborted"), {
+        name: "AbortError",
+        code: "UND_ERR_ABORTED",
+      }),
+    });
+    undiciFetch.mockRejectedValue(rejection);
+
+    const transport = resolveTelegramTransport(undefined, {
+      network: { autoSelectFamily: false, dnsResultOrder: "ipv4first" },
+    });
+    const caught = await captureTransportError(transport);
+
+    expect(caught).toBe(rejection);
+    expect(isSafeToRetrySendError(caught)).toBe(false);
+  });
+
+  it("does not claim a tunnel refusal for a direct dispatcher", async () => {
+    const rejection = buildProxyTunnelRejection(503);
+    undiciFetch.mockRejectedValue(rejection);
+
+    const transport = resolveTelegramTransport(undefined, {
+      network: { autoSelectFamily: false, dnsResultOrder: "ipv4first" },
+    });
+    const caught = await captureTransportError(transport);
+
+    expect(caught).toBe(rejection);
+    expect(isSafeToRetrySendError(caught)).toBe(false);
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
