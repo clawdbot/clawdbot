@@ -1411,7 +1411,10 @@ describe("infra runtime", () => {
       }
     });
 
-    it("emits SIGUSR1 if deferral check throws", async () => {
+    // #12970 emitted SIGUSR1 here, treating a thrown check as proof of idleness. A throw
+    // means pending work is UNKNOWN, so that could cut live work. The bounded deferral
+    // budget is now the only authorized escape, which the second half asserts still lands.
+    it("defers instead of emitting SIGUSR1 when the deferral check throws", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
       process.on("SIGUSR1", handler);
@@ -1421,6 +1424,10 @@ describe("infra runtime", () => {
         });
         scheduleGatewaySigusr1Restart({ delayMs: 0 });
         await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        // The check never recovers, so the restart must still land through the budget.
+        await vi.advanceTimersByTimeAsync(300_000);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
       } finally {
         process.removeListener("SIGUSR1", handler);

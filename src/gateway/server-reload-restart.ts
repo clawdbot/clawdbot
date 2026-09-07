@@ -455,6 +455,11 @@ class GatewayRestartTransaction {
       }
 
       let failedEmission: { reason: string; intent?: GatewayRestartIntent } | undefined;
+      // A deferral that timed out is still live (it keeps polling to retry a rejected forced
+      // emission), so replacing the field without cancelling would orphan that poll exactly
+      // the way nulling the handle in onTimeout used to. Cancel before reassigning: one
+      // coordinator owns at most one live deferral at a time.
+      this.restartDeferral?.cancel();
       this.restartDeferral = deferGatewayRestartUntilIdle({
         getPendingCount: () => this.options.getActiveCounts().totalActive,
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(undefined),
@@ -509,17 +514,25 @@ class GatewayRestartTransaction {
             );
           },
           onTimeout: (_pending, elapsedMs) => {
+            // restartPending clears so a later config change can supersede this one, but the
+            // handle is deliberately RETAINED: unlike onReady, the timeout is NOT terminal —
+            // the deferral keeps polling past the deadline so a forced emission that rejects
+            // is retried. Nulling it here left that live poll owned by nobody, so neither
+            // supersedeRequest() nor shutdown could cancel it and it kept invoking stale
+            // restart preparation. Ownership ends at cancel(), not at this notification.
             this.restartPending = false;
-            this.restartDeferral = null;
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("still active")}; forcing restart`,
             );
           },
+          // Non-terminal, like onStillPending and onTimeout: a failed check leaves pending
+          // work unknown and the deferral keeps polling, so ownership must survive here.
+          // Clearing restartDeferral would strand a live deferral that nothing can cancel
+          // or supersede. Only onReady is terminal, because only it means the restart was
+          // actually delivered.
           onCheckError: (err) => {
-            this.restartPending = false;
-            this.restartDeferral = null;
             params.logReload.warn(
-              `restart deferral check failed (${String(err)}); restarting gateway now`,
+              `restart deferral check failed (${String(err)}); pending work is unknown, deferring and retrying`,
             );
           },
         },

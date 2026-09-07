@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as restartModule from "../infra/restart.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { nextGatewayReloadGeneration } from "./server-reload-generation.js";
 import { createGatewayRestartCoordinator } from "./server-reload-restart.js";
@@ -75,6 +76,56 @@ describe("gateway restart readiness preflight", () => {
       expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
       expect(requestRecoveryRestart).toHaveBeenCalledOnce();
     } finally {
+      coordinator.stopRestartRetries();
+    }
+  });
+
+  // ClawSweeper #118053: the timeout deliberately leaves the deferral polling so a forced
+  // emission that rejects is retried, but onTimeout also nulled `restartDeferral` — so the
+  // live poll was owned by nobody and neither supersession nor shutdown could reach cancel().
+  // A direct probe confirms cancel() is load-bearing: on a timed-out deferral whose emission
+  // keeps throwing, cancel() takes it from ~8 retries/window to 0.
+  it("keeps the timed-out deferral cancellable so a later request can supersede it", async () => {
+    const cancel = vi.fn();
+    const deferSpy = vi.spyOn(restartModule, "deferGatewayRestartUntilIdle");
+    let capturedHooks: { onTimeout?: (pending: number, elapsedMs: number) => void } | undefined;
+    deferSpy.mockImplementation(
+      (opts: Parameters<typeof restartModule.deferGatewayRestartUntilIdle>[0]) => {
+        capturedHooks = opts.hooks;
+        return { cancel };
+      },
+    );
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const activeCounts = { ...zeroActiveCounts, totalActive: 1, activeTasks: 1 };
+    const coordinator = createGatewayRestartCoordinator({
+      params: { assertRestartReady: vi.fn(), logReload, requestRecoveryRestart: vi.fn() },
+      myGeneration: nextGatewayReloadGeneration(),
+      restartRecoveryAvailable: true,
+      getActiveCounts: () => activeCounts,
+      formatActiveDetails: () => [],
+      formatDeferredWorkStatus: () => "1 active task",
+      formatTaskBlockers: () => null,
+    });
+
+    try {
+      coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig, {
+        prepareRuntimeConfig: async () => ({}) as OpenClawConfig,
+      });
+      expect(deferSpy).toHaveBeenCalledOnce();
+
+      // The deadline passes. The deferral is NOT finished — it keeps polling to retry a
+      // rejected forced emission — so the coordinator must retain its handle.
+      capturedHooks?.onTimeout?.(1, 300_000);
+
+      // A later config change supersedes the timed-out request. If onTimeout dropped the
+      // handle, this cancel never reaches the still-live poll.
+      coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig, {
+        prepareRuntimeConfig: async () => ({}) as OpenClawConfig,
+      });
+
+      expect(cancel).toHaveBeenCalled();
+    } finally {
+      deferSpy.mockRestore();
       coordinator.stopRestartRetries();
     }
   });

@@ -694,9 +694,22 @@ export function deferGatewayRestartUntilIdle(opts: {
       ? Math.max(pollMs, Math.floor(opts.maxWaitMs))
       : undefined;
 
+  // How long a preparation may run before a post-deadline tick may supersede it. Poll
+  // cadence is NOT a preparation deadline: a beforeEmit that legitimately runs longer than
+  // one interval (a config reload awaiting prepareRuntimeConfig easily exceeds the 500 ms
+  // production poll) would then be replaced on every tick, thrashing fresh preparations
+  // forever without ever emitting. Reusing the deferral's own budget keeps the takeover
+  // strictly slower than the patience the caller already declared, so a hung preparation
+  // stays bounded while a slow one still gets to finish.
+  const preparationBudgetMs = Math.max(pollMs, maxWaitMs ?? 0);
+
   let cancelled = false;
   let attemptingEmission = false;
+  // When the in-flight attempt began, so the takeover can tell a hung preparation from a
+  // slow one.
+  let emissionStartedAt = 0;
   let cancelEmissionFence: (() => void) | null = null;
+  let timedOutNotified = false;
   let poll: ReturnType<typeof setInterval> | null = null;
   const stopPoll = () => {
     if (!poll) {
@@ -715,6 +728,24 @@ export function deferGatewayRestartUntilIdle(opts: {
   const handle = { cancel };
   const startedAt = Date.now();
   let nextStillPendingAt = startedAt + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
+  // Last count an inspection actually returned. A failed inspection leaves the real count
+  // unknown, so hooks that must report a number reuse this instead of inventing one.
+  let lastKnownPending = 0;
+  // An inspection failure means active work is UNKNOWN, not absent. Returning undefined
+  // instead of emitting keeps the deferral alive, so the bounded maxWaitMs timeout stays
+  // the only authorized escalation rather than a probe crash restarting live work.
+  const readPendingCount = (): number | undefined => {
+    try {
+      lastKnownPending = opts.getPendingCount();
+      return lastKnownPending;
+    } catch (err) {
+      opts.hooks?.onCheckError?.(err);
+      return undefined;
+    }
+  };
+  // Tags each attempt so a stale settlement — from a preparation superseded at the
+  // timeout below — becomes a no-op instead of clobbering the attempt that replaced it.
+  let emissionAttemptSeq = 0;
   const attemptEmission = (params: {
     intent?: GatewayRestartIntent;
     notifyReady: boolean;
@@ -724,16 +755,32 @@ export function deferGatewayRestartUntilIdle(opts: {
       return;
     }
     attemptingEmission = true;
+    emissionStartedAt = Date.now();
+    const attemptSeq = ++emissionAttemptSeq;
+    const isStillCurrentAttempt = () => attemptSeq === emissionAttemptSeq;
     void emitPreparedGatewayRestart(
       opts.emitHooks,
       opts.reason,
       params.intent,
-      params.skipIdleCheck ? undefined : () => opts.getPendingCount() <= 0,
+      // Routed through readPendingCount so a throw on this final admission-time read reads
+      // as unknown rather than idle: canEmit stays false and the poll retries, instead of
+      // rejecting into the catch below and re-emitting with no idle check at all.
+      params.skipIdleCheck
+        ? undefined
+        : () => {
+            const current = readPendingCount();
+            return current !== undefined && current <= 0;
+          },
       (rollback) => {
-        cancelEmissionFence = rollback;
+        if (isStillCurrentAttempt()) {
+          cancelEmissionFence = rollback;
+        }
       },
     )
       .then((attempted) => {
+        if (!isStillCurrentAttempt()) {
+          return;
+        }
         attemptingEmission = false;
         // Successful delivery clears the cancel hook after the fence is owned by
         // the run loop. Failed attempts already reopened via emitPrepared finally.
@@ -747,42 +794,74 @@ export function deferGatewayRestartUntilIdle(opts: {
         }
       })
       .catch((err: unknown) => {
+        if (!isStillCurrentAttempt()) {
+          return;
+        }
         attemptingEmission = false;
         // Invoke before clearing: a thrown emission must reopen the fence even
         // when emitPreparedGatewayRestart's finally did not run (for example a
         // rejection from the independent-root wrapper after cancel raced).
         cancelEmissionFence?.();
         cancelEmissionFence = null;
-        stopPoll();
+        // A rejected emission is no more evidence of idleness than a failed probe read.
+        // Re-emitting here bypassed the idle check entirely, and stopping the poll left
+        // the deferral dead; both also contradicted onCheckError, which is non-terminal.
+        // Keep polling so the next interval retries through the idle-checked path and the
+        // bounded budget still escalates if the emission never succeeds.
         opts.hooks?.onCheckError?.(err);
-        void emitPreparedGatewayRestart(opts.emitHooks, opts.reason, params.intent);
       });
   };
   const inspectPending = () => {
     if (cancelled) {
       return;
     }
-    let current: number;
-    try {
-      current = opts.getPendingCount();
-    } catch (err) {
-      stopPoll();
-      opts.hooks?.onCheckError?.(err);
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-      return;
-    }
-    if (current <= 0) {
+    const current = readPendingCount();
+    const elapsedMs = Date.now() - startedAt;
+    // Checked before the idle branch below: a probe that keeps reporting idle while
+    // emission keeps failing (emitRestart throwing) hits that branch's early return on
+    // every tick. Gating it on the budget means repeated idle-emission failures still
+    // reach the escalation below instead of looping the idle retry forever.
+    const timedOut = maxWaitMs !== undefined && elapsedMs >= maxWaitMs;
+    if (!timedOut && current !== undefined && current <= 0) {
       attemptEmission({ notifyReady: true });
       return;
     }
-    const elapsedMs = Date.now() - startedAt;
-    if (Date.now() >= nextStillPendingAt) {
+    // Skipped while the count is unknown, or once idle+timed-out has already reached the
+    // escalation below: onCheckError already reported an unknown-count read, and an idle
+    // count is not a "still pending" observation.
+    if (current !== undefined && current > 0 && Date.now() >= nextStillPendingAt) {
       opts.hooks?.onStillPending?.(current, elapsedMs);
       nextStillPendingAt = Date.now() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
     }
-    if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
-      stopPoll();
-      opts.hooks?.onTimeout?.(current, elapsedMs);
+    if (timedOut) {
+      if (!timedOutNotified) {
+        timedOutNotified = true;
+        opts.hooks?.onTimeout?.(lastKnownPending, elapsedMs);
+      }
+      // Deliberately NOT gated on the once-only notification above. An attempt whose
+      // beforeEmit hook is hung leaves its guard set, which would defeat this bound
+      // indefinitely — and that is true of a FORCED attempt started by an earlier
+      // timeout tick just as much as of the idle-triggered one, so a once-only takeover
+      // simply moves the permanent wedge one attempt along. Superseding is bounded to an
+      // attempt that already outlived preparationBudgetMs, so a merely slow preparation
+      // finishes rather than being thrashed. Roll back its fence (safe
+      // no-op if a signal already fired) and drop the guard so the attempt below claims
+      // a fresh attempt id and runs a real beforeEmit of its own — never skipped, so a
+      // caller's safety preflight can't look like it already ran. If the stuck slot is
+      // instead a coalesced session's parked hook (see the while(nextParked) drain
+      // above), it's unreachable here and its continuation is lost when it never settles
+      // — but on unfixed main the same stuck slot already defeats BOTH that session's
+      // restart and this bound forever, so nothing reachable from here is lost that
+      // wasn't lost already.
+      if (attemptingEmission && Date.now() - emissionStartedAt >= preparationBudgetMs) {
+        cancelEmissionFence?.();
+        cancelEmissionFence = null;
+        attemptingEmission = false;
+      }
+      // Not gated on !timedOutNotified: the poll deliberately stays alive past the deadline
+      // (stopPoll only ever runs on cancel or a genuinely delivered restart) so a forced
+      // attempt whose emission rejects — same as the pre-timeout idle-emission-keeps-failing
+      // case — gets retried on the next tick instead of stranding the deferral silently.
       attemptEmission({
         intent: opts.timeoutIntent,
         notifyReady: false,
@@ -790,20 +869,15 @@ export function deferGatewayRestartUntilIdle(opts: {
       });
     }
   };
-  let pending: number;
-  try {
-    pending = opts.getPendingCount();
-  } catch (err) {
-    opts.hooks?.onCheckError?.(err);
-    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-    return handle;
-  }
-  if (pending > 0) {
+  const pending = readPendingCount();
+  if (pending !== undefined && pending > 0) {
     opts.hooks?.onDeferring?.(pending);
   }
+  // Registered before the idle branch so an unknown initial count lands in the deferred
+  // state and retries, rather than restarting on a probe that never reported idle.
   poll = setInterval(inspectPending, pollMs);
   activeDeferralPolls.add(poll);
-  if (pending <= 0) {
+  if (pending !== undefined && pending <= 0) {
     attemptEmission({ notifyReady: true });
   }
   return handle;
