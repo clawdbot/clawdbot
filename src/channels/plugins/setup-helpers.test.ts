@@ -566,6 +566,66 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     expect(channel.botToken).toBeUndefined();
   });
 
+  it("prefers the exact key over an alias listed first when the channel declares nothing", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          telegram: {
+            botToken: "root-tok",
+            accounts: { Default: { name: "Alias" }, default: { name: "Canon" } },
+          },
+        },
+      }),
+      channelKey: "telegram",
+      setupSurface: {
+        applyAccountConfig: ({ cfg }) => cfg,
+        singleAccountKeysToMove: ["botToken"],
+      } as ChannelSetupAdapter,
+    });
+
+    // resolveNormalizedAccountEntry returns the exact key before its normalized scan
+    // (src/routing/account-lookup.ts:35-37), so Telegram reads "default" for that id however
+    // late it is listed. A token moved into "Default" would leave the entry every reader takes
+    // without one.
+    const channel = channelRecord(next, "telegram");
+    expect(accountRecord(channel, "default")).toEqual({ name: "Canon", botToken: "root-tok" });
+    expect(accountRecord(channel, "Default")).toEqual({ name: "Alias" });
+    expect(channel.botToken).toBeUndefined();
+  });
+
+  it("takes the exact key beside a dotted alias listed first when the channel declares nothing", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          matrix: {
+            defaultAccount: "ops",
+            homeserver: "https://matrix.example.org",
+            userId: "@ops:example.org",
+            accessToken: "token",
+            accounts: { "Ops.": { enabled: true }, ops: { enabled: true } },
+          },
+        },
+      }),
+      channelKey: "matrix",
+      setupSurface: matrixSetupSurface,
+    });
+
+    // Matrix's own target resolver names the first key normalizing to "ops", which is "Ops.",
+    // and the promotion normalizes that back to "ops". resolveNormalizedAccountEntry takes the
+    // exact "ops" key for that id, so the credentials land there and the alias stays as authored.
+    const channel = channelRecord(next, "matrix");
+    expect(accountRecord(channel, "ops")).toEqual({
+      enabled: true,
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
+      accessToken: "token",
+    });
+    expect(accountRecord(channel, "Ops.")).toEqual({ enabled: true });
+    expect(channel.homeserver).toBeUndefined();
+    expect(channel.userId).toBeUndefined();
+    expect(channel.accessToken).toBeUndefined();
+  });
+
   it("prefers the exact key over its case variant under the case-insensitive lookup", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({

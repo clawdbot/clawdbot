@@ -42,9 +42,10 @@ export type ChannelSetupAdapter<Input extends { name?: string } = ChannelSetupIn
   /**
    * Which shared lookup the channel's readers select account entries with
    * (src/routing/account-lookup.ts). Absent means `resolveNormalizedAccountEntry`, the exact key or
-   * the first key whose normalized id matches, and single-account promotion keeps landing on the
-   * first key that normalizes to the target. `"case-insensitive"` means `resolveAccountEntry`, the
-   * exact key or the first key whose lowercase matches, and promotion lands where that lookup reads.
+   * the first key whose normalized id matches, and single-account promotion lands on the exact
+   * key, else the first key that normalizes to the target. `"case-insensitive"` means
+   * `resolveAccountEntry`, the exact key or the first key whose lowercase matches, and promotion
+   * lands where that lookup reads.
    */
   accountEntryLookup?: "case-insensitive";
   singleAccountKeysToMove?: readonly string[];

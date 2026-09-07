@@ -17,7 +17,6 @@ type ChannelSectionBase = {
 
 export type ChannelSetupPromotionSurface = {
   configPromotion?: "preserve-root";
-  accountEntryLookup?: "case-insensitive";
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
   resolveSingleAccountPromotionTarget?: (params: {

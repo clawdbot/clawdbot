@@ -330,9 +330,16 @@ function resolveExistingAccountKey(
 ): string {
   if (accountEntryLookup !== "case-insensitive") {
     // The channel's readers select entries with resolveNormalizedAccountEntry
-    // (src/routing/account-lookup.ts:27-51), whose fallback scan takes the first key in map order
-    // whose normalized id is the target, so that key keeps receiving the moved values and an alias
-    // such as accounts["Work.Bot"] never gains a canonical twin that would shadow it.
+    // (src/routing/account-lookup.ts:27-51), the exact key first, then the first key in map order
+    // whose normalized id is the target. The writer mirrors that order. The exact-first step can
+    // only keep a value with the entry that lookup already prefers, so accounts.default receives
+    // the moved values even when accounts.Default is listed before it, and the scan still keeps an
+    // alias such as accounts["Work.Bot"] from gaining a canonical twin that would shadow it. The
+    // target may be a raw existing key (the defaultAccount and sole-named-key paths return one),
+    // and Object.hasOwn returns it just as the scan's fallback would.
+    if (Object.hasOwn(accounts, targetAccountId)) {
+      return targetAccountId;
+    }
     return (
       Object.keys(accounts).find((key) => normalizeAccountId(key) === targetAccountId) ??
       targetAccountId
