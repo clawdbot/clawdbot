@@ -29,6 +29,7 @@ on:
       - "scripts/lib/actions-artifact-archive.mjs"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-publication-artifact.mjs"
+      - "scripts/plugin-npm-bootstrap-approval.mjs"
       - "scripts/release-tooling-identity.d.mts"
       - "scripts/release-tooling-identity.mjs"
       - "scripts/plugin-npm-release-check.ts"
@@ -1252,6 +1253,7 @@ jobs:
     environment: npm-release
     permissions:
       actions: read
+      attestations: read
       contents: read
       id-token: write
     strategy:
@@ -1632,6 +1634,55 @@ jobs:
           console.log("already_published=true");
           NODE
 
+      - name: Download stable npm bootstrap approval
+        if: ${{ steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.publication_evidence.outputs.publish_tag == 'latest' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: npm-stable-bootstrap-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
+          path: ${{ runner.temp }}/npm-stable-bootstrap-approval
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_publish_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Authorize bootstrap release
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+          PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
+          RELEASE_TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch }}
+          EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$PACKAGE_VERSION" == *"-beta."* && "$PUBLISH_TAG" == "beta" ]]; then
+            exit 0
+          fi
+          [[ "$PUBLISH_TAG" == "latest" ]] || {
+            echo "npm bootstrap requires beta or an attested regular stable/latest approval." >&2
+            exit 1
+          }
+          approval="${RUNNER_TEMP}/npm-stable-bootstrap-approval/approval.json"
+          gh attestation verify "$approval" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/openclaw-release-publish.yml" \
+            --signer-digest "$EXPECTED_WORKFLOW_SHA" \
+            --source-digest "$EXPECTED_WORKFLOW_SHA" \
+            --source-ref "$EXPECTED_WORKFLOW_FULL_REF" \
+            --deny-self-hosted-runners
+          direct_recovery=false
+          if [[ "$GITHUB_ACTOR" != "github-actions[bot]" ]]; then
+            direct_recovery=true
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" \
+            --jq '{workflowName: .name, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url, runAttempt: .run_attempt, repository: .repository.full_name, path}' |
+            APPROVAL_PATH="$approval" RELEASE_APPROVAL_KIND=npm-stable-bootstrap \
+              DIRECT_RELEASE_RECOVERY="$direct_recovery" node scripts/validate-release-publish-approval.mjs
+
       - name: Publish approved bootstrap tarball
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.bootstrap_npm_package_version.outputs.already_published != 'true'
         env:
@@ -1652,10 +1703,6 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          [[ "$PACKAGE_VERSION" == *"-beta."* && "$PUBLISH_TAG" == "beta" ]] || {
-            echo "npm token bootstrap requires an approved beta package and beta tag." >&2
-            exit 1
-          }
           [[ -n "${NPM_TOKEN// }" ]] || {
             echo "npm token bootstrap requires the protected npm release token." >&2
             exit 1
@@ -1710,14 +1757,31 @@ jobs:
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
         run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
-      - name: Record Meta trusted publisher checkpoint
+      - name: Verify bootstrap npm dist-tag
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+          PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
+        run: |
+          set -euo pipefail
+          npm view "$PACKAGE_NAME" dist-tags --json --prefer-online |
+            node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              const tags = JSON.parse(readFileSync(0, "utf8"));
+              if (tags[process.env.PUBLISH_TAG] !== process.env.PACKAGE_VERSION) {
+                throw new Error("Bootstrap dist-tag does not match the approved version; use credential-isolated selector recovery without republishing.");
+              }
+            '
+
+      - name: Record plugin trusted publisher checkpoint
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
         env:
           ALREADY_PUBLISHED: ${{ steps.bootstrap_npm_package_version.outputs.already_published }}
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
         run: |
           {
-            echo "## Meta npm bootstrap follow-up"
+            echo "## Plugin npm bootstrap follow-up"
             echo
             if [[ "$ALREADY_PUBLISHED" == "true" ]]; then
               echo "- Verified existing \`${PACKAGE_NAME}\` against the approved immutable tarball."

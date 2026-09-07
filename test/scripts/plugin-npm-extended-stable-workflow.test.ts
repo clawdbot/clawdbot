@@ -9,10 +9,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { PLUGIN_NPM_RELEASE_AUTHORITY_PATHS } from "../../scripts/lib/plugin-publication-candidates.ts";
+import { createStablePluginNpmBootstrapApproval } from "../../scripts/plugin-npm-bootstrap-approval.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
@@ -75,7 +76,150 @@ function workflowPathPatternCovers(pattern: string, path: string): boolean {
   return path === pattern;
 }
 
+function runStableBootstrapAdmission(
+  overrides: {
+    approval?: Record<string, unknown>;
+    env?: Record<string, string>;
+    run?: Record<string, unknown>;
+    attestationExit?: number;
+    tagSha?: string;
+  } = {},
+) {
+  const root = mkdtempSync(join(tmpdir(), "npm-bootstrap-approval-"));
+  try {
+    const toolingSha = "b".repeat(40);
+    const targetSha = "a".repeat(40);
+    const branch = `release-publish/${toolingSha.slice(0, 12)}-123`;
+    const approval = createStablePluginNpmBootstrapApproval({
+      repository: "openclaw/openclaw",
+      parentRunId: "123",
+      parentRunAttempt: 2,
+      workflowBranch: branch,
+      workflowFullRef: `refs/tags/${branch}`,
+      parentWorkflowSha: toolingSha,
+      targetSha,
+      releaseTag: "v2026.9.3",
+      publishTag: "latest",
+      releaseProfile: "stable",
+      validationRunId: "456",
+      validationRunAttempt: 3,
+      packages: ["@openclaw/team-reports"],
+    });
+    const approvalDir = join(root, "npm-stable-bootstrap-approval");
+    mkdirSync(approvalDir);
+    writeFileSync(
+      join(approvalDir, "approval.json"),
+      JSON.stringify({ ...approval, ...overrides.approval }),
+    );
+    const run = {
+      workflowName: "OpenClaw Release Publish",
+      headBranch: branch,
+      headSha: toolingSha,
+      event: "workflow_dispatch",
+      status: "in_progress",
+      conclusion: null,
+      runAttempt: 2,
+      repository: "openclaw/openclaw",
+      path: `.github/workflows/openclaw-release-publish.yml@refs/tags/${branch}`,
+      ...overrides.run,
+    };
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "gh"),
+      `#!${process.execPath}\nif(process.argv[2] === "attestation") process.exit(${overrides.attestationExit ?? 0}); process.stdout.write(${JSON.stringify(JSON.stringify(run))});\n`,
+      { mode: 0o755 },
+    );
+    const refs = `${overrides.tagSha ?? targetSha}\trefs/tags/v2026.9.3^{}\n`;
+    writeFileSync(
+      join(bin, "git"),
+      `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(refs)});\n`,
+      { mode: 0o755 },
+    );
+    return spawnSync(
+      "/bin/bash",
+      ["-c", step(workflow().jobs?.publish_plugins_npm, "Authorize bootstrap release").run!],
+      {
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
+          RUNNER_TEMP: root,
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          GITHUB_ACTOR: "github-actions[bot]",
+          PACKAGE_NAME: "@openclaw/team-reports",
+          PACKAGE_VERSION: "2026.9.3",
+          PUBLISH_TAG: "latest",
+          RELEASE_TARGET_SHA: targetSha,
+          RELEASE_PUBLISH_RUN_ID: "123",
+          EXPECTED_RUN_ATTEMPT: "2",
+          EXPECTED_WORKFLOW_BRANCH: branch,
+          EXPECTED_WORKFLOW_FULL_REF: `refs/tags/${branch}`,
+          EXPECTED_WORKFLOW_SHA: toolingSha,
+          ...overrides.env,
+        },
+      },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("plugin npm extended-stable workflow", () => {
+  it.skipIf(process.platform === "win32")(
+    "admits exact attested stable/full bootstrap and retains beta",
+    () => {
+      for (const releaseProfile of ["stable", "full"]) {
+        const result = runStableBootstrapAdmission({ approval: { releaseProfile } });
+        expect(result.status, result.stderr).toBe(0);
+      }
+      const beta = runStableBootstrapAdmission({
+        env: { PACKAGE_VERSION: "2026.9.3-beta.1", PUBLISH_TAG: "beta" },
+        attestationExit: 1,
+      });
+      expect(beta.status, beta.stderr).toBe(0);
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["package scope", { env: { PACKAGE_NAME: "@openclaw/unselected" } }],
+    ["version", { env: { PACKAGE_VERSION: "2026.9.4" } }],
+    ["selector", { env: { PUBLISH_TAG: "beta" } }],
+    ["alpha", { env: { PACKAGE_VERSION: "2026.9.3-alpha.1", PUBLISH_TAG: "alpha" } }],
+    [
+      "extended-stable",
+      { approval: { releaseTag: "v2026.9.33" }, env: { PACKAGE_VERSION: "2026.9.33" } },
+    ],
+    ["profile", { approval: { releaseProfile: "beta" } }],
+    ["attestation", { attestationExit: 1 }],
+    ["tag moved", { tagSha: "c".repeat(40) }],
+    ["target", { approval: { targetSha: "c".repeat(40) } }],
+    ["parent attempt", { run: { runAttempt: 3 } }],
+    ["cancelled parent", { run: { status: "completed", conclusion: "cancelled" } }],
+    ["tooling", { run: { headSha: "c".repeat(40) } }],
+    [
+      "direct main",
+      { env: { EXPECTED_WORKFLOW_BRANCH: "main", EXPECTED_WORKFLOW_FULL_REF: "refs/heads/main" } },
+    ],
+  ] as const)("rejects changed stable bootstrap %s", (_name, overrides) => {
+    const result = runStableBootstrapAdmission(overrides);
+    expect(result.status, result.stderr).not.toBe(0);
+  });
+
+  it("authorizes bootstrap recovery and verifies selectors even when bytes already exist", () => {
+    const publish = workflow().jobs?.publish_plugins_npm;
+    expect(step(publish, "Authorize bootstrap release").if).toBe(
+      "steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'",
+    );
+    expect(step(publish, "Verify bootstrap npm dist-tag").if).toBe(
+      "steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'",
+    );
+    expect(publish?.permissions?.attestations).toBe("read");
+    const approval = step(publish, "Download stable npm bootstrap approval");
+    expect(approval.with?.name).toContain(
+      "${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}",
+    );
+  });
   it("keeps push triggers aligned with npm publication authorities", () => {
     const triggerPaths = (workflow().on?.push?.paths ?? []).filter(
       (path) => path !== "extensions/**",
