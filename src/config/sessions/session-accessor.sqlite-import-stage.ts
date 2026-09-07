@@ -156,6 +156,27 @@ export class SqliteSessionImportStage {
     const update = this.database.prepare(
       "UPDATE rows SET event_json = ? WHERE source = ? AND seq = ?",
     );
+    // Rewriting `rows` while its cursor is open re-delivers the row, and the replay guard
+    // would then discard the re-delivered copy as a duplicate. Rows that need normalized
+    // provider metadata are recorded here and rewritten once the scan has finished; until
+    // then their stored bytes are still legacy, so readers normalize on the way out.
+    const normalizedRows = diskSet("normalized");
+    const storedEventJson = (seq: number): string | undefined => {
+      const row = readRow.get(source, seq);
+      if (!row) {
+        return undefined;
+      }
+      const eventJson = String(row.event_json);
+      if (!normalizedRows.has(String(seq))) {
+        return eventJson;
+      }
+      const entry: unknown = JSON.parse(eventJson);
+      if (!isRecord(entry)) {
+        return eventJson;
+      }
+      normalizeLegacyOpenAICodexTranscriptMetadata([entry]);
+      return JSON.stringify(entry);
+    };
     let changed = false;
     let recognized = true;
     let headerSeq: number | undefined;
@@ -172,7 +193,7 @@ export class SqliteSessionImportStage {
         }
         if (normalizeLegacyOpenAICodexTranscriptMetadata([entry]) > 0) {
           eventJson = JSON.stringify(entry);
-          update.run(eventJson, source, row.seq);
+          normalizedRows.add(String(row.seq));
           changed = true;
         }
         if (entry.type === "session") {
@@ -200,8 +221,7 @@ export class SqliteSessionImportStage {
         if (typeof entry.id === "string" && (indexed || leafControl)) {
           const previous = lookup(entry.id);
           if (previous) {
-            const previousRow = readRow.get(source, Number(previous.entry.importSeq));
-            if (previousRow && String(previousRow.event_json) === eventJson) {
+            if (storedEventJson(Number(previous.entry.importSeq)) === eventJson) {
               repeatedRows.add(String(row.seq));
               changed = true;
               continue;
@@ -241,6 +261,15 @@ export class SqliteSessionImportStage {
       resetDescendantIds: diskSet("reset"),
       invalidLeafControlIds: diskSet("invalid"),
     });
+    for (const pending of this.database
+      .prepare("SELECT id FROM tree_sets WHERE kind = 'normalized'")
+      .iterate()) {
+      const seq = Number(pending.id);
+      const eventJson = storedEventJson(seq);
+      if (eventJson !== undefined) {
+        update.run(eventJson, source, seq);
+      }
+    }
     this.database
       .prepare(
         `DELETE FROM rows WHERE source = ? AND CAST(seq AS TEXT) IN (
