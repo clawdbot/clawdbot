@@ -69,6 +69,9 @@ asking you to choose token or password. Existing password-mode configs are
 preserved. Use `--gateway-auth password` or `--gateway-password <value>` to
 choose a password explicitly; Tailscale Funnel still requires password mode.
 
+Use `setup --team` for the same small-team onboarding as `onboard --team`.
+`--agent-name <name>` names the first agent or, with `--team`, the coordinator.
+
 <Note>
 `openclaw setup` is for mutable config installs. In Nix mode (`OPENCLAW_NIX_MODE=1`) OpenClaw refuses setup writes because the config file is managed by Nix. Use the first-party [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) or the equivalent source config for another Nix package.
 </Note>

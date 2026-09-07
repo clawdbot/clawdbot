@@ -513,6 +513,7 @@ describe("registerSetupCommand", () => {
       "setup",
       "--non-interactive",
       "--accept-risk",
+      "--team",
       "--flow",
       "advanced",
       "--gateway-port",
@@ -534,6 +535,7 @@ describe("registerSetupCommand", () => {
     expect(lastWizardOptions()).toMatchObject({
       nonInteractive: true,
       acceptRisk: true,
+      team: true,
       flow: "advanced",
       gatewayPort: 18789,
       installDaemon: false,
@@ -611,8 +613,9 @@ describe("registerSetupCommand", () => {
   it.each([
     ["guided", ["--wizard"]],
     ["classic", ["--classic"]],
+    ["team", ["--team"]],
     ["non-interactive", ["--non-interactive", "--accept-risk"]],
-  ])("forwards --agent-name through %s setup", async (_mode, modeArgs) => {
+  ])("forwards first-agent options through %s setup", async (_mode, modeArgs) => {
     await runCli([
       "setup",
       ...modeArgs,
@@ -625,6 +628,7 @@ describe("registerSetupCommand", () => {
 
     expect(lastWizardOptions()).toMatchObject({
       agentName: "robby",
+      team: modeArgs.includes("--team") ? true : undefined,
       workspace: "/tmp/robby",
       skipBootstrap: true,
     });
