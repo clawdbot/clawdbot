@@ -378,6 +378,7 @@ function parseMarketplaceManifest(
   }
 
   const plugins: MarketplacePluginEntry[] = [];
+  const pluginNames = new Set<string>();
   for (const entry of rec.plugins) {
     if (!entry || typeof entry !== "object") {
       return { ok: false, error: `invalid marketplace entry in ${sourceLabel}: expected object` };
@@ -387,6 +388,14 @@ function parseMarketplaceManifest(
     if (!name) {
       return { ok: false, error: `invalid marketplace entry in ${sourceLabel}: missing name` };
     }
+    // Marketplace names select install sources; duplicates would silently run the first entry.
+    if (pluginNames.has(name)) {
+      return {
+        ok: false,
+        error: `invalid marketplace entry "${name}" in ${sourceLabel}: duplicate plugin name`,
+      };
+    }
+    pluginNames.add(name);
     const normalizedSource = normalizeEntrySource(plugin.source);
     if (!normalizedSource.ok) {
       return {

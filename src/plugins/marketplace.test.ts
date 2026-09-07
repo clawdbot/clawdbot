@@ -323,6 +323,107 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it.each(["frontend-design", " frontend-design "])(
+    "rejects duplicate normalized marketplace plugin names when listing (%j)",
+    async (duplicateName) => {
+      await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+        const manifestPath = await writeMarketplaceManifest(rootDir, {
+          plugins: [
+            { name: "frontend-design", source: "./plugins/shadow" },
+            { name: duplicateName, source: "./plugins/intended" },
+          ],
+        });
+
+        await expect(listMarketplacePlugins({ marketplace: rootDir })).resolves.toEqual({
+          ok: false,
+          error: `invalid marketplace entry "frontend-design" in ${manifestPath}: duplicate plugin name`,
+        });
+        expect(installPluginFromPathMock).not.toHaveBeenCalled();
+        expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("rejects ambiguous marketplace plugin installs before resolving either source", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const shadowDir = path.join(rootDir, "plugins", "shadow");
+      const manifestPath = await writeLocalMarketplaceFixture({
+        rootDir,
+        pluginDir: shadowDir,
+        manifest: {
+          plugins: [
+            { name: "frontend-design", source: "./plugins/shadow" },
+            { name: " frontend-design ", source: "./plugins/intended" },
+          ],
+        },
+      });
+      installPluginFromPathMock.mockResolvedValue({
+        ok: true,
+        pluginId: "frontend-design",
+        targetDir: "/tmp/frontend-design",
+        extensions: ["index.ts"],
+      });
+
+      await expect(
+        installPluginFromMarketplace({ marketplace: manifestPath, plugin: "frontend-design" }),
+      ).resolves.toEqual({
+        ok: false,
+        error: `invalid marketplace entry "frontend-design" in ${manifestPath}: duplicate plugin name`,
+      });
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves distinct case-sensitive marketplace plugin names", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          { name: "Calendar", source: "./plugins/upper" },
+          { name: "calendar", source: "./plugins/lower" },
+        ],
+      });
+
+      const result = await listMarketplacePlugins({ marketplace: rootDir });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.manifest.plugins.map((plugin) => plugin.name)).toEqual([
+          "Calendar",
+          "calendar",
+        ]);
+      }
+    });
+  });
+
+  it("rejects duplicate remote marketplace names before resolving plugin sources", async () => {
+    mockRemoteMarketplaceClone({
+      pluginDir: path.join("plugins", "shadow"),
+      manifest: {
+        plugins: [
+          { name: "frontend-design", source: "./plugins/shadow" },
+          { name: " frontend-design ", source: "./plugins/intended" },
+        ],
+      },
+    });
+
+    const result = await installPluginFromMarketplace({
+      marketplace: "owner/repo",
+      plugin: "frontend-design",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('invalid marketplace entry "frontend-design"');
+      expect(result.error).toContain("duplicate plugin name");
+    }
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(installPluginFromPathMock).not.toHaveBeenCalled();
+  });
+
   it("rejects oversized local marketplace manifests", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
