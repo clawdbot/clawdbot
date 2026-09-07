@@ -16,12 +16,14 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  isAttemptTranscriptMessage,
   isCompatibleSingletonRewrite,
   isCompleteToolGroup,
   projectReplayPayload,
   type AttemptTranscriptMessage as TranscriptMessage,
 } from "./attempt-transcript-replay.js";
-import type { AttemptParamsLike } from "./attempt-types.js";
+import { assertCopilotAttemptHostCapabilities, type AttemptParamsLike } from "./attempt-types.js";
+import { commitProviderSessionTranscriptPrefix } from "./provider-transcript-commit.js";
 
 type TranscriptRecorder = NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]>;
 type AppendResult =
@@ -29,7 +31,6 @@ type AppendResult =
       anchor: TranscriptEntryAnchor;
       appended: boolean;
       message: TranscriptMessage;
-      messageId: string;
     }
   | undefined;
 type PendingWrite = {
@@ -134,6 +135,7 @@ export function createAttemptTranscriptJournal(params: {
   let pendingTools: ToolGroup | undefined;
   let queue = Promise.resolve();
   let firstFailure: Error | undefined;
+  const providerToolReceipts = new Map<string, PersistenceReceipt>();
   const sdkUserPersistenceReceipts = new Map<string, PersistenceReceipt>();
   const sdkUserRecorders = new Map<string, TranscriptRecorder>();
   let abortPromise: Promise<void> | undefined;
@@ -146,11 +148,29 @@ export function createAttemptTranscriptJournal(params: {
   let assistantTranscriptIdempotencyKey: string | undefined;
   let terminalAnchor: TranscriptEntryAnchor | undefined;
 
+  const snapshotReplayPayload = (message: TranscriptMessage) =>
+    structuredClone(projectReplayPayload(message));
+  const compareReplayPayloads = (
+    expected: readonly unknown[],
+    messages: readonly TranscriptMessage[],
+  ) => {
+    if (
+      expected.length !== messages.length ||
+      expected.some(
+        (payload, index) => !isDeepStrictEqual(payload, projectReplayPayload(messages[index]!)),
+      )
+    ) {
+      replayInvalid = true;
+    }
+  };
+
   const captureFailure = (error: unknown) => {
-    if (firstFailure) {
+    const fresh = !firstFailure;
+    firstFailure ??= error instanceof Error ? error : new Error(String(error));
+    providerToolReceipts.forEach((receipt) => receipt.reject(firstFailure!));
+    if (!fresh) {
       return;
     }
-    firstFailure = error instanceof Error ? error : new Error(String(error));
     replayInvalid = true;
     pendingTools = undefined;
     for (const receipt of sdkUserPersistenceReceipts.values()) {
@@ -188,7 +208,7 @@ export function createAttemptTranscriptJournal(params: {
     options: { singleton?: boolean } = {},
   ): TranscriptMessage | undefined => {
     const message = structuredClone(write.message) as TranscriptMessage;
-    const originalReplayPayload = structuredClone(projectReplayPayload(message));
+    const originalReplayPayload = snapshotReplayPayload(message);
     const hooked = runAgentHarnessBeforeMessageWriteHook({
       message: structuredClone(message) as TranscriptMessage,
       agentId: target.agentId,
@@ -202,11 +222,7 @@ export function createAttemptTranscriptJournal(params: {
     if (!hooked) {
       return undefined;
     }
-    if (
-      !isDeepStrictEqual(originalReplayPayload, projectReplayPayload(hooked as TranscriptMessage))
-    ) {
-      replayInvalid = true;
-    }
+    compareReplayPayloads([originalReplayPayload], [hooked as TranscriptMessage]);
     const idempotencyKey = (message as { idempotencyKey?: string }).idempotencyKey;
     const taintMetadata = readTurnTaintMetadata(message);
     const toolIdentity =
@@ -236,6 +252,7 @@ export function createAttemptTranscriptJournal(params: {
   };
 
   const append = async (write: PendingWrite): Promise<AppendResult> => {
+    const originalReplayPayload = snapshotReplayPayload(write.message);
     const outcome = await appendSessionTranscriptMessageByIdentityStrict({
       ...target,
       ...(config ? { config } : {}),
@@ -251,14 +268,10 @@ export function createAttemptTranscriptJournal(params: {
     if (outcome.kind === "rejected") {
       throw new Error("Transcript session changed before singleton append");
     }
-    if (
-      !isDeepStrictEqual(
-        projectReplayPayload(write.message),
-        projectReplayPayload(outcome.result.message as TranscriptMessage),
-      )
-    ) {
-      replayInvalid = true;
+    if (!isAttemptTranscriptMessage(outcome.result.message)) {
+      throw new Error("Copilot transcript replayed an invalid message");
     }
+    compareReplayPayloads([originalReplayPayload], [outcome.result.message as TranscriptMessage]);
     if (outcome.result.message.role === "user") {
       write.recorder?.markRuntimePersisted(outcome.result.message, outcome.result.anchor, {
         appended: outcome.result.appended,
@@ -269,6 +282,50 @@ export function createAttemptTranscriptJournal(params: {
 
   const appendToolGroup = async (group: ToolGroup) => {
     const writes = [group.assistant, ...group.order.map((id) => group.results.get(id)!)];
+    const originalReplayPayloads = writes.map((write) => snapshotReplayPayload(write.message));
+    if (group.order.some((id) => providerToolReceipts.has(id))) {
+      assertCopilotAttemptHostCapabilities(params.attempt);
+      const assertCurrent = () => {
+        if (firstFailure || pendingTools !== group) {
+          throw new Error("Copilot provider transcript group is no longer current");
+        }
+      };
+      const outcome = await commitProviderSessionTranscriptPrefix(params.attempt.hostCapabilities, {
+        assertCurrent,
+        baseAnchor: terminalAnchor,
+        entries: writes.map((write) => ({
+          eventId: write.eventId!,
+          identity: readIdempotencyKey(write.message)!,
+          message: write.message,
+        })),
+        validatePreparedPrefix: (messages) => {
+          const transcriptMessages = messages.filter(isAttemptTranscriptMessage);
+          return (
+            transcriptMessages.length === messages.length &&
+            isCompleteToolGroup(transcriptMessages, group.order)
+          );
+        },
+      });
+      if (outcome.kind === "suppressed") {
+        return undefined;
+      }
+      if (outcome.kind !== "committed" && outcome.kind !== "replayed") {
+        throw new Error(`Copilot provider transcript commit ${outcome.kind}`);
+      }
+      if (outcome.results.some((result) => !isAttemptTranscriptMessage(result.message))) {
+        throw new Error("Copilot provider transcript replayed an invalid message");
+      }
+      const results = outcome.results.map((result) => ({
+        ...result,
+        appended: outcome.kind === "committed",
+        message: result.message as TranscriptMessage,
+      }));
+      compareReplayPayloads(
+        originalReplayPayloads,
+        results.map((result) => result.message),
+      );
+      return results;
+    }
     const keys = writes.map((write) => readIdempotencyKey(write.message));
     const persistedKeys = new Set(
       (await readVisibleSessionTranscriptMessageEntries(target)).flatMap((entry) =>
@@ -312,17 +369,10 @@ export function createAttemptTranscriptJournal(params: {
     ) {
       throw new Error("Copilot transcript replayed an invalid tool group");
     }
-    if (
-      results.some(
-        (result, index) =>
-          !isDeepStrictEqual(
-            projectReplayPayload(writes[index]!.message),
-            projectReplayPayload(result.message as TranscriptMessage),
-          ),
-      )
-    ) {
-      replayInvalid = true;
-    }
+    compareReplayPayloads(
+      originalReplayPayloads,
+      results.map((result) => result.message as TranscriptMessage),
+    );
     return results;
   };
 
@@ -353,6 +403,48 @@ export function createAttemptTranscriptJournal(params: {
       assistantTranscriptOwned = true;
       assistantTranscriptIdempotencyKey = persisted ? key : undefined;
       terminalAnchor = persisted ? anchor : undefined;
+    }
+  };
+  const finishToolGroup = async (group: ToolGroup) => {
+    const providerWrites = group.order.filter((id) => providerToolReceipts.has(id));
+    const results = await appendToolGroup(group);
+    if (!results && providerWrites.length > 0) {
+      throw new Error("Copilot provider transcript group was suppressed");
+    }
+    let appended = false;
+    if (!results) {
+      replayInvalid = true;
+      ownAssistant(group.assistantKey, false);
+    } else {
+      for (const result of results) {
+        appended = accept(result as AppendResult) || appended;
+      }
+      ownAssistant(group.assistantKey, true, results.at(-1)?.anchor);
+      for (const toolCallId of providerWrites) {
+        providerToolReceipts.get(toolCallId)!.resolve();
+      }
+    }
+    pendingTools = undefined;
+    const deferredReceipts: PersistenceReceipt[] = [];
+    for (const write of deferredUserWrites.splice(0)) {
+      const outcome = await append(write);
+      if (!outcome) {
+        replayInvalid = true;
+        if (write.eventId) {
+          sdkUserPersistenceReceipt(write.eventId).reject(
+            new Error("Copilot steering user write was suppressed"),
+          );
+        }
+        continue;
+      }
+      appended = accept(outcome) || appended;
+      if (write.eventId) {
+        deferredReceipts.push(sdkUserPersistenceReceipt(write.eventId));
+      }
+    }
+    await publish(appended);
+    for (const receipt of deferredReceipts) {
+      receipt.resolve();
     }
   };
 
@@ -394,6 +486,37 @@ export function createAttemptTranscriptJournal(params: {
       error.code = "transcript_persistence_failed";
       throw error;
     }
+  };
+
+  const recordResult = (input: {
+    eventId: string;
+    message: Extract<AgentMessage, { role: "toolResult" }>;
+    replayIncomplete?: boolean;
+  }) => {
+    if (!claim(input.eventId)) {
+      if (firstFailure) {
+        providerToolReceipts.get(input.message.toolCallId)?.reject(firstFailure);
+      }
+      return;
+    }
+    turnTainted ||= readTurnTaintMetadata(input.message)?.resultContentSource === "network";
+    schedule(async () => {
+      const group = pendingTools;
+      if (!group || !group.order.includes(input.message.toolCallId)) {
+        throw new Error(`Copilot emitted an unmatched tool result: ${input.message.toolCallId}`);
+      }
+      const key = providerToolReceipts.has(input.message.toolCallId)
+        ? input.eventId
+        : `copilot-sdk:${params.sdkSessionId}:${input.eventId}`;
+      group.results.set(input.message.toolCallId, {
+        eventId: input.eventId,
+        message: { ...input.message, idempotencyKey: key } as TranscriptMessage,
+      });
+      replayInvalid ||= input.replayIncomplete === true;
+      if (group.order.every((toolCallId) => group.results.has(toolCallId))) {
+        await finishToolGroup(group);
+      }
+    });
   };
 
   return {
@@ -453,7 +576,10 @@ export function createAttemptTranscriptJournal(params: {
           recorder.markBlocked();
           return;
         }
-        const persisted = outcome.message as Extract<AgentMessage, { role: "user" }>;
+        if (outcome.message.role !== "user") {
+          throw new Error("Copilot transcript replayed a non-user initial message");
+        }
+        const persisted = outcome.message;
         accept(outcome);
         persistedInitialUser = persisted;
         terminalAnchor = outcome.anchor;
@@ -563,60 +689,22 @@ export function createAttemptTranscriptJournal(params: {
       message: Extract<AgentMessage, { role: "toolResult" }>;
       replayIncomplete?: boolean;
     }) {
-      if (!claim(input.eventId)) {
+      if (providerToolReceipts.has(input.message.toolCallId)) {
         return;
       }
-      turnTainted ||= readTurnTaintMetadata(input.message)?.resultContentSource === "network";
-      schedule(async () => {
-        const group = pendingTools;
-        if (!group || !group.order.includes(input.message.toolCallId)) {
-          throw new Error(`Copilot emitted an unmatched tool result: ${input.message.toolCallId}`);
-        }
-        group.results.set(input.message.toolCallId, {
-          eventId: input.eventId,
-          message: {
-            ...input.message,
-            idempotencyKey: `copilot-sdk:${params.sdkSessionId}:${input.eventId}`,
-          } as TranscriptMessage,
-        });
-        replayInvalid ||= input.replayIncomplete === true;
-        if (!group.order.every((toolCallId) => group.results.has(toolCallId))) {
-          return;
-        }
-        const results = await appendToolGroup(group);
-        let appended = false;
-        if (!results) {
-          replayInvalid = true;
-          ownAssistant(group.assistantKey, false);
-        } else {
-          for (const result of results) {
-            appended = accept(result as AppendResult) || appended;
-          }
-          ownAssistant(group.assistantKey, true, results.at(-1)?.anchor);
-        }
-        pendingTools = undefined;
-        const deferredReceipts: PersistenceReceipt[] = [];
-        for (const write of deferredUserWrites.splice(0)) {
-          const outcome = await append(write);
-          if (!outcome) {
-            replayInvalid = true;
-            if (write.eventId) {
-              sdkUserPersistenceReceipt(write.eventId).reject(
-                new Error("Copilot steering user write was suppressed"),
-              );
-            }
-            continue;
-          }
-          appended = accept(outcome) || appended;
-          if (write.eventId) {
-            deferredReceipts.push(sdkUserPersistenceReceipt(write.eventId));
-          }
-        }
-        await publish(appended);
-        for (const receipt of deferredReceipts) {
-          receipt.resolve();
-        }
+      recordResult(input);
+    },
+    recordProviderToolResult(
+      message: Extract<AgentMessage, { role: "toolResult" }>,
+    ): Promise<void> {
+      const receipt = createDeferred<void>();
+      void receipt.promise.catch(() => undefined);
+      providerToolReceipts.set(message.toolCallId, receipt);
+      recordResult({
+        eventId: `copilot-sdk:${params.sdkSessionId}:tool:${message.toolCallId}`,
+        message,
       });
+      return receipt.promise;
     },
     waitForSdkUserPersisted(eventId: string) {
       return sdkUserPersistenceReceipt(eventId).promise;

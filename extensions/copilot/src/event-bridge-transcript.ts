@@ -1,9 +1,10 @@
-import type { Attachment, SessionEvent } from "@github/copilot-sdk";
+import type { Attachment, SessionEvent, ToolResultObject } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sanitizeToolResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   asNonArrayRecord,
+  asOptionalRecord,
   readNonEmptyStringPreservingWhitespace as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildCopilotAssistantUsage, type CopilotUsageSnapshot } from "./usage-bridge.js";
@@ -31,6 +32,31 @@ export interface AttemptTranscriptJournalProjection {
     message: Extract<AgentMessage, { role: "toolResult" }>;
     replayIncomplete?: boolean;
   }): void;
+}
+
+export function buildSuspendableToolResultMessage(params: {
+  providerResult: ToolResultObject;
+  result: unknown;
+  resultContentSource?: "network";
+  startedAt: number;
+  toolCallId: string;
+  toolName: string;
+}): Extract<AgentMessage, { role: "toolResult" }> {
+  const details = asOptionalRecord(params.result)?.details;
+  return {
+    role: "toolResult",
+    toolCallId: params.toolCallId,
+    toolName: params.toolName,
+    content: [
+      { type: "text", text: sanitizeToolDetailText(params.providerResult.textResultForLlm) },
+    ],
+    ...(details !== undefined ? { details } : {}),
+    isError: params.providerResult.resultType !== "success",
+    timestamp: params.startedAt,
+    ...(params.resultContentSource
+      ? { __openclaw: { resultContentSource: params.resultContentSource } }
+      : {}),
+  };
 }
 
 export function buildAssistantMessage(params: {

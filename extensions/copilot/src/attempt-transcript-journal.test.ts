@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  readSessionTranscriptEvents,
+  readVisibleSessionTranscriptMessageEntries,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupAttemptTranscriptJournalFixtures,
@@ -1211,32 +1214,73 @@ describe("Copilot attempt transcript journal", () => {
     });
   });
 
-  it("does not rerun group hooks for an idempotent replay", async () => {
-    const hook = vi.fn(() => undefined);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_message_write", handler: hook }]),
-    );
-    const { attempt, journal, session, target } = await createFixture();
-    await journal.persistInitialUser();
-    emitReplayGroup(session);
-    await journal.barrier("first commit");
-    expect(hook).toHaveBeenCalledTimes(3);
-    const existingMessages = transcriptMessages(await readSessionTranscriptEvents(target)).map(
-      (row) => row.message,
-    );
+  it.each(["unchanged", "assistant-text", "result-text", "tool-argument"] as const)(
+    "preserves cold replay rows and detects %s drift without rerunning hooks",
+    async (drift) => {
+      const hook = vi.fn((input: unknown) => {
+        const message = (input as { message: AgentMessage }).message;
+        if (message.role === "assistant") {
+          for (const part of message.content) {
+            if (drift === "assistant-text" && part.type === "text") {
+              part.text = "rewritten assistant";
+            }
+            if (drift === "tool-argument" && part.type === "toolCall") {
+              part.arguments = { path: "rewritten" };
+            }
+          }
+        }
+        if (drift === "result-text" && message.role === "toolResult") {
+          message.content = [{ type: "text", text: "rewritten result" }];
+        }
+        return { message };
+      });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_message_write", handler: hook }]),
+      );
+      const { attempt, bridge, journal, session, target } = await createFixture();
+      await journal.persistInitialUser();
+      emitReplayGroup(session);
+      await journal.barrier("first commit");
+      expect(hook).toHaveBeenCalledTimes(3);
+      expect(journal.snapshot().replayInvalid).toBe(drift !== "unchanged");
+      const firstAnchor = journal.snapshot().terminalAnchor;
+      expect(firstAnchor).toBeDefined();
+      bridge.detach();
 
-    const { session: replaySession, journal: replayJournal } = createJournalSession(
-      attempt,
-      existingMessages,
-    );
-    await replayJournal.persistInitialUser();
-    emitReplayGroup(replaySession);
-    await replayJournal.barrier("replay");
+      const storedEvents = await readSessionTranscriptEvents(target);
+      const storedEntries = await readVisibleSessionTranscriptMessageEntries(target);
+      const existingMessages = transcriptMessages(storedEvents).map((row) => row.message);
+      expect(existingMessages).toHaveLength(3);
+      const {
+        session: replaySession,
+        journal: replayJournal,
+        bridge: replayBridge,
+      } = createJournalSession(attempt, existingMessages);
+      expect(replaySession).not.toBe(session);
+      await replayJournal.persistInitialUser();
+      emitReplayGroup(replaySession);
+      if (drift === "unchanged") {
+        await replayJournal.barrier("cold replay");
+        expect(replayJournal.snapshot().terminalAnchor).toEqual(firstAnchor);
+      } else {
+        // Ordinary group replay must retain the accessor's strict identity check.
+        // A hook-written payload mismatch is invalid replay, not a fresh write.
+        await expect(replayJournal.barrier("cold replay")).rejects.toMatchObject({
+          code: "transcript_persistence_failed",
+          cause: { name: "TranscriptTurnAdmissionConflictError" },
+        });
+      }
 
-    expect(hook).toHaveBeenCalledTimes(3);
-    expect(transcriptMessages(await readSessionTranscriptEvents(target))).toHaveLength(3);
-    expect(replayJournal.snapshot().messagesSnapshot).toHaveLength(3);
-  });
+      expect(hook).toHaveBeenCalledTimes(3);
+      expect(replayJournal.snapshot()).toMatchObject({
+        messagesSnapshot: existingMessages,
+        replayInvalid: drift !== "unchanged",
+      });
+      expect(await readSessionTranscriptEvents(target)).toEqual(storedEvents);
+      expect(await readVisibleSessionTranscriptMessageEntries(target)).toEqual(storedEntries);
+      replayBridge.detach();
+    },
+  );
 
   it("rolls back the complete group when SQLite fails mid-group", async () => {
     const { journal, session, target, tempDir } = await createFixture();

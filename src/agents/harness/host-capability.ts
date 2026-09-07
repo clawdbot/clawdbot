@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import {
@@ -29,6 +30,10 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
+import {
+  resolveCodeModeTranscriptAuthority,
+  type CodeModeTranscriptAuthority,
+} from "../code-mode-transcript-authority.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
@@ -54,7 +59,9 @@ import {
   getCoreTtsToolResultMediaUrls,
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
+import { redactTranscriptMessage } from "../transcript-redact.js";
 import { bindHarnessContextMedia } from "./context-media.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./hook-helpers.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
   registerAgentHarnessBeforeToolCallRetention,
@@ -64,6 +71,7 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "./transcript-visibility.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
@@ -72,6 +80,7 @@ type AgentHarnessHostApprovalResult = NonNullable<
 >;
 
 const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
+const PROVIDER_TRANSCRIPT_COMMIT = Symbol.for("openclaw.agentHarness.providerTranscriptCommit.v1");
 
 function normalizeNativeOperationCwd(value: unknown, attemptCwd: string | undefined): string {
   if (typeof value !== "string") {
@@ -197,6 +206,7 @@ export function createAgentHarnessHostCapabilities(params: {
   const { lifecycleGeneration } = delegatedAuthority;
   const { runId } = delegatedAuthority.operationalRunInstance;
   const coreTtsToolResults = new WeakSet<object>();
+  const transcriptAuthority = resolveCodeModeTranscriptAuthority(attempt);
   let active = true;
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
@@ -454,6 +464,53 @@ export function createAgentHarnessHostCapabilities(params: {
   };
   const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
     bindTools(tools, options, () => {});
+  const commitProviderTranscriptPrefix = transcriptAuthority
+    ? async (
+        prefix: Omit<
+          Parameters<CodeModeTranscriptAuthority["commitPrefix"]>[0],
+          "assertCurrent"
+        > & {
+          assertCurrent: () => void;
+        },
+      ) => {
+        const assertCommitCurrent = () => {
+          assertActive();
+          prefix.assertCurrent();
+        };
+        assertCommitCurrent();
+        return await transcriptAuthority.commitPrefix(
+          { ...prefix, assertCurrent: assertCommitCurrent },
+          (message) => {
+            // Hooks may rewrite content, but cannot erase producer provenance or
+            // mutate its nested source facts before the atomic transcript commit.
+            const originalMetadata = asOptionalRecord(Reflect.get(message, "__openclaw"));
+            const hooked = runAgentHarnessBeforeMessageWriteHook({
+              agentId: attempt.agentId,
+              message: structuredClone(message),
+              prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
+              sessionKey: attempt.sessionKey,
+            });
+            assertCommitCurrent();
+            if (!hooked) {
+              return null;
+            }
+            const prepared = originalMetadata
+              ? {
+                  ...hooked,
+                  __openclaw: {
+                    ...asOptionalRecord(Reflect.get(hooked, "__openclaw")),
+                    ...originalMetadata,
+                  },
+                }
+              : hooked;
+            return projectAgentHarnessTranscriptMessageForDisplay({
+              hidden: attempt.trigger === "memory",
+              message: redactTranscriptMessage(prepared, config),
+            });
+          },
+        );
+      }
+    : undefined;
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
@@ -501,6 +558,9 @@ export function createAgentHarnessHostCapabilities(params: {
       });
     },
     bindToolSurface,
+    ...(commitProviderTranscriptPrefix
+      ? { [PROVIDER_TRANSCRIPT_COMMIT]: commitProviderTranscriptPrefix }
+      : {}),
     createToolSurface: (options, bindingOptions) => {
       assertActive();
       // Only host-created core tools can seed TTS provenance. Plugin-bound tools
@@ -685,6 +745,7 @@ export function createAgentHarnessHostCapabilities(params: {
       if (!active) {
         return;
       }
+      transcriptAuthority?.close();
       active = false;
       capabilityAbortController.abort();
     },
