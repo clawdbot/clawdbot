@@ -238,6 +238,7 @@ export class BrowserPanelNativeController {
     if (this.nativeTabs.some((tab) => tab.id === reply.tabId)) {
       this.pendingActivation = null;
       await this.controller.selectTab(reply.tabId);
+      this.presentation.renew();
       return reply.tabId;
     }
     return null;

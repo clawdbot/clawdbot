@@ -537,6 +537,42 @@ describe("native Browser panel ownership", () => {
     expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: false });
   });
 
+  it.each(["select", "reused-open"] as const)(
+    "renews ownership when the first panel reselects a tab presented by another scope: %s",
+    async (action) => {
+      const native = fakeNativeBrowser([nativeTab("mac-one")]);
+      const first = controllerFixture();
+      flushFrames();
+      const firstPresentation = native.messages().at(-1);
+      expect(firstPresentation).toMatchObject({ type: "present", tabId: "mac-one", visible: true });
+      const second = controllerFixture();
+      flushFrames();
+      expect(native.messages().at(-1)).toMatchObject({
+        type: "present",
+        scope: second.controller.native.presentation.scope,
+        tabId: "mac-one",
+        visible: true,
+      });
+      expect(second.controller.native.presentation.scope).not.toBe(
+        first.controller.native.presentation.scope,
+      );
+      native.postMessage.mockClear();
+      hit = first.host.renderRoot.querySelector(".bp-stage");
+
+      if (action === "select") {
+        await first.controller.selectTab("mac-one");
+      } else {
+        native.postMessage.mockImplementationOnce(async () => ({ ok: true, tabId: "mac-one" }));
+        await first.controller.openUrl("https://example.test/page", { newTab: true, native: true });
+      }
+      flushFrames();
+
+      expect(native.messages().filter((message) => message.type === "present")).toEqual([
+        firstPresentation,
+      ]);
+    },
+  );
+
   it("hides on presentation loss and releases its scope without closing window tabs", () => {
     const native = fakeNativeBrowser([nativeTab("mac-one")]);
     const { controller, host } = controllerFixture();

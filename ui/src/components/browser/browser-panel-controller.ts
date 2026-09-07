@@ -455,6 +455,7 @@ export class BrowserPanelController implements ReactiveController {
       this.setState("urlDraft", nativeTab.url);
       this.setState("loading", this.native.activeTab?.loading ?? false);
       this.setState("errorText", null);
+      this.native.presentation.renew();
       return;
     }
     if (route && browserRouteKey(this.operations.route) !== browserRouteKey(route)) {

@@ -116,6 +116,12 @@ export class BrowserPanelNativePresentation {
     });
   };
 
+  renew(): void {
+    // Explicit selection reclaims a tab that another panel scope may now own.
+    this.lastPayload = "";
+    this.schedule();
+  }
+
   hide(): void {
     if (this.connected) {
       this.send(null, null);
