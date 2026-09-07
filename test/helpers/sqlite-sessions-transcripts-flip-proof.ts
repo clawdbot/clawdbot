@@ -150,6 +150,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
   await runQaGatewayFixture(
     async () => {
       try {
+        // The mock, Doctor commands, and Gateway share the same isolated environment.
+        inst.state.applyEnv();
         const mockOpenAiPort = await startMockOpenAiServer(context, {
           requestLogPath: context.mockOpenAiRequestLog,
           responseText: context.fullTurnAssistantText,
@@ -165,8 +167,6 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
           ...mockConfig,
           gateway: { ...asRecord(instanceConfig.gateway), ...mockConfig.gateway },
         });
-        // Doctor commands and the gateway must resolve the same isolated database.
-        inst.state.applyEnv();
         gatewayEntrypoint = await inst.entrypoint();
         if (options.requireBuiltCli === true && !isBuiltCliEntrypoint(gatewayEntrypoint)) {
           throw new Error(`expected built CLI entrypoint, got ${gatewayEntrypoint.join(" ")}`);
@@ -564,9 +564,10 @@ async function startMockOpenAiServer(
           }
           const listening = /(?:^|\n)mock-openai listening on ([^\r\n]*)\r?\n/u.exec(stdout);
           if (listening) {
-            const port = Number(listening[1]);
-            if (!/^[1-9]\d{0,4}$/u.test(listening[1]) || port > 65_535) {
-              throw new Error(`invalid mock OpenAI listener port: ${listening[1]}`);
+            const portText = expectDefined(listening[1], "mock OpenAI listener port");
+            const port = Number(portText);
+            if (!/^[1-9]\d{0,4}$/u.test(portText) || port > 65_535) {
+              throw new Error(`invalid mock OpenAI listener port: ${portText}`);
             }
             ready = true;
             return port;

@@ -1,7 +1,9 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureFullEnv } from "../../src/test-utils/env.js";
 import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import {
   createOpenClawTestInstance,
@@ -10,6 +12,10 @@ import {
 import { runSqliteSessionsTranscriptsFlipProof } from "../helpers/sqlite-sessions-transcripts-flip-proof.js";
 import { stopChildProcess } from "../helpers/stop-child-process.js";
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 vi.mock("../../src/test-utils/openclaw-test-state.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../src/test-utils/openclaw-test-state.js")>();
@@ -49,6 +55,9 @@ describe("SQLite flip mock endpoint ownership", () => {
   it.each([false, true])(
     "owns the first published endpoint and handles config failure (unverified stop=%s)",
     async (unverifiedStop) => {
+      const envSnapshot = captureFullEnv();
+      process.env.ANTHROPIC_API_KEY = "ambient-provider-fixture";
+      const previousEnv = { ...process.env };
       const actualState = await vi.importActual<
         typeof import("../../src/test-utils/openclaw-test-state.js")
       >("../../src/test-utils/openclaw-test-state.js");
@@ -66,6 +75,7 @@ describe("SQLite flip mock endpoint ownership", () => {
       let requestLog = "";
       let initialConfig: Record<string, unknown> | undefined;
       let publishedConfig: Record<string, unknown> | undefined;
+      let childEnv: NodeJS.ProcessEnv | undefined;
       let publicationCount = 0;
       const cli = vi.fn(async (): Promise<never> => {
         throw new Error("CLI ran before configuration completed");
@@ -83,6 +93,12 @@ describe("SQLite flip mock endpoint ownership", () => {
           publicationCount++;
           publishedConfig = record;
           publishedPort = Number(new URL(provider.baseUrl).port);
+          const mockSpawn = vi
+            .mocked(spawn)
+            .mock.calls.find(
+              ([, args]) => Array.isArray(args) && args[0] === "scripts/e2e/mock-openai-server.mjs",
+            );
+          childEnv = mockSpawn?.[2]?.env;
           competingBind = await tryBind(publishedPort);
           if (asRecord(competingBind)?.code === "EADDRINUSE") {
             const response = await fetch(`${provider.baseUrl}/responses`, {
@@ -125,7 +141,17 @@ describe("SQLite flip mock endpoint ownership", () => {
         });
         expect(requestLog).toContain("mock startup proof");
         expect(cli).not.toHaveBeenCalled();
+        expect(Object.keys(process.env).toSorted()).toEqual(Object.keys(previousEnv).toSorted());
+        expect(
+          Object.keys(previousEnv).filter((key) => process.env[key] !== previousEnv[key]),
+        ).toEqual([]);
         expect(instance).toBeDefined();
+        expect({ HOME: childEnv?.HOME, OPENCLAW_STATE_DIR: childEnv?.OPENCLAW_STATE_DIR }).toEqual({
+          HOME: instance!.homeDir,
+          OPENCLAW_STATE_DIR: instance!.stateDir,
+        });
+        expect(childEnv?.OPENAI_API_KEY === "sk-openclaw-e2e-mock").toBe(true);
+        expect(childEnv?.ANTHROPIC_API_KEY).toBeUndefined();
         if (unverifiedStop) {
           expect(result).toBeInstanceOf(AggregateError);
           expect((result as AggregateError).errors[0]).toBe(configFailure);
@@ -147,6 +173,8 @@ describe("SQLite flip mock endpoint ownership", () => {
         vi.mocked(createOpenClawTestState).mockReset();
         vi.mocked(createOpenClawTestInstance).mockReset();
         vi.mocked(stopChildProcess).mockReset();
+        vi.mocked(spawn).mockClear();
+        envSnapshot.restore();
       }
     },
   );
