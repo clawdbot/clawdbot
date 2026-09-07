@@ -12,7 +12,11 @@ import {
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
 } from "./oauth-refresh-marker.js";
-import { fenceOAuthRefreshPeers } from "./oauth-refresh-peers.js";
+import {
+  fenceOAuthRefreshPeers,
+  rollbackOAuthRefreshPeerClaims,
+  settleOAuthRefreshPeerClaims,
+} from "./oauth-refresh-peers.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
   createOAuthMainAgentDir,
@@ -225,6 +229,168 @@ describe("OAuth refresh peer settlement", () => {
     } finally {
       envSnapshot.restore();
       resetOAuthTestState();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
+
+  it.each([
+    {
+      name: "conflicting account ids",
+      identity: { accountId: "acct-b" },
+      retired: false,
+    },
+    {
+      name: "conflicting emails",
+      identity: { email: "b@example.com" },
+      retired: false,
+    },
+    {
+      name: "conflicting account ids despite matching email",
+      identity: { accountId: "acct-b", email: "a@example.com" },
+      retired: false,
+    },
+    {
+      name: "identity-less peer",
+      identity: {},
+      retired: true,
+    },
+    {
+      name: "matching identity",
+      identity: { accountId: "acct-a" },
+      retired: true,
+    },
+  ])("settles an exact replacement safely for $name", async ({ identity, retired }) => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-exact-settlement-");
+      await createOAuthMainAgentDir(tempRoot);
+      const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
+      await fs.mkdir(peerAgentDir, { recursive: true });
+      const profileId = "openai:default";
+      const provider = "openai";
+      const ownerOriginal = createExpiredOauthStore({
+        profileId,
+        provider,
+        accountId: "acct-a",
+        email: "a@example.com",
+      }).profiles[profileId];
+      if (ownerOriginal?.type !== "oauth") {
+        throw new Error("expected owner OAuth credential");
+      }
+      const peerOriginal = {
+        ...ownerOriginal,
+        accountId: undefined,
+        email: undefined,
+        ...identity,
+      };
+      const fence = createOAuthRefreshFence({ profileId, credential: ownerOriginal });
+      const replacement = {
+        ...ownerOriginal,
+        access: "rotated-a-access",
+        refresh: "rotated-a-refresh",
+        expires: Date.now() + 60 * 60 * 1000,
+      };
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, peerAgentDir);
+      const persistedFence = loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId];
+      if (persistedFence?.type !== "oauth") {
+        throw new Error("expected persisted OAuth fence");
+      }
+
+      settleOAuthRefreshPeerClaims({
+        profileId,
+        fence: persistedFence,
+        claims: [
+          {
+            candidate: {
+              agentId: "peer-a",
+              agentDir: peerAgentDir,
+              databasePath: resolveAuthProfileDatabasePath(peerAgentDir),
+              env: process.env,
+            },
+            original: peerOriginal,
+          },
+        ],
+        authoritativeSharedCredential: replacement,
+        replacement,
+      });
+
+      const settled = loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId];
+      if (retired) {
+        expect(settled).toBeUndefined();
+      } else {
+        expect(settled?.type === "oauth" && isOAuthRefreshFence(settled)).toBe(true);
+        expect(settled?.type === "oauth" && isPendingOAuthRefreshFence(settled)).toBe(false);
+      }
+    } finally {
+      envSnapshot.restore();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
+
+  it("continues rolling back peers after one candidate cannot be restored or terminalized", async () => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-peer-rollback-");
+      await createOAuthMainAgentDir(tempRoot);
+      const profileId = "openai:default";
+      const provider = "openai";
+      const original = createExpiredOauthStore({ profileId, provider }).profiles[profileId];
+      if (original?.type !== "oauth") {
+        throw new Error("expected original OAuth credential");
+      }
+      const fence = createOAuthRefreshFence({ profileId, credential: original });
+      const brokenAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
+      const healthyAgentDir = path.join(tempRoot, "agents", "peer-b", "agent");
+      await Promise.all([
+        fs.mkdir(brokenAgentDir, { recursive: true }),
+        fs.mkdir(healthyAgentDir, { recursive: true }),
+      ]);
+      await fs.writeFile(resolveAuthProfileDatabasePath(brokenAgentDir), "not a sqlite database");
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, healthyAgentDir);
+      const persistedFence = loadPersistedAuthProfileStore(healthyAgentDir)?.profiles[profileId];
+      if (persistedFence?.type !== "oauth") {
+        throw new Error("expected persisted OAuth fence");
+      }
+
+      expect(() =>
+        rollbackOAuthRefreshPeerClaims({
+          profileId,
+          fence: persistedFence,
+          claims: [
+            {
+              candidate: {
+                agentId: "peer-b",
+                agentDir: healthyAgentDir,
+                databasePath: resolveAuthProfileDatabasePath(healthyAgentDir),
+                env: process.env,
+              },
+              original,
+            },
+            {
+              candidate: {
+                agentId: "peer-a",
+                agentDir: brokenAgentDir,
+                databasePath: resolveAuthProfileDatabasePath(brokenAgentDir),
+                env: process.env,
+              },
+              original,
+            },
+          ],
+        }),
+      ).toThrow(AggregateError);
+      expect(loadPersistedAuthProfileStore(healthyAgentDir)?.profiles[profileId]).toMatchObject({
+        type: "oauth",
+        provider,
+        access: original.access,
+        refresh: original.refresh,
+        expires: original.expires,
+      });
+    } finally {
+      envSnapshot.restore();
       await removeOAuthTestTempRoot(tempRoot);
     }
   });

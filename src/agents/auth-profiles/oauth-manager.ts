@@ -825,19 +825,32 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             if (error instanceof OAuthRefreshPeerFenceError) {
               peerClaims = mergePeerClaims(peerClaims, error.claims);
             }
+            const cleanupErrors: unknown[] = [];
             try {
               rollbackOAuthRefreshPeerClaims({
                 profileId: params.profileId,
                 fence,
                 claims: peerClaims,
               });
-            } finally {
+            } catch (cleanupError) {
+              cleanupErrors.push(cleanupError);
+            }
+            try {
               await rollbackOAuthRefreshOwnerClaim({
                 ownerAgentDir,
                 profileId: params.profileId,
                 fence,
                 original: cred,
               });
+            } catch (cleanupError) {
+              cleanupErrors.push(cleanupError);
+            }
+            if (cleanupErrors.length > 0) {
+              throw new AggregateError(
+                [error, ...cleanupErrors],
+                "Failed to claim OAuth refresh ownership and roll back partial claims.",
+                { cause: error },
+              );
             }
             throw error;
           }

@@ -16,7 +16,7 @@ import {
   isOAuthRefreshFence,
   isSameOAuthRefreshGeneration,
 } from "./oauth-refresh-marker.js";
-import { hasMatchingOAuthIdentity } from "./oauth-shared.js";
+import { hasMatchingOAuthIdentity, hasOAuthIdentity } from "./oauth-shared.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
@@ -221,11 +221,20 @@ export async function fenceOAuthRefreshPeers(params: {
     return claims;
   } catch (error) {
     if (params.rollbackOnFailure !== false) {
-      rollbackOAuthRefreshPeerClaims({
-        profileId: params.profileId,
-        fence: params.fence,
-        claims,
-      });
+      try {
+        rollbackOAuthRefreshPeerClaims({
+          profileId: params.profileId,
+          fence: params.fence,
+          claims,
+        });
+      } catch (rollbackError) {
+        // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause must remain the original fencing failure.
+        throw new AggregateError(
+          [error, rollbackError],
+          "Failed to fence every historical OAuth refresh peer and roll back partial claims.",
+          { cause: error },
+        );
+      }
       throw error;
     }
     throw new OAuthRefreshPeerFenceError(claims, error);
@@ -238,10 +247,12 @@ export function rollbackOAuthRefreshPeerClaims(params: {
   fence: OAuthCredential;
   claims: readonly OAuthRefreshPeerClaim[];
 }): void {
+  const unresolved: Error[] = [];
   for (const claim of params.claims.toReversed()) {
     if (!claim.original) {
       continue;
     }
+    let restoreError: Error | undefined;
     try {
       let restored = false;
       updateCandidateAuthProfileStore({
@@ -262,22 +273,40 @@ export function rollbackOAuthRefreshPeerClaims(params: {
       if (restored) {
         continue;
       }
-    } catch {
-      // The terminal retry below preserves the no-replay invariant.
+    } catch (error) {
+      restoreError = toErrorObject(error, "Failed to restore OAuth refresh peer");
     }
-    updateCandidateAuthProfileStore({
-      candidate: claim.candidate,
-      profileId: params.profileId,
-      updater: (store) => {
-        const current = store.profiles[params.profileId];
-        if (
-          !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
-        ) {
-          return false;
-        }
-        store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);
-        return true;
-      },
+    try {
+      updateCandidateAuthProfileStore({
+        candidate: claim.candidate,
+        profileId: params.profileId,
+        updater: (store) => {
+          const current = store.profiles[params.profileId];
+          if (
+            !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
+          ) {
+            return false;
+          }
+          store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);
+          return true;
+        },
+      });
+    } catch (error) {
+      const terminalError = toErrorObject(error, "Failed to terminally fence OAuth refresh peer");
+      unresolved.push(
+        restoreError
+          ? new AggregateError(
+              [restoreError, terminalError],
+              `Failed to resolve OAuth refresh peer rollback: ${claim.candidate.databasePath}`,
+              { cause: restoreError },
+            )
+          : terminalError,
+      );
+    }
+  }
+  if (unresolved.length > 0) {
+    throw new AggregateError(unresolved, "Failed to roll back every OAuth refresh peer.", {
+      cause: unresolved[0],
     });
   }
 }
@@ -314,8 +343,9 @@ export function settleOAuthRefreshPeerClaims(params: {
             inherited !== undefined &&
             inherited.provider === claim.original.provider &&
             hasUsableOAuthCredential(inherited) &&
-            (isExactOAuthCredential(inherited, params.replacement) ||
-              hasMatchingOAuthIdentity(claim.original, inherited));
+            (hasMatchingOAuthIdentity(claim.original, inherited) ||
+              (!hasOAuthIdentity(claim.original) &&
+                isExactOAuthCredential(inherited, params.replacement)));
           if (canInherit) {
             delete store.profiles[params.profileId];
           } else {
