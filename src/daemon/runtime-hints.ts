@@ -53,6 +53,7 @@ export function buildGatewayRuntimeRecoveryHints(params: {
   logFile?: string | null;
   platform?: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
+  rewriteCommands?: LaunchdStderrRewriteCommands;
 }): string[] {
   const hints =
     params.kind === "gui-session"
@@ -72,6 +73,7 @@ export function buildGatewayRuntimeRecoveryHints(params: {
         env: params.env,
         systemdServiceName: resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE),
         windowsTaskName: resolveGatewayWindowsTaskName(params.env.OPENCLAW_PROFILE),
+        rewriteCommands: params.rewriteCommands,
       }),
     );
   }

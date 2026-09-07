@@ -37,7 +37,7 @@ export function resolveAdvertisedLaunchdStderr(
 
 export type LaunchdStderrRewriteCommands = {
   restartCommand: string;
-  forceInstallCommand: string;
+  forceInstallCommand?: string;
 };
 
 const GATEWAY_LAUNCHD_STDERR_REWRITE_COMMANDS: LaunchdStderrRewriteCommands = {
@@ -50,5 +50,8 @@ export function formatLaunchdStderrRewriteGuidance(
   env: GatewayServiceEnv = process.env,
   commands: LaunchdStderrRewriteCommands = GATEWAY_LAUNCHD_STDERR_REWRITE_COMMANDS,
 ): string {
-  return `Rewrite the LaunchAgent with ${formatCliCommand(commands.restartCommand, env)} or ${formatCliCommand(commands.forceInstallCommand, env)}.`;
+  const restartCommand = formatCliCommand(commands.restartCommand, env);
+  return commands.forceInstallCommand
+    ? `Rewrite the LaunchAgent with ${restartCommand} or ${formatCliCommand(commands.forceInstallCommand, env)}.`
+    : `Rewrite the LaunchAgent with ${restartCommand}.`;
 }

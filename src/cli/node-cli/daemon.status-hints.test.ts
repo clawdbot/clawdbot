@@ -100,5 +100,15 @@ describe("runNodeDaemonStatus launchd stderr hints", () => {
     expect(stdout()).toContain(formatCliCommand("openclaw node install --force"));
     expect(stdout()).not.toContain("openclaw gateway restart");
     expect(stdout()).not.toContain("openclaw gateway install");
+
+    mocks.runtime.log.mockClear();
+    await withEnvAsync(
+      { HOME: homeDir, OPENCLAW_PROFILE: undefined, OPENCLAW_NIX_MODE: "1" },
+      async () => {
+        await runNodeDaemonStatus();
+      },
+    );
+    expect(stdout()).toContain(formatCliCommand("openclaw node restart"));
+    expect(stdout()).not.toContain("openclaw node install");
   });
 });

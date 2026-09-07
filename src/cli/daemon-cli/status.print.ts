@@ -432,6 +432,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       restartCommand: formatCliCommand("openclaw gateway restart", env),
       env,
       logFile: status.logFile,
+      rewriteCommands: {
+        restartCommand: "openclaw gateway restart",
+        ...(!installBlock ? { forceInstallCommand: "openclaw gateway install --force" } : {}),
+      },
     })) {
       defaultRuntime.error(errorText(hint));
     }

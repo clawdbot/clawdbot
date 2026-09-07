@@ -86,7 +86,9 @@ function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
     windowsTaskName: resolveNodeWindowsTaskName(),
     rewriteCommands: {
       restartCommand: "openclaw node restart",
-      forceInstallCommand: "openclaw node install --force",
+      ...(resolveDaemonInstallBlockMessage("node", env)
+        ? {}
+        : { forceInstallCommand: "openclaw node install --force" }),
     },
   });
 }
