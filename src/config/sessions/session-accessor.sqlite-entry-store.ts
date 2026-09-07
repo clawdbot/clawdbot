@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { getChildLogger } from "../../logging/logger.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
@@ -274,20 +275,29 @@ function clearSqliteSessionEntryPreservingWindows(
         }
       : {}),
   } as const;
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .insertInto("session_nodes")
-      .values({ session_key: params.sessionKey, ...cleared })
-      .onConflict((conflict) => conflict.column("session_key").doUpdateSet(cleared)),
-  );
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .updateTable("session_nodes")
-      .set({ entry_valid: -1 })
-      .where("session_key", "=", params.sessionKey),
-  );
+  // Clear + settle must be atomic: the entry-validity triggers mark the row
+  // pending (entry_valid = 0) on the upsert, and the follow-up UPDATE settles
+  // the cleared row back to -1. If a concurrent flush interleaved its own
+  // entry_json write between the two statements, the reset's settle step would
+  // persist the terminal (non-empty entry + entry_valid = -1) shape that
+  // canonical validation rejects (issue #139960). Nesting is handled via
+  // SAVEPOINT when the caller already holds a transaction.
+  runSqliteImmediateTransactionSync(database.db, () => {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("session_nodes")
+        .values({ session_key: params.sessionKey, ...cleared })
+        .onConflict((conflict) => conflict.column("session_key").doUpdateSet(cleared)),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_nodes")
+        .set({ entry_valid: -1 })
+        .where("session_key", "=", params.sessionKey),
+    );
+  });
 }
 
 export function deleteLifecycleTargetRows(

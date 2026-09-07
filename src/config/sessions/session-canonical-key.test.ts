@@ -307,4 +307,69 @@ describe("cold canonical session validation", () => {
 
     expect(() => loadSessionEntryReadOnly(scope)).toThrow("openclaw doctor --fix");
   });
+
+  it("tolerates a reset racing a flush: complete payload with entry_valid = -1 over a retained window self-heals", () => {
+    const scope = createScope();
+    replaceSessionEntrySync(scope, { sessionId: "cold-key", updatedAt: 1, label: "before" });
+    runOpenClawAgentWriteTransaction((database) => {
+      ensureTranscriptSessionRoot(database, { ...scope, sessionId: "cold-key" }, 2);
+    }, scope);
+    // Live connection + racing raw writer mirrors the outage (issue #139960):
+    // the flush rewrites entry_json (the validity trigger marks the row
+    // pending), then the reset's settle step lands entry_valid = -1 over the
+    // flushed payload. The tuple must not brick reads.
+    const held = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
+    const writer = new DatabaseSync(scope.storePath);
+    try {
+      writer
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run(
+          JSON.stringify({ sessionId: "cold-key", updatedAt: 1, label: "flushed" }),
+          scope.sessionKey,
+        );
+      writer
+        .prepare("UPDATE session_nodes SET entry_valid = -1 WHERE session_key = ?")
+        .run(scope.sessionKey);
+      expect(() => listSessionEntriesReadOnly({ ...scope, projection: "list" })).not.toThrow();
+      expect(() => loadSessionEntryReadOnly(scope)).not.toThrow();
+    } finally {
+      writer.close();
+      void held;
+    }
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    // Cold listing tolerates the raced row (no repair error); the entry stays
+    // absent until the session's next turn rewrites it.
+    expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })).toEqual([]);
+    // Recovery completes without an operator: the session's next turn settles
+    // the row back to a valid entry and it lists again.
+    replaceSessionEntrySync(scope, { sessionId: "cold-key", updatedAt: 3, label: "next-turn" });
+    const rows = listSessionEntriesReadOnly({ ...scope, projection: "list" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.entry).toMatchObject({ sessionId: "cold-key", label: "next-turn" });
+  });
+
+  it("still requires repair for an unparseable payload with entry_valid = -1, even over a retained window", () => {
+    const scope = createScope();
+    replaceSessionEntrySync(scope, { sessionId: "cold-key", updatedAt: 1, label: "before" });
+    runOpenClawAgentWriteTransaction((database) => {
+      ensureTranscriptSessionRoot(database, { ...scope, sessionId: "cold-key" }, 2);
+    }, scope);
+    const writer = new DatabaseSync(scope.storePath);
+    try {
+      writer
+        .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
+        .run(scope.sessionKey);
+      writer
+        .prepare("UPDATE session_nodes SET entry_valid = -1 WHERE session_key = ?")
+        .run(scope.sessionKey);
+    } finally {
+      writer.close();
+    }
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    expect(() => listSessionEntriesReadOnly({ ...scope, projection: "list" })).toThrow(
+      "openclaw doctor --fix",
+    );
+  });
 });

@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
@@ -172,13 +173,20 @@ export function ensureTranscriptSessionRoot(
       .onConflict((conflict) => conflict.column("session_key").doNothing()),
   );
   if ((insertedNode.numAffectedRows ?? 0n) > 0n) {
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("session_nodes")
-        .set({ entry_valid: -1 })
-        .where("session_key", "=", scope.sessionKey),
-    );
+    // Insert + settle must be atomic (issue #139960): the insert fires the
+    // entry-validity trigger (marks the row pending), and the settle UPDATE
+    // writes the cleared root back to -1. A concurrent flush interleaving its
+    // entry_json write between the two would otherwise be settled to the
+    // terminal (non-empty entry + entry_valid = -1) shape.
+    runSqliteImmediateTransactionSync(database.db, () => {
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("session_nodes")
+          .set({ entry_valid: -1 })
+          .where("session_key", "=", scope.sessionKey),
+      );
+    });
     publishSessionEntryCacheInvalidation(database);
   }
   executeSqliteQuerySync(

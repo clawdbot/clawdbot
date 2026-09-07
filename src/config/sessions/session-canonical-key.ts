@@ -165,6 +165,7 @@ export function scanCanonicalSqliteSessionEntries(
         "session_nodes.fork_source_session_key",
         "session_nodes.parent_session_key",
         "session_nodes.spawned_by",
+        "session_nodes.updated_at",
         "retained_window.session_id as retained_window_id",
       ])
       // Key validation needs metadata; Doctor visitors still own complete saved entries.
@@ -183,12 +184,23 @@ export function scanCanonicalSqliteSessionEntries(
   )) {
     // Retained windows have no entry, but their keys remain part of a listing snapshot.
     metadata?.keys.push(row.session_key);
-    if (
-      row.entry_json === "{}" &&
-      row.entry_valid === -1 &&
-      row.retained_window_id === row.current_session_id
-    ) {
-      continue;
+    // An invalid logical entry (entry_valid = -1) carrying a complete,
+    // self-consistent payload over the retained window is the signature of a
+    // reset settling entry_valid = -1 over a concurrent flush's write
+    // (issue #139960). It is rebuildable from the retained window; payloads
+    // that are unparseable or inconsistent with the row identity/timestamp
+    // remain terminal corruption requiring repair.
+    if (row.entry_valid === -1 && row.retained_window_id === row.current_session_id) {
+      const racedPayload =
+        row.entry_json === "{}" ||
+        parseSqliteSessionEntryRecord({
+          entry_json: row.entry_json,
+          current_session_id: row.current_session_id,
+          updated_at: row.updated_at,
+        });
+      if (racedPayload) {
+        continue;
+      }
     }
     const record =
       row.entry_valid === 1
