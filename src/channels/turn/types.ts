@@ -226,7 +226,7 @@ type ChannelDeliveryAdapterBase = {
   ) => Promise<void> | void;
   /** Let core emit the one canonical `message_sent` after non-durable provider settlement. */
   observeMessageSent?: true;
-  onError?: (err: unknown, info: { kind: string }) => void;
+  onError?: (err: unknown, info: { kind: string }) => Promise<void> | void;
 };
 
 export type ChannelCoreManagedTurnDeliveryAdapter = ChannelDeliveryAdapterBase & {
