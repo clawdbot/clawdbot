@@ -16,11 +16,28 @@ import {
   persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
+import {
+  REQUEST,
+  seedActivePlacement,
+} from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 import type { SessionRepositoryCheckpointPayload } from "./worker-environments/session-repository-checkpoints.js";
 
 const mocks = githubPublicationTestMocks();
 export const repositoryPublicationTestUrl = "https://github.com/owner/repository/pull/1";
+
+export function seedPublicationPlacement(
+  placements: Parameters<typeof seedActivePlacement>[0],
+  owner: Parameters<typeof seedActivePlacement>[1],
+) {
+  seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+    environmentId: owner.environmentId,
+    sessionId: REQUEST.sessionId,
+    ownerEpoch: owner.ownerEpoch,
+  });
+  return seedActivePlacement(placements, owner);
+}
 
 export async function createRepositoryPublicationFixture(
   checkpoint: Mock,

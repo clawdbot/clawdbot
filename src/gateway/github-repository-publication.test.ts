@@ -24,24 +24,18 @@ import {
 } from "./github-repository-publication-store.js";
 import {
   createRepositoryPublicationFixture,
+  seedPublicationPlacement,
   repositoryPublicationTestUrl as url,
 } from "./github-repository-publication.test-support.js";
-import {
-  REQUEST,
-  seedActivePlacement,
-} from "./worker-environments/placement-dispatch-test-fixtures.js";
+import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
   withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
-function repositoryFixture(
-  requestedRef?: Parameters<typeof createRepositoryPublicationFixture>[1],
-  session?: Parameters<typeof createRepositoryPublicationFixture>[2],
-) {
-  return createRepositoryPublicationFixture(checkpoint, requestedRef, session);
-}
+const repositoryFixture = createRepositoryPublicationFixture.bind(undefined, checkpoint);
 
 describe("repository checkpoint GitHub publication", () => {
   installGitHubPublicationTestHarness();
@@ -554,7 +548,7 @@ describe("repository checkpoint GitHub publication", () => {
       let held: Promise<void> | undefined;
       try {
         if (blocker === "pending result") {
-          seedActivePlacement(blocked.placements, {
+          seedPublicationPlacement(blocked.placements, {
             environmentId: "pending-publication-worker",
             ownerEpoch: 7,
             executionMode: "remote-exec",
@@ -623,7 +617,7 @@ describe("repository checkpoint GitHub publication", () => {
     "settles the accepted checkpoint for an in-turn $executionMode request with publication $publication",
     async ({ executionMode, publication }) => {
       const f = await repositoryFixture(undefined, REQUEST);
-      seedActivePlacement(f.placements, {
+      seedPublicationPlacement(f.placements, {
         environmentId: "in-turn-worker",
         ownerEpoch: 7,
         executionMode,
@@ -696,7 +690,7 @@ describe("repository checkpoint GitHub publication", () => {
     async (executionMode) => {
       const f = await repositoryFixture(undefined, REQUEST);
       if (executionMode) {
-        seedActivePlacement(f.placements, {
+        seedPublicationPlacement(f.placements, {
           environmentId: "run-scoped-worker",
           ownerEpoch: 7,
           executionMode,
@@ -757,7 +751,7 @@ describe("repository checkpoint GitHub publication", () => {
     "rejects a remote-exec publication with a %s before recording an intent",
     async (mismatch) => {
       const f = await repositoryFixture(undefined, REQUEST);
-      seedActivePlacement(f.placements, {
+      seedPublicationPlacement(f.placements, {
         environmentId: "owned-worker",
         ownerEpoch: 7,
         executionMode: "remote-exec",
@@ -833,6 +827,11 @@ describe("repository checkpoint GitHub publication", () => {
           workspaceBaseManifestRef: "sha256:" + "1".repeat(64),
           remoteWorkspaceDir: "/worker/workspace",
         },
+      });
+      seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+        environmentId: "publication-worker",
+        sessionId: SESSION_ID,
+        ownerEpoch: 7,
       });
       f.placements.transition({
         sessionId: SESSION_ID,
