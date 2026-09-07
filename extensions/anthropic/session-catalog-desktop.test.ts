@@ -33,15 +33,17 @@ describe("Claude Desktop overlay cache", () => {
   let now: number;
   let dirty: "all" | Set<string>;
   let watch: DirtyDirectoryWatch;
+  let closeWatch = vi.fn();
 
   beforeEach(async () => {
     home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-desktop-overlay-"));
     now = Date.UTC(2026, 0, 1);
     dirty = new Set();
+    closeWatch = vi.fn();
     watch = {
       takeDirty: () => dirty,
       observeChildDirectories: vi.fn(),
-      close: vi.fn(),
+      close: closeWatch,
     };
     createWatch.mockReset().mockReturnValue(watch);
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -70,7 +72,7 @@ describe("Claude Desktop overlay cache", () => {
   it("keeps an absent Desktop store cached until the sixty-second backstop", async () => {
     const absent = await readDesktopOverlay(home);
     expect(absent.available).toBe(false);
-    expect(watch.close).toHaveBeenCalledOnce();
+    expect(closeWatch).toHaveBeenCalledOnce();
 
     await writeDesktopMetadata(home, "Created");
     now += 59_999;
