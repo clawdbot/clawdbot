@@ -17,7 +17,11 @@ import {
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { Context, Model, ThinkingContent, ToolCall } from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
-import { stripSystemPromptCacheBoundary } from "./utils/system-prompt-cache-boundary.js";
+import {
+  splitSystemPromptRelocatableBoundary,
+  stripSystemPromptCacheBoundary,
+  stripSystemPromptRelocatableBoundary,
+} from "./utils/system-prompt-cache-boundary.js";
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 type ChatCompletionContentPartVideo = {
@@ -71,12 +75,30 @@ export function convertMessages(
     normalizeToolCallId(id),
   ) as ProviderMessage[];
 
+  // Chat templates serialize `tools` after the system message, so a volatile
+  // region left inside it still sits ahead of the tool schemas and forks the
+  // cacheable prefix on every new conversation. Carry it past the tools on a
+  // user turn instead, keeping the full prompt in place until a carrier turn is
+  // actually emitted so a projected-away turn cannot drop the region.
+  let relocatableSplit: { remainingPrompt: string; relocatable: string } | undefined;
+  let systemParamIndex: number | undefined;
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    const systemPrompt = options.preserveSystemPromptCacheBoundary
-      ? context.systemPrompt
-      : stripSystemPromptCacheBoundary(context.systemPrompt);
+    let systemPrompt: string;
+    if (options.preserveSystemPromptCacheBoundary) {
+      // The cache boundary stays so the caller can anchor its breakpoint on it,
+      // but nothing downstream relocates, so the relocatable markers would
+      // otherwise survive into the payload.
+      systemPrompt = stripSystemPromptRelocatableBoundary(context.systemPrompt);
+    } else {
+      const split = splitSystemPromptRelocatableBoundary(context.systemPrompt);
+      if (split && split.relocatable.length > 0) {
+        relocatableSplit = split;
+      }
+      systemPrompt = stripSystemPromptCacheBoundary(context.systemPrompt);
+    }
+    systemParamIndex = params.length;
     params.push({ role, content: sanitizeSurrogates(systemPrompt) });
   }
 
@@ -288,5 +310,64 @@ export function convertMessages(
     lastRole = msg.role;
   }
 
+  if (relocatableSplit !== undefined && systemParamIndex !== undefined) {
+    relocateNonBehavioralRegion({
+      params,
+      systemParamIndex,
+      split: relocatableSplit,
+      cacheOptOutIndexes: options.cacheOptOutIndexes,
+    });
+  }
+
   return params;
+}
+
+/**
+ * Attach the producer-marked non-behavioral region to the first user turn.
+ *
+ * Keeping per-session facts below `SYSTEM_PROMPT_CACHE_BOUNDARY` only stabilizes
+ * the prefix for providers that anchor a breakpoint there; Chat Completions
+ * serializes tool schemas after the whole system message, so the region still
+ * divides the prefix ahead of them. Everything outside the marked region stays
+ * in the system message at its original authority.
+ */
+function relocateNonBehavioralRegion(args: {
+  params: ChatCompletionMessageParam[];
+  systemParamIndex: number;
+  split: { remainingPrompt: string; relocatable: string };
+  cacheOptOutIndexes?: Set<number>;
+}): void {
+  const text = sanitizeSurrogates(args.split.relocatable);
+  // The FIRST user turn, not the last: a trailing turn changes every request, so
+  // the region would move off the previous turn on each follow-up and fork the
+  // prefix there, costing the whole prior exchange including tool results. The
+  // first turn is byte-identical for the life of the conversation and still sits
+  // after the tool schemas, which is all the relocation needs.
+  for (let index = args.systemParamIndex + 1; index < args.params.length; index++) {
+    const param = args.params[index];
+    if (!param || param.role !== "user") {
+      continue;
+    }
+    if (typeof param.content === "string") {
+      param.content = `${param.content}\n\n${text}`;
+    } else if (Array.isArray(param.content)) {
+      param.content = [
+        ...param.content,
+        { type: "text", text } satisfies ChatCompletionContentPartText,
+      ];
+    } else {
+      continue;
+    }
+    // Shrink the system message only once a carrier turn is secured, so a
+    // projected-away user turn leaves the region where it already is.
+    const systemParam = args.params[args.systemParamIndex];
+    if (systemParam) {
+      systemParam.content = sanitizeSurrogates(
+        stripSystemPromptCacheBoundary(args.split.remainingPrompt),
+      );
+    }
+    // The turn now carries volatile text, so it must not anchor a cache breakpoint.
+    args.cacheOptOutIndexes?.add(index);
+    return;
+  }
 }

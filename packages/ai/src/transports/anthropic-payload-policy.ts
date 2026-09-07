@@ -12,6 +12,7 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
+  stripSystemPromptRelocatableBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
 /**
  * Anthropic-family request payload policy helpers.
@@ -265,11 +266,16 @@ function applyAnthropicCacheControlToSystem(
       continue;
     }
     const record = block as Record<string, unknown>;
-    if (record.type !== "text" || typeof record.text !== "string") {
+    const blockText = record.text;
+    if (record.type !== "text" || typeof blockText !== "string") {
       normalizedBlocks.push(block);
       continue;
     }
-    const split = splitSystemPromptCacheBoundary(record.text);
+    // This transport relocates nothing, so the relocatable marker must not
+    // survive into the payload; the cache boundary stays for the breakpoint.
+    const text = stripSystemPromptRelocatableBoundary(blockText);
+    record.text = text;
+    const split = splitSystemPromptCacheBoundary(text);
     if (!split) {
       if (record.cache_control === undefined) {
         record.cache_control = cacheControl;

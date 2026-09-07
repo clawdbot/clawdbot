@@ -8,6 +8,8 @@ import {
   normalizePromptCapabilityIds,
   normalizeStructuredPromptSection,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "@openclaw/ai/internal/shared";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1539,9 +1541,17 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
     `Reasoning=${reasoningLevel}; hidden unless on/stream. Toggle /reasoning; /status shows when enabled.`,
+    // Only the per-session facts line sits between these markers. It states
+    // session identity and host facts and directs the model to do nothing, so a
+    // transport whose tool schemas serialize after the system message may carry
+    // it past them without moving any instruction out of its authoring role.
+    // The region is closed explicitly: callers append to this prompt afterwards
+    // (hook `appendSystemContext`, the permission refresh notice), and those
+    // additions must keep their instruction role rather than travel with it.
+    SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+    `${buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities)}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
   );
 
   return lines.filter(Boolean).join("\n");
