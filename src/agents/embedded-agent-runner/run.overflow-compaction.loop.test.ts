@@ -3,6 +3,11 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
+  bindWorkspaceSkillUsage,
+  consumeRunSkillUsage,
+  discardRunWorkspaceSkillUsage,
+} from "../../skills/runtime/run-usage.js";
+import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
 } from "../admitted-run-context.js";
@@ -189,12 +194,16 @@ function makeDispatchInput(
 describe("embedded run retry dispatch", () => {
   let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
   beforeEach(async () => {
+    consumeRunSkillUsage("run-1");
     mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
     mocks.settleRequesterAfterSessionSpawns.mockReset();
     admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
     admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
   });
-  afterEach(() => admission.close());
+  afterEach(() => {
+    discardRunWorkspaceSkillUsage(admittedRunContext.operationalRunInstance);
+    admission.close();
+  });
 
   it.each([undefined, "global", "agent:main:policy"])(
     "dispatches a global plugin attempt with its prepared owner (%s)",
@@ -223,6 +232,64 @@ describe("embedded run retry dispatch", () => {
       expect(mocks.runAttempt).toHaveBeenCalledTimes(1);
       expect(mocks.runAttempt.mock.calls[0]?.[0]).toEqual(result.preparedAttempt);
       expect(mocks.runAttempt.mock.calls[0]?.[1]).toBeUndefined();
+    },
+  );
+
+  it.each(["openclaw", "codex", "third-party"])(
+    "records only snapshot-matched explicit skill selections for the admitted %s run",
+    async (agentHarnessId) => {
+      const skillFile = "/tmp/workspace/skills/release/SKILL.md";
+      const bundledSkillFile = "/tmp/bundled/skills/lint/SKILL.md";
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.preparedRuntime.snapshot().agentHarness.id = agentHarnessId;
+      input.runInput.runParams.explicitSkillSelections = [
+        { name: "release_alias", path: skillFile },
+        { name: "bundled_lint", path: bundledSkillFile },
+        { name: "unmatched", path: "/tmp/workspace/skills/unmatched/SKILL.md" },
+      ];
+      input.runInput.runParams.skillsSnapshot = {
+        prompt: "",
+        skills: [],
+        skillCommandUsagePaths: [
+          {
+            readPath: skillFile,
+            skillFile,
+            skillName: "release",
+            skillSource: "workspace",
+          },
+          {
+            readPath: bundledSkillFile,
+            skillFile: bundledSkillFile,
+            skillName: "lint",
+            skillSource: "bundled",
+          },
+        ],
+      };
+
+      await prepareAndDispatchEmbeddedRunAttempt(input);
+      await prepareAndDispatchEmbeddedRunAttempt(input);
+
+      expect(
+        bindWorkspaceSkillUsage({
+          operationalRunInstance: admittedRunContext.operationalRunInstance,
+          skillFile,
+        })?.(),
+      ).toBe(true);
+      expect(
+        bindWorkspaceSkillUsage({
+          operationalRunInstance: admittedRunContext.operationalRunInstance,
+          skillFile: bundledSkillFile,
+        }),
+      ).toBeUndefined();
+      expect(consumeRunSkillUsage("run-1")).toEqual([
+        { name: "release", source: "workspace", activation: "command", skillFile },
+        {
+          name: "lint",
+          source: "bundled",
+          activation: "command",
+          skillFile: bundledSkillFile,
+        },
+      ]);
     },
   );
 

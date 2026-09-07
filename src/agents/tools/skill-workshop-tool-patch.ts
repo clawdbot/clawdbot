@@ -1,12 +1,14 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { hasRunWorkspaceSkillUsage } from "../../skills/runtime/run-usage.js";
+import { bindWorkspaceSkillUsage } from "../../skills/runtime/run-usage.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
-import { findUniqueSkillPatchSpan } from "../../skills/workshop/service.js";
+import { composeSkillBodyPatch, findUniqueSkillPatchSpan } from "../../skills/workshop/service.js";
 import type { SkillWorkshopPreparedPatch } from "../../skills/workshop/types.js";
 import { readWritableWorkshopSkill } from "../../skills/workshop/workspace-skill-read.js";
+import type { OperationalRunInstanceRef } from "../admitted-run-context.js";
 import { readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 type WritableSkillPatchTarget = Awaited<ReturnType<typeof readWritableWorkshopSkill>>;
 
@@ -176,21 +178,42 @@ export function resolveSkillPatchAuthorization(params: {
   return redeemPreparedSkillPatch(params);
 }
 
-export function assertSkillPatchRunUsage(params: {
+function assertSkillPatchRunUsage(params: {
   skill: WritableSkillPatchTarget;
   foregroundRepair: boolean;
-  runId?: string;
-}): void {
-  if (
-    params.foregroundRepair &&
-    !hasRunWorkspaceSkillUsage({
-      runId: params.runId,
-      name: params.skill.skillKey,
-      skillFile: params.skill.skillFile,
-    })
-  ) {
-    throw new ToolInputError(
-      `skill "${params.skill.skillName}" was not used in this run and cannot be repaired autonomously`,
-    );
+  operationalRunInstance?: OperationalRunInstanceRef;
+}): () => void {
+  const isAuthorized = params.foregroundRepair
+    ? bindWorkspaceSkillUsage({
+        operationalRunInstance: params.operationalRunInstance,
+        skillFile: params.skill.skillFile,
+      })
+    : undefined;
+  const assertAuthorized = () => {
+    if (params.foregroundRepair && isAuthorized?.() !== true) {
+      throw new ToolInputError(
+        `skill "${params.skill.skillName}" was not used in this run and cannot be repaired autonomously`,
+      );
+    }
+  };
+  assertAuthorized();
+  return assertAuthorized;
+}
+
+export function prepareAuthorizedSkillPatch(params: {
+  skill: WritableSkillPatchTarget;
+  foregroundRepair: boolean;
+  patch: ReturnType<typeof readSkillPatchText>;
+}): () => void {
+  const assertAuthorized = assertSkillPatchRunUsage({
+    skill: params.skill,
+    foregroundRepair: params.foregroundRepair,
+    operationalRunInstance: getGatewayToolCallerIdentity()?.operationalRunInstance,
+  });
+  try {
+    composeSkillBodyPatch(stripProposalFrontmatterForSkill(params.skill.content), params.patch);
+  } catch (error) {
+    throw new ToolInputError(error instanceof Error ? error.message : String(error));
   }
+  return assertAuthorized;
 }

@@ -31,6 +31,17 @@ type PreparedWorkspaceSkillFileMutation = {
   proposedContentHash: string;
 };
 
+type WorkspaceSkillMutationWriter = (
+  file: PreparedWorkspaceSkillFileMutation,
+  overwrite: boolean,
+  assertMutationAuthorized?: () => void,
+) => Promise<void>;
+
+type WorkspaceSkillMutationApplyOptions = {
+  writeFile?: WorkspaceSkillMutationWriter;
+  assertMutationAuthorized?: () => void;
+};
+
 export type PreparedWorkspaceSkillMutation = {
   mode: "create" | "update";
   skillsRoot: string;
@@ -228,20 +239,31 @@ export async function prepareWorkspaceSkillRestoration(params: {
 
 export async function applyWorkspaceSkillMutation(
   mutation: PreparedWorkspaceSkillMutation,
-  writeFile: (
-    file: PreparedWorkspaceSkillFileMutation,
-    overwrite: boolean,
-  ) => Promise<void> = writeWorkspaceSkillFile,
+  options: WorkspaceSkillMutationApplyOptions | WorkspaceSkillMutationWriter = {},
 ): Promise<void> {
+  const writeFile =
+    typeof options === "function" ? options : (options.writeFile ?? writeWorkspaceSkillFile);
+  const assertMutationAuthorized =
+    typeof options === "function" ? undefined : options.assertMutationAuthorized;
   const written: PreparedWorkspaceSkillFileMutation[] = [];
   const writtenSupportPaths: string[] = [];
   try {
     for (const file of mutation.supportFiles) {
-      await writePreparedWorkspaceFile(file, mutation.mode === "update", writeFile);
+      await writePreparedWorkspaceFile(
+        file,
+        mutation.mode === "update",
+        writeFile,
+        assertMutationAuthorized,
+      );
       written.push(file);
       writtenSupportPaths.push(file.path);
     }
-    await writePreparedWorkspaceFile(mutation.skillFile, mutation.mode === "update", writeFile);
+    await writePreparedWorkspaceFile(
+      mutation.skillFile,
+      mutation.mode === "update",
+      writeFile,
+      assertMutationAuthorized,
+    );
   } catch (error) {
     try {
       await restorePreparedWorkspaceFiles(written.toReversed());
@@ -319,10 +341,12 @@ function normalizeSupportFiles(
 async function writePreparedWorkspaceFile(
   file: PreparedWorkspaceSkillFileMutation,
   overwrite: boolean,
-  writeFile: (file: PreparedWorkspaceSkillFileMutation, overwrite: boolean) => Promise<void>,
+  writeFile: WorkspaceSkillMutationWriter,
+  assertMutationAuthorized?: () => void,
 ): Promise<void> {
   try {
-    await writeFile(file, overwrite);
+    assertMutationAuthorized?.();
+    await writeFile(file, overwrite, assertMutationAuthorized);
   } catch (error) {
     // fs-safe commits writes atomically, but its post-write identity check can
     // reject after commit. Restore only our exact bytes; preserve external edits.
@@ -345,8 +369,10 @@ async function writePreparedWorkspaceFile(
 async function writeWorkspaceSkillFile(
   file: PreparedWorkspaceSkillFileMutation,
   overwrite: boolean,
+  assertMutationAuthorized?: () => void,
 ): Promise<void> {
   const targetRoot = await root(file.rootDir);
+  assertMutationAuthorized?.();
   await targetRoot.write(file.relativePath, file.content, {
     encoding: "utf8",
     mkdir: true,

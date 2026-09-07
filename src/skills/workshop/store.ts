@@ -254,6 +254,7 @@ export async function writeSkillProposal(params: {
   ownerAgentId: string;
   maxPending: number;
   event: NewSkillProposalEvent;
+  assertMutationAuthorized?: () => void;
   store?: SkillWorkshopStoreOptions;
 }): Promise<SkillProposalEvent> {
   assertProposalId(params.record.id);
@@ -262,6 +263,7 @@ export async function writeSkillProposal(params: {
   await stageSkillProposalGeneration(params);
 
   try {
+    params.assertMutationAuthorized?.();
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);

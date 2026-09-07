@@ -25,6 +25,7 @@ export {
   hasSkillReferenceCandidate,
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
+  skillCommandsToExplicitSelections,
 } from "./chat-command-invocation.js";
 
 export function listSkillCommandsForWorkspace(params: {

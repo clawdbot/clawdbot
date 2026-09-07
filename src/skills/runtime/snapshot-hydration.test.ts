@@ -21,6 +21,7 @@ describe("hydrateResolvedSkills", () => {
       prompt: "p",
       skills: [{ name: "x" }],
       resolvedSkills: [makeFixtureSkill("x", 100)],
+      skillCommandUsagePaths: [],
       version: 1,
     };
     let buildCalls = 0;
@@ -47,6 +48,7 @@ describe("hydrateResolvedSkills", () => {
         prompt: "DIFFERENT-PROMPT",
         skills: [{ name: "y" }],
         resolvedSkills: rebuiltSkills,
+        skillCommandUsagePaths: [],
         version: 99,
       };
     });
@@ -56,6 +58,7 @@ describe("hydrateResolvedSkills", () => {
     expect(result.skillFilter).toEqual(["x"]);
     expect(result.version).toBe(7);
     expect(result.resolvedSkills).toBe(rebuiltSkills);
+    expect(result.skillCommandUsagePaths).toEqual([]);
   });
 
   it("treats an empty resolvedSkills array as populated", () => {
@@ -63,6 +66,7 @@ describe("hydrateResolvedSkills", () => {
       prompt: "",
       skills: [],
       resolvedSkills: [],
+      skillCommandUsagePaths: [],
       version: 1,
     };
     let buildCalls = 0;

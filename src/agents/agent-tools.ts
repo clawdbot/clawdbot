@@ -765,6 +765,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       ? {
           agentId: executionAgentId,
           sessionKey: executionSessionKey.trim(),
+          ...(options.operationalRunInstance
+            ? { operationalRunInstance: options.operationalRunInstance }
+            : {}),
           ...(options.abortSignal ? { approvalSignals: [options.abortSignal] } : {}),
           turnSourceChannel: resolveGatewayMessageChannel(
             options.messageChannel ?? options.messageProvider,

@@ -1,6 +1,10 @@
 /** Publishes committed run accounting before retiring its runtime resources. */
 import { incrementCompactionCount } from "../../../auto-reply/reply/session-updates.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import {
+  discardRunSkillUsage,
+  discardRunWorkspaceSkillUsage,
+} from "../../../skills/runtime/run-usage.js";
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
@@ -36,6 +40,8 @@ export async function settleEmbeddedRun(input: {
 }): Promise<void> {
   const { runInput, runtime, compaction, ownedContextEngineLease } = input;
   const params = runInput.runParams;
+  discardRunSkillUsage(params.runId);
+  discardRunWorkspaceSkillUsage(runtime.admittedRunContext.operationalRunInstance);
   // Publish committed bookkeeping before cleanup can throw or cancellation closes the caller.
   // A returned model/session id is never a substitute for the accepted host target.
   const committed = compaction.session.committedCompactionSuccessor;

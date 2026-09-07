@@ -184,6 +184,43 @@ function createSkillProposalRollback(params: {
 }
 
 describe("skill workshop proposals", () => {
+  it("does not persist an update when authority closes during proposal staging", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workshopSkillsDir(), "revoked-proposal");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await writeSkill({
+      dir: skillDir,
+      name: "revoked-proposal",
+      description: "Keep the original skill when proposal authority closes",
+      body: "# Revoked Proposal\n\nOriginal body.\n",
+    });
+    let authorized = true;
+    let checks = 0;
+
+    await expect(
+      proposeUpdateSkill({
+        workspaceDir,
+        skillName: "revoked-proposal",
+        content: "# Revoked Proposal\n\nForbidden replacement.\n",
+        assertMutationAuthorized: () => {
+          checks += 1;
+          if (checks === 1) {
+            queueMicrotask(() => {
+              authorized = false;
+            });
+          }
+          if (!authorized) {
+            throw new Error("run authority closed during proposal staging");
+          }
+        },
+      }),
+    ).rejects.toThrow("run authority closed during proposal staging");
+
+    expect(checks).toBe(2);
+    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({ proposals: [] });
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Original body.");
+  });
+
   it("uses one Workshop target across session workspaces", async () => {
     const firstWorkspaceDir = await fs.realpath(await makeWorkspace());
     const secondWorkspaceDir = await fs.realpath(await makeWorkspace());
