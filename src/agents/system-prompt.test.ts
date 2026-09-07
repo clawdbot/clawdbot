@@ -462,15 +462,17 @@ describe("buildAgentSystemPrompt", () => {
         promptMode,
       });
       expect(prompt).toContain("using existing access or the service's supported credential flow");
-      expect(prompt).toContain("Their request is sufficient authorization");
-      expect(prompt).toContain("In a group conversation, move the handoff to private chat");
+      expect(prompt).toContain("their request already authorizes the handoff");
+      expect(prompt).toContain(
+        "first select a private conversation with the requesting user from trusted conversation context",
+      );
       expect(prompt).toContain("recovery/backup codes, and hidden device tokens");
       expect(prompt).toContain(
         "Keep these secrets out of chat, tool arguments, URLs, logs, and shell text",
       );
       expect(prompt).toContain("host-owned masked credential entry");
       expect(prompt).toContain(
-        "short-lived user-facing code and verification URL from trusted login output",
+        "trusted flow's short-lived user-facing code and verification URL only there",
       );
       expect(prompt).toContain("user-provided short-lived one-time codes or OAuth callbacks");
       expect(prompt).toContain("same pending flow");

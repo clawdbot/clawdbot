@@ -1190,15 +1190,17 @@ describe("Codex app-server native code mode config", () => {
       disableTools: true,
       disableMessageTool: true,
     } as EmbeddedRunAttemptParams);
-    expect(instructions).toContain("Their request is sufficient authorization");
-    expect(instructions).toContain("In a group conversation, move the handoff to private chat");
+    expect(instructions).toContain("their request already authorizes the handoff");
+    expect(instructions).toContain(
+      "first select a private conversation with the requesting user from trusted conversation context",
+    );
     expect(instructions).toContain("recovery/backup codes, and hidden device tokens");
     expect(instructions).toContain(
       "Keep these secrets out of chat, tool arguments, URLs, logs, and shell text",
     );
     expect(instructions).toContain("host-owned masked credential entry");
     expect(instructions).toContain(
-      "short-lived user-facing code and verification URL from trusted login output",
+      "trusted flow's short-lived user-facing code and verification URL only there",
     );
     expect(instructions).toContain("user-provided short-lived one-time codes or OAuth callbacks");
     expect(instructions).toContain("same pending flow");
