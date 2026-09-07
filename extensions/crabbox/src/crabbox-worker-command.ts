@@ -46,15 +46,15 @@ export async function runCrabboxCommand(params: {
   return result;
 }
 
+const CREDENTIAL_FAILURE_PATTERN =
+  /\b(?:access\s+denied|authentication|authorization|credentials?|forbidden|permission|token|unauthorized)\b/iu;
+// `crabbox stop` exits 4 with this line when the lease record itself is gone (#137025).
+const LEASE_NOT_FOUND_PATTERN = /\blease(?:\/[a-z0-9_-]+)? not found:\s*(\S+)/iu;
+
 // Recognition failure does not prove resource absence; only the stop owner can confirm cleanup.
 export function isUnrecognizedLease(result: SpawnResult, identifier: string): boolean {
   const output = `${result.stderr}\n${result.stdout}`;
-  if (
-    !output.includes(identifier) ||
-    /\b(?:access\s+denied|authentication|authorization|credentials?|forbidden|permission|token|unauthorized)\b/iu.test(
-      output,
-    )
-  ) {
+  if (!output.includes(identifier) || CREDENTIAL_FAILURE_PATTERN.test(output)) {
     return false;
   }
   return (
@@ -73,6 +73,20 @@ export function isUnrecognizedLease(result: SpawnResult, identifier: string): bo
   );
 }
 
+// Stop success needs exit 4 naming this lease as not found. The inspect classifier above is
+// wider on purpose: missing local claims, coordinator 404 warnings and exit 5 retries do not
+// prove the release finished (docs/gateway/cloud-workers.md, "Failed teardown stays retryable").
+function isLeaseConfirmedAbsent(result: SpawnResult, identifier: string): boolean {
+  if (result.code !== 4) {
+    return false;
+  }
+  const output = `${result.stderr}\n${result.stdout}`;
+  if (CREDENTIAL_FAILURE_PATTERN.test(output)) {
+    return false;
+  }
+  return LEASE_NOT_FOUND_PATTERN.exec(output)?.[1] === identifier;
+}
+
 export async function stopCrabboxLease(params: {
   binary: string;
   id: string;
@@ -87,6 +101,9 @@ export async function stopCrabboxLease(params: {
     timeoutMs: CRABBOX_STOP_TIMEOUT_MS,
   });
   if (result.termination === "exit" && result.code === 0) {
+    return;
+  }
+  if (result.termination === "exit" && isLeaseConfirmedAbsent(result, params.id)) {
     return;
   }
   throw crabboxCommandError("stop", result);

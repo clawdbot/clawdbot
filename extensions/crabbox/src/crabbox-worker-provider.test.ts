@@ -3205,12 +3205,21 @@ describe("Crabbox worker provider", () => {
     expect(hasLoneSurrogate(message)).toBe(false);
   });
 
+  it("confirms stop when the provider reports the lease itself as not found", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return commandResult({ code: 4, stderr: `lease/server not found: ${LEASE_ID}` });
+    });
+    await expect(provider.destroy(lifecycleLease())).resolves.toBeUndefined();
+    expect(calls).toEqual([[SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]]);
+  });
+
   it.each([
     {
       code: 5,
       stderr: `warning: could not inspect lease before release: coordinator GET http://127.0.0.1/v1/leases/${LEASE_ID}: http 404: not_found\ncoordinator accepted release for ${LEASE_ID}, but remote cleanup reported a cleanup failure or scheduled retry`,
     },
-    { code: 4, stderr: `lease/server not found: ${LEASE_ID}` },
     { code: 4, stderr: `sandbox ${LEASE_ID} is not claimed by Crabbox` },
     { code: 4, stderr: `wandb sandbox "${LEASE_ID}" has no matching local ownership claim` },
     { code: 4, stderr: `unikraftcloud lease ${LEASE_ID} no longer exists` },
