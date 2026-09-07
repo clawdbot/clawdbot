@@ -13,7 +13,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
@@ -451,6 +454,49 @@ describe("sessionsTailCommand", () => {
     const output = runtimeOutput(runtime);
     expect(output).toContain("current ok");
     expect(output).not.toContain("stale ok");
+  });
+
+  it("does not let a sessionId-less store row poison an unrelated --session-key request (#140261)", async () => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([
+      makeEvent({
+        type: "tool.result",
+        ts: "2026-05-18T12:04:21.000Z",
+        data: { name: "healthy", success: true },
+      }),
+    ]);
+
+    // Regression pin for #140261: a legacy/corrupted row (e.g. a cron entry where only
+    // a system message was ever queued, so no live session -- and thus no sessionId --
+    // was ever established) must not crash selection-building for the whole store, even
+    // when the request targets a different, healthy --session-key. Every accessor write
+    // path now refuses to persist an entry lacking a sessionId (hasValidSessionEntryIdentity)
+    // and always defaults one (createFallbackSessionEntry), so this inserts straight into
+    // session_nodes to reproduce the on-disk shape a pre-existing corrupted/legacy row would
+    // have. On current main the read path already excludes such rows before sessions-tail
+    // ever sees them (parseSqliteSessionEntryRecord requires a string sessionId), and
+    // buildTailSelection's own sessionId check is a second, independent guard -- this test
+    // pins that combined behavior rather than exercising a fix made on this branch.
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(
+        "agent:main:cron:orphaned",
+        "orphaned-placeholder",
+        JSON.stringify({ updatedAt: 5, systemSent: true }),
+        5,
+      );
+
+    await expect(
+      sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime),
+    ).resolves.toBeUndefined();
+
+    const output = runtimeOutput(runtime);
+    expect(output).toContain("healthy ok");
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it.each([

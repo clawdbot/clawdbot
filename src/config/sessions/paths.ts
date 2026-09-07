@@ -61,7 +61,7 @@ export function resolveSessionFilePathOptions(params: {
 const SAFE_SESSION_ID_RE = /^[\p{L}\p{N}][\p{L}\p{N}\p{M}._-]{0,127}$/u;
 
 export function validateSessionId(sessionId: string): string {
-  const trimmed = sessionId.trim();
+  const trimmed = typeof sessionId === "string" ? sessionId.trim() : "";
   if (
     trimmed !== trimmed.normalize("NFC") ||
     !SAFE_SESSION_ID_RE.test(trimmed) ||
