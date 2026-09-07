@@ -25,6 +25,13 @@ openclaw-chat-pane {
   overflow: auto;
 }
 
+/* The 6px divider stays fully draggable but overlays the pane boundary instead
+   of consuming a transparent gutter that exposes the split-view background. */
+.chat-split-view > resizable-divider {
+  z-index: 3;
+  margin-inline: -3px;
+}
+
 .chat-split-view__column {
   display: flex;
   flex-direction: column;
@@ -32,22 +39,56 @@ openclaw-chat-pane {
   min-height: 0;
 }
 
+.chat-split-view__column > resizable-divider[orientation="horizontal"] {
+  z-index: 3;
+  margin-block: -3px;
+}
+
 /* One cell = pane header + pane; the header lives in-flow with its pane, so
    split geometry needs no mirrored toolbar layer. */
 .chat-split-view__cell {
   --chat-surface: var(--bg-content, var(--bg));
 
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 200px;
   overflow: hidden;
+  isolation: isolate;
 }
 
 .chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
   > .chat-split-view__column
-  > .chat-split-view__cell:not(.chat-split-view__cell--active) {
-  filter: saturate(0.45);
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)::after {
+  /* The theme-tuned tint and transcript filter separate neutral panes without
+     reducing the close control's contrast. */
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: rgb(0 0 0 / var(--split-inactive-overlay-alpha));
+  pointer-events: none;
+  transition: background-color var(--split-inactive-transition-duration) ease-out;
+}
+
+.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)
+  .chat-main__conversation {
+  opacity: var(--split-inactive-content-opacity);
+  filter: saturate(var(--split-inactive-saturation)) brightness(var(--split-inactive-brightness));
+  transition:
+    opacity var(--split-inactive-transition-duration) ease-out,
+    filter var(--split-inactive-transition-duration) ease-out;
+}
+
+.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)
+  .chat-pane__header {
+  position: relative;
+  z-index: 2;
 }
 
 .chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
@@ -64,7 +105,8 @@ openclaw-chat-pane {
     .chat-pane__draft-indicator,
     .chat-pane__branches-menu,
     .chat-pane__gateway-menu,
-    .chat-pane__actions
+    .chat-pane__actions .chat-icon-btn:not(.chat-pane__close-pane),
+    .chat-pane__actions > openclaw-chat-header-session-menu
   ) {
   display: none;
 }

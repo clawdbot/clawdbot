@@ -389,6 +389,12 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
   `;
 }
 
+// Pane cells activate on bubbled pointer and focus events. Keep close events on
+// their button so an inactive pane is removed before activation can rerender it.
+function stopClosePaneActivation(event: Event): void {
+  event.stopPropagation();
+}
+
 export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const copyPathLabel =
     props.copiedAction === "copy-path"
@@ -615,6 +621,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                       class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane"
                       type="button"
                       aria-label=${t("chat.splitView.closePane")}
+                      @pointerdown=${stopClosePaneActivation}
+                      @focusin=${stopClosePaneActivation}
                       @click=${() => props.onClosePane?.(props.paneId)}
                     >
                       ${icons.x}
