@@ -321,6 +321,51 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       }).status,
     ).toBe("fail");
   });
+  it.each([0, 1, 2])(
+    "preserves frozen doctor counts while shrinking current policy: %s",
+    async (count) => {
+      const packageName = "@openclaw/codex";
+      const probe = 'import { spawn } from "node:child_process";\nspawn(process.execPath, []);\n';
+      const artifact = writePluginArtifact({
+        extensionId: "codex",
+        packageName,
+        files: {
+          "src/app-server/transport-stdio.ts": probe,
+          "src/app-server/sandbox-exec-server/sandbox-child.ts": probe,
+          "src/app-server/transport-process-snapshot.ts": probe,
+          "src/doctor.ts":
+            'import { spawn } from "node:child_process";\n' +
+            "spawn(process.execPath, []);\n".repeat(count),
+          "src/unreviewed.ts": probe,
+        },
+      });
+      for (const context of ["", "release/2026.9.1", "release/2026.9.2", "release/2026.9.3"]) {
+        const frozen = context === "release/2026.9.1" || context === "release/2026.9.2";
+        const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
+        expect(scanned.scanErrors).toEqual([]);
+        const result = scanned.packageResults[0]!;
+        expect(result.unexpectedCriticalFindings.map((finding) => finding.path).toSorted()).toEqual(
+          [
+            ...Array.from({ length: frozen ? 0 : count }, () => "src/doctor.ts"),
+            "src/unreviewed.ts",
+          ],
+        );
+        const report = buildPluginNpmSecurityScanReport({
+          candidateSha: CANDIDATE_SHA,
+          packageResults: scanned.packageResults,
+          targetContextRef: context,
+          toolingSha: TOOLING_SHA,
+        });
+        expect(report.status).toBe("fail"); // The unknown finding is never admitted.
+        expect(
+          report.errors.filter((error) =>
+            error.startsWith(`${packageName}: reviewed critical inventory mismatch`),
+          ),
+        ).toHaveLength(frozen && count !== 1 ? 1 : 0);
+      }
+    },
+  );
+
   it.each([null, 0, 2, 3, 4])(
     "requires exactly three reviewed one-shot fixture spawns when packed: %s",
     async (count) => {
@@ -334,7 +379,6 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
         packageName,
         files: {
           "src/app-server/transport-stdio.ts": spawnProbe,
-          "src/doctor.ts": spawnProbe,
           "src/app-server/sandbox-exec-server/sandbox-child.ts": spawnProbe,
           "src/app-server/transport-process-snapshot.ts": spawnProbe,
           ...(count === null

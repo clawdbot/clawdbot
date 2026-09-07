@@ -5,13 +5,23 @@ import {
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
-import { normalizePluginConfig } from "./config.js";
+import { applyCliRuntimeRecallTimeoutDefault, normalizePluginConfig } from "./config.js";
 
 const manifest = JSON.parse(
   fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf-8"),
 ) as { configSchema: JsonSchemaObject };
 
 describe("active-memory manifest config schema", () => {
+  it.each([
+    [{}, true, 45_000, true],
+    [{}, false, 15_000, true],
+    [{ timeoutMs: 20_000 }, true, 20_000, false],
+  ] as const)("applies CLI timeout defaults to %#", (input, eligible, timeoutMs, isDefault) => {
+    const config = normalizePluginConfig(input);
+    expect(config.timeoutMsIsDefault).toBe(isDefault);
+    expect(applyCliRuntimeRecallTimeoutDefault(config, eligible).timeoutMs).toBe(timeoutMs);
+  });
+
   it.each(["escalate", "always", "off"])("accepts mode=%s", (mode) => {
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,

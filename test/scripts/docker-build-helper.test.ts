@@ -6198,7 +6198,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     writeFileSync(join(physicalRoot, "package.json"), '{"name":"openclaw"}');
     writeFileSync(
       join(physicalRoot, "cli.cjs"),
-      'process.stdout.write(require.resolve("@openclaw/fs-safe/package.json"));',
+      'process.stdout.write(require.resolve("@openclaw/fs-safe"));',
     );
     writeFileSync(
       join(fsSafe, "package.json"),
@@ -6206,12 +6206,14 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
         name: "@openclaw/fs-safe",
         type: "module",
         exports: {
-          "./package.json": "./package.json",
+          ".": "./dist/index.js",
           "./config": "./config.js",
           "./durability": "./durability.js",
         },
       }),
     );
+    mkdirSync(join(fsSafe, "dist"), { recursive: true });
+    writeFileSync(join(fsSafe, "dist/index.js"), "export {};\n");
     writeFileSync(
       join(fsSafe, "config.js"),
       'export function configureFsSafeNative({ mode }) { if (mode !== "off") throw new Error("fixture requires fallback mode"); }',
@@ -6229,7 +6231,7 @@ export async function sha256File(file) {
     symlinkSync(physicalRoot, logicalRoot, process.platform === "win32" ? "junction" : "dir");
     expect(
       execFileSync(process.execPath, [join(logicalRoot, "cli.cjs")], { encoding: "utf8" }),
-    ).toBe(join(fsSafe, "package.json"));
+    ).toBe(join(fsSafe, "dist/index.js"));
     for (const packageRoot of [physicalRoot, logicalRoot]) {
       const result = spawnSync(
         process.execPath,
