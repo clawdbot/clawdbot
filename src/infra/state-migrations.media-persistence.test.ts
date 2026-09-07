@@ -1,19 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
-import { appendTranscriptEventInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import {
@@ -33,47 +33,28 @@ afterEach(() => {
 });
 
 describe("legacy media persistence doctor migration", () => {
-  it("canonicalizes assistant media at the generic transcript append owner", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-append-");
+  it("preserves the typed maintenance cause when lease acquisition fails", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-lease-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        expect(
-          appendTranscriptEventInTransaction(
-            database,
-            {
-              agentId: "main",
-              env,
-              sessionId: "append-session",
-              sessionKey: "agent:main:append-session",
-            },
-            createEvent({
-              id: "event-1",
-              parentId: null,
-              timestamp: 1000,
-              message: {
-                role: "assistant",
-                content: "append",
-                MediaPaths: ["/media/a.png"],
-                MediaTypes: ["image/png"],
-              },
-            }),
-          ),
-        ).toBe(true);
-      },
-      { agentId: "main", env },
-    );
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const row = database.db
-      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 0")
-      .get("append-session") as { event_json: string };
-    const message = (JSON.parse(row.event_json) as { message: Record<string, unknown> }).message;
-    expect(message).toMatchObject({ role: "assistant", content: "append" });
-    expect(message).not.toHaveProperty("MediaPaths");
-    expect(message).not.toHaveProperty("MediaTypes");
-    expect(message["__openclaw"]).toMatchObject({
-      media: [expect.objectContaining({ path: "/media/a.png", contentType: "image/png" })],
-    });
+    const sharedPath = resolveOpenClawStateSqlitePath(env);
+    const openDatabase = nodeSqlite.openNodeSqliteDatabase;
+    const spy = vi
+      .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+      .mockImplementation((file, options) => {
+        if (file === sharedPath) {
+          throw Object.assign(new Error("fixture lease storage failure"), { code: "SQLITE_IOERR" });
+        }
+        return openDatabase(file, options);
+      });
+    try {
+      const result = await migrateLegacyMediaPersistence({ env });
+      expect(result.changes).toEqual([]);
+      expect(result.warnings).toEqual([
+        expect.stringContaining("fixture lease storage failure | SQLITE_IOERR"),
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("rewrites every active shape and trajectory snapshot, migrates mixed archives, and reruns as a no-op", async () => {

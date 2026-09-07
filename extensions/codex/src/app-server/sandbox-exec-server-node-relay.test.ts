@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
@@ -154,6 +155,8 @@ async function expectPairedNodeHttpCredentialRejection(params: {
   expect(transport.channel.send).not.toHaveBeenCalled();
   expect(onExecutionDisconnect).not.toHaveBeenCalled();
 }
+
+useIsolatedStateGuard();
 
 afterEach(async () => {
   customLoggingPattern.value = "";

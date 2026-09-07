@@ -15,18 +15,21 @@ import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import {
   parseTimeoutMsOrExit,
   resolveUpdateRoot,
+  tryResolveInvocationCwd,
   tryWriteCompletionCache,
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
-  createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
@@ -41,74 +44,14 @@ import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
-import { reportPreMutationUpdateFailure } from "./update-command-result.js";
-
-const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
-
-type UpdateFinalizePhase =
-  | "configSnapshot"
-  | "doctor"
-  | "plugins"
-  | "targetConfigValidation"
-  | "targetConfigConvergence"
-  | "completionCache";
-
-type UpdateFinalizePhaseOutcome = "completed" | "failed" | "warning" | "skipped" | "deferred";
-
-type UpdateFinalizePhaseTiming = {
-  phase: UpdateFinalizePhase;
-  startedOffsetMs: number;
-  durationMs: number;
-  outcome: UpdateFinalizePhaseOutcome;
-};
-
-async function runTimedFinalizePhase<T>(params: {
-  finalizationStartedAt: number;
-  phaseTimings: UpdateFinalizePhaseTiming[];
-  phase: UpdateFinalizePhase;
-  run: () => Promise<T>;
-  outcome?: (result: T) => UpdateFinalizePhaseOutcome;
-}): Promise<T> {
-  const startedAt = performance.now();
-  try {
-    const result = await params.run();
-    params.phaseTimings.push({
-      phase: params.phase,
-      startedOffsetMs: Math.max(0, Math.round(startedAt - params.finalizationStartedAt)),
-      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
-      outcome: params.outcome?.(result) ?? "completed",
-    });
-    return result;
-  } catch (err) {
-    params.phaseTimings.push({
-      phase: params.phase,
-      startedOffsetMs: Math.max(0, Math.round(startedAt - params.finalizationStartedAt)),
-      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
-      outcome: "failed",
-    });
-    throw err;
-  }
-}
-
-type UpdateFinalizeResult = {
-  status: "ok" | "warning" | "error";
-  mode: "finalize";
-  root: string;
-  channel: UpdateChannel;
-  restart: false;
-  phaseTimings: UpdateFinalizePhaseTiming[];
-  postUpdate: {
-    doctor: {
-      status: "ok";
-    };
-    plugins: PostCorePluginUpdateResult;
-  };
-};
+import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
+import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import { withUpdateFailureTriage } from "./update-command-triage.js";
+import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 
 export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
+  const invocationCwd = tryResolveInvocationCwd();
   suppressDeprecations();
-  const finalizationStartedAt = performance.now();
-  const phaseTimings: UpdateFinalizePhaseTiming[] = [];
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {
     return;
@@ -122,18 +65,59 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     return;
   }
 
-  assertConfigWriteAllowedInCurrentMode();
+  await withCommandProcessScope(async (stopChildren) => {
+    const lifecycle = new UpdateFinalizationLifecycle(Boolean(opts.json), timeoutMs, stopChildren);
+    try {
+      const root = await withUpdateInProgressEnv(invocationCwd, () =>
+        lifecycle.run("preflight", async () => {
+          // Refused invocations cannot create a ledger or write failure-triage artifacts.
+          assertConfigWriteAllowedInCurrentMode();
+          await assertOpenClawStateWriteAllowedAtPath({
+            databasePath: resolveOpenClawStateSqlitePath(process.env),
+            recoverOrphanedSidecars: false,
+          });
+          await retainCliProcessJobUntilExit();
+          lifecycle.attachLedger();
+          return await resolveUpdateRoot();
+        }),
+      );
+      lifecycle.root = root;
+      const target = { root, env: resolveServiceRefreshEnv(process.env, invocationCwd) };
+      await withUpdateFailureTriage({ ...opts, invocationCwd }, target, () =>
+        withUpdateInProgressEnv(invocationCwd, async () => {
+          try {
+            const prepared = await lifecycle.run("targetConfigValidation", () =>
+              prepareUpdateFinalization(opts, root, requestedChannel),
+            );
+            await updateFinalizeCommandInternal(opts, prepared, lifecycle);
+          } catch (error) {
+            if (error instanceof UpdateCommandFailure) {
+              lifecycle.complete(error.exitCode);
+            }
+            throw error;
+          }
+        }),
+      );
+    } catch (error) {
+      if (!lifecycle.completed) {
+        lifecycle.fail();
+      }
+      throw error;
+    } finally {
+      lifecycle.finishRecovery();
+    }
+  });
+}
+
+async function prepareUpdateFinalization(
+  opts: UpdateFinalizeOptions,
+  root: string,
+  requestedChannel: UpdateChannel | null,
+) {
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
   });
-
-  const root = await resolveUpdateRoot();
-  let configSnapshot = await runTimedFinalizePhase({
-    finalizationStartedAt,
-    phaseTimings,
-    phase: "targetConfigValidation",
-    run: async () => await readConfigFileSnapshot({ skipPluginValidation: true }),
-  });
+  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   const preFinalizeConfig =
     (await readPostCorePreUpdateSourceConfig({
       sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
@@ -157,7 +141,6 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         opts,
         controlPlaneUpdateSentinelMeta: null,
       });
-      return;
     }
   }
   const storedChannel = configSnapshot.valid
@@ -173,129 +156,112 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   const channel = requestedChannel ?? storedChannel ?? effectiveChannel ?? DEFAULT_PACKAGE_CHANNEL;
   if (requestedChannel) {
     configSnapshot = await withPluginLifecycleLease({}, async () => {
-      configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-      return await persistRequestedUpdateChannel({
-        configSnapshot,
-        requestedChannel,
-      });
+      const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+      return await persistRequestedUpdateChannel({ configSnapshot: snapshot, requestedChannel });
     });
   }
+  return {
+    root,
+    configSnapshot,
+    preFinalizeConfig,
+    requestedChannel,
+    storedChannel,
+    effectiveChannel,
+    channel,
+  };
+}
+
+async function updateFinalizeCommandInternal(
+  opts: UpdateFinalizeOptions,
+  prepared: Awaited<ReturnType<typeof prepareUpdateFinalization>>,
+  lifecycle: UpdateFinalizationLifecycle,
+): Promise<void> {
+  const { root, preFinalizeConfig, requestedChannel, storedChannel, effectiveChannel, channel } =
+    prepared;
+  let { configSnapshot } = prepared;
 
   const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
-    await runTimedFinalizePhase({
-      finalizationStartedAt,
-      phaseTimings,
-      phase: "configSnapshot",
-      run: createUpdateConfigSnapshot,
-    });
-    await runTimedFinalizePhase({
-      finalizationStartedAt,
-      phaseTimings,
-      phase: "doctor",
-      run: async () => {
-        await runUpdateFinalizationDoctorInFreshProcess({
-          phase: "pre-plugin",
-          root,
-          yes: opts.yes === true,
-          json: opts.json === true,
-          workspaceSuggestions: true,
-          timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-        });
-      },
-    });
-    return await withPluginLifecycleLease({}, async () => {
-      configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-      if (requestedChannel) {
-        configSnapshot = await persistRequestedUpdateChannel({
-          configSnapshot,
-          requestedChannel,
-        });
-      }
-      const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
-      configSnapshot = restoredConfig.snapshot;
-      const postDoctorStoredChannel = configSnapshot.valid
-        ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-        : null;
-      const postDoctorChannel =
-        requestedChannel ??
-        postDoctorStoredChannel ??
-        storedChannel ??
-        effectiveChannel ??
-        DEFAULT_PACKAGE_CHANNEL;
-      const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-      return await runTimedFinalizePhase({
-        finalizationStartedAt,
-        phaseTimings,
-        phase: "plugins",
-        run: async () =>
-          await updatePluginsAfterCoreUpdate({
+    await lifecycle.run("configSnapshot", createUpdateConfigSnapshot);
+    await lifecycle.run("doctor", () =>
+      runUpdateFinalizationDoctorInFreshProcess({
+        phase: "pre-plugin",
+        root,
+        yes: opts.yes === true,
+        json: opts.json === true,
+        workspaceSuggestions: true,
+        timeoutMs: lifecycle.budget("doctor"),
+      }),
+    );
+    return await lifecycle.run(
+      "plugins",
+      () =>
+        withPluginLifecycleLease({}, async () => {
+          configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+          if (requestedChannel) {
+            configSnapshot = await persistRequestedUpdateChannel({
+              configSnapshot,
+              requestedChannel,
+            });
+          }
+          const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
+          configSnapshot = restoredConfig.snapshot;
+          const postDoctorStoredChannel = configSnapshot.valid
+            ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+            : null;
+          const postDoctorChannel =
+            requestedChannel ??
+            postDoctorStoredChannel ??
+            storedChannel ??
+            effectiveChannel ??
+            DEFAULT_PACKAGE_CHANNEL;
+          const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+          return await updatePluginsAfterCoreUpdate({
             root,
             channel: postDoctorChannel,
             configSnapshot,
             configChanged: restoredConfig.changed,
             restoredAuthoredChannels: restoredConfig.authoredChannels,
-            opts: {
-              json: opts.json,
-              timeout: opts.timeout,
-              yes: opts.yes,
-              acceptCapabilities: opts.acceptCapabilities,
-              restart: false,
-            },
-            timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+            json: opts.json,
+            acceptCapabilities: opts.acceptCapabilities,
+            timeoutMs: lifecycle.budget("plugins"),
             pluginInstallRecords,
-          }),
-        outcome: (result) =>
-          result.status === "error"
-            ? "failed"
-            : result.status === "warning"
-              ? "warning"
-              : "completed",
-      });
-    });
+          });
+        }),
+      pluginOutcome,
+    );
   });
-  // Fresh doctor acquires this same cross-process lease; completion must run after release.
-  const completedPluginUpdate = await runTimedFinalizePhase({
-    finalizationStartedAt,
-    phaseTimings,
-    phase: "targetConfigConvergence",
-    run: async () =>
-      await completePostCorePluginUpdate({
+  // Fresh Doctor acquires this same lease; convergence must run after release.
+  const completedPluginUpdate = await lifecycle.run(
+    "targetConfigConvergence",
+    async () => {
+      const result = await completePostCorePluginUpdate({
         root,
         pluginUpdate: initialPluginUpdate,
         freshDoctorRequired: initialPluginUpdate.changed,
         yes: opts.yes === true,
         json: opts.json === true,
-        timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-      }),
-    outcome: (result) =>
-      result.pluginUpdate.status === "error"
-        ? "failed"
-        : result.pluginUpdate.status === "warning"
-          ? "warning"
-          : "completed",
-  });
+        timeoutMs: lifecycle.budget("targetConfigConvergence"),
+      });
+      await persistValidatedDowngradeConfig(result.configSnapshot);
+      return result;
+    },
+    (result) => pluginOutcome(result.pluginUpdate),
+  );
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
   configSnapshot = completedPluginUpdate.configSnapshot;
-  await persistValidatedDowngradeConfig(configSnapshot);
+  const completionBudget = lifecycle.budget("completionCache");
+  // Leave shutdown time inside the phase deadline so optional cache failures can settle.
+  const completionTimeout = completionBudget - Math.min(1_000, completionBudget / 2);
+  await lifecycle.run(
+    "completionCache",
+    async () =>
+      opts.deferCompletionCache
+        ? ("deferred" as const)
+        : await tryWriteCompletionCache(root, Boolean(opts.json), completionTimeout),
+    (result) => result,
+  );
 
-  if (opts.deferCompletionCache) {
-    phaseTimings.push({
-      phase: "completionCache",
-      startedOffsetMs: Math.max(0, Math.round(performance.now() - finalizationStartedAt)),
-      durationMs: 0,
-      outcome: "deferred",
-    });
-  } else {
-    await runTimedFinalizePhase({
-      finalizationStartedAt,
-      phaseTimings,
-      phase: "completionCache",
-      run: async () => await tryWriteCompletionCache(root, Boolean(opts.json)),
-      outcome: (result) => result,
-    });
-  }
-
-  const result: UpdateFinalizeResult = {
+  const result = {
     status:
       pluginUpdate.status === "error"
         ? "error"
@@ -311,7 +277,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         : null) ??
       channel,
     restart: false,
-    phaseTimings,
+    phaseTimings: lifecycle.phaseTimings,
     postUpdate: {
       doctor: {
         status: "ok",
@@ -323,8 +289,29 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     defaultRuntime.writeJson(result);
   } else if (result.status === "ok") {
     defaultRuntime.log(theme.muted("Update finalization completed."));
+  } else if (result.status === "warning") {
+    defaultRuntime.log(theme.warn("Update finalization completed with warnings."));
+  } else {
+    defaultRuntime.log(theme.error("Update finalization failed."));
   }
+  lifecycle.complete(result.status === "error" ? 1 : 0);
   if (result.status === "error") {
-    defaultRuntime.exit(1);
+    throw new UpdateCommandFailure({
+      status: "error",
+      mode: "unknown",
+      root,
+      reason: "post-update-plugins",
+      postUpdate: { plugins: pluginUpdate },
+      steps: [],
+      durationMs: Math.round(performance.now() - lifecycle.startedAt),
+    });
   }
+}
+
+function pluginOutcome(result: PostCorePluginUpdateResult): "failed" | "warning" | "completed" {
+  return result.status === "error"
+    ? "failed"
+    : result.status === "warning"
+      ? "warning"
+      : "completed";
 }

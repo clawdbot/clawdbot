@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "../../llm/types.js";
-import { isReplayUnsafeAssistantError } from "../../llm/utils/retry.js";
+import { isTerminalAssistantError } from "../../llm/utils/retry.js";
 import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import {
   classifyFailoverSignal,
@@ -15,7 +15,7 @@ export function buildAssistantFailoverSignal(
   msg: AssistantMessage,
   opts?: { provider?: string },
 ): FailoverSignal {
-  const retryAfterMs = resolveRetryAfterMs(msg.errorMessage);
+  const retryAfterMs = resolveRetryAfterMs(msg.errorMessage, Date.now(), msg.errorBody);
   return {
     status: extractErrorHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
     ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
@@ -30,7 +30,7 @@ export function classifyAssistantFailoverReason(
   msg: AssistantMessage | undefined,
   opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner | null },
 ): FailoverReason | null {
-  if (!msg || msg.stopReason !== "error" || isReplayUnsafeAssistantError(msg)) {
+  if (!msg || msg.stopReason !== "error" || isTerminalAssistantError(msg)) {
     return null;
   }
   // Runtime preparation carries the resolved owner here so packaged runs do

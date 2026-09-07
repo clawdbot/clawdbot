@@ -11,9 +11,11 @@ import { getMattermostRuntime } from "../runtime.js";
 import { isWildcardBindHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import {
+  isRequestBodyLimitError,
   isTrustedProxyAddress,
   readRequestBodyWithLimit,
   resolveClientIp,
+  sendHttpRequestRejection,
   type OpenClawConfig,
 } from "./runtime-api.js";
 
@@ -348,6 +350,8 @@ function readInteractionBody(req: IncomingMessage): Promise<string> {
   return readRequestBodyWithLimit(req, {
     maxBytes: INTERACTION_MAX_BODY_BYTES,
     timeoutMs: INTERACTION_BODY_TIMEOUT_MS,
+    // Defer destruction so the rejection below reaches Mattermost before the close.
+    destroyOnLimit: false,
   });
 }
 
@@ -433,6 +437,26 @@ export function createMattermostInteractionHandler(params: {
       payload = parseInteractionPayload(raw);
     } catch (err) {
       log?.(`mattermost interaction: failed to parse body: ${String(err)}`);
+      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+        await sendHttpRequestRejection(
+          req,
+          res,
+          413,
+          JSON.stringify({ error: "Payload too large" }),
+          "application/json",
+        );
+        return;
+      }
+      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+        await sendHttpRequestRejection(
+          req,
+          res,
+          408,
+          JSON.stringify({ error: "Request body timeout" }),
+          "application/json",
+        );
+        return;
+      }
       res.statusCode = 400;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Invalid request body" }));

@@ -402,10 +402,10 @@ struct OpenClawQuestionCard: View {
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     #if os(iOS)
-                        .textInputAutocapitalization(.never)
+                    .textInputAutocapitalization(.never)
                     #endif
-                        .disabled(self.model.status(at: now) != .pending)
-                        .accessibilityLabel("Secret value")
+                    .disabled(self.model.status(at: now) != .pending)
+                    .accessibilityLabel("Secret value")
                 } else {
                     TextField(
                         "Other answer",
@@ -422,19 +422,19 @@ struct OpenClawQuestionCard: View {
         }
         #if os(macOS)
         .focusable()
-        .focused(self.$focusedQuestionID, equals: question.questionid)
-        .onKeyPress(characters: .decimalDigits) { keyPress in
-            guard self.focusedQuestionID == question.questionid else { return .ignored }
-            return self.handleNumberKey(keyPress, question: question, now: now)
-        }
-        .onKeyPress(.return) {
-            guard self.focusedQuestionID == question.questionid,
-                  self.model.status(at: now) == .pending,
-                  self.model.canSubmit
-            else { return .ignored }
-            Task { await self.onSubmit(self.model) }
-            return .handled
-        }
+            .focused(self.$focusedQuestionID, equals: question.questionid)
+            .onKeyPress(characters: .decimalDigits) { keyPress in
+                guard self.focusedQuestionID == question.questionid else { return .ignored }
+                return self.handleNumberKey(keyPress, question: question, now: now)
+            }
+            .onKeyPress(.return) {
+                guard self.focusedQuestionID == question.questionid,
+                      self.model.status(at: now) == .pending,
+                      self.model.canSubmit
+                else { return .ignored }
+                Task { await self.onSubmit(self.model) }
+                return .handled
+            }
         #endif
     }
 
@@ -477,10 +477,10 @@ struct OpenClawQuestionCard: View {
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
                 #if os(iOS)
-                    .textInputAutocapitalization(.never)
+                .textInputAutocapitalization(.never)
                 #endif
-                    .disabled(self.model.status(at: now) != .pending)
-                    .accessibilityLabel("Allowed HTTPS hosts")
+                .disabled(self.model.status(at: now) != .pending)
+                .accessibilityLabel("Allowed HTTPS hosts")
                 Text("Exact HTTPS hosts, separated by commas or spaces. Empty allows config SecretRefs only.")
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)

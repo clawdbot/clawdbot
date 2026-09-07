@@ -15,6 +15,9 @@ export const GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED = "node.runnerInventory
 /** Event name emitted when a newer OpenClaw version is available. */
 export const GATEWAY_EVENT_UPDATE_AVAILABLE = "update.available" as const;
 
+/** Active update ledger progress; detailed records remain admin-scoped. */
+export const GATEWAY_EVENT_UPDATE_RUN_CHANGED = "update.run.changed" as const;
+
 /** Returns whether this authenticated client may receive detailed update metadata. */
 export function canReadDetailedUpdateMetadata(role: string, scopes: readonly string[]): boolean {
   return roleScopesAllow({

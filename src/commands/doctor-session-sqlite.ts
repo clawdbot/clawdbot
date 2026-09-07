@@ -1441,7 +1441,7 @@ async function compactSqliteDatabase(
   } catch (err) {
     report.issues.push({
       code: "sqlite_compact_failed",
-      message: `SQLite database compact failed: ${String(err)}`,
+      message: `SQLite database compact failed: ${formatErrorMessage(err)}`,
     });
   }
 }

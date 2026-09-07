@@ -1759,6 +1759,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         updatedAt: Date.now(),
         archivedAt,
         archivedBy: { type: "human", id: "profile-operator" },
+        archiveReason: "manual",
       };
       if (blocked || suppliedOwner) {
         placementContextMocks.getMany.mockReturnValue(
@@ -1819,6 +1820,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           type: "human",
           id: "profile-operator",
         });
+        expect(sessionStoreMocks.currentEntry?.archiveReason).toBe("manual");
         expect(replyResolver).not.toHaveBeenCalled();
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
         return;
@@ -1829,6 +1831,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expect(sessionStoreMocks.currentEntry?.sessionId).toBe(sessionId);
       expect(sessionStoreMocks.currentEntry?.archivedAt).toBeUndefined();
       expect(sessionStoreMocks.currentEntry?.archivedBy).toBeUndefined();
+      expect(sessionStoreMocks.currentEntry?.archiveReason).toBeUndefined();
       if (suppliedOwner) {
         expect(ownerGetMany).toHaveBeenCalledWith([sessionId]);
         expect(placementContextMocks.resolveSessionWorkerPlacementContext).not.toHaveBeenCalled();
@@ -2026,6 +2029,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     name: string;
     commands?: OpenClawConfig["commands"];
     admitted: boolean;
+    command?: "/new" | "/reset";
+    tombstoneDuringDispatch?: boolean;
   }>([
     { name: "ordinary channel-authorized reset", admitted: true },
     {
@@ -2038,9 +2043,24 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       commands: { ownerAllowFrom: ["owner"], allowFrom: { matrix: [] } },
       admitted: false,
     },
+    ...(["/new", "/reset"] as const).flatMap((command) => [
+      {
+        name: `authorized ${command} after recovery commits`,
+        command,
+        tombstoneDuringDispatch: true,
+        admitted: true,
+      },
+      {
+        name: `denied ${command} after recovery commits`,
+        command,
+        tombstoneDuringDispatch: true,
+        commands: { allowFrom: { matrix: [] } },
+        admitted: false,
+      },
+    ]),
   ])(
     "gates hard reset admission without pre-unarchiving the tombstone: $name",
-    async ({ commands, admitted }) => {
+    async ({ commands, admitted, command = "/new", tombstoneDuringDispatch }) => {
       setNoAbort();
       const sessionId = "restart-tombstone-session";
       const sessionKey = "agent:main:matrix:channel:room-a";
@@ -2080,9 +2100,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         To: "!room-a:example.test",
         AccountId: "default",
         SessionKey: sessionKey,
-        Body: "/new",
-        CommandBody: "/new",
-        RawBody: "/new",
+        Body: command,
+        CommandBody: command,
+        RawBody: command,
         CommandSource: "text",
         CommandAuthorized: true,
         InboundAccessAuthorized: true,
@@ -2091,11 +2111,27 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       });
 
       const tombstoneBefore = structuredClone(sessionStoreMocks.currentEntry);
+      if (tombstoneDuringDispatch) {
+        sessionStoreMocks.currentEntry = {
+          sessionId,
+          updatedAt: Date.now(),
+          mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 3 },
+        };
+      }
       const dispatch = dispatchReplyFromConfig({
         ctx,
         cfg: { ...emptyConfig, commands },
         dispatcher,
         replyResolver,
+        ...(tombstoneDuringDispatch
+          ? {
+              fastAbortResolver: async () => {
+                sessionStoreMocks.currentEntry = structuredClone(tombstoneBefore);
+                return { handled: false, aborted: false };
+              },
+              formatAbortReplyTextResolver: () => "aborted",
+            }
+          : {}),
       });
       if (!admitted) {
         await expect(dispatch).rejects.toMatchObject({
@@ -2996,7 +3032,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
-  it("delivers fast auto progress in message-tool-only mode without verbose progress", async () => {
+  it("suppresses fast auto progress in message-tool-only mode without verbose progress", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -3020,50 +3056,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
-        suppressDefaultToolProgressMessages: true,
-      },
-    });
-
-    expect(result.queuedFinal).toBe(false);
-    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "💨Fast: auto-off(75s>=60s)",
-        channelData: { openclawProgressKind: "fast-mode-auto" },
-      }),
-    );
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("suppresses fast auto progress for room-event message-tool-only turns", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({
-        text: "💨Fast: auto-off(75s>=60s)",
-        channelData: { openclawProgressKind: "fast-mode-auto" },
-      });
-      return { text: "NO_REPLY" } satisfies ReplyPayload;
-    });
-    const ctx = buildTestCtx({
-      SessionKey: "test:session",
-      ChatType: "channel",
-      InboundEventKind: "room_event",
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-        suppressDefaultToolProgressMessages: true,
       },
     });
 
@@ -3073,19 +3065,21 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses fast auto progress when sendPolicy is deny", async () => {
+  it("delivers fast auto progress in message-tool-only mode when verbose progress is on", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
       updatedAt: 0,
-      sendPolicy: "deny",
+      sendPolicy: "allow",
+      verboseLevel: "on",
     };
     const dispatcher = createDispatcher();
+    const payload = {
+      text: "💨Fast: auto-off(75s>=60s)",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({
-        text: "💨Fast: auto-off(75s>=60s)",
-        channelData: { openclawProgressKind: "fast-mode-auto" },
-      });
+      await opts?.onToolResult?.(payload);
       return { text: "NO_REPLY" } satisfies ReplyPayload;
     });
 
@@ -3101,11 +3095,102 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+  });
+
+  it.each([
+    { forceToolResultProgress: false, label: "hidden", verboseLevel: "off" },
+    { forceToolResultProgress: false, label: "verbose", verboseLevel: "on" },
+    { forceToolResultProgress: true, label: "forced", verboseLevel: "off" },
+  ] as const)(
+    "suppresses $label fast auto progress for room-event message-tool-only turns",
+    async ({ forceToolResultProgress, verboseLevel }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "s1",
+        updatedAt: 0,
+        sendPolicy: "allow",
+        verboseLevel,
+      };
+      const dispatcher = createDispatcher();
+      const onToolResult = vi.fn(() => true);
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onToolResult?.({
+          text: "💨Fast: auto-off(75s>=60s)",
+          channelData: { openclawProgressKind: "fast-mode-auto" },
+        });
+        return { text: "NO_REPLY" } satisfies ReplyPayload;
+      });
+      const ctx = buildTestCtx({
+        SessionKey: "test:session",
+        ChatType: "channel",
+        InboundEventKind: "room_event",
+      });
+
+      const result = await dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          suppressDefaultToolProgressMessages: true,
+          forceToolResultProgress,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+          allowToolLifecycleWhenProgressHidden: true,
+          onToolResult,
+        },
+      });
+
+      expect(result.queuedFinal).toBe(false);
+      expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(onToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("suppresses fast auto progress when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
+        suppressDefaultToolProgressMessages: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        onToolResult,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sendPolicyDenied).toBe(true);
+    expect(onToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("forwards fast auto progress callbacks without separate message delivery", async () => {
+  it("suppresses fast auto progress callbacks when verbose progress is off", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -3139,10 +3224,213 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(result.queuedFinal).toBe(false);
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("forwards hidden fast auto progress only to lifecycle callbacks", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn(() => false);
+    const payload = {
+      text: "💨Fast: auto-on",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.(payload);
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressDefaultToolProgressMessages: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        allowToolLifecycleWhenProgressHidden: true,
+        onToolResult,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(onToolResult).toHaveBeenCalledOnce();
     expect(onToolResult).toHaveBeenCalledWith(payload);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
+
+  it.each(["off", "on"] as const)(
+    "falls back once when a forced fast auto callback declines visibility at verbose %s",
+    async (verboseLevel) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "s1",
+        updatedAt: 0,
+        sendPolicy: "allow",
+        verboseLevel,
+      };
+      const dispatcher = createDispatcher();
+      const onToolResult = vi.fn(() => false);
+      const payload = {
+        text: "💨Fast: auto-on",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      } satisfies ReplyPayload;
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onToolResult?.(payload);
+        return { text: "NO_REPLY" } satisfies ReplyPayload;
+      });
+
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          forceToolResultProgress: true,
+          suppressDefaultToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+          onToolResult,
+        },
+      });
+
+      expect(result.queuedFinal).toBe(false);
+      expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(onToolResult).toHaveBeenCalledOnce();
+      expect(onToolResult).toHaveBeenCalledWith(payload);
+      expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+      expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delivers forced fast auto progress once without a channel callback", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "off",
+    };
+    const dispatcher = createDispatcher();
+    const payload = {
+      text: "💨Fast: auto-on",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.(payload);
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        forceToolResultProgress: true,
+        suppressDefaultToolProgressMessages: true,
+      },
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+  });
+
+  it("does not invoke a source-suppressed fast auto callback without opt-in", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn(() => true);
+    const payload = {
+      text: "💨Fast: auto-on",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.(payload);
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
+        suppressDefaultToolProgressMessages: true,
+        onToolResult,
+      },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { callbackResult: true, verboseLevel: "off" },
+    { callbackResult: undefined, verboseLevel: "off" },
+    { callbackResult: true, verboseLevel: "on" },
+    { callbackResult: undefined, verboseLevel: "on" },
+  ] as const)(
+    "does not duplicate forced fast auto progress accepted with $callbackResult at verbose $verboseLevel",
+    async ({ callbackResult, verboseLevel }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "s1",
+        updatedAt: 0,
+        sendPolicy: "allow",
+        verboseLevel,
+      };
+      const dispatcher = createDispatcher();
+      const onToolResult = vi.fn(() => callbackResult);
+      const payload = {
+        text: "💨Fast: auto-on",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      } satisfies ReplyPayload;
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onToolResult?.(payload);
+        return { text: "NO_REPLY" } satisfies ReplyPayload;
+      });
+
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          forceToolResultProgress: true,
+          suppressDefaultToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+          onToolResult,
+        },
+      });
+
+      expect(onToolResult).toHaveBeenCalledOnce();
+      expect(onToolResult).toHaveBeenCalledWith(payload);
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
 
   it("lets the channel own forced tool progress at verbosity off", async () => {
     setNoAbort();

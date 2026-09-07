@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { ClickButton, EscalationReason } from "./driver-client.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
@@ -28,22 +29,8 @@ async function createFakeEndpoint(
   // Registered before the bind so a failed listen still removes the root.
   onTestFinished(async () => await fs.rm(directory, { recursive: true, force: true }));
   const socketPath = path.join(directory, "daemon.sock");
-  const binaryPath = path.join(directory, "cua-driver");
-  await fs.writeFile(
-    binaryPath,
-    `#!/usr/bin/env node
-const net = require("node:net");
-const args = process.argv.slice(2);
-if (args.length !== 4 || args[0] !== "mcp" || args[1] !== "--embedded" || args[2] !== "--socket") process.exit(64);
-if (process.env.CUA_DRIVER_EMBEDDED !== undefined || process.env.CUA_DRIVER_PERMISSION_MODE !== undefined || process.env.CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS !== undefined || process.env.CUA_DRIVER_RS_TELEMETRY_ENABLED !== "false" || process.env.CUA_DRIVER_RS_UPDATE_CHECK !== "false") process.exit(65);
-const socket = net.createConnection(args[3]);
-process.stdin.pipe(socket);
-socket.pipe(process.stdout);
-socket.on("error", (error) => { process.stderr.write(error.message); process.exit(66); });
-socket.on("close", () => process.exit(0));
-`,
-    { mode: 0o700 },
-  );
+  // Keep the executable immutable: Linux rejects exec while an inode has a writer.
+  const binaryPath = fileURLToPath(new URL("../test/fixtures/mcp-proxy.cjs", import.meta.url));
 
   const requests: RpcRequest[] = [];
   const connections = new Set<net.Socket>();
@@ -294,6 +281,22 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         fake.respond(request, sessionState("window"));
       } else if (request.method === "tools/call" && request.params?.name === "list_windows") {
         held.push(request);
+        if (held.length !== 2) {
+          return;
+        }
+        const firstRequest = held.find((call) => call.params?.arguments?.marker === "first");
+        const secondRequest = held.find((call) => call.params?.arguments?.marker === "second");
+        if (!firstRequest || !secondRequest) {
+          throw new Error("fixture did not receive both tagged requests");
+        }
+        const framed = Buffer.from(
+          `${JSON.stringify({ jsonrpc: "2.0", id: secondRequest.id, result: toolResult({ marker: "second", text: "β雪" }) })}\n\n${JSON.stringify({ jsonrpc: "2.0", id: firstRequest.id, result: toolResult({ marker: "first" }) })}\n`,
+        );
+        const split = framed.indexOf(Buffer.from("雪")) + 1;
+        expect(split).toBeGreaterThan(0);
+        // Receiving both requests owns the response; cold proxy startup is not a polling deadline.
+        fake.writeRaw(secondRequest, framed.subarray(0, split));
+        setImmediate(() => fake.writeRaw(secondRequest, framed.subarray(split)));
       } else if (request.method === "tools/call" && request.params?.name === "end_session") {
         fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
       }
@@ -309,24 +312,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       settlement.push("second");
       return result;
     });
-    await vi.waitFor(() => expect(held).toHaveLength(2));
-    const firstRequest = held.find((request) => request.params?.arguments?.marker === "first");
-    const secondRequest = held.find((request) => request.params?.arguments?.marker === "second");
-    if (!firstRequest || !secondRequest) {
-      throw new Error("fixture did not receive both tagged requests");
-    }
-
-    const framed = Buffer.from(
-      `${JSON.stringify({ jsonrpc: "2.0", id: secondRequest.id, result: toolResult({ marker: "second", text: "β雪" }) })}\n\n${JSON.stringify({ jsonrpc: "2.0", id: firstRequest.id, result: toolResult({ marker: "first" }) })}\n`,
-    );
-    const split = framed.indexOf(Buffer.from("雪")) + 1;
-    expect(split).toBeGreaterThan(0);
-    endpoint.writeRaw(secondRequest, framed.subarray(0, split));
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    endpoint.writeRaw(secondRequest, framed.subarray(split));
-
     const [first, second] = await Promise.all([firstCall, secondCall]);
     expect(JSON.parse(first.structuredJson!)).toEqual({ marker: "first" });
     expect(JSON.parse(second.structuredJson!)).toEqual({ marker: "second", text: "β雪" });

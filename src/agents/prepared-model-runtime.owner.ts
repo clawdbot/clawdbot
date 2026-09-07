@@ -11,7 +11,10 @@ import {
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { resolveSelectedAgentHarnessRuntime } from "./harness/runtime-plugin-load-plan.js";
+import {
+  resolveSelectedAgentHarnessRuntime,
+  type AgentHarnessPluginSelection,
+} from "./harness/runtime-plugin-load-plan.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import {
@@ -22,7 +25,6 @@ import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
-  startSerializedSnapshotBuild,
   startSerializedSnapshotBuildBatch,
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
@@ -80,8 +82,7 @@ export function prepareModelRuntimeOwner(
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   existing?: PreparedModelRuntimeOwner,
 ): PreparedModelRuntimeOwner {
-  // Preparation precedes async discovery: auth may supersede the first build, or a new
-  // preparation whose previous snapshot is still attached. Neither snapshot owns these facts.
+  // Preparation precedes async discovery; neither an old nor unpublished snapshot owns these facts.
   return Object.assign(existing ?? { generation: 0, needsRefresh: true, catalogStale: false }, {
     input,
     catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
@@ -91,22 +92,31 @@ export function prepareModelRuntimeOwner(
   });
 }
 
+export function retirePreparedModelRuntimeOwnerIfUnused(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  key: string,
+  owner: PreparedModelRuntimeOwner,
+  retained = false,
+): void {
+  if (
+    (owner.provenance === "run" || owner.provenance === "ephemeral") &&
+    (owner.admissionCount ?? 0) === 0 &&
+    (owner.leaseCount ?? 0) === 0 &&
+    !retained &&
+    owners.get(key) === owner
+  ) {
+    owners.delete(key);
+  }
+}
+
 export class PreparedModelRuntimeOwnerRetention {
   readonly #retained = new Map<string, PreparedModelRuntimeOwner>();
-
   constructor(private readonly maxSize: number) {}
 
   clear(owners: Map<string, PreparedModelRuntimeOwner>): void {
-    // Released run owners retire with this lifecycle; active leases retire on release.
-    // Configured publication owners never belong to this retention layer.
+    // Released run owners retire here; active leases retire on release.
     for (const [key, owner] of this.#retained) {
-      if (
-        owner.provenance === "run" &&
-        (owner.leaseCount ?? 0) === 0 &&
-        owners.get(key) === owner
-      ) {
-        owners.delete(key);
-      }
+      retirePreparedModelRuntimeOwnerIfUnused(owners, key, owner);
     }
     this.#retained.clear();
   }
@@ -132,9 +142,7 @@ export class PreparedModelRuntimeOwnerRetention {
       }
       const [oldestKey, oldestOwner] = oldest;
       this.#retained.delete(oldestKey);
-      if ((oldestOwner.leaseCount ?? 0) === 0 && owners.get(oldestKey) === oldestOwner) {
-        owners.delete(oldestKey);
-      }
+      retirePreparedModelRuntimeOwnerIfUnused(owners, oldestKey, oldestOwner);
     }
   }
 }
@@ -288,17 +296,18 @@ export function normalizePreparedModelRuntimeInput(
   );
   const workspaceDir = normalizeOptionalDir(input.workspaceDir);
   const env = input.env ? Object.freeze({ ...input.env }) : undefined;
-  const runtimePluginSelections = input.runtimePluginSelections
-    ? Object.freeze(
-        [...input.runtimePluginSelections]
-          .map((selection) => {
-            const runtime = resolveSelectedAgentHarnessRuntime(selection, input.config);
-            const { agentId: _agentId, ...normalized } = selection;
-            return Object.freeze({ ...normalized, runtime });
-          })
-          .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
-      )
-    : undefined;
+  const selections = new Map<string, AgentHarnessPluginSelection>();
+  for (const selection of input.runtimePluginSelections ?? []) {
+    const runtime = resolveSelectedAgentHarnessRuntime(selection, input.config);
+    const { agentId: _agentId, ...normalized } = selection;
+    const entry = Object.freeze({ ...normalized, runtime });
+    selections.set(JSON.stringify(entry), entry);
+  }
+  const runtimePluginSelections = Object.freeze(
+    [...selections]
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([, entry]) => entry),
+  );
   return {
     ...rest,
     agentDir: path.resolve(input.agentDir),
@@ -505,6 +514,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
       catalogMode: owner.catalogMode,
       input,
       catalogOwner: owner.catalogOwner,
+      inventoryOwner: owner,
       pluginGeneration: owner.pendingPluginGeneration,
       prepareInboundPluginRegistry: owner.provenance === "configured",
       isGenerationCurrent,
@@ -652,17 +662,23 @@ export async function publishModelRuntimeSnapshot(
   owner.pluginGeneration = undefined;
   owner.pendingPluginGeneration = reusablePluginGeneration;
   const generation = owner.generation;
-  const build = startSerializedSnapshotBuild(
-    {
-      input,
-      catalogOwner: owner.catalogOwner,
-      isGenerationCurrent: () => owner.generation === generation && owners.get(key) === owner,
-      prepareInboundPluginRegistry: provenance === "configured",
-      pluginGeneration: reusablePluginGeneration,
-    },
+  const isGenerationCurrent = () => owner.generation === generation && owners.get(key) === owner;
+  const build = startSerializedSnapshotBuildBatch(
+    [
+      {
+        input,
+        catalogOwner: owner.catalogOwner,
+        inventoryOwner: owner,
+        isGenerationCurrent,
+        isBuildCurrent: isGenerationCurrent,
+        prepareInboundPluginRegistry: provenance === "configured",
+        pluginGeneration: reusablePluginGeneration,
+      },
+    ],
     agentBuildCompletions,
     buildTimeoutMs,
     catalogMode,
+    undefined,
     pluginMetadataSnapshot,
   );
   owner.buildCompletion = build.completion;
@@ -674,8 +690,8 @@ export async function publishModelRuntimeSnapshot(
   owners.set(key, owner);
   const publication = (async () => {
     try {
-      const result = await build.pending;
-      if (owner.generation !== generation || owners.get(key) !== owner) {
+      const result = (await build.pending)[0]!;
+      if (!isGenerationCurrent()) {
         throw new PreparedModelRuntimePublicationSupersededError(
           `prepared model runtime publication was superseded for ${input.agentDir}`,
         );
@@ -691,10 +707,13 @@ export async function publishModelRuntimeSnapshot(
       if (owner.generation === generation) {
         owner.pendingPluginGeneration = undefined;
       }
-      if (owner.generation === generation && owners.get(key) === owner) {
+      if (isGenerationCurrent()) {
         owner.pending = undefined;
         owner.needsRefresh = true;
         owner.refreshError = refreshError;
+        if (!owner.snapshot) {
+          retirePreparedModelRuntimeOwnerIfUnused(owners, key, owner);
+        }
       }
       throw refreshError;
     }

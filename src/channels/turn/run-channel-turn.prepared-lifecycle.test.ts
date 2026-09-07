@@ -5,7 +5,6 @@ import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { RecordInboundSession } from "../session.types.js";
 import { hasFinalChannelTurnDispatch } from "./dispatch-result.js";
 import { runChannelTurn } from "./run-channel-turn.js";
-import type { ChannelTurnResolved } from "./types.js";
 
 function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -91,26 +90,35 @@ describe("prepared channel turn lifecycle", () => {
     expect(result.dispatchResult.queuedFinal).toBe(true);
   });
 
-  it("rejects prepared turns that omit dispatch lifecycle ownership", async () => {
+  it("rejects prepared turns that omit dispatch lifecycle ownership when the caller adopts a durable ingress claim", async () => {
     const recordInboundSession = createRecordInboundSession();
     const runDispatch = vi.fn(async () => ({ visibleReplySent: true }));
     const onFinalize = vi.fn();
+    const turnAdoptionLifecycle = { onAdopted: vi.fn(async () => undefined) };
 
     await expect(
       runChannelTurn({
         channel: "test",
         raw: { id: "msg-1", text: "hello" },
+        turnAdoptionLifecycle,
         adapter: {
           ingest: () => ({ id: "msg-1", rawText: "hello" }),
-          resolveTurn: () =>
-            ({
+          resolveTurn: () => {
+            const turn = {
               channel: "test",
               routeSessionKey: "agent:main:test:peer",
               storePath,
               ctxPayload: createCtx(),
               recordInboundSession,
               runDispatch,
-            }) as unknown as ChannelTurnResolved,
+              runDispatchLifecycle: {
+                turnAdoptionLifecycle,
+                onDispatchSkipped: vi.fn(),
+              },
+            };
+            Object.defineProperty(turn, "runDispatchLifecycle", { value: undefined });
+            return turn;
+          },
           onFinalize,
         },
       }),

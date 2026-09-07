@@ -2,9 +2,10 @@
  * Test-only helpers for producing Codex app-server prompt snapshots and dynamic
  * tool specs without starting a live app-server.
  */
-import type {
-  AnyAgentTool,
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+import {
+  isSubagentSessionKey,
+  type AnyAgentTool,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -14,7 +15,11 @@ import {
 } from "./src/app-server/config.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
-import type { CodexDynamicToolSpec, JsonObject } from "./src/app-server/protocol.js";
+import {
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolSpec,
+  type JsonObject,
+} from "./src/app-server/protocol.js";
 import {
   buildDeveloperInstructions,
   buildThreadResumeParams,
@@ -92,6 +97,15 @@ export function buildCodexHarnessPromptSnapshot(params: {
       appServer: params.appServer,
       promptText: params.promptText,
       turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      messageToolAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
+        (tool) => tool.name === "message",
+      ),
+      requireExplicitMessageTarget:
+        params.attempt.requireExplicitMessageTarget ??
+        isSubagentSessionKey(params.attempt.sessionKey),
+      sessionStatusAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
+        (tool) => tool.name === "session_status",
+      ),
     }),
   };
 }

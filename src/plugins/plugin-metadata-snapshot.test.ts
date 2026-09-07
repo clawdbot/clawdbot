@@ -3,8 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
+import {
+  resolveProviderEndpoint,
+  resolveProviderRequestPolicy,
+} from "../agents/provider-attribution.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
@@ -66,6 +70,25 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
       loadPluginManifestRegistryForInstalledIndex(params),
   };
 });
+
+function mockSchemaSnapshotSource(
+  index: ReturnType<typeof makeIndex>,
+  properties: Record<string, unknown>,
+) {
+  const registry = makeManifestRegistry();
+  const plugin = registry.plugins[0];
+  if (!plugin) {
+    throw new Error("expected manifest plugin fixture");
+  }
+  plugin.configSchema = { type: "object", properties };
+  loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+    source: "provided",
+    snapshot: index,
+    diagnostics: [],
+  });
+  loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+  return registry;
+}
 
 describe("plugin metadata snapshot", () => {
   beforeEach(() => {
@@ -328,25 +351,11 @@ describe("plugin metadata snapshot", () => {
 
   it("rewalks collection-bearing manifest graphs after prototype mutation", () => {
     const index = makeIndex();
-    const registry = makeManifestRegistry();
-    const plugin = registry.plugins[0];
-    if (!plugin) {
-      throw new Error("expected manifest plugin fixture");
-    }
     const initialMapValue = { nested: { value: "initial-map" } };
     const initialSetValue = { nested: { value: "initial-set" } };
     const sharedMap = new Map([["initial", initialMapValue]]);
     const sharedSet = new Set([initialSetValue]);
-    plugin.configSchema = {
-      type: "object",
-      properties: { sharedMap, sharedSet },
-    };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+    const registry = mockSchemaSnapshotSource(index, { sharedMap, sharedSet });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     expect(Object.isFrozen(initialMapValue.nested)).toBe(true);
@@ -387,27 +396,13 @@ describe("plugin metadata snapshot", () => {
 
   it("rewalks enumerable accessor graphs when their closure-backed values change", () => {
     const index = makeIndex();
-    const registry = makeManifestRegistry();
-    const plugin = registry.plugins[0];
-    if (!plugin) {
-      throw new Error("expected manifest plugin fixture");
-    }
     let accessorValue = { nested: { value: "initial" } };
     const accessor = {} as { current: typeof accessorValue };
     Object.defineProperty(accessor, "current", {
       enumerable: true,
       get: () => accessorValue,
     });
-    plugin.configSchema = {
-      type: "object",
-      properties: { accessor },
-    };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+    const registry = mockSchemaSnapshotSource(index, { accessor });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     expect(Object.isFrozen(accessor)).toBe(true);
@@ -433,11 +428,6 @@ describe("plugin metadata snapshot", () => {
 
   it("rewalks proxy graphs that forge safe descriptors before their values change", () => {
     const index = makeIndex();
-    const registry = makeManifestRegistry();
-    const plugin = registry.plugins[0];
-    if (!plugin) {
-      throw new Error("expected manifest plugin fixture");
-    }
     let currentValue = { nested: { value: "decoy" } };
     const target = {} as { current: typeof currentValue };
     Object.defineProperty(target, "current", {
@@ -468,16 +458,7 @@ describe("plugin metadata snapshot", () => {
         return Reflect.get(proxyTarget, key, receiver);
       },
     });
-    plugin.configSchema = {
-      type: "object",
-      properties: { proxy },
-    };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+    const registry = mockSchemaSnapshotSource(index, { proxy });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     expect(forgedDescriptors).toBe(1);
@@ -865,18 +846,43 @@ describe("plugin metadata snapshot", () => {
     const index = makeIndex();
     const registry = makeManifestRegistry();
     const plugin = registry.plugins[0];
-    if (!plugin) {
+    const [other] = makeManifestRegistry("other").plugins;
+    if (!plugin || !other) {
       throw new Error("expected manifest plugin fixture");
     }
     plugin.cliBackends = ["DEMO-CLI"];
     plugin.setup = { cliBackends: ["Demo-CLI", "Other-CLI"] };
     plugin.providerEndpoints = [
       {
-        endpointClass: "openai-public",
-        hosts: [" API.EXAMPLE.COM "],
-        baseUrls: ["https://api.example.com/v1/"],
+        endpointClass: " openai-public ",
+        hosts: [" API.EXAMPLE.COM ", "api.example.com", " "],
+        hostSuffixes: [" .API.EXAMPLE.COM "],
+        baseUrls: [
+          "HTTPS://ROUTE.EXAMPLE.COM/V1/?debug=1#tail",
+          "route.example.com/v1/",
+          "ftp://invalid.example.com",
+          " ",
+        ],
+      },
+      { endpointClass: " ", hosts: ["ignored.example.com"] },
+      { endpointClass: "future-endpoint", hosts: ["ignored.example.com"] },
+      {
+        endpointClass: "google-vertex",
+        hostSuffixes: ["-VERTEX.EXAMPLE.COM"],
+        googleVertexRegionHostSuffix: " -VERTEX.EXAMPLE.COM ",
+      },
+      {
+        endpointClass: "google-vertex",
+        hosts: ["GLOBAL.VERTEX.EXAMPLE.COM"],
+        googleVertexRegion: " GLOBAL ",
       },
     ];
+    other.providerEndpoints = [{ endpointClass: "azure-openai", hosts: ["api.example.com"] }];
+    registry.plugins.push(other);
+    index.plugins = [...index.plugins, ...makeIndex("other").plugins];
+    const sourceEndpoints = structuredClone(
+      registry.plugins.map((entry) => entry.providerEndpoints),
+    );
     plugin.providerRequest = {
       providers: {
         demo: {
@@ -899,11 +905,72 @@ describe("plugin metadata snapshot", () => {
       ["demo-cli", ["demo"]],
       ["other-cli", ["demo"]],
     ]);
-    expect(snapshot.owners.providerEndpoints).toContainEqual({
-      endpointClass: "openai-public",
-      hosts: ["api.example.com"],
-      hostSuffixes: [],
-      baseUrls: ["https://api.example.com/v1"],
+    expect(snapshot.owners.providerEndpoints?.slice(0, 4)).toEqual([
+      {
+        endpointClass: "openai-public",
+        hosts: ["api.example.com", "api.example.com"],
+        hostSuffixes: [".api.example.com"],
+        baseUrls: ["https://route.example.com/v1", "https://route.example.com/v1"],
+      },
+      {
+        endpointClass: "google-vertex",
+        hosts: [],
+        hostSuffixes: ["-vertex.example.com"],
+        baseUrls: [],
+        googleVertexRegionHostSuffix: "-vertex.example.com",
+      },
+      {
+        endpointClass: "google-vertex",
+        hosts: ["global.vertex.example.com"],
+        hostSuffixes: [],
+        baseUrls: [],
+        googleVertexRegion: "GLOBAL",
+      },
+      {
+        endpointClass: "azure-openai",
+        hosts: ["api.example.com"],
+        hostSuffixes: [],
+        baseUrls: [],
+      },
+    ]);
+    expect(registry.plugins.map((entry) => entry.providerEndpoints)).toEqual(sourceEndpoints);
+    for (const baseUrl of ["https://api.example.com", "https://route.example.com/v1?query=1"]) {
+      expect(
+        resolveProviderRequestPolicy({
+          provider: "openai",
+          baseUrl,
+          providerMetadataOwners: snapshot.owners,
+        }),
+      ).toMatchObject({
+        endpointClass: "openai-public",
+        usesKnownNativeOpenAIEndpoint: true,
+        usesExplicitProxyLikeEndpoint: false,
+        attributionHeaders: { originator: "openclaw" },
+      });
+    }
+    expect(
+      resolveProviderEndpoint("https://us-central1-vertex.example.com", snapshot.owners),
+    ).toEqual({
+      endpointClass: "google-vertex",
+      hostname: "us-central1-vertex.example.com",
+      googleVertexRegion: "us-central1",
+    });
+    expect(resolveProviderEndpoint("https://global.vertex.example.com", snapshot.owners)).toEqual({
+      endpointClass: "google-vertex",
+      hostname: "global.vertex.example.com",
+      googleVertexRegion: "GLOBAL",
+    });
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "openai",
+        baseUrl: "https://ignored.example.com",
+        providerMetadataOwners: snapshot.owners,
+      }),
+    ).toMatchObject({
+      endpointClass: "custom",
+      usesKnownNativeOpenAIEndpoint: false,
+      usesExplicitProxyLikeEndpoint: true,
+      attributionHeaders: undefined,
     });
     expect(snapshot.owners.providerRequests?.get("demo")).toEqual({
       family: "demo-family",

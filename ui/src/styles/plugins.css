@@ -370,21 +370,6 @@ h3.plugins-subheader {
   color: var(--danger);
 }
 
-.plugins-remove-confirm {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--danger);
-  font-size: var(--control-ui-text-xs);
-  white-space: nowrap;
-}
-
-.plugins-remove-confirm .btn.danger {
-  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
-  background: var(--danger-subtle);
-  color: var(--danger);
-}
-
 .plugins-group__link {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
@@ -983,14 +968,49 @@ h3.plugins-subheader {
 
 /* ---------- responsive ---------- */
 
-@media (max-width: 560px) {
-  .plugins-toolbar--fields > .settings-segmented {
+@media (max-width: 640px) {
+  openclaw-skills-page .md-preview-dialog__panel {
+    /* Match the modal's phone height so only the editor body scrolls. */
+    min-height: 90dvh;
+    max-height: 90dvh;
+  }
+
+  openclaw-skills-page .plugins-toolbar--fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  openclaw-skills-page .plugins-toolbar--fields > :is(.settings-segmented, .plugins-field) {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+  }
+
+  openclaw-skills-page .plugins-toolbar--fields > .settings-segmented {
     height: auto;
   }
 
-  .plugins-remove-confirm {
-    flex-wrap: wrap;
+  openclaw-skills-page .plugins-toolbar__hint {
     white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  openclaw-skills-page .plugins-toolbar:has(> .field) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  openclaw-skills-page .plugins-toolbar > .btn {
+    max-width: 100%;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 560px) {
+  .plugins-toolbar--fields > .settings-segmented {
+    height: auto;
   }
 
   .plugins-row-message {

@@ -247,10 +247,16 @@ export function createChannelIngressDrain<
       config: options.retryPolicy,
       now: now(),
     });
+    const committed =
+      disposition.kind === "fail"
+        ? await failClaim(claim, disposition.reason, disposition.message)
+        : await releaseClaim(claim, { lastError: disposition.message });
+    const displayId = claim.id.replace(/^0+(?=\d)/, "") || claim.id;
+    if (!committed) {
+      log(`spooled update ${displayId} settlement skipped: claim no longer owns the event`);
+      return;
+    }
     if (disposition.kind === "fail") {
-      // Operator-visible dead-letter line. Prefer numeric id when the event id
-      // is a zero-padded telegram update_id so logs stay human-readable.
-      const displayId = claim.id.replace(/^0+(?=\d)/, "") || claim.id;
       log(
         `spooled update ${displayId} failed with non-retryable ${disposition.reason}: ${disposition.message}; dead-lettered`,
       );
@@ -259,12 +265,9 @@ export function createChannelIngressDrain<
           `spooled update ${displayId} on lane ${claim.laneKey ?? displayId} reached retry limit after ${disposition.attempt} attempts; dead-lettered`,
         );
       }
-      await failClaim(claim, disposition.reason, disposition.message);
       return;
     }
-    const displayId = claim.id.replace(/^0+(?=\d)/, "") || claim.id;
     log(`spooled update ${displayId} failed; keeping for retry: ${disposition.message}`);
-    await releaseClaim(claim, { lastError: disposition.message });
   };
 
   const armStallWatchdog = (state: ActiveHandlerState<TPayload, TMetadata>) => {

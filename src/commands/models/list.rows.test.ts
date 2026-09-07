@@ -289,7 +289,7 @@ describe("loadListModelCatalogSnapshot", () => {
     await loadListModelCatalogSnapshot(createRowContext({ authIndex }));
 
     expect(mocks.loadModelCatalogSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ readOnly: true, refreshFullCatalog: true }),
+      expect.objectContaining({ readOnly: true, refreshFullCatalog: "stale" }),
     );
   });
 });

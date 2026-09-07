@@ -498,31 +498,25 @@ function mutateInlineTokensWithMentions(params: {
 function compactLooseListTokens(tokens: MarkdownToken[]): void {
   const listItemStack: Array<{
     level: number;
-    immediateParagraphOpenIndexes: number[];
-    immediateParagraphCloseIndexes: number[];
+    // null keeps multi-paragraph items visible, including after later paragraphs.
+    paragraphIndex: number | null | undefined;
   }> = [];
 
   for (const [index, token] of tokens.entries()) {
     if (token.type === "list_item_open") {
       listItemStack.push({
         level: token.level,
-        immediateParagraphOpenIndexes: [],
-        immediateParagraphCloseIndexes: [],
+        paragraphIndex: undefined,
       });
       continue;
     }
 
     if (token.type === "list_item_close") {
       const item = listItemStack.pop();
-      if (
-        item &&
-        item.immediateParagraphOpenIndexes.length === 1 &&
-        item.immediateParagraphCloseIndexes.length === 1
-      ) {
-        const openIndex = item.immediateParagraphOpenIndexes[0];
-        const closeIndex = item.immediateParagraphCloseIndexes[0];
-        const openToken = openIndex === undefined ? undefined : tokens[openIndex];
-        const closeToken = closeIndex === undefined ? undefined : tokens[closeIndex];
+      if (typeof item?.paragraphIndex === "number") {
+        // markdown-it emits each paragraph as open, inline, close tokens.
+        const openToken = tokens[item.paragraphIndex];
+        const closeToken = tokens[item.paragraphIndex + 2];
         if (openToken && closeToken) {
           openToken.hidden = true;
           closeToken.hidden = true;
@@ -537,9 +531,7 @@ function compactLooseListTokens(tokens: MarkdownToken[]): void {
     }
 
     if (token.type === "paragraph_open") {
-      currentItem.immediateParagraphOpenIndexes.push(index);
-    } else if (token.type === "paragraph_close") {
-      currentItem.immediateParagraphCloseIndexes.push(index);
+      currentItem.paragraphIndex = currentItem.paragraphIndex === undefined ? index : null;
     }
   }
 }

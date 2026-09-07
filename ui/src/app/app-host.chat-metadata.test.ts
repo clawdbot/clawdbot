@@ -34,18 +34,16 @@ it.each(["config.changed", "chat.metadata.changed"])(
   async (event) => {
     const model = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
     let ready = false;
-    const request = vi.fn(
-      async (): Promise<ChatMetadataResult> => ({
-        commands: [],
-        models: [
-          {
-            ...model,
-            available: ready,
-            ...(ready ? {} : { unavailableReason: "missing-auth" as const }),
-          },
-        ],
-      }),
-    );
+    const request = vi.fn(async (): Promise<ChatMetadataResult> => ({
+      commands: [],
+      models: [
+        {
+          ...model,
+          available: ready,
+          ...(ready ? {} : { unavailableReason: "missing-auth" as const }),
+        },
+      ],
+    }));
     const client = { request } as unknown as GatewayBrowserClient;
     const state = {
       client,

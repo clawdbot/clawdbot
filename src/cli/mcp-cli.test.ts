@@ -1036,13 +1036,13 @@ describe("mcp cli", () => {
       mockLog.mockClear();
       await runMcpCommand(["mcp", "probe", "memory"]);
       expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "tools have no safety annotations; calls will require interactive approval",
+        "tools have no safety annotations; calls require approval in prompting session postures",
       );
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "doctor", "memory", "--probe"]);
       expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "tools have no safety annotations; calls will require interactive approval",
+        "tools have no safety annotations; calls require approval in prompting session postures",
       );
     });
   });

@@ -3,15 +3,19 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import type { RouteId } from "../../../app-route-paths.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import type { SessionMenuData } from "../../../components/session-menu-actions.ts";
 import type { SessionOwnerOption } from "../../../components/session-owner-chip.ts";
 import type { SessionCapability } from "../../../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
+import { createSessionOwnerMenuHarness } from "../../../test-helpers/session-owner-menu.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -23,7 +27,6 @@ import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
-  HeaderMenuStatusAction,
 } from "./chat-header-session-menu.ts";
 import "./chat-header-session-menu.ts";
 import type { ChatSessionSharingProps } from "./chat-session-sharing.ts";
@@ -72,11 +75,9 @@ async function mountMenu(
     settings?: UiSettings;
     panelActions?: HeaderMenuQuickAction[];
     layoutActions?: HeaderMenuQuickAction[];
-    statusActions?: HeaderMenuStatusAction[];
     sharing?: ChatSessionSharingProps | null;
-    ownerOptions?: SessionOwnerOption[];
-    selfOwner?: SessionOwnerOption | null;
-    currentOwnerId?: string | null;
+    context?: ApplicationContext<RouteId>;
+    currentOwner?: SessionOwnerOption | null;
     actionDisabledReasons?: Partial<Record<HeaderMenuActionKind, string>>;
     forkDisabled?: boolean;
     forkFromLastCompleted?: boolean;
@@ -88,7 +89,9 @@ async function mountMenu(
     onAction?: (action: HeaderMenuAction) => void;
   } = {},
 ): Promise<HeaderMenuElement> {
-  const container = document.createElement("div");
+  const container = options.context
+    ? createApplicationContextProvider(options.context)
+    : document.createElement("div");
   containers.push(container);
   document.body.append(container);
   render(
@@ -115,12 +118,9 @@ async function mountMenu(
       .settings=${options.settings ?? settings()}
       .panelActions=${options.panelActions ?? []}
       .layoutActions=${options.layoutActions ?? []}
-      .statusActions=${options.statusActions ?? []}
       .sharing=${options.sharing ?? null}
       .groups=${["Projects"]}
-      .ownerOptions=${options.ownerOptions ?? []}
-      .selfOwner=${options.selfOwner ?? null}
-      .currentOwnerId=${options.currentOwnerId ?? null}
+      .currentOwner=${options.currentOwner ?? null}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${options.forkDisabled ?? false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
@@ -212,6 +212,7 @@ describe("chat header session menu", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -237,6 +238,7 @@ describe("chat header session menu", () => {
       "Archive session",
       "Icon & color",
       "Move to group",
+      "Assign to…",
       "Fork conversation",
       "Copy",
       "Open in",
@@ -290,6 +292,7 @@ describe("chat header session menu", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
@@ -303,7 +306,7 @@ describe("chat header session menu", () => {
     const groupLabels = Array.from(
       moveToGroup.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
     ).map(itemLabel);
-    expect(groupLabels).toEqual(["Catalog", "Discovered", "New group…"]);
+    expect(groupLabels).toEqual(["Catalog", "Discovered", "New group"]);
   });
 
   it("dispatches canonical session actions from the header surface", async () => {
@@ -319,6 +322,7 @@ describe("chat header session menu", () => {
     menu.querySelector<HTMLButtonElement>(".session-menu__icon-remove")?.click();
     for (const value of [
       "copy-session-link",
+      "copy-session-preview-link",
       "copy-markdown",
       "copy-session-id",
       "open-new-tab",
@@ -337,6 +341,7 @@ describe("chat header session menu", () => {
       [{ kind: "set-color", color: "purple" }],
       [{ kind: "reset-appearance" }],
       [{ kind: "copy-session-link" }],
+      [{ kind: "copy-session-preview-link" }],
       [{ kind: "copy-markdown" }],
       [{ kind: "copy-session-id" }],
       [{ kind: "open-new-tab" }],
@@ -454,29 +459,31 @@ describe("chat header session menu", () => {
     expect(splitRight).toHaveBeenCalledOnce();
   });
 
-  it("offers direct and submenu owner assignment", async () => {
+  it("offers self and named owner assignment in one submenu", async () => {
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
-    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
-    const research = { type: "agent", id: "research:one", label: "Research" } as const;
+    const { context } = createSessionOwnerMenuHarness();
     const menu = await mountMenu({
-      ownerOptions: [ada, research],
-      selfOwner: ada,
-      currentOwnerId: research.id,
+      context,
+      currentOwner: { type: "agent", id: "research:one" },
       onAction,
     });
 
-    expect(item(menu, "Assign to me").disabled).toBe(false);
     const submenu = item(menu, "Assign to…");
     expect(
+      Array.from(menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"))
+        .map(itemLabel)
+        .filter((label) => label.startsWith("Assign to")),
+    ).toEqual(["Assign to…"]);
+    expect(
       Array.from(submenu.querySelectorAll("wa-dropdown-item[slot='submenu']")).map(itemLabel),
-    ).toEqual(["Ada", "Research"]);
+    ).toEqual(["Me", "Research"]);
     const selected = item(menu, "Research");
     expect(selected.getAttribute("role")).toBe("menuitemradio");
     expect(selected.getAttribute("aria-checked")).toBe("true");
     expect(selected.disabled).toBe(true);
     expect(selected.querySelector("[slot='details']")).not.toBeNull();
 
-    select(menu, item(menu, "Assign to me").getAttribute("value") ?? "");
+    select(menu, item(menu, "Me").getAttribute("value") ?? "");
     select(menu, "assign-owner:agent:research%3Aone");
     expect(onAction.mock.calls).toEqual([
       [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
@@ -486,12 +493,10 @@ describe("chat header session menu", () => {
 
   it("drills into compact menu groups without rendering side flyouts", async () => {
     const showTasks = vi.fn();
-    const showAccess = vi.fn();
     const onOpenCommandPalette = vi.fn();
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
-    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
-    const research = { type: "agent", id: "research:one", label: "Research" } as const;
+    const { context } = createSessionOwnerMenuHarness();
     const menu = await mountMenu({
       compact: true,
       worktreePath: "/work/openclaw",
@@ -512,18 +517,8 @@ describe("chat header session menu", () => {
           onActivate: vi.fn(),
         },
       ],
-      statusActions: [
-        {
-          id: "access",
-          label: "Limited access",
-          icon: icons.shieldQuestion,
-          tone: "warn",
-          onActivate: showAccess,
-        },
-      ],
-      ownerOptions: [ada, research],
-      selfOwner: ada,
-      currentOwnerId: research.id,
+      context,
+      currentOwner: { type: "agent", id: "research:one" },
       onOpenCommandPalette,
       onSettingsChange,
       onAction,
@@ -534,7 +529,6 @@ describe("chat header session menu", () => {
     ).map(itemLabel);
     expect(rootLabels).toEqual([
       "Open command palette",
-      "Limited access",
       "Panels",
       "Layout",
       "View",
@@ -551,25 +545,13 @@ describe("chat header session menu", () => {
       "Delete…",
     ]);
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
-    expect(
-      menu.querySelector('.chat-header-session-menu__status-dot[data-tone="warn"]'),
-    ).not.toBeNull();
-
     select(menu, "open-command-palette");
     expect(onOpenCommandPalette).toHaveBeenCalledOnce();
-    const dropdown = menu.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
-    if (dropdown) {
-      dropdown.open = true;
-    }
-    select(menu, "status:access");
-    expect(showAccess).toHaveBeenCalledOnce();
-    expect(dropdown?.open).toBe(false);
-
     select(menu, "compact:open-copy");
     await menu.updateComplete;
     expect(
       Array.from(menu.querySelectorAll(":scope > wa-dropdown > wa-dropdown-item")).map(itemLabel),
-    ).toEqual(["Back", "Session link", "Conversation as Markdown", "Session ID"]);
+    ).toEqual(["Back", "Session link", "Preview link", "Conversation as Markdown", "Session ID"]);
     select(menu, "compact:back");
     await menu.updateComplete;
     select(menu, "compact:open-open-in");
@@ -615,7 +597,7 @@ describe("chat header session menu", () => {
       Array.from(
         menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
       ).map(itemLabel),
-    ).toEqual(["Back", "Ada", "Research"]);
+    ).toEqual(["Back", "Me", "Research"]);
     select(menu, "assign-owner:human:profile-ada");
     expect(onAction).toHaveBeenCalledWith({
       kind: "assign-owner",
@@ -709,6 +691,7 @@ describe("chat header session menu", () => {
     expect(item(menu, "Conversation as Markdown").disabled).toBe(true);
     for (const kind of [
       "copy-session-link",
+      "copy-session-preview-link",
       "copy-markdown",
       "open-new-tab",
       "open-new-window",

@@ -53,7 +53,55 @@ Internal OpenClaw runtime code follows the same direction: load config once at t
 
 Provider and channel execution paths must use the active runtime config snapshot, not a file snapshot returned for config readback or editing. File snapshots preserve source values such as SecretRef markers for UI and writes; provider callbacks need the resolved runtime view. When a helper may be called with either the active source snapshot or the active runtime snapshot, route through `selectApplicableRuntimeConfig()` before reading credentials.
 
+Retained channel monitors can bind `createRuntimeConfigReader(cfg)` from
+`openclaw/plugin-sdk/runtime-config-snapshot` once at startup. The reader follows
+runtime updates when the supplied config belongs to the active runtime, and
+preserves an explicitly scoped config otherwise, including when no runtime has
+been published yet. Read once per turn and carry that snapshot through admission
+and replies. Process-wide controls such as diagnostics should read at the point
+of emission.
+
+`createChannelInboundDebouncer` keeps its returned numeric `debounceMs` and default
+queue timing as startup snapshots. For live timing, pass its existing
+`resolveDebounceMs(entry)` callback and resolve with the bound config reader.
+If pending-key or shutdown bookkeeping also depends on the delay, capture one
+value on the entry and use it for both bookkeeping and the callback.
+
+A channel's `reload.noopPrefixes` opts only that channel out of shared-policy
+refresh. Declare a prefix only after every retained consumer reads it live or
+does not consume it. Undeclared channels still refresh; one channel's declaration
+cannot suppress a sibling's reload. A narrower `reload.configPrefixes` entry can
+retain restart behavior under a broader no-op prefix.
+
 ## Reusable runtime utilities
+
+Native command probes should use `runCommandWithTimeout` from
+`openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
+`killProcessTree: true`. Await its result so timeout or cancellation cleanup finishes
+before returning. For commands whose output is always UTF-8, such as JSON status
+probes, use `runUtf8CommandWithTimeout` from the same subpath.
+
+Use `splitCommandArgs(raw)` from the same subpath to group quoted process
+arguments. Backslashes and `#` stay literal; there is no shell expansion.
+Unfinished quotes return `null` unless the caller passes
+`{ allowUnclosedQuotes: true }` to preserve an existing permissive input contract.
+Empty quoted arguments are omitted.
+
+Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
+signaling or the bounded Windows `taskkill` attempt, not proof that every process
+exited. Keep the probe pending through cleanup, use `detached: true` only for a
+process group you created, and start Windows tree termination while its root is
+still alive.
+
+Channel plugins that deliver agent replies directly can call
+`renderPresentationForDelivery(handler, payload)` from
+`openclaw/plugin-sdk/interactive-runtime` at delivery, after modifying hooks. Supply
+the channel's `presentationCapabilities` and `renderPresentation` callback; the
+callback receives a payload with a normalized, adapted `presentation` and the
+normalized original presentation as its second argument. Use the original for
+whole-card text fallbacks that must retain labels clipped by native limits. This
+shares core outbound rendering's fallback-text policy and removes the portable
+presentation fields after rendering. The callback may be synchronous or async.
 
 Use `attachErrorDiagnostic(error, text)` from `openclaw/plugin-sdk/error-runtime`
 to attach supplemental operator diagnostics to a thrown error without changing
@@ -137,6 +185,20 @@ return {
 
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
+
+### Stage timing diagnostics
+
+`openclaw/plugin-sdk/time-runtime` exports `createStageTimingTracker(now?)` and
+`formatStageTimings(stages)`. The tracker records rounded, nonnegative
+`durationMs` and `elapsedMs` values. `mark(name)` measures since the previous
+mark; `measure(name, run)` and `measureSync(name, run)` record explicit spans,
+including failed work, and preserve the callback's result or error. Measured
+spans do not advance the checkpoint used by `mark`.
+
+`snapshot()` returns `{ totalMs, stages }` with a copied stage array. The optional
+clock defaults to `Date.now`. Formatting produces comma-separated
+`name:durationMs@elapsedMs` entries (with `ms` units) or `none`. Callers retain
+ownership of log labels, warning thresholds, and when to emit a summary.
 
 ## Plugin command runtime helpers
 
@@ -270,6 +332,10 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic canonical-store repair.
 
+    When patch authority can change while `update` awaits, pass `assertCommitAllowed: () => void`. The storage owner calls this synchronous guard inside the commit transaction; throw to reject the entire patch. Keep network requests and other asynchronous work in `update`.
+
+    For native conversation controls, `getConversationSession(...)` from `openclaw/plugin-sdk/session-store-runtime` reads the current recorded binding for one transport address. Supply `agentId`, `channel`, `accountId`, `kind` (`direct`, `group`, or `channel`), and the ingress `peerId`; optional `threadId` selects an exact thread. Optional `storePath` and `env` select the same agent store as other session helpers. It returns `{ sessionKey, sessionId }`, or `undefined` when no current binding exists, and follows session resets without creating a session. It does not list active runs or infer a parent address. Targeted Stop dispatch can provide `replyOptions.isCommandTargetCurrent`, a synchronous in-process owner check carried to the cancellation boundary. A false result rejects a stale target; cancelled owners cannot mark a replacement session aborted.
+
     `createSessionEntry(...)` creates a new canonical session row and transcript. Its trusted `initialEntry` surface is deliberately narrow. A plugin may select an owned `agentHarnessId`; seed an owned CLI backend with `cliBackendId`, `model`, and `cliSessionBinding`; or seed a persistent ACP session with `acpBackendId` and `acpSessionBinding: { acpAgentId, agentSessionId }`. The ACP variant persists the supplied native agent session id through the canonical SQLite ACP metadata owner so the first turn resumes that external session. The injected runtime restricts plugin-owned CLI and ACP sessions to the calling plugin's `plugin:<id>:` namespace; harness ids must be owned through `registerAgentHarness(...)`. These are ownership invariants, not a sandbox between in-process plugins. Creation rejects an existing row; `label`, `displayName`, and `spawnedCwd` are separate creation fields rather than trusted-entry patches.
 
     Optional `displayName` seeds the existing presentation field atomically with the new row. The host trims it and truncates it to at most 500 UTF-16 code units without splitting a surrogate pair; empty or whitespace-only input leaves it unset. Duplicate display titles are allowed and do not claim an addressable label. Explicit `label` values retain normal uniqueness validation and display priority. Reuse and interrupted-initializer recovery preserve all stored labels and title snapshots, including absent titles and older automatically assigned labels. This create-only input does not permit title changes through `initialEntry` or the `afterCreate` final patch, and is not a public `sessions.create` Gateway parameter.
@@ -294,13 +360,21 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     `resolveStorePath(...)` and `updateSessionStoreEntry(...)` round out the session helpers: `resolveStorePath` resolves the session store path for a given scope, and `updateSessionStoreEntry({ storePath, sessionKey, update })` patches one entry directly by store path when the caller already knows it.
 
-    `loadTranscriptEventsSync(...)` is available for synchronous doctor and repair paths that cannot use the async transcript runtime. It returns raw `SessionStoreTranscriptEvent` records. Normal plugin runtime code should prefer `openclaw/plugin-sdk/session-transcript-runtime`.
+    `loadTranscriptEventsSync(...)` is available for synchronous doctor and repair paths that cannot use the async transcript runtime. It returns raw `SessionStoreTranscriptEvent` records and does not consult runtime `session.store`; pass `storePath` for a non-default store. Normal plugin runtime code should prefer `openclaw/plugin-sdk/session-transcript-runtime`.
 
     `formatSqliteSessionFileMarker(...)`, `parseSqliteSessionFileMarker(...)`, and `sqliteSessionFileMarkerMatchesSession(...)` are transitional helpers for code that still receives a legacy field named `sessionFile`. A parsed SQLite marker identifies a live SQLite transcript target; it is not a filesystem path. New APIs should carry typed session identity instead of marker strings.
 
     For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `readSessionTranscriptRawDelta(...)`, `readSessionTranscriptVisibleMessageDelta(...)`, `readVisibleSessionTranscriptMessageEntries(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read raw events or visible branch-safe message entries, append messages, publish updates, and run related operations under the same transcript write lock without depending on active transcript file paths. `readVisibleSessionTranscriptMessageEntries(...)` returns ordered read metadata; its `seq` field is not a resumable cursor.
 
+    For the identity-based operations listed above, an omitted `storePath` selects `session.store` from the supplied `config` when the operation accepts one, otherwise from the current runtime config snapshot. An explicit concrete `storePath` takes precedence; incognito session keys always select isolated in-memory storage. The write lock pins its selected store for callback reads, appends, and queued publication, even if runtime config changes while the callback awaits. Public identities and targets remain pathless. `readLatestAssistantTextByIdentity(...)` and `appendAssistantMirrorMessageByIdentity(...)` use the same store-selection rules.
+
     `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of an already canonical message. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries canonical ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
+
+    A harness that supports `sessions_yield` uses `appendSessionYieldContext(...)` after successful yield settlement to retain private resume context in the canonical session transcript. Pass the session target, `message`, and an `assertCurrent` callback that checks the current run and settlement authority. The writer checks that callback again before appending the hidden context entry. Failed or revoked settlement must not append context; public tool results and display projections must omit the private message.
+
+    A harness host may provide `hostCapabilities.prepareContextMedia({ message, maxChars })` to reconstruct retained document text and images from canonical user media. The host captures the current run's config, workspace, channel, account, and authority; preparation rechecks that authority across asynchronous work. `maxChars` must be finite and limits extraction for each file. Fit all returned text, attachment notes, and images into the native context budget, and deliver image bytes through the native input path. Preparation reuses ordinary local-root, URL, MIME, byte, page, and image limits without rewriting transcript rows or echoing channel media. An older host without this optional capability may still project ordinary text history, but attachment restoration must fail explicitly rather than silently omit the saved input.
+
+    For an exact existing session, use `appendSessionTranscriptMessageByIdentityStrict(...)` for one message or `appendSessionTranscriptMessagesByIdentity(...)` for an atomic ordered batch. Both accept optional `storePath`: when omitted, the shared turn owner resolves it from the supplied `config` (or current runtime snapshot), session agent, and `env`; an explicit concrete path overrides `session.store`, while incognito keys retain their in-memory routing. Strict single append returns `kind: "result"`, `kind: "suppressed"` when message preparation declines the append, or `{ kind: "rejected", reason: "session-rebound" }` when the expected session no longer matches. A batch rejects if its session changed and inserts or idempotently replays the whole group, never a partial group.
 
     A harness host may provide `hostCapabilities.annotateCurrentUserTurn(...)` for its already-admitted current prompt. The operation accepts only `mirrorIdentity`, `upstreamUserText`, `mirrorOrigin`, and `mirrorSourceFingerprint`; the host fixes diagnostic run correlation. Call it only after native prompt acceptance and outside transcript write locks. It cannot select an anchor, replace content, or annotate history. It revalidates the live host, exact recorder, active admission, session/writer ownership, unchanged message and source fingerprint at commit, then refreshes the recorder's generation and publishes the same event ID. Identical provenance does not rewrite or publish again. Missing capability, conflicts and stale owners must remain refusals; do not substitute a generic append or infer provenance. This optional capability adds no required host-version field and does not change transcript cursor invalidation.
 
@@ -308,7 +382,9 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     `readSessionTranscriptVisibleMessageDelta(...)` provides the same bounded bootstrap-and-resume shape over the host-owned active message projection. It returns messages from oldest to newest, so context engines can drain initial history and persist the opaque cursor as their watermark. Store and return the cursor unchanged; it is a continuation hint, not an authorization credential. Linear appends resume after the last returned message. Transcript replacement, a cursor whose anchor left or moved within the active branch, malformed cursors, and cross-session cursors return `reset` with a fresh bootstrap cursor. The count and byte defaults and caps match the raw delta API. While the active projection is rebuilding after a branch change, the result is `unavailable` with reason `projection_rebuilding`; retry later rather than falling back to an active transcript file.
 
-    The legacy whole-store and active transcript file helpers are no longer exported from the plugin SDK. Use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs.
+    `openclaw/plugin-sdk/session-store-runtime` still exports deprecated `loadSessionStore(...)`, `updateSessionStore(...)`, `resolveSessionFilePath(...)`, and `resolveSessionStoreEntry(...)` for official plugins released with v2026.7.1-beta.5. These compatibility exports are separate from `api.runtime.agent.session`. The existing [beta.5 compatibility window](/plugins/compatibility#current-compatibility-areas) runs through 2026-10-12; removal also requires the minimum supported plugin version to exclude that release. The whole-store helpers use SQLite-backed projections, and the legacy transcript-path bridge supports older file-based doctor inspection; SQLite remains canonical.
+
+    For new plugin code, use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">
@@ -479,6 +555,41 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
   <Accordion title="api.runtime.subagent">
     Launch and manage background subagent runs.
 
+    For a tool-free completion that needs no retained session or reply delivery,
+    use `complete(...)`:
+
+    ```typescript
+    const { text } = await api.runtime.subagent.complete({
+      agentId: "research", // required configured agent that owns this work
+      message: "Summarize these notes.",
+      extraSystemPrompt: "Return a concise summary.", // optional
+      timeoutMs: 30_000, // optional; defaults to 30 seconds
+      // model: "openai/gpt-5.6-luna", // optional authorized override
+      // signal: abortController.signal, // optional cancellation
+    });
+    ```
+
+    `agentId` and `message` are required. `extraSystemPrompt`, `model`,
+    `timeoutMs`, and `signal` are optional. The selected agent supplies its
+    configured default model and credential owner when `model` is omitted.
+    The result is `{ text: string }`; no session creation, message polling,
+    deletion, or completion delivery is needed. The configured runtime must
+    support fresh, tool-free isolated inference; unsupported runtimes fail
+    before inference.
+
+    Completions use the [shared background queue](/concepts/queue#background-work),
+    with up to three runs per plugin within the three-run total budget.
+    Cancellation removes queued work immediately. Running work keeps its slot
+    until underlying runtime cleanup finishes, then rejects; late output is not
+    returned after cancellation, timeout, or runtime retirement. Calls require
+    a live Gateway binding and plugin identity. Request-scoped calls retain the
+    caller's operator scopes and agent access; completions started inside an
+    operator tool invocation are cancelled when that invocation ends.
+    Model overrides retain the
+    existing subagent authorization and `allowedModels` policy below.
+
+    Use `run(...)` when you need a session or an agent tool surface:
+
     ```typescript
     // Start a subagent run
     const { runId, sessionKey } = await api.runtime.subagent.run({
@@ -512,8 +623,16 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `waitForRun(...)` returns the canonical Gateway wait result. `status` is `"ok"`, `"error"`, `"timeout"`, or `"pending"`; pending is a normal nonterminal observation, not an exception. Optional `error`, `startedAt`, `endedAt`, `stopReason`, `livenessState`, `yielded`, `pendingError`, `timeoutPhase`, `providerStarted`, and `terminalReply` metadata is preserved so callers can distinguish observation timeouts from terminal outcomes. `timeoutMs` bounds the wait call; it does not cancel the run.
 
     <Warning>
-    Model overrides (`provider`/`model`) require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Untrusted plugins can still run subagents, but override requests are rejected.
+    Outside an authorized Gateway request, model overrides require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Plugins without that opt-in can use the configured model, but override requests are rejected.
     </Warning>
+
+    `plugins.entries.<id>.subagent.allowedModels` can restrict overrides to
+    canonical `provider/model` targets. The same policy applies to `complete`;
+    request-scoped calls retain their authenticated client's override authority.
+    The check uses the destination agent's model configuration, including exact
+    configured model IDs, and applies to the plugin's initial override. Configured
+    defaults, operator-installed model routing hooks, and automatic model fallbacks
+    retain their own selection policies.
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
 
@@ -690,6 +809,8 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.commands.allow`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
 
+    `allow-always` remains one policy decision unless the node-invoke policy explicitly declares `standingApproval: { kind: "placement", scope: "<capability>" }`. That opt-in permits later launches only for a high-risk command on the same current managed placement, node pairing, environment owner, workspace, and semantic capability scope, for at most 30 days and never across Gateway restart. Use a stable, content-free scope for a capability whose approval deliberately covers later argument changes. Do not opt in when the approved target or other request arguments must remain exact.
+
     A node command may declare `prepare(context)` for asynchronous native startup.
     Node-host initialization awaits it before publishing the initial manifest or
     connecting to the Gateway; plugin registration itself stays synchronous.
@@ -705,42 +826,54 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
   </Accordion>
   <Accordion title="api.runtime.tasks">
-    Bind Task Flow and Task Run state to an existing OpenClaw session key or trusted tool context.
+    Bind Task Flow and Task Run state to a trusted, existing OpenClaw owner session.
 
-    - `api.runtime.tasks.managedFlows` is mutation-capable: create, advance, and cancel Task Flows.
-    - `api.runtime.tasks.flows` and `api.runtime.tasks.runs` are read-only DTO views for listing and status lookups; both expose `bindSession(...)` / `fromToolContext(...)` plus `get`, `list`, `findLatest`, and `resolve`.
+    - `managedFlows` creates and mutates managed flow records. Bind with `fromToolContext(ctx)` or `bindSession({ sessionKey, requesterOrigin })` using host-resolved context, never raw user input.
+    - `flows` and `runs` provide owner-scoped DTO lookups (`get`, `list`, `findLatest`, `resolve`). `flows` also exposes `getTaskSummary`; `runs.cancel` cancels an existing task.
+    - `managedFlows.get(flowId)` returns the record with its revision. The read-only `flows` DTO is not the revision-bearing mutation record.
 
-    Task Flow tracks durable multi-step workflow state. It is not a scheduler:
-    use Cron or `api.session.workflow.scheduleSessionTurn(...)` for future
-    wakeups, then use `managedFlows` from the scheduled turn when that work
-    needs flow state, child tasks, waits, or cancellation.
+    A skill file does not provide `api` or register a plugin. For operator/agent
+    workflows, use [managed Lobster execution](/automation/taskflow#run-a-managed-lobster-workflow).
+    The following contract is for actual plugin/controller code.
 
-    ```typescript
-    const taskFlow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
+    **Launching and linking a child**
 
-    const created = taskFlow.createManaged({
-      controllerId: "my-plugin/review-batch",
-      goal: "Review new pull requests",
-    });
+    `runTask` records a link to existing work; it never launches ACP/subagent
+    execution. The backing task must already exist with the same owner,
+    canonical run/session identities and task runtime. Arbitrary IDs or a
+    `status: "running"` declaration cannot establish that authority.
 
-    const child = taskFlow.runTask({
-      flowId: created.flowId,
-      runtime: "acp",
-      childSessionKey: "agent:main:subagent:reviewer",
-      task: "Review PR #123",
-      status: "running",
-      startedAt: Date.now(),
-    });
+    1. Create a managed flow bound to the real requester session. Handle creation failure before launching work. Binding state access does not grant subagent requester authority.
+    2. Inside an active requester-bound `before_dispatch` hook for an authenticated inbound request, call `api.runtime.subagent.run` with a unique agent-qualified child session key, the task message and `completionDelivery: "current-requester"`. The Gateway captures the requester and delivery route; retain the returned canonical `runId` and `sessionKey`. Missing identities or a rejected launch are failures, not permission to fabricate a task. Ordinary runs without `current-requester` have `not_applicable` completion delivery and lack the mirrored backing needed for this link.
+    3. Immediately before linking, resolve the canonical task with the owner-bound `runs.resolve(runId)`. Verify its owner, run id, child session key and task runtime. Use its actual `sourceId`, queued/running status and available timing facts in `managedFlows.runTask`, alongside the managed flow id and task description. Do not confuse the launch result's harness/provider metadata with the task DTO's `runtime`. Keep this final read/check and `runTask` synchronous, with no intervening `await`, and check `created` before proceeding.
+    4. Observe completion through `subagent.waitForRun` and the canonical task. A bounded wait returning `pending` or an observation timeout is not a terminal child failure and does not cancel the run. Interpret results only after actual completion. On failure, record a failed/blocked flow outcome and report it; never insert a replacement child declaration to hide launch/link refusal.
+    5. Reload the managed record after awaited work. Stop for terminal state or cancellation intent; use the latest revision for the next state transition. Check every `applied` result, including `finish`/`fail`, and check `cancelled` for cancellation. On revision conflict, reread and reconcile rather than blindly retrying side effects.
 
-    const waiting = taskFlow.setWaiting({
-      flowId: created.flowId,
-      expectedRevision: created.revision,
-      currentStep: "await-human-reply",
-      waitJson: { kind: "reply", channel: "telegram" },
-    });
-    ```
+    <Warning>
+    A child can finish before step 3. `runTask` does not replay terminal events
+    that preceded linkage, so never label a completed backing task as queued or
+    running. Handle its completed result directly in the controller instead of
+    creating a stale active projection. The launch/link sequence is not atomic.
+    </Warning>
 
-    Use `bindSession({ sessionKey, requesterOrigin })` when you already have a trusted OpenClaw session key from your own binding layer. Do not bind from raw user input.
+    `completionDelivery: "current-requester"` is available only within the
+    genuine hook invocation. Do not retain that authority after the hook ends
+    or call private requester-context/registry helpers. See `api.runtime.subagent`
+    above for the public launch and wait contract. ACP linkage likewise requires
+    an existing owner-backed ACP launch, not a standalone `runTask` declaration.
+
+    **State without a child**
+
+    For inline work, use `createManaged`, then checked `setWaiting`, `resume`,
+    `finish` or `fail` transitions as appropriate; no `runTask` is needed.
+    Keep `stateJson` and `waitJson` bounded. Waiting metadata records the reason
+    and correlation, but the controller must register the real event listener.
+
+    Records persist in SQLite; arbitrary JavaScript is not replayed after
+    restart. Reload with the same trusted owner binding and explicitly resume
+    from current state. Task Flow is not a scheduler: use Automations or
+    `api.session.workflow.scheduleSessionTurn(...)` for future wakeups. See
+    [Task Flow](/automation/taskflow) for durability and cancellation.
 
   </Accordion>
   <Accordion title="api.runtime.tts">
@@ -779,6 +912,13 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       cfg: api.config,
       agentDir: "/tmp/agent",
     });
+
+    // Prepare a capture limit before installing audio receive listeners.
+    const budget = await api.runtime.mediaUnderstanding.resolveAudioInputBudget({
+      cfg: api.config,
+    });
+    // budget.enabled is false when audio understanding is disabled. Otherwise,
+    // budget.maxBytes includes the container header and covers the largest fallback.
 
     // Transcribe audio
     const { text } = await api.runtime.mediaUnderstanding.transcribeAudioFile({
@@ -981,8 +1121,20 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     ```
 
   </Accordion>
+  <Accordion title="api.runtime.modelConfig">
+    Synchronous model-selection policy, without preparing a model or starting a session.
+
+    `resolveDefaultModelForAgent({ cfg, agentId })` resolves the agent's configured default. `resolveAllowedModelRef({ cfg, catalog, raw, defaultProvider, defaultModel, agentId })` resolves a model name or alias against the supplied catalog and agent allowlist, returning `{ ref, key }` or `{ error }`. It does not select or validate an agent runtime; callers that require a particular harness must apply that separate policy.
+
+    Use these host operations instead of importing model-selection implementation modules into a plugin's registration entry.
+
+  </Accordion>
   <Accordion title="api.runtime.modelAuth">
     Model and provider auth resolution.
+
+    Synchronous profile operations are also available: `resolveProviderIdForAuth`, `ensureAuthProfileStore`, `resolveAuthProfileOrder`, `listProfilesForProvider`, and `isProviderApiKeyConfigured`. They use the canonical host auth policy. Supply the owning agent directory when reading agent profiles, and use `readOnly: true` and `allowKeychainPrompt: false` for non-interactive profile inspection. Profile stores and resolved credentials must not be logged.
+
+    Capability factories should construct descriptors only. Keep credential inspection and resolution in the callbacks that need them, rather than performing them while registering a provider.
 
     ```typescript
     const auth = await api.runtime.modelAuth.getApiKeyForModel({ model, cfg });
@@ -1032,7 +1184,11 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `deleteIf(...)` when cleanup must remove only the value previously observed; its synchronous predicate and deletion run in one SQLite transaction. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values up to 1 MiB of UTF-8 encoded JSON, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
 
-    `openSyncKeyedStore<T>(...)` returns the same store shape with synchronous methods (`register`, `registerIfAbsent`, `deleteIf`, `lookup`, `consume`, `clear` all return values directly instead of promises) for callers that cannot await.
+    `lookupMany(keys)` is an optional keyed-store capability for at most 10,000 exact keys per call. Results have the same length and order as the input, including duplicates. Each position is a `Result<T | undefined, PluginStateStoreError>`: `{ ok: true, value }` on success, including `value: undefined` for missing or expired keys, or `{ ok: false, error }` for corrupt stored JSON. An empty request returns `[]`. Keys use the same trimming and 512-byte UTF-8 limit as `lookup`; invalid keys or an oversized request fail with `PLUGIN_STATE_INVALID_INPUT` and operation `lookup` before reading. Database acquisition and query errors fail the whole call. Corrupt-JSON errors retain the `lookup` error code and operation in their per-key result. Inspect each result only when the reader reaches that position, and throw `result.error` if it is not `ok`; this lets a reader stop at an earlier missing or invalid chunk without raising a later corruption error. Each call uses one expiry cutoff and one SQLite selection in the same plugin and namespace, without creating a missing database. Separate calls, including metadata reads, do not share a snapshot; chunked formats must retain their generation, digest, and reader-lifetime checks.
+
+    Current host factories provide `lookupMany`, but the public store types keep it optional for existing third-party adapters and declared older host versions. A plugin supporting those hosts must check the method and use its existing sequential `lookup` path when absent; never retry a failed bulk read through that path. Matrix, Microsoft Teams, and Voice Call retain this compatibility until their declared minimum host supplies the capability. Do not import a new helper export from an older host just to detect this method.
+
+    `openSyncKeyedStore<T>(...)` returns the same store shape with synchronous methods (`register`, `registerIfAbsent`, `deleteIf`, `lookup`, `lookupMany`, `consume`, `clear` all return values directly instead of promises) for callers that cannot await.
 
     `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
 
@@ -1043,7 +1199,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `openChannelIngressDrain(...)` opens the core channel-agnostic worker over that queue (or creates a queue when none is supplied). The drain owns stale-claim recovery, per-lane claim serialization, complete-at-adoption or complete-on-dispatch-return, retry/dead-letter disposition, optional pre-adoption supersede, and claim→adoption stall timeout. Wire claim ownership into reply generation with `turnAdoptionLifecycle` (via `bindIngressLifecycleToReplyOptions` from `plugin-sdk/channel-outbound`). Channel plugins keep accept-side enqueue, lane derivation, non-retryable classification, and any supersede authorization policy.
 
     <Warning>
-    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. The rejection names the plugin id and the origin it loaded from; a channel plugin loaded from `plugins.load.paths` or an unofficial install is untrusted, so its ingress monitor fails channel start instead of running without a durable queue.
+    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. Refusals include the recorded reason, registry database path, origin, and install source/spec; `plugins inspect` reports the same trust facts. A load path selecting the recorded official installation preserves trust; an untracked local copy does not. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for doctor migrations and cause-specific remedies. An untrusted channel's ingress monitor fails channel start instead of running without a durable queue.
     </Warning>
 
   </Accordion>
@@ -1083,6 +1239,8 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     Use `saveRemoteMedia(...)` when a remote URL should become OpenClaw media. Use `saveResponseMedia(...)` when the plugin already fetched a `Response` with plugin-owned auth, redirect, or allowlist handling. Use `readRemoteMediaBuffer(...)` only when the plugin needs raw bytes for inspection, transforms, decryption, or reupload. `fetchRemoteMedia(...)` remains a deprecated compatibility alias for `readRemoteMediaBuffer(...)`.
 
     Remote media options and `fetchWithSsrFGuard(...)` from `openclaw/plugin-sdk/ssrf-runtime` accept a synchronous `beforeRequest` callback for final-dispatch authorization checks. It runs after proxy, DNS, and dispatcher preparation and immediately before every physical request. Redirects invoke it once per hop; media retries invoke it again for every attempt and hop. If it throws, that request is not sent and the same error propagates. Promise or thenable results are rejected before transport dispatch.
+
+    Guarded fetch also accepts a synchronous `resolveDispatcherPolicy(url)` override, reevaluated for each redirect. An undefined result uses `dispatcherPolicy`, or direct routing when no default policy is supplied. Providers preserving operator-configured proxy routing can use `resolveEnvHttpProxyAgentOptions` and `matchesNoProxy` from `openclaw/plugin-sdk/fetch-runtime` to select each hop. The `trusted_explicit_proxy` mode permits HTTP, HTTPS, `socks:` and `socks5:` proxy URLs and delegates target DNS to the explicitly trusted proxy; proxy-host validation and target-host policy still apply. Direct hops keep DNS pinning. Strict mode rejects SOCKS proxies, and the separate trusted-env-proxy gate remains HTTP(S)-only.
 
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 
@@ -1128,6 +1286,35 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
 ## Gateway service events
 
+Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operations
+already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
+`removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
+
+Use the service's `start()` and `stop()` methods to own recurring reconciliation.
+They run for service or plugin replacement as well as Gateway startup and shutdown;
+`gateway_start` and `gateway_stop` do not replay on plugin-only reload.
+Each returned scheduler handle belongs to one service lifetime and one scheduler
+instance. Calls, including queued writes, reject once service shutdown begins or
+that scheduler is replaced. Call `ctx.getCron()` again to obtain the replacement
+scheduler while the service remains active.
+
+A service can declare `reload: { configPrefixes: ["myConfig.service"] }` alongside
+its `id`, `start`, and `stop`. After a matching config change commits, the Gateway
+stops that service and calls `start(ctx)` again with the new `ctx.config`. Only
+loaded services declaring the matching prefix are replaced; overlapping owners
+all refresh. Existing equal or narrower restart or no-op policies still take precedence.
+Each start receives a new capability lease and health reporter. Stop must release
+resources before resolving; failed replacement cleanup or startup triggers
+Gateway recovery. A full plugin replacement subsumes these service restarts.
+
+Trusted official diagnostics exporter services can also receive
+`ctx.internalDiagnostics.getRuntimeIdentity?.()`. It returns the hosting
+process's canonical `processInstanceId` and optional loaded `buildId`, with no
+filesystem lookup or RPC. Capture it during service startup; a retained getter
+throws after the service lease is revoked. Hosts that do not provide this
+optional capability leave runtime identity unavailable. This diagnostic fact
+does not grant authority or identify a service-reload epoch.
+
 Long-lived services registered with `api.registerService(...)` receive a process-local
 `ctx.gatewayEvents` facade when the process runs a Gateway broadcaster; in runtimes without one the
 field is absent, so feature-detect it and keep a fallback (for example a coarse poll). Use
@@ -1155,6 +1342,10 @@ The handler runs in the Gateway process and does not add a Gateway protocol subs
 returned unsubscribe function and call it during service cleanup. The payload is a lightweight
 change notice; use `api.runtime.agent.session.getSessionEntry(...)` when the plugin needs the full
 current session entry.
+
+OpenClaw calls a service's `stop()` at most once per startup attempt, including when a replacement
+times out before startup fails. Failed-start rollback and shutdown share the same cleanup result;
+a cleanup failure is recorded rather than retried within that attempt.
 
 Service startup failures from a returned or awaited promise are recorded automatically. A service
 that intentionally starts required work in the background must report later failure and recovery

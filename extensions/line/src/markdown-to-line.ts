@@ -10,7 +10,7 @@ import {
   type MarkdownTableMeta,
 } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { toFlexMessage } from "./flex-templates/message.js";
+import { fitsLineFlexBubble, toFlexMessage } from "./flex-templates/message.js";
 import { createReceiptCard } from "./flex-templates/schedule-cards.js";
 import type { FlexBubble } from "./flex-templates/types.js";
 export { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
@@ -54,7 +54,6 @@ const LINE_MARKDOWN_OPTIONS = {
   preserveSourceBlockSpacing: true,
 } as const;
 const TRANSCRIPT_ROLE_PREFIX = "[assistant-authored transcript] ";
-const LINE_FLEX_BUBBLE_MAX_BYTES = 30_000;
 // How much code one Flex card shows. Nothing in LINE caps a Flex text this low —
 // it is the card's own readable budget — so a longer block is delivered as text
 // rather than cut down to it.
@@ -450,8 +449,7 @@ export function processLineMessage(text: string): ProcessedLineMessage {
           cells.some((cell) => renderTableCell(cell, "-").hasMarkup),
         ));
     const bubble = rowOverflow ? undefined : convertTableToFlexBubble(toMarkdownTable(table));
-    // LINE rejects the whole push/reply when any bubble exceeds its 30 KB UTF-8 JSON limit.
-    if (!bubble || Buffer.byteLength(JSON.stringify(bubble), "utf8") > LINE_FLEX_BUBBLE_MAX_BYTES) {
+    if (!bubble || !fitsLineFlexBubble(bubble)) {
       plainTextInsertions.push({
         position: table.placeholderOffset,
         text: `\n\n${formatOversizedTableAsBullets(table)}\n\n`,

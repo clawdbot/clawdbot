@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { createWindowsCmdShimFixture, withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
 import {
@@ -26,6 +26,7 @@ const BOT_TOKEN = "424242:telegram-model-picker-proof";
 const CHAT_ID = 2468;
 const MESSAGE_ID = 9001;
 const PREPARED_MODEL = "prepared-model";
+const DISCOVERED_MODEL = "discovered-model";
 const REPLACEMENT_MODEL = "replacement-model";
 const REPLACEMENT_PROVIDER = "qa-picker";
 const REPLACEMENT_MODEL_REF = `${REPLACEMENT_PROVIDER}/${REPLACEMENT_MODEL}`;
@@ -220,7 +221,7 @@ async function resolveBuiltModule(params: {
   exportMarker: string;
 }): Promise<string> {
   for (const name of await fs.readdir(params.distDir)) {
-    if (!name.startsWith(params.prefix) || !name.endsWith(".js")) {
+    if (!name.startsWith(params.prefix) || !/\.m?js$/u.test(name)) {
       continue;
     }
     const filePath = path.join(params.distDir, name);
@@ -417,7 +418,7 @@ async function settleCleanup(...cleanups: Array<() => Promise<void>>) {
   }
 }
 
-test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", async () => {
+test("initializes unrestricted Telegram model browsing and reuses its prepared catalog", async () => {
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
   let nextUpdateId = 2;
@@ -448,10 +449,10 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
         writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
         return;
       }
-      succeed(res, {
+      writeJson(res, 200, {
         models: [
           {
-            name: PREPARED_MODEL,
+            name: DISCOVERED_MODEL,
             modified_at: "2026-08-16T00:00:00Z",
             digest: "prepared-model-digest",
             size: 1,
@@ -468,7 +469,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
         writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
         return;
       }
-      succeed(res, {
+      writeJson(res, 200, {
         model_info: { "general.context_length": 8192 },
         capabilities: ["completion", "tools"],
       });
@@ -518,7 +519,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     } else if (
       method === "editMessageText" &&
       pickerStage === "models" &&
-      hasCallback({ method, body }, `mdl_sel_ollama/${PREPARED_MODEL}`)
+      hasCallback({ method, body }, `mdl_sel_ollama/${DISCOVERED_MODEL}`)
     ) {
       pickerStage = "repeated-providers";
       queueCallback("mdl_prov");
@@ -556,9 +557,9 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
         const gatewayOwner = createQaGatewayChild();
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
-          await gatewayOwner.start({
+          const gateway = await gatewayOwner.start({
             repoRoot,
-            useRepoCli: true,
+            mockAuthAgentIds: [],
             transportBaseUrl: apiRoot,
             transport: {
               requiredPluginIds: ["telegram"],
@@ -586,6 +587,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
             primaryModel: `ollama/${PREPARED_MODEL}`,
             alternateModel: `ollama/${PREPARED_MODEL}`,
             runtimeEnvPatch: {
+              OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: undefined,
               OPENCLAW_SKIP_CHANNELS: undefined,
               OPENCLAW_SKIP_PROVIDERS: undefined,
               OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
@@ -598,7 +600,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
                 defaults: {
                   ...cfg.agents?.defaults,
                   model: `ollama/${PREPARED_MODEL}`,
-                  modelPolicy: { allow: ["ollama/*"] },
+                  modelPolicy: { allow: [] },
                   models: {
                     ...cfg.agents?.defaults?.models,
                     [`ollama/${PREPARED_MODEL}`]: {},
@@ -627,16 +629,25 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
             }),
           });
 
-          const startupDiscoveryRequests = discoveryRequests;
-          expect(startupDiscoveryRequests).toBe(0);
           pendingUpdates.push(initialModelsUpdate());
 
           await expect
-            .poll(() => ({ stage: pickerStage, discoveryRequests }), {
+            .poll(() => pickerStage, {
               interval: 50,
               timeout: 30_000,
             })
-            .toEqual({ stage: "providers", discoveryRequests: 2 });
+            .toBe("providers");
+          await expect
+            .poll(() => gateway.call("models.list", { view: "default" }), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .toMatchObject({
+              models: expect.arrayContaining([
+                expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+              ]),
+            });
+          expect(discoveryRequests).toBeGreaterThan(0);
           const warmDiscoveryRequests = discoveryRequests;
           discoveryFrozen = true;
           queueCallback("mdl_prov");
@@ -664,20 +675,254 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
           expect(hasCallback(pickerEdits[2]!, "mdl_list_ollama_1")).toBe(true);
           expect(
             pickerEdits[1] &&
-              keyboardCallbackData(pickerEdits[1]).includes(`mdl_sel_ollama/${PREPARED_MODEL}`),
+              keyboardCallbackData(pickerEdits[1]).includes(`mdl_sel_ollama/${DISCOVERED_MODEL}`),
           ).toBe(true);
           expect(pickerEdits[3] && hasCallback(pickerEdits[3], "mdl_list_ollama_1")).toBe(true);
 
           expect(
             telegramCalls.filter((call) => call.method === "answerCallbackQuery"),
           ).toHaveLength(4);
+          const preparedModels = await gateway.call("models.list", { view: "default" });
+          expect(preparedModels).toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+            ]),
+          });
           expect(discoveryRequests).toBe(warmDiscoveryRequests);
           expect(postWarmDiscoveryAttempts).toBe(0);
+
+          discoveryFrozen = false;
+          const refreshedModels = await gateway.call("models.list", {
+            view: "default",
+            refresh: true,
+          });
+          expect(refreshedModels).toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+            ]),
+          });
+          expect(discoveryRequests).toBeGreaterThan(warmDiscoveryRequests);
+          console.info(
+            "MODEL_INVENTORY_PROOF",
+            JSON.stringify({
+              scenario: "unrestricted-inventory",
+              callbacks: keyboardCallbackData(pickerEdits[1]!),
+              warmDiscoveryRequests,
+              postWarmDiscoveryAttempts,
+              refreshedDiscoveryRequests: discoveryRequests,
+            }),
+          );
         } finally {
           await settleCleanup(async () => await stopQaGatewayFixture(gatewayOwner));
         }
       }),
   );
+}, 120_000);
+
+test("lists native CLI-bound models through Telegram polling and provider callbacks", async () => {
+  const telegramCalls: TelegramCall[] = [];
+  const pendingUpdates: unknown[] = [];
+  const primaryRef = "anthropic/claude-haiku-4-5";
+  const boundRef = "anthropic/claude-sonnet-4-6";
+  let providerRequests = 0;
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
+    const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+    const telegramMatch = pathname.match(/^\/bot([^/]+)\/([^/]+)$/);
+    if (!telegramMatch) {
+      providerRequests += 1;
+      writeJson(res, 404, { ok: false, error: "native command must not call a model" });
+      return;
+    }
+    const [, token = "", method = ""] = telegramMatch;
+    if (token !== BOT_TOKEN) {
+      writeJson(res, 401, { ok: false, error: "unexpected bot token" });
+      return;
+    }
+    const body = await readJson(req);
+    if (method === "getMe") {
+      succeed(res, {
+        id: 424242,
+        is_bot: true,
+        first_name: "QA Picker",
+        username: "qa_picker_bot",
+      });
+      return;
+    }
+    if (method === "getUpdates") {
+      const update = pendingUpdates.shift();
+      succeed(res, update ? [update] : []);
+      return;
+    }
+    telegramCalls.push({ method, body });
+    if (method === "sendMessage") {
+      pendingUpdates.push(callbackUpdate(2, "native-provider-list", "mdl_list_anthropic_1"));
+    }
+    succeed(res);
+  };
+
+  await withTempDir("openclaw-telegram-native-model-picker-", async (fixtureRoot) => {
+    const cliPath = path.join(fixtureRoot, process.platform === "win32" ? "claude.cjs" : "claude");
+    const authCallsPath = path.join(fixtureRoot, "native-auth-calls.jsonl");
+    if (process.platform === "win32") {
+      await createWindowsCmdShimFixture({
+        shimPath: path.join(fixtureRoot, "claude.cmd"),
+        scriptPath: cliPath,
+        shimLine: `@"${process.execPath}" "%~dp0\\claude.cjs" %*`,
+      });
+    }
+    await fs.writeFile(
+      cliPath,
+      `#!${process.execPath}
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(authCallsPath)}, JSON.stringify(argv) + "\\n");
+if (JSON.stringify(argv) !== JSON.stringify(["auth", "status", "--json"])) process.exit(1);
+process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }));
+`,
+      { mode: 0o755 },
+    );
+    await withServer(
+      (req, res) => {
+        void handleRequest(req, res);
+      },
+      async (apiRoot) => {
+        const gatewayOwner = createQaGatewayChild();
+        try {
+          const gateway = await gatewayOwner.start({
+            repoRoot: path.resolve(import.meta.dirname, "../../../.."),
+            transportBaseUrl: apiRoot,
+            transport: {
+              requiredPluginIds: ["telegram"],
+              createGatewayConfig: () => ({
+                channels: {
+                  telegram: {
+                    enabled: true,
+                    botToken: BOT_TOKEN,
+                    apiRoot,
+                    dmPolicy: "open",
+                    allowFrom: ["*"],
+                    commands: { native: true },
+                  },
+                },
+              }),
+            },
+            enabledPluginIds: ["anthropic"],
+            mockAuthAgentIds: [],
+            controlUiEnabled: false,
+            primaryModel: primaryRef,
+            alternateModel: boundRef,
+            runtimeEnvPatch: {
+              PATH: `${fixtureRoot}${path.delimiter}${process.env.PATH ?? ""}`,
+              ANTHROPIC_API_KEY: undefined,
+              ANTHROPIC_AUTH_TOKEN: undefined,
+              CLAUDE_CODE_OAUTH_TOKEN: undefined,
+              CLAUDE_CONFIG_DIR: path.join(fixtureRoot, "claude-state"),
+              TELEGRAM_BOT_TOKEN: undefined,
+              OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: undefined,
+              OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+            },
+            mutateConfig: (cfg) => ({
+              ...cfg,
+              auth: { profiles: {} },
+              agents: {
+                ...cfg.agents,
+                defaults: {
+                  ...cfg.agents?.defaults,
+                  model: primaryRef,
+                  modelPolicy: { allow: [] },
+                  models: {
+                    [primaryRef]: { agentRuntime: { id: "claude-cli" } },
+                    [boundRef]: { agentRuntime: { id: "claude-cli" } },
+                  },
+                },
+                entries: {
+                  ...cfg.agents?.entries,
+                  qa: { ...cfg.agents?.entries?.qa, model: primaryRef },
+                },
+              },
+              models: { providers: {} },
+            }),
+          });
+
+          // Observe startup auth without warming provider discovery before the channel command.
+          await expect
+            .poll(() => gateway.call("models.list", { preparedOnly: true }), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .toMatchObject({
+              models: expect.arrayContaining([
+                expect.objectContaining({
+                  provider: "anthropic",
+                  id: "claude-sonnet-4-6",
+                  available: true,
+                }),
+              ]),
+            });
+          pendingUpdates.push(initialModelsUpdate());
+          await expect
+            .poll(() => telegramCalls.find((call) => call.method === "editMessageText"), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .toBeDefined();
+          const modelList = telegramCalls.find((call) => call.method === "editMessageText");
+          const providerMenu = telegramCalls.find((call) => call.method === "sendMessage");
+          expect(providerMenu).toBeDefined();
+          const providerButton = inlineKeyboard(providerMenu!)
+            .flat()
+            .find((button) => button.callback_data === "mdl_list_anthropic_1");
+          const gatewayModels = (await gateway.call("models.list", { view: "default" })) as {
+            models: Array<{
+              provider: string;
+              id: string;
+              available?: boolean;
+              unavailableReason?: string;
+            }>;
+          };
+          console.info(
+            "MODEL_INVENTORY_PROOF",
+            JSON.stringify({
+              scenario: "native-cli-models",
+              providerButtonText: providerButton?.text,
+              callbacks: keyboardCallbackData(modelList!),
+              models: gatewayModels.models.filter(
+                (entry) =>
+                  `${entry.provider}/${entry.id}` === primaryRef ||
+                  `${entry.provider}/${entry.id}` === boundRef,
+              ),
+              fixtureProviderRequests: providerRequests,
+            }),
+          );
+          const cliCalls = (await fs.readFile(authCallsPath, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          console.info("MODEL_INVENTORY_AUTH_PROOF", JSON.stringify(cliCalls));
+          expect(cliCalls.length).toBeGreaterThan(0);
+          expect(providerButton?.text).toBe("anthropic (2)");
+          expect(modelList?.body.text).toContain("Models (anthropic");
+          expect(keyboardCallbackData(modelList!)).toContain(`mdl_sel_${boundRef}`);
+          expect(keyboardCallbackData(modelList!)).toContain(`mdl_sel_${primaryRef}`);
+          expect(gatewayModels).toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({
+                provider: "anthropic",
+                id: "claude-sonnet-4-6",
+                available: true,
+              }),
+            ]),
+          });
+          expect(
+            cliCalls.every((args) => JSON.stringify(args) === '["auth","status","--json"]'),
+          ).toBe(true);
+          expect(providerRequests).toBe(0);
+        } finally {
+          await stopQaGatewayFixture(gatewayOwner);
+        }
+      },
+    );
+  });
 }, 120_000);
 
 test("recovers a replaced model catalog and drains the following Telegram callback", async () => {

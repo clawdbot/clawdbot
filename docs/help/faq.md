@@ -119,6 +119,21 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
   </Accordion>
 
+  <Accordion title="Is OpenClaw owned by OpenAI?">
+    No. OpenClaw is stewarded by the [OpenClaw Foundation](https://openclaw.org), an independent 501(c)(3). OpenAI is one of several donors, and its creator works there. Donors do not own, control, or direct the project. Codex is one [agent harness](/concepts/agent-runtimes) plugin among several, and no lab's model is privileged in the code.
+
+  </Accordion>
+
+  <Accordion title="What does OpenClaw send to the Foundation?">
+    By default, a daily update check carrying the OpenClaw version, OS, Node version, and CPU architecture: the same information any package registry sees. Optional anonymous feature statistics are off by default and carry no identifier. No prompts, messages, model names, keys, paths, or machine identifiers are ever sent to the Foundation. Set `update.checkOnStart: false` to send nothing at all. Traffic to the model providers and chat platforms you configure is separate and goes to them, as always; see "Is all data used with OpenClaw saved locally?" below. Details: [Usage telemetry and update checks](/gateway/telemetry).
+
+  </Accordion>
+
+  <Accordion title="How is OpenClaw funded, and how does that compare?">
+    The Foundation is funded by donations and has no product to sell: no paid tier, no hosted service, no token. It is not venture-backed. Some other self-hosted agents are built by venture-funded companies that sell a subscription their agent offers during setup. That is a difference in incentives, not a judgment of their engineering; see the [governance comparison](/start/why-openclaw#governance).
+
+  </Accordion>
+
   <Accordion title="What are the advantages vs Claude Code for web development?">
     OpenClaw is an **assistant and coordination layer**, not an IDE replacement. Use Claude Code or Codex for the fastest direct coding loop inside a repo. Use OpenClaw for durable memory, cross-device access, and tool orchestration.
 
@@ -178,7 +193,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     }
     ```
 
-    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`, then agent-specific overrides in flat `agents.entries.*.params`. Do not duplicate the same model under nested `agents.entries.*.models["provider/model"].params`; that path is for per-agent model catalog and runtime overrides.
+    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`. Use `agents.entries.*.models["provider/model"].params` when one agent needs different settings for that model. Flat `agents.entries.*.params` applies across that agent's models and wins over both per-model layers.
 
     See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), [Configuration](/gateway/config-agents), [Slash commands](/tools/slash-commands).
 
@@ -231,8 +246,8 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Debug:
     ```bash
-    openclaw cron run <jobId>
-    openclaw cron runs --id <jobId> --limit 50
+    openclaw automations run <jobId>
+    openclaw automations runs <jobId> --limit 50
     ```
 
     Docs: [Cron jobs](/automation/cron-jobs), [Automation](/automation).
@@ -251,7 +266,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Debug:
     ```bash
-    openclaw cron runs --id <jobId> --limit 50
+    openclaw automations runs <jobId> --limit 50
     openclaw tasks show <lookup>
     ```
 
@@ -268,7 +283,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Debug:
     ```bash
-    openclaw cron runs --id <jobId> --limit 50
+    openclaw automations runs <jobId> --limit 50
     ```
 
     Docs: [Cron jobs](/automation/cron-jobs), [cron CLI](/cli/cron).
@@ -554,7 +569,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     {
       agents: {
         defaults: {
-          workspace: "~/Projects/my-repo",
+          workspace: "~/path/to/my-repo",
         },
       },
     }

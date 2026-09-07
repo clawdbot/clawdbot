@@ -24,6 +24,7 @@ describe("memory watchers on the real filesystem", () => {
     async (operation) => {
       const state = await createOpenClawTestState({ label: "memory-watch-filesystem" });
       const initialWatchers = activeFilesystemWatchers();
+      const openWatchers = new Set<nativeFs.FSWatcher>();
       const turnContext = new AsyncLocalStorage<string>();
       const pendingInputContext = new AsyncLocalStorage<string>();
       const watcherContexts: Array<{ turn?: string; pendingInput?: string }> = [];
@@ -34,7 +35,10 @@ describe("memory watchers on the real filesystem", () => {
           turn: turnContext.getStore(),
           pendingInput: pendingInputContext.getStore(),
         });
-        return originalWatch(...args);
+        const watcher = originalWatch(...args);
+        openWatchers.add(watcher);
+        watcher.once("close", () => openWatchers.delete(watcher));
+        return watcher;
       });
       syncBuiltinESMExports();
       const originalSetTimeout = globalThis.setTimeout;
@@ -83,7 +87,11 @@ describe("memory watchers on the real filesystem", () => {
         const activeManager = manager;
         await activeManager.sync({ reason: "test-initial-index" });
         expect(activeManager.status().fts?.available).toBe(true);
-        expect(activeFilesystemWatchers()).toBeGreaterThan(initialWatchers);
+        expect(openWatchers.size).toBeGreaterThan(0);
+        // Bun emits watcher close events but does not expose Node's FSEventWrap census.
+        if (!process.versions.bun) {
+          expect(activeFilesystemWatchers()).toBeGreaterThan(initialWatchers);
+        }
         const indexPath = activeManager.status().dbPath;
         if (!indexPath) {
           throw new Error("memory index path unavailable");
@@ -136,7 +144,10 @@ describe("memory watchers on the real filesystem", () => {
         index.close();
         index = undefined;
         await activeManager.close();
-        await expect.poll(activeFilesystemWatchers).toBe(initialWatchers);
+        await expect.poll(() => openWatchers.size).toBe(0);
+        if (!process.versions.bun) {
+          await expect.poll(activeFilesystemWatchers).toBe(initialWatchers);
+        }
       } finally {
         index?.close();
         await manager?.close();

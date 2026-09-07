@@ -38,7 +38,7 @@ import {
   buildSidebarSessionNavigationState,
   collectCategorizedChildRootRows,
   collectPromotedMainChildRows,
-  collectSidebarSessionCandidateRows,
+  collectSidebarSessionRowsByKey,
   compareSidebarSessionRowsByMode,
   collectKnownSidebarSessionCatalogIds,
   collectKnownSidebarSessionGroups,
@@ -46,7 +46,6 @@ import {
   findSidebarMainSessionRow,
   findProjectedSidebarSession,
   someSidebarSessionInTree,
-  resolveSidebarAgentChipSubtitle,
   resolveActiveSidebarAgent,
   resolveSidebarHomeAttention,
   resolveLatestSidebarAgentSession,
@@ -304,6 +303,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return this.getSessionNavigationState().selectedAgentId;
   }
 
+  sidebarSessionHref(session: SidebarRecentSession): string {
+    // Build links only for rendered rows, after full-roster projection and pagination.
+    return sessionNavigationTarget({
+      face: resolveSessionPreferredFace(session),
+      sessionKey: session.key,
+      fallbackAgentId: this.selectedAgentIdForSessions(),
+      basePath: this.context?.basePath ?? "",
+      row: session,
+      mainKey: this.context ? this.sessionMainKey() : undefined,
+      preferenceDerivedFace: true,
+    }).href;
+  }
+
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter {
     return this.sessionsStatusFilter;
   }
@@ -373,10 +385,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return buildReconciledSidebarZone({
       sidebarEntries: this.sidebarEntries,
       rows,
-      workboardBoards: this.workboardBoards,
-      enabledRouteIds: this.enabledRouteIds,
-      workboardBoardsReady: this.workboardBoardsReady,
-      controlUiTabs: this.context?.gateway.snapshot.hello?.controlUiTabs,
+      pluginNavigationKeys: new Set(this.pluginNavigation().map((entry) => entry.key)),
     });
   }
 
@@ -465,7 +474,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     }
   }
 
-  /** Chip switching selects the agent and refreshes its session list. */
+  /** Chip switching selects the agent for the application. */
   protected readonly expandAgent = (agentId: string) => {
     const context = this.context;
     if (!context) {
@@ -480,7 +489,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     this.sessionProjection.resetMembership();
     this.sessionData.visibleSessionLimits.clear();
     context.agentSelection.set(nextAgentId);
-    void this.sessionData.refreshSidebarSessions(nextAgentId);
   };
 
   expandedAgentId(): string {
@@ -517,10 +525,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       return;
     }
     this.selectSession(this.agentResumeKey(agentId));
-  }
-
-  agentChipSubtitle(agentId: string): string {
-    return resolveSidebarAgentChipSubtitle(this.latestAgentSessionRow(agentId));
   }
 
   switchChipAgent(agentId: string) {
@@ -655,10 +659,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     ) {
       scopedRootRows.push(lineageRoot);
     }
-    const sessionCandidateRows = collectSidebarSessionCandidateRows({
+    const sessionRowsByKey = collectSidebarSessionRowsByKey({
       rows,
       childRowsByParent: childSessionRowsByParent,
     });
+    const sessionCandidateRows = [...sessionRowsByKey.values()];
     const categorizedChildRows = collectCategorizedChildRootRows({
       rows: sessionCandidateRows,
       scopedRoots: scopedRootRows,
@@ -688,8 +693,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     // renders as its live row inside the Coding catalog, never as a thread.
     const projected = projectSessionTree({
       roots: orderedRootRows.filter((row) => !adopted.has(row.key)),
-      agentRows: rows,
-      childRowsByParent: childSessionRowsByParent,
+      rowsByKey: sessionRowsByKey,
       loadingChildKeys: this.sessionData.loadingChildSessionKeys,
       knownSessionAttention: this.attention.knownSessionAttention(),
       toSidebarSession: navigationState.toSidebarSession,

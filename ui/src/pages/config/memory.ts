@@ -14,6 +14,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import {
   selectedEngineId,
@@ -21,6 +22,8 @@ import {
   type MemoryEngineSelection,
   type MemoryTab,
 } from "./memory-schema.ts";
+
+registerMemoryImportEnglish();
 
 /** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
 type MemoryEngineOption = {
@@ -252,24 +255,26 @@ function renderEngineSection(props: MemoryViewProps) {
         }),
       })}
       ${renderDisabledEngineRow(props, engineId)}
-      ${props.engineOutcome === null
-        ? nothing
-        : renderSettingsRow({
-            title: t(
-              props.engineOutcome.kind === "error"
-                ? "memoryPage.engine.changeFailed"
-                : "pluginsPage.needsAttention",
-            ),
-            description: props.engineOutcome.message,
-            control: renderSettingsStatus({
-              kind: props.engineOutcome.kind === "error" ? "danger" : "warn",
-              label: t(
+      ${
+        props.engineOutcome === null
+          ? nothing
+          : renderSettingsRow({
+              title: t(
                 props.engineOutcome.kind === "error"
-                  ? "common.failed"
+                  ? "memoryPage.engine.changeFailed"
                   : "pluginsPage.needsAttention",
               ),
-            }),
-          })}
+              description: props.engineOutcome.message,
+              control: renderSettingsStatus({
+                kind: props.engineOutcome.kind === "error" ? "danger" : "warn",
+                label: t(
+                  props.engineOutcome.kind === "error"
+                    ? "common.failed"
+                    : "pluginsPage.needsAttention",
+                ),
+              }),
+            })
+      }
     `,
   );
 }
@@ -319,37 +324,43 @@ function renderAddonsSection(props: MemoryViewProps) {
     html`
       ${props.addons.map(
         (addon) => html`
-          ${props.canToggleAddons && (addon.state === "enabled" || addon.state === "disabled")
-            ? renderSettingsToggleRow({
-                title: addon.label,
-                ariaLabel: t("memoryPage.addons.toggleAriaLabel", { plugin: addon.label }),
-                description: addon.description,
-                checked: addon.state === "enabled",
-                disabled: addon.busy,
-                onChange: (enabled) => props.onAddonChange(addon.id, enabled),
-              })
-            : renderSettingsRow({
-                title: addon.label,
-                description: addon.description,
-                control: renderAddonStatus(addon.state),
-              })}
-          ${addon.error === null
-            ? nothing
-            : renderSettingsRow({
-                title: t("memoryPage.addons.changeFailed", { plugin: addon.label }),
-                description: addon.error,
-                control: renderSettingsStatus({ kind: "danger", label: t("common.failed") }),
-              })}
-          ${addon.notice === null
-            ? nothing
-            : renderSettingsRow({
-                title: t("pluginsPage.needsAttention"),
-                description: addon.notice,
-                control: renderSettingsStatus({
-                  kind: "warn",
-                  label: t("pluginsPage.needsAttention"),
-                }),
-              })}
+          ${
+            props.canToggleAddons && (addon.state === "enabled" || addon.state === "disabled")
+              ? renderSettingsToggleRow({
+                  title: addon.label,
+                  ariaLabel: t("memoryPage.addons.toggleAriaLabel", { plugin: addon.label }),
+                  description: addon.description,
+                  checked: addon.state === "enabled",
+                  disabled: addon.busy,
+                  onChange: (enabled) => props.onAddonChange(addon.id, enabled),
+                })
+              : renderSettingsRow({
+                  title: addon.label,
+                  description: addon.description,
+                  control: renderAddonStatus(addon.state),
+                })
+          }
+          ${
+            addon.error === null
+              ? nothing
+              : renderSettingsRow({
+                  title: t("memoryPage.addons.changeFailed", { plugin: addon.label }),
+                  description: addon.error,
+                  control: renderSettingsStatus({ kind: "danger", label: t("common.failed") }),
+                })
+          }
+          ${
+            addon.notice === null
+              ? nothing
+              : renderSettingsRow({
+                  title: t("pluginsPage.needsAttention"),
+                  description: addon.notice,
+                  control: renderSettingsStatus({
+                    kind: "warn",
+                    label: t("pluginsPage.needsAttention"),
+                  }),
+                })
+          }
         `,
       )}
       ${renderSettingsRow({
@@ -413,31 +424,35 @@ export function renderMemory(props: MemoryViewProps) {
           })}
         </div>
         <div class="hub-page-header__actions">
-          ${props.activeTab === "settings" || props.agents.length <= 1
-            ? nothing
-            : html`
-                <div class="agent-scope-control">
-                  <span class="agent-scope-control__label"
-                    >${t("memoryPage.dreaming.agentScope.rowTitle")}</span
-                  >
-                  <openclaw-agent-select
-                    .options=${props.agents}
-                    .value=${props.agentId ?? ""}
-                    .accessibleLabel=${t("memoryPage.dreaming.agentScope.rowTitle")}
-                    .onSelect=${(value: string) => props.onAgentChange(value || null)}
-                  ></openclaw-agent-select>
-                </div>
-              `}
+          ${
+            props.activeTab === "settings" || props.agents.length <= 1
+              ? nothing
+              : html`
+                  <div class="agent-scope-control">
+                    <span class="agent-scope-control__label"
+                      >${t("memoryPage.dreaming.agentScope.rowTitle")}</span
+                    >
+                    <openclaw-agent-select
+                      .options=${props.agents}
+                      .value=${props.agentId ?? ""}
+                      .accessibleLabel=${t("memoryPage.dreaming.agentScope.rowTitle")}
+                      .onSelect=${(value: string) => props.onAgentChange(value || null)}
+                    ></openclaw-agent-select>
+                  </div>
+                `
+          }
         </div>
       </section>
       <div id=${MEMORY_PANEL_ID} class="memory-page__panel" role="tabpanel">
-        ${props.activeTab === "overview"
-          ? props.overview
-          : props.activeTab === "memories"
-            ? props.memories
-            : props.activeTab === "dreams"
-              ? props.dreams
-              : renderSettingsTab(props)}
+        ${
+          props.activeTab === "overview"
+            ? props.overview
+            : props.activeTab === "memories"
+              ? props.memories
+              : props.activeTab === "dreams"
+                ? props.dreams
+                : renderSettingsTab(props)
+        }
       </div>
     </section>
   `;

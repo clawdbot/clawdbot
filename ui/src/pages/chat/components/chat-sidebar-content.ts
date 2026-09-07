@@ -1,21 +1,18 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
+import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
-import {
-  handleMarkdownCodeBlockClick,
-  markdownCodeBlocks,
-} from "../../../components/markdown-code-blocks.ts";
+import { markdownBlocks } from "../../../components/markdown-blocks.ts";
+import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
 import {
-  markdownSessionHref,
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
   type SessionLinkTarget,
@@ -28,31 +25,24 @@ import {
   resolveEmbedSandbox,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
+import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
-import { safeAttachmentHref, safeMediaAttachmentHref } from "./chat-attachment-href.ts";
+import {
+  isCrossOriginHttpSource,
+  safeAttachmentHref,
+  safeMediaAttachmentHref,
+} from "./chat-attachment-href.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import { isSvgImageMediaPath } from "./chat-message-media.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import "./session-diff-panel.ts";
 
 type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
-
-function isCrossOriginHttpSource(source: string): boolean {
-  try {
-    const url = new URL(source, window.location.href);
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin
-    );
-  } catch {
-    return false;
-  }
-}
 
 function renderSidebarAttachment(
   content: Extract<SidebarContent, { kind: "attachment" }>,
@@ -126,10 +116,6 @@ function renderSidebarAttachment(
     downloadHref: src,
   });
 }
-function toPlainTextCodeFence(value: string, language = ""): string {
-  const fenceHeader = language ? `\`\`\`${language}` : "```";
-  return `${fenceHeader}\n${value}\n\`\`\``;
-}
 
 export function buildRawContent(
   content: ChatDetailPanelContent | null | undefined,
@@ -141,7 +127,7 @@ export function buildRawContent(
     const rawText = content.rawText ?? content.content;
     return {
       kind: "markdown",
-      content: toPlainTextCodeFence(rawText),
+      content: formatFencedCodeBlock(rawText),
       rawText,
     };
   }
@@ -149,14 +135,14 @@ export function buildRawContent(
     const rawText = content.rawText ?? content.content;
     return {
       kind: "markdown",
-      content: toPlainTextCodeFence(rawText, content.language),
+      content: formatFencedCodeBlock(rawText, content.language),
       rawText,
     };
   }
   if (content.rawText?.trim()) {
     return {
       kind: "markdown",
-      content: toPlainTextCodeFence(content.rawText, "json"),
+      content: formatFencedCodeBlock(content.rawText, "json"),
       rawText: content.rawText,
     };
   }
@@ -231,161 +217,180 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                 : t("chat.detailPanel.toolDetails");
   return html`
     <div class="sidebar-panel">
-      ${props.embedded
-        ? nothing
-        : html`<div class="sidebar-header">
-            <div class="sidebar-title">${title}</div>
-            <div class="sidebar-header__actions">
-              <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
-                <button
-                  @click=${props.onClose}
-                  class="btn"
-                  type="button"
-                  aria-label=${t("chat.detailPanel.close")}
-                >
-                  ${icons.x}
-                </button>
-              </openclaw-tooltip>
-            </div>
-          </div> `}
+      ${
+        props.embedded
+          ? nothing
+          : html`<div class="sidebar-header">
+              <div class="sidebar-title">${title}</div>
+              <div class="sidebar-header__actions">
+                <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
+                  <button
+                    @click=${props.onClose}
+                    class="btn"
+                    type="button"
+                    aria-label=${t("chat.detailPanel.close")}
+                  >
+                    ${icons.x}
+                  </button>
+                </openclaw-tooltip>
+              </div>
+            </div> `
+      }
       <div class="sidebar-content">
-        ${props.error
-          ? html`
-              ${renderLazyViewError({
-                error: props.error,
-                stale: isStaleChunkImportError(props.error),
-                onRetry: props.onRetry,
-              })}
-              ${content?.kind === "file" || content?.rawText?.trim()
-                ? html`
-                    <button
-                      @click=${props.onViewRawText}
-                      class="btn"
-                      type="button"
-                      style="margin-top: 12px;"
-                    >
-                      ${t("chat.detailPanel.viewRawText")}
-                    </button>
-                  `
-                : nothing}
-            `
-          : content
-            ? content.kind === "file"
-              ? renderSidebarFile(content, props.onViewRawText, props.fileView)
-              : content.kind === "session-diff"
-                ? html`<openclaw-session-diff
-                    .loader=${content.load}
-                    .loadFileText=${content.loadFileText ?? null}
-                    .execNode=${props.fileView?.execNode ?? null}
-                    .openFile=${content.openFile ?? null}
-                    .revealFile=${props.fileView?.onReveal ?? null}
-                  ></openclaw-session-diff>`
-                : content.kind === "canvas"
-                  ? html`
-                      <div class="chat-tool-card__preview" data-kind="canvas">
-                        <div class="chat-tool-card__preview-panel" data-side="front">
-                          ${keyed(
-                            `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
-                            html`
-                              <iframe
-                                class="chat-tool-card__preview-frame"
-                                title=${content.title?.trim() ||
-                                t("chat.detailPanel.renderPreview")}
-                                sandbox=${canvasSandbox}
-                                src=${canvasSrc ?? nothing}
-                                style=${content.preferredHeight
-                                  ? `height:${content.preferredHeight}px`
-                                  : ""}
-                              ></iframe>
-                            `,
-                          )}
+        ${
+          props.error
+            ? html`
+                ${renderLazyViewError({
+                  error: props.error,
+                  stale: isStaleChunkImportError(props.error),
+                  onRetry: props.onRetry,
+                })}
+                ${
+                  content?.kind === "file" || content?.rawText?.trim()
+                    ? html`
+                        <button
+                          @click=${props.onViewRawText}
+                          class="btn"
+                          type="button"
+                          style="margin-top: 12px;"
+                        >
+                          ${t("chat.detailPanel.viewRawText")}
+                        </button>
+                      `
+                    : nothing
+                }
+              `
+            : content
+              ? content.kind === "file"
+                ? renderSidebarFile(content, props.onViewRawText, props.fileView)
+                : content.kind === "session-diff"
+                  ? html`<openclaw-session-diff
+                      .loader=${content.load}
+                      .loadFileText=${content.loadFileText ?? null}
+                      .execNode=${props.fileView?.execNode ?? null}
+                      .openFile=${content.openFile ?? null}
+                      .revealFile=${props.fileView?.onReveal ?? null}
+                    ></openclaw-session-diff>`
+                  : content.kind === "canvas"
+                    ? html`
+                        <div class="chat-tool-card__preview" data-kind="canvas">
+                          <div class="chat-tool-card__preview-panel" data-side="front">
+                            ${keyed(
+                              `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
+                              html`
+                                <iframe
+                                  class="chat-tool-card__preview-frame"
+                                  title=${
+                                    content.title?.trim() || t("chat.detailPanel.renderPreview")
+                                  }
+                                  sandbox=${canvasSandbox}
+                                  src=${canvasSrc ?? nothing}
+                                  style=${
+                                    content.preferredHeight
+                                      ? `height:${content.preferredHeight}px`
+                                      : ""
+                                  }
+                                ></iframe>
+                              `,
+                            )}
+                          </div>
+                          ${
+                            content.rawText?.trim()
+                              ? html`
+                                  <div style="margin-top: 12px;">
+                                    <button @click=${props.onViewRawText} class="btn" type="button">
+                                      ${t("chat.detailPanel.viewRawText")}
+                                    </button>
+                                  </div>
+                                `
+                              : nothing
+                          }
                         </div>
-                        ${content.rawText?.trim()
-                          ? html`
-                              <div style="margin-top: 12px;">
-                                <button @click=${props.onViewRawText} class="btn" type="button">
+                      `
+                    : content.kind === "image"
+                      ? html`
+                          <div class="chat-tool-card__preview" data-kind="image">
+                            <div class="chat-tool-card__preview-panel" data-side="front">
+                              <button
+                                type="button"
+                                class="chat-tool-card__preview-image-button"
+                                aria-label=${t("chat.imageLightbox.open", { title })}
+                                @click=${() =>
+                                  openResolvedImage(props.onOpenImage, content.src, title)}
+                              >
+                                <img
+                                  class="chat-tool-card__preview-image"
+                                  src=${content.src}
+                                  alt=${title}
+                                  style="display:block;max-width:100%;height:auto;border-radius:8px;"
+                                />
+                              </button>
+                            </div>
+                            ${
+                              content.rawText?.trim()
+                                ? html`
+                                    <div style="margin-top: 12px;">
+                                      <button
+                                        @click=${props.onViewRawText}
+                                        class="btn"
+                                        type="button"
+                                      >
+                                        ${t("chat.detailPanel.viewRawText")}
+                                      </button>
+                                    </div>
+                                  `
+                                : nothing
+                            }
+                          </div>
+                        `
+                      : content.kind === "attachment"
+                        ? html`<div class="sidebar-attachment-preview">
+                            ${renderSidebarAttachment(
+                              content,
+                              props.onAttachmentUpdate,
+                              props.attachmentRuntime,
+                            )}
+                          </div>`
+                        : html`
+                            <section class="sidebar-markdown-shell">
+                              <div class="sidebar-markdown-shell__toolbar">
+                                <div class="sidebar-markdown-shell__intro">
+                                  <div class="sidebar-markdown-shell__eyebrow">
+                                    ${icons.scrollText}
+                                    <span>${t("chat.detailPanel.renderedMarkdown")}</span>
+                                  </div>
+                                  <div class="sidebar-markdown-shell__hint">
+                                    ${t("chat.detailPanel.renderedMarkdownHint")}
+                                  </div>
+                                </div>
+                                <button
+                                  @click=${props.onViewRawText}
+                                  class="btn btn--sm"
+                                  type="button"
+                                >
                                   ${t("chat.detailPanel.viewRawText")}
                                 </button>
                               </div>
-                            `
-                          : nothing}
-                      </div>
-                    `
-                  : content.kind === "image"
-                    ? html`
-                        <div class="chat-tool-card__preview" data-kind="image">
-                          <div class="chat-tool-card__preview-panel" data-side="front">
-                            <button
-                              type="button"
-                              class="chat-tool-card__preview-image-button"
-                              aria-label=${t("chat.imageLightbox.open", { title })}
-                              @click=${() =>
-                                openResolvedImage(props.onOpenImage, content.src, title)}
-                            >
-                              <img
-                                class="chat-tool-card__preview-image"
-                                src=${content.src}
-                                alt=${title}
-                                style="display:block;max-width:100%;height:auto;border-radius:8px;"
-                              />
-                            </button>
-                          </div>
-                          ${content.rawText?.trim()
-                            ? html`
-                                <div style="margin-top: 12px;">
-                                  <button @click=${props.onViewRawText} class="btn" type="button">
-                                    ${t("chat.detailPanel.viewRawText")}
-                                  </button>
-                                </div>
-                              `
-                            : nothing}
-                        </div>
-                      `
-                    : content.kind === "attachment"
-                      ? html`<div class="sidebar-attachment-preview">
-                          ${renderSidebarAttachment(
-                            content,
-                            props.onAttachmentUpdate,
-                            props.attachmentRuntime,
-                          )}
-                        </div>`
-                      : html`
-                          <section class="sidebar-markdown-shell">
-                            <div class="sidebar-markdown-shell__toolbar">
-                              <div class="sidebar-markdown-shell__intro">
-                                <div class="sidebar-markdown-shell__eyebrow">
-                                  ${icons.scrollText}
-                                  <span>${t("chat.detailPanel.renderedMarkdown")}</span>
-                                </div>
-                                <div class="sidebar-markdown-shell__hint">
-                                  ${t("chat.detailPanel.renderedMarkdownHint")}
-                                </div>
-                              </div>
-                              <button
-                                @click=${props.onViewRawText}
-                                class="btn btn--sm"
-                                type="button"
-                              >
-                                ${t("chat.detailPanel.viewRawText")}
-                              </button>
-                            </div>
-                            ${markdownHtml
-                              ? html`
-                                  <article
-                                    class="sidebar-markdown-reader sidebar-markdown"
-                                    dir=${detectTextDirection(content.content)}
-                                  >
-                                    ${unsafeHTML(markdownHtml)}
-                                  </article>
-                                `
-                              : html`
-                                  <div class="sidebar-markdown-empty">
-                                    ${t("chat.detailPanel.noPreviewableMarkdown")}
-                                  </div>
-                                `}
-                          </section>
-                        `
-            : html` <div class="muted">${t("chat.detailPanel.noContent")}</div> `}
+                              ${
+                                markdownHtml
+                                  ? html`
+                                      <article
+                                        class="sidebar-markdown-reader sidebar-markdown"
+                                        dir=${detectTextDirection(content.content)}
+                                      >
+                                        ${unsafeHTML(markdownHtml)}
+                                      </article>
+                                    `
+                                  : html`
+                                      <div class="sidebar-markdown-empty">
+                                        ${t("chat.detailPanel.noPreviewableMarkdown")}
+                                      </div>
+                                    `
+                              }
+                            </section>
+                          `
+              : html` <div class="muted">${t("chat.detailPanel.noContent")}</div> `
+        }
       </div>
     </div>
   `;
@@ -407,7 +412,7 @@ export function renderSidebarPanel(
   return html`
     <div
       class=${fillHost ? "sidebar-panel-host--fill" : ""}
-      ${markdownCodeBlocks()}
+      ${markdownBlocks()}
       @click=${props.onClick}
       @keydown=${props.onKeydown}
     >
@@ -433,9 +438,7 @@ export function handleSidebarClick(event: MouseEvent, callbacks: SidebarNavigati
     callbacks.onOpenWorkspaceFile?.(target);
     return;
   }
-  const sessionTarget =
-    markdownSessionLinkFromEvent(event) ??
-    markdownSessionHref(event, sessionRefFromPath, callbacks.basePath);
+  const sessionTarget = markdownSessionLinkFromEvent(event, callbacks.basePath);
   if (sessionTarget && shouldHandleNavigationClick(event)) {
     event.preventDefault();
     callbacks.onOpenSessionLink?.(sessionTarget);
@@ -448,13 +451,8 @@ export function handleSidebarKeydown(event: KeyboardEvent, callbacks: SidebarNav
     callbacks.onOpenWorkspaceFile?.(target);
     return;
   }
-  const sessionTarget =
-    markdownSessionLinkFromKeyboardEvent(event) ??
-    (event.key === "Enter"
-      ? markdownSessionHref(event, sessionRefFromPath, callbacks.basePath)
-      : null);
+  const sessionTarget = markdownSessionLinkFromKeyboardEvent(event, callbacks.basePath);
   if (sessionTarget) {
-    event.preventDefault();
     callbacks.onOpenSessionLink?.(sessionTarget);
   }
 }

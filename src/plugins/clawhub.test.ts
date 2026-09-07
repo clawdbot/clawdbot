@@ -50,7 +50,8 @@ vi.mock("../infra/clawhub-artifacts.js", async () => {
   };
 });
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
   resolveCompatibilityHostVersion: (...args: unknown[]) =>
     resolveCompatibilityHostVersionMock(...args),
 }));
@@ -484,6 +485,49 @@ describe("installPluginFromClawHub", () => {
       expect.stringContaining("ClawHub   https://clawhub.ai/plugins/demo"),
     );
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not publish a ClawHub plugin after authority closes during artifact review", async () => {
+    const archive = await mockClawHubFallbackArchive({
+      entries: {
+        "package.json": JSON.stringify({
+          name: "demo",
+          version: "2026.3.22",
+          openclaw: { extensions: ["./index.js"] },
+        }),
+        "openclaw.plugin.json": JSON.stringify({
+          id: "demo",
+          configSchema: { type: "object" },
+        }),
+        "index.js": "export default { register() {} };\n",
+      },
+    });
+    const extensionsDir = path.join(path.dirname(archive.archivePath), "extensions");
+    const { installPluginFromArchive } = await import("./install-package.js");
+    installPluginFromArchiveMock.mockImplementationOnce(installPluginFromArchive);
+    let authorityActive = true;
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      extensionsDir,
+      onBeforePluginArtifactCommit: async () => {
+        authorityActive = false;
+      },
+      beforePersistentApply: () => {
+        if (!authorityActive) {
+          throw new Error("plugin installation authority closed");
+        }
+      },
+    });
+
+    expect(authorityActive).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("plugin installation authority closed"),
+    });
+    await expect(fs.stat(path.join(extensionsDir, "demo"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
@@ -2350,10 +2394,10 @@ describe("installPluginFromClawHub", () => {
   });
 
   it("rejects fallback verification when _meta.json exceeds the per-file size limit", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));
-    tempDirs.push(dir);
-    const archivePath = path.join(dir, "archive.zip");
-    await fs.writeFile(archivePath, "placeholder", "utf8");
+    const { archivePath } = await createClawHubArchive({
+      "_meta.json": '{"slug":"demo","version":"2026.3.22"}',
+      "openclaw.plugin.json": '{"id":"demo"}',
+    });
     const oversizedMetaEntry = {
       name: "_meta.json",
       dir: false,
@@ -2409,110 +2453,62 @@ describe("installPluginFromClawHub", () => {
     expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
   });
 
-  it("rejects fallback verification when archive directories alone exceed the entry limit", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));
-    tempDirs.push(dir);
-    const archivePath = path.join(dir, "archive.zip");
-    await fs.writeFile(archivePath, "placeholder", "utf8");
-    const zipEntries = Object.fromEntries(
-      Array.from({ length: 50_001 }, (_, index) => [
-        `folder-${index}/`,
-        {
-          name: `folder-${index}/`,
-          dir: true,
-        },
-      ]),
-    );
-    const loadAsyncSpy = vi.spyOn(JSZip, "loadAsync").mockResolvedValueOnce({
-      files: zipEntries,
-    } as unknown as JSZip);
-    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
-      version: {
-        version: "2026.3.22",
-        createdAt: 0,
-        changelog: "",
-        files: [
-          {
-            path: "openclaw.plugin.json",
-            size: 13,
-            sha256: sha256Hex('{"id":"demo"}'),
+  it.each(["file", "directory"] as const)(
+    "rejects fallback verification when actual ZIP %s entries exceed the entry limit",
+    async (entryType) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));
+      tempDirs.push(dir);
+      const archivePath = path.join(dir, "archive.zip");
+      await fs.writeFile(
+        archivePath,
+        createZipCentralDirectoryArchive({
+          actualEntryCount: 50_001,
+          declaredEntryCount: 1,
+          entryType,
+        }),
+      );
+      const loadAsyncSpy = vi.spyOn(JSZip, "loadAsync");
+      fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+        version: {
+          version: "2026.3.22",
+          createdAt: 0,
+          changelog: "",
+          files: [
+            {
+              path: "openclaw.plugin.json",
+              size: 13,
+              sha256: sha256Hex('{"id":"demo"}'),
+            },
+          ],
+          compatibility: {
+            pluginApiRange: ">=2026.3.22",
+            minGatewayVersion: "2026.3.0",
           },
-        ],
-        compatibility: {
-          pluginApiRange: ">=2026.3.22",
-          minGatewayVersion: "2026.3.0",
         },
-      },
-    });
-    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath,
-      integrity: "sha256-not-used-in-fallback",
-      cleanup: archiveCleanupMock,
-    });
+      });
+      downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
+        archivePath,
+        integrity: "sha256-not-used-in-fallback",
+        cleanup: archiveCleanupMock,
+      });
 
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo",
-    });
+      try {
+        const result = await installPluginFromClawHub({
+          spec: "clawhub:demo",
+        });
 
-    loadAsyncSpy.mockRestore();
-    expectInstallFailureFields(
-      result,
-      CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      "ClawHub archive fallback verification exceeded the archive entry limit.",
-    );
-    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects fallback verification when the actual ZIP central directory exceeds the entry limit", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));
-    tempDirs.push(dir);
-    const archivePath = path.join(dir, "archive.zip");
-    await fs.writeFile(
-      archivePath,
-      createZipCentralDirectoryArchive({
-        actualEntryCount: 50_001,
-        declaredEntryCount: 1,
-        declaredCentralDirectorySize: 0,
-      }),
-    );
-    const loadAsyncSpy = vi.spyOn(JSZip, "loadAsync");
-    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
-      version: {
-        version: "2026.3.22",
-        createdAt: 0,
-        changelog: "",
-        files: [
-          {
-            path: "openclaw.plugin.json",
-            size: 13,
-            sha256: sha256Hex('{"id":"demo"}'),
-          },
-        ],
-        compatibility: {
-          pluginApiRange: ">=2026.3.22",
-          minGatewayVersion: "2026.3.0",
-        },
-      },
-    });
-    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath,
-      integrity: "sha256-not-used-in-fallback",
-      cleanup: archiveCleanupMock,
-    });
-
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo",
-    });
-
-    loadAsyncSpy.mockRestore();
-    expectInstallFailureFields(
-      result,
-      CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      "ClawHub archive fallback verification exceeded the archive entry limit.",
-    );
-    expect(loadAsyncSpy).not.toHaveBeenCalled();
-    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
-  });
+        expectInstallFailureFields(
+          result,
+          CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+          "ClawHub archive fallback verification exceeded the archive entry limit.",
+        );
+        expect(loadAsyncSpy).not.toHaveBeenCalled();
+        expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+      } finally {
+        loadAsyncSpy.mockRestore();
+      }
+    },
+  );
 
   it("rejects fallback verification when the downloaded archive exceeds the ZIP size limit", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));

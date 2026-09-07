@@ -37,6 +37,9 @@ type CopilotToolBridgeTestInput = Omit<
     attemptParams?: Omit<CopilotToolBridgeAttemptParams, "hostCapabilities"> &
       Partial<Pick<CopilotToolBridgeAttemptParams, "hostCapabilities">>;
   };
+type CopilotCodingToolsOptions = NonNullable<
+  Parameters<NonNullable<CopilotToolBridgeInput["createOpenClawCodingTools"]>>[0]
+>;
 const testHostCapabilities = createCopilotTestHostCapabilities();
 
 function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
@@ -808,6 +811,9 @@ describe("createCopilotToolBridge", () => {
         attemptParams: {
           agentAccountId: "acct-1",
           toolBindings,
+          clientCaps: ["inline-widgets"],
+          taskSuggestionDeliveryMode: "gateway",
+          approvalReviewerDeviceId: "reviewer-device",
           senderId: "sender-1",
           senderName: "Ada",
           senderUsername: "ada",
@@ -824,6 +830,7 @@ describe("createCopilotToolBridge", () => {
           currentThreadTs: "1700000000.000100",
           currentMessageId: "M-1",
           messageProvider: "slack",
+          pinnedWidgetAuthoring: true,
           messageTo: "U-1",
           messageThreadId: "1700000000.000100",
           replyToMode: "first",
@@ -841,6 +848,9 @@ describe("createCopilotToolBridge", () => {
       expect(opts).toMatchObject({
         agentAccountId: "acct-1",
         toolBindings,
+        clientCaps: ["inline-widgets"],
+        taskSuggestionDeliveryMode: "gateway",
+        approvalReviewerDeviceId: "reviewer-device",
         senderId: "sender-1",
         senderName: "Ada",
         senderUsername: "ada",
@@ -857,6 +867,7 @@ describe("createCopilotToolBridge", () => {
         currentThreadTs: "1700000000.000100",
         currentMessageId: "M-1",
         messageProvider: "slack",
+        pinnedWidgetAuthoring: true,
         messageTo: "U-1",
         messageThreadId: "1700000000.000100",
         replyToMode: "first",
@@ -1171,12 +1182,13 @@ describe("createCopilotToolBridge", () => {
       expect(exec).toMatchObject({ security: "fast", elevated: { allowed: true } });
     });
 
-    it("forwards run-trace and scheduled policy context", async () => {
+    it("forwards active thinking, run-trace and scheduled policy context", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
 
       await createCopilotToolBridge({
         attemptParams: {
           trigger: "cron",
+          thinkLevel: "off",
           jobId: "job-1",
           memoryFlushWritePath: ".memory/append.md",
           toolsAllow: ["read", "edit"],
@@ -1186,12 +1198,13 @@ describe("createCopilotToolBridge", () => {
             ownerSessionKey: "agent:main:discord:group:ops",
             ownerAccountId: "default",
           },
-        } as never,
+        },
         createOpenClawCodingTools,
       });
 
       const opts = getOpts();
       expect(opts.trigger).toBe("cron");
+      expect(opts.requesterThinkingLevel).toBe("off");
       expect(opts.jobId).toBe("job-1");
       expect(opts.memoryFlushWritePath).toBe(".memory/append.md");
       // buildEmbeddedAttemptToolRunContext renames toolsAllow ->
@@ -1279,23 +1292,23 @@ describe("createCopilotToolBridge", () => {
       warn.mockRestore();
     });
 
-    it("requireExplicitMessageTarget defaults to isSubagentSessionKey(sessionKey) when undefined", async () => {
-      const { createOpenClawCodingTools, getOpts } = captureCall();
-
-      await createCopilotToolBridge({
-        // No requireExplicitMessageTarget; sessionKey looks like a
-        // subagent key so the default must be true. Mirrors PI
-        // attempt.ts:1097-1098.
-        attemptParams: { sessionKey: "subagent:envelope:abc" } as never,
-        createOpenClawCodingTools,
-      });
-
-      const opts = getOpts();
-      // We don't assert the exact boolean (subagent detection is owned
-      // by isSubagentSessionKey) — only that the bridge consulted the
-      // helper rather than emitting `undefined`.
-      expect(typeof opts.requireExplicitMessageTarget).toBe("boolean");
-    });
+    it.each([
+      { sessionKey: "agent:main:main", required: undefined, expected: false },
+      { sessionKey: "agent:main:subagent:child", required: undefined, expected: true },
+      { sessionKey: "agent:main:subagent:child", required: false, expected: false },
+      { sessionKey: "agent:main:main", required: true, expected: true },
+    ])(
+      "shares the resolved target requirement for $sessionKey / $required",
+      async ({ sessionKey, required, expected }) => {
+        const { createOpenClawCodingTools, getOpts } = captureCall();
+        const bridge = await createCopilotToolBridge({
+          attemptParams: { sessionKey, requireExplicitMessageTarget: required } as never,
+          createOpenClawCodingTools,
+        });
+        expect(getOpts().requireExplicitMessageTarget).toBe(expected);
+        expect(bridge.promptToolPolicy.requireExplicitMessageTarget).toBe(expected);
+      },
+    );
   });
 
   describe("sandbox forwarding (PR #86155 [P1])", () => {
@@ -1462,6 +1475,37 @@ describe("createCopilotToolBridge", () => {
         expect(names).not.toContain("write");
         expect(names).not.toContain("edit");
         expect(names).not.toContain("ask_user");
+      });
+    });
+
+    it("hands the question tools this run's own way to show a prompt", async () => {
+      // Bridged tools are dispatched here, not through the embedded tool lifecycle,
+      // so nothing reserves a blocking question's prompt before the tool runs. Without
+      // this the question is never shown and the turn waits out its full timeout.
+      await withTempDir("openclaw-copilot-question-prompt-", async (workspaceDir) => {
+        const onToolResult = vi.fn();
+        let capturedQuestionPrompt: CopilotCodingToolsOptions["questionPrompt"];
+        const createOpenClawCodingTools = vi.fn(async (options?: CopilotCodingToolsOptions) => {
+          capturedQuestionPrompt = options?.questionPrompt;
+          return [];
+        });
+
+        await createCopilotToolBridge({
+          attemptParams: {
+            messageChannel: "telegram",
+            onToolResult,
+            runId: "question-prompt-run",
+            sessionKey: "agent:agent-1:question-prompt",
+            workspaceDir,
+          },
+          createOpenClawCodingTools,
+          sessionId: "question-prompt-session",
+          sessionKey: "agent:agent-1:question-prompt",
+          workspaceDir,
+        });
+
+        expect(capturedQuestionPrompt?.send).toBe(onToolResult);
+        expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
       });
     });
 
@@ -2085,13 +2129,11 @@ describe("createCopilotToolBridge tool conversion", () => {
 
   it("reports direct tool failures and matching recovery to the host terminal observer", async () => {
     const error = new Error("delivery failed");
-    const execute = vi
-      .fn()
-      .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce({
-        content: [{ text: "delivered", type: "text" }],
-        details: { status: "ok" },
-      });
+    const result = {
+      content: [{ text: "delivered", type: "text" }],
+      details: { status: "ok" },
+    };
+    const execute = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(result);
     const observeToolTerminal = vi.fn(() => ({
       executionStarted: true,
       sideEffectEvidence: true,
@@ -2109,6 +2151,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(observeToolTerminal).toHaveBeenNthCalledWith(1, {
       toolCallId: "send-1",
       toolName: "message",
+      result: error,
       arguments: args,
       executionStarted: true,
       outcome: "failure",
@@ -2117,6 +2160,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(observeToolTerminal).toHaveBeenNthCalledWith(2, {
       toolCallId: "send-2",
       toolName: "message",
+      result,
       arguments: args,
       executionStarted: true,
       outcome: "success",
@@ -2287,8 +2331,9 @@ describe("createCopilotToolBridge tool conversion", () => {
       name: "memory_forget",
       result: textToolResult("unused"),
     });
+    const error = new Error("catalog delete failed");
     target.execute = vi.fn(async () => {
-      throw new Error("catalog delete failed");
+      throw error;
     });
     const args = { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" };
 
@@ -2310,6 +2355,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(observeToolTerminal).toHaveBeenCalledWith({
       toolCallId: "catalog-forget-1",
       toolName: "memory_forget",
+      result: error,
       arguments: args,
       executionStarted: true,
       outcome: "failure",
@@ -2387,67 +2433,201 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(getError(result as ToolResultObject)).toBe(error.message);
   });
 
-  it("runs default tools in parallel", async () => {
-    const first = createDeferred<{
-      content: Array<{ text: string; type: string }>;
-      details: null;
-    }>();
-    const second = createDeferred<{
-      content: Array<{ text: string; type: string }>;
-      details: null;
-    }>();
-    const execute = vi
-      .fn()
-      .mockImplementationOnce(async () => first.promise)
-      .mockImplementationOnce(async () => second.promise);
-    const sourceTool = makeTool({ execute });
-    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, {});
-
-    const firstRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-1" }));
-    const secondRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-2" }));
-    await flushAsync();
-
-    expect(execute).toHaveBeenCalledTimes(2);
-    first.resolve({ content: [{ text: "one", type: "text" }], details: null });
-    second.resolve({ content: [{ text: "two", type: "text" }], details: null });
-
-    await expect(Promise.all([firstRun, secondRun])).resolves.toEqual([
-      { resultType: "success", textResultForLlm: "one" },
-      { resultType: "success", textResultForLlm: "two" },
-    ]);
+  it.each([
+    { name: "same sequential tool", modes: ["sequential"], calls: [0, 0], parallel: false },
+    {
+      name: "distinct sequential tools",
+      modes: ["sequential", "sequential"],
+      calls: [0, 1],
+      parallel: false,
+    },
+    {
+      name: "sequential then parallel",
+      modes: ["sequential", "parallel"],
+      calls: [0, 1],
+      parallel: false,
+    },
+    {
+      name: "parallel then sequential",
+      modes: ["parallel", "sequential"],
+      calls: [0, 1],
+      parallel: false,
+    },
+    { name: "same default tool", modes: [undefined], calls: [0, 0], parallel: true },
+    {
+      name: "distinct parallel tools",
+      modes: [undefined, "parallel"],
+      calls: [0, 1],
+      parallel: true,
+    },
+  ] as const)("orders $name within the attempt", async ({ modes, calls, parallel }) => {
+    const firstStarted = createDeferred<void>();
+    const first = createDeferred<void>();
+    const second = createDeferred<void>();
+    const events: string[] = [];
+    const bridge = await createCopilotToolBridge({
+      createOpenClawCodingTools: () =>
+        modes.map((executionMode, index) =>
+          makeTool({
+            name: `ordered_${index}`,
+            executionMode,
+            execute: vi.fn(async (callId: string) => {
+              events.push(`start:${callId}`);
+              if (callId === "call-1") {
+                firstStarted.resolve();
+                await first.promise;
+              } else {
+                await second.promise;
+              }
+              events.push(`finish:${callId}`);
+              return textToolResult(callId);
+            }),
+          }),
+        ),
+    });
+    const tools = bridge.promptToolPolicy.apply().tools;
+    const runs = calls.map((index, call) =>
+      runSdkTool(
+        expectDefined(tools[index], "ordered SDK tool"),
+        {},
+        makeInvocation({ toolCallId: `call-${call + 1}` }),
+      ),
+    );
+    try {
+      await firstStarted.promise;
+      await flushAsync();
+      expect([...events]).toEqual(parallel ? ["start:call-1", "start:call-2"] : ["start:call-1"]);
+      first.resolve();
+      await runs[0];
+      second.resolve();
+      await expect(Promise.all(runs)).resolves.toEqual([
+        { resultType: "success", textResultForLlm: "call-1" },
+        { resultType: "success", textResultForLlm: "call-2" },
+      ]);
+      if (!parallel) {
+        expect(events).toEqual(["start:call-1", "finish:call-1", "start:call-2", "finish:call-2"]);
+      }
+    } finally {
+      first.resolve();
+      second.resolve();
+      await Promise.allSettled(runs);
+      bridge.cleanup?.();
+    }
   });
 
-  it("serializes sequential tools so the second call waits for the first", async () => {
-    const first = createDeferred<{
-      content: Array<{ text: string; type: string }>;
-      details: null;
-    }>();
-    const second = createDeferred<{
-      content: Array<{ text: string; type: string }>;
-      details: null;
-    }>();
-    const execute = vi
-      .fn()
-      .mockImplementationOnce(async () => first.promise)
-      .mockImplementationOnce(async () => second.promise);
-    const sourceTool = makeTool({ execute, executionMode: "sequential" });
-    const sdkTool = await convertOpenClawToolToSdkToolForTest(sourceTool, {});
+  it("drains earlier calls after rejection and resumes parallel work after an exclusive call", async () => {
+    const started = Array.from({ length: 5 }, () => createDeferred<void>());
+    const gates = Array.from({ length: 5 }, () => createDeferred<void>());
+    const events: number[] = [];
+    const failure = new Error("terminal observer failed");
+    const observeTerminal = createContractToolTerminalObserver("copilot-ordering-run");
+    const bridge = await createCopilotToolBridge({
+      attemptParams: {
+        observeToolTerminal: (observation) => {
+          if (observation.toolCallId === "call-0") {
+            throw failure;
+          }
+          return observeTerminal(observation);
+        },
+      },
+      createOpenClawCodingTools: () =>
+        gates.map((gate, index) =>
+          makeTool({
+            name: `ordered_${index}`,
+            executionMode: index === 2 ? "sequential" : undefined,
+            execute: vi.fn(async () => {
+              events.push(index);
+              expectDefined(started[index], "tool start").resolve();
+              await gate.promise;
+              return textToolResult(String(index));
+            }),
+          }),
+        ),
+    });
+    const runs = bridge.promptToolPolicy
+      .apply()
+      .tools.map((tool, index) =>
+        runSdkTool(tool, {}, makeInvocation({ toolCallId: `call-${index}` })),
+      );
+    const settled = Promise.allSettled(runs);
+    try {
+      await Promise.all([started[0]?.promise, started[1]?.promise]);
+      await flushAsync();
+      expect([...events]).toEqual([0, 1]);
+      gates[0]?.resolve();
+      await expect(runs[0]).rejects.toBe(failure);
+      await flushAsync();
+      expect([...events]).toEqual([0, 1]);
+      gates[1]?.resolve();
+      await started[2]?.promise;
+      await flushAsync();
+      expect([...events]).toEqual([0, 1, 2]);
+      gates[2]?.resolve();
+      await Promise.all([started[3]?.promise, started[4]?.promise]);
+      expect([...events]).toEqual([0, 1, 2, 3, 4]);
+    } finally {
+      for (const gate of gates) {
+        gate.resolve();
+      }
+      await settled;
+      bridge.cleanup?.();
+    }
+    await expect(Promise.all(runs.slice(1))).resolves.toEqual(
+      [1, 2, 3, 4].map((index) => ({ resultType: "success", textResultForLlm: String(index) })),
+    );
+  });
 
-    const firstRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-1" }));
-    const secondRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-2" }));
-    await flushAsync();
-
-    expect(execute).toHaveBeenCalledTimes(1);
-    first.resolve({ content: [{ text: "one", type: "text" }], details: null });
-    await firstRun;
-    await flushAsync();
-    expect(execute).toHaveBeenCalledTimes(2);
-    second.resolve({ content: [{ text: "two", type: "text" }], details: null });
-
-    await expect(Promise.all([firstRun, secondRun])).resolves.toEqual([
-      { resultType: "success", textResultForLlm: "one" },
-      { resultType: "success", textResultForLlm: "two" },
-    ]);
+  it("rechecks abort before a queued tool starts without blocking another attempt", async () => {
+    const controller = new AbortController();
+    const started = createDeferred<void>();
+    const gate = createDeferred<void>();
+    const queuedExecute = vi.fn(async () => ({ content: [], details: {} }));
+    const makeBridge = (sessionId: string, abortSignal?: AbortSignal) =>
+      createCopilotToolBridge({
+        sessionId,
+        abortSignal,
+        createOpenClawCodingTools: () => [
+          makeTool({
+            name: "exclusive",
+            executionMode: "sequential",
+            execute: vi.fn(async () => {
+              started.resolve();
+              await gate.promise;
+              return { content: [], details: {} };
+            }),
+          }),
+          makeTool({ name: "next", execute: queuedExecute }),
+        ],
+      });
+    const firstBridge = await makeBridge("first-attempt", controller.signal);
+    const otherBridge = await makeBridge("other-attempt");
+    const tools = firstBridge.promptToolPolicy.apply().tools;
+    const first = runSdkTool(expectDefined(tools[0], "exclusive tool"), {});
+    const queued = runSdkTool(expectDefined(tools[1], "queued tool"), {});
+    try {
+      await started.promise;
+      await flushAsync();
+      expect(queuedExecute).not.toHaveBeenCalled();
+      await expect(
+        runSdkTool(
+          expectDefined(otherBridge.promptToolPolicy.apply().tools[1], "other attempt tool"),
+          {},
+        ),
+      ).resolves.toMatchObject({ resultType: "success" });
+      controller.abort();
+      gate.resolve();
+      await first;
+      await expect(queued).resolves.toMatchObject({
+        resultType: "failure",
+        textResultForLlm: "[copilot-tool-bridge] aborted before execution",
+      });
+      expect(queuedExecute).toHaveBeenCalledTimes(1);
+    } finally {
+      gate.resolve();
+      await Promise.allSettled([first, queued]);
+      firstBridge.cleanup?.();
+      otherBridge.cleanup?.();
+    }
   });
 
   it("returns a failure result when execute observes an abort after start", async () => {

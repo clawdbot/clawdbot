@@ -226,39 +226,6 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
-  it("destroys and reclaims a pending result owned by a previous gateway instance", async () => {
-    const originalHarness = createTestHarness();
-    const active = originalHarness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "restarted-turn-claim",
-      runId: "restarted-turn-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
-    placementStore.markWorkspaceResultPending(claim);
-
-    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const restartedHarness = createTestHarness({}, restartedStore);
-    restartedHarness.markEnvironmentOwnerEpoch(2);
-    await restartedHarness.service.reconcile();
-
-    expect(restartedHarness.placements.current()).toMatchObject({
-      state: "reclaimed",
-      turnClaim: null,
-      workspaceBaseManifestRef: restartedHarness.reconciledManifestRef,
-    });
-    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
-    expect(restartedHarness.environments.destroy).toHaveBeenCalledOnce();
-    expect(restartedHarness.log).not.toContain("workspace:resume");
-  });
-
   it("keeps a previous-instance pending result fenced when another session is attached", async () => {
     const originalHarness = createTestHarness();
     const active = originalHarness.placements.seedActive(2);

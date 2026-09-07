@@ -1,12 +1,12 @@
 import path from "node:path";
 import type { Plugin } from "vite";
-import type { Vitest } from "vitest/node";
-import { isVitestWorkerMetadataRequest } from "../../scripts/lib/vitest-cli-mode.mts";
+// The runner config loader closes before hooks run; capture the native parser while loading.
+import { parseCLI, type Vitest } from "vitest/node";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import {
   isVitestWorkerDeclaration,
   requestVitestWorkerArtifacts,
   resolveVitestWorkerDeclaration,
-  verifyVitestWorkerArtifacts,
   vitestWorkerDeclarationEntries,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-bootstrap.mts";
@@ -26,14 +26,14 @@ export function compiledSubprocessesPlugin(): Plugin {
   return {
     name: "openclaw:compiled-subprocesses",
     enforce: "pre",
-    configureVitest({ vitest, experimental_defineCacheKeyGenerator }) {
+    configureVitest({ vitest, defineCacheKeyGenerator }) {
       const supplied = getVitestWorkerDescriptor();
       // Only the repository runner can join all borrowers before deleting code.
       // Standalone Vitest, watch and metadata collection retain live source.
       if (
         !supplied ||
         vitest.config.watch ||
-        isVitestWorkerMetadataRequest(process.argv.slice(2))
+        !parseVitestExecutionArgs(process.argv.slice(2), parseCLI)
       ) {
         return;
       }
@@ -41,7 +41,7 @@ export function compiledSubprocessesPlugin(): Plugin {
       if (!instance[ownerKey]) {
         // Source and compiled imports differ, but generations within this mode
         // share parent transforms. Keep Vitest's source/config hashing intact.
-        experimental_defineCacheKeyGenerator(() => "openclaw:compiled-subprocesses");
+        defineCacheKeyGenerator(() => "openclaw:compiled-subprocesses");
         const directory = supplied.directory;
         let preparation: Promise<string> | undefined;
         let failure: unknown;
@@ -60,8 +60,10 @@ export function compiledSubprocessesPlugin(): Plugin {
         instance[ownerKey] = {
           acquire() {
             return (preparation ??= (async () => {
-              await requestVitestWorkerArtifacts();
-              verifyVitestWorkerArtifacts(directory);
+              await requestVitestWorkerArtifacts().catch((error: unknown) => {
+                failure = error;
+                throw error;
+              });
               return directory;
             })());
           },
@@ -71,19 +73,10 @@ export function compiledSubprocessesPlugin(): Plugin {
             process.exitCode = 1;
           }
         });
-        // Vitest closes its pool concurrently with this hook. Verification is
-        // safe here; deletion belongs to the outer runner after actual child close.
-        vitest.onClose(async () => {
+        // The outer owner verifies before lending and after every borrower closes.
+        // Rechecking here races pool shutdown and consumes Vitest's teardown deadline.
+        vitest.onClose(() => {
           process.off("disconnect", ownerDisconnected);
-          if (preparation) {
-            try {
-              verifyVitestWorkerArtifacts(await preparation);
-            } catch (error) {
-              failure = error;
-              process.exitCode = 1;
-              throw error;
-            }
-          }
         });
       }
       owner = instance[ownerKey];

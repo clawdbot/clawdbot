@@ -18,7 +18,18 @@ const DEADCODE_SOURCE_PATH_RE = /^(?:src|extensions|ui|packages)\/.+\.[cm]?[jt]s
 
 /** Returns whether any changed path is production source knip scans. */
 export function hasDeadcodeScannedSource(changedPaths: string[]): boolean {
-  return changedPaths.map(normalizeChangedPath).some((p) => DEADCODE_SOURCE_PATH_RE.test(p));
+  return changedPaths.some((path) => DEADCODE_SOURCE_PATH_RE.test(path));
+}
+
+const PROTOCOL_EVENT_COVERAGE_INPUT_RE =
+  /^(?:src\/gateway\/(?:server-methods-list|events)\.ts|scripts\/(?:(?:check-protocol-event-coverage|changed-lanes|check-changed)\.m[jt]s|tsx\.mjs|lib\/(?:(?:tsx-cli-shim|record-shared)\.mjs|local-check-runtime\.mts)|protocol-event-coverage\.allowlist\.json)|apps\/(?:ios\/Sources|shared\/OpenClawKit\/Sources)\/.+\.swift|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/.+\.kt)$/u;
+
+export function hasProtocolEventCoverageInput(changedPaths: string[]): boolean {
+  // Match the guard's scan roots and excluded directories, including deleted inputs.
+  return changedPaths.some(
+    (path) =>
+      PROTOCOL_EVENT_COVERAGE_INPUT_RE.test(path) && !/\/(?:Tests|\.build|build)\//u.test(path),
+  );
 }
 
 const SCRIPTS_TYPECHECK_PATH_RE =
@@ -45,6 +56,44 @@ const PUBLIC_EXTENSION_CONTRACT_RE =
   /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/(?:sync-plugin-sdk-exports|plugin-sdk-api-diff)\.mts$)/u;
 const BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE =
   /^(?:src\/config\/(?:bundled-channel-config-metadata\.generated|zod-schema\.[^/]+)\.ts|src\/channels\/plugins\/config-schema\.ts|src\/plugin-sdk\/(?:bundled-channel-config-schema|channel-config-schema)\.ts|src\/plugins\/(?:bundled-dir|public-surface-loader|public-surface-runtime|sdk-alias)\.ts|scripts\/(?:generate-bundled-channel-config-metadata\.ts|load-channel-config-surface\.ts|lib\/(?:bundled-plugin-source-utils|format-generated-module|generated-output-utils)\.mts)|extensions\/[^/]+\/(?:openclaw\.plugin\.json|package\.json|(?:config|security-contract)-api\.[cm]?[jt]sx?|src\/config-(?:schema(?:-[^/]+)?|surface|ui-hints)\.[cm]?[jt]sx?))$/u;
+const CONFIG_DOC_INPUT_PATH_RE =
+  /^(?:src\/config\/[^/]+\.ts|src\/channels\/ids\.ts|src\/plugin-sdk\/(?:channel-core|secret-input)\.ts|src\/plugins\/(?:manifest(?:-registry|-setup-normalizers)?|package-manifest|discovery|bundled-channel-config-metadata)\.ts|scripts\/(?:generate-config-doc-baseline\.ts|(?:check-changed|changed-lanes)\.m[jt]s|lib\/changed-path-facts\.mjs))$/u;
+const CONFIG_DOC_BASELINE_PATHS = new Set([
+  "docs/.generated/config-baseline.counts.json",
+  "docs/.generated/config-baseline.sha256",
+]);
+
+// Bridge shared schema/hint owners consumed through SDK/workspace aliases.
+// Facades in CONFIG_DOC_INPUT_PATH_RE are direct inputs, not runtime traversal roots.
+const CONFIG_DOC_SCHEMA_SOURCE_PATHS = new Set([
+  "src/config/schema.ts",
+  "src/plugin-sdk/channel-config-ui-hints.ts",
+  "src/plugin-sdk/secret-input-schema.ts",
+  "packages/net-policy/src/redact-sensitive-url.ts",
+]);
+
+/** Source entries and shared owners consumed by core schema and bundled metadata collectors. */
+export function isConfigDocSchemaSourcePath(file: string): boolean {
+  return (
+    CONFIG_DOC_SCHEMA_SOURCE_PATHS.has(file) ||
+    /^extensions\/[^/]+\/(?:src\/config-(?:schema|surface)|channel-config-api)\.[cm]?[jt]sx?$/u.test(
+      file,
+    )
+  );
+}
+
+/** Config docs consume core schema/help plus the bundled plugin metadata pipeline. */
+export function hasConfigDocInput(changedPaths: string[]): boolean {
+  return changedPaths.some(
+    (changedPath) =>
+      !getChangedPathFacts(changedPath).isChangedLaneTest &&
+      (CONFIG_DOC_BASELINE_PATHS.has(changedPath) ||
+        isConfigDocSchemaSourcePath(changedPath) ||
+        CONFIG_DOC_INPUT_PATH_RE.test(changedPath) ||
+        BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE.test(changedPath)),
+  );
+}
+
 /**
  * Files whose changes are treated as release metadata only.
  * @internal Shared repository-script contract.
@@ -57,8 +106,8 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
-  "docs/.generated/config-baseline.counts.json",
-  "docs/.generated/config-baseline.sha256",
+  "apps/mobile/version.json",
+  ...CONFIG_DOC_BASELINE_PATHS,
   "docs/install/updating.md",
   "package.json",
 ]);
@@ -72,6 +121,19 @@ export type ChangedLaneResult = {
   docsOnly: boolean;
   reasons: string[];
 };
+
+/** Eligible leaf inputs; compiler inventories still decide all consuming graphs. */
+export function getChangedCoreTestPaths(result: ChangedLaneResult): string[] | undefined {
+  const { lanes } = result;
+  if (lanes.all || lanes.core || lanes.ui || lanes.tooling || lanes.liveDockerTooling) {
+    return undefined;
+  }
+  const paths = result.paths.filter((file) => getChangedPathFacts(file).surface !== "docs");
+  return paths.length > 0 &&
+    paths.every((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
+    ? paths
+    : undefined;
+}
 
 type DetectChangedLanesOptions = {
   packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null;
@@ -108,7 +170,7 @@ export function createEmptyChangedLanes() {
 }
 
 export function isChangedLaneTestPath(changedPath: string) {
-  return getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest;
+  return getChangedPathFacts(changedPath).isChangedLaneTest;
 }
 
 /**
@@ -119,9 +181,9 @@ export function detectChangedLanes(
   changedPaths: string[],
   options: DetectChangedLanesOptions = {},
 ): ChangedLaneResult {
-  const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))]
-    .toSorted((left, right) => left.localeCompare(right))
-    .filter((changedPath) => changedPath !== "--");
+  const paths = [...new Set(changedPaths.filter(Boolean))].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
   const lanes = createEmptyChangedLanes();
   const reasons = [];
   let extensionImpactFromCore = false;
@@ -199,7 +261,11 @@ export function detectChangedLanes(
       continue;
     }
 
-    if (PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath)) {
+    // Test leaves exercise contracts; shared helpers and suites can affect their consumers.
+    if (
+      PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath) &&
+      !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(changedPath)
+    ) {
       lanes.core = true;
       lanes.coreTests = true;
       lanes.extensions = true;
@@ -218,6 +284,23 @@ export function detectChangedLanes(
         lanes.extensionTests = true;
         reasons.push(`${changedPath}: extension production`);
       }
+      continue;
+    }
+
+    // Shared inputs retain their Node/tooling owner as well as browser checks.
+    if (
+      changedPath === "tsconfig.json" ||
+      /^packages\/normalization-core\/(?:package\.json|src\/record-coerce\.ts)$/u.test(changedPath)
+    ) {
+      lanes.ui = true;
+      reasons.push(`${changedPath}: shared browser renderer input`);
+    }
+
+    // Native hosts bundle this DOM runtime; the Node-only core graph cannot own it.
+    if (changedPath.startsWith("packages/mermaid-renderer/")) {
+      lanes.ui = true;
+      lanes.coreTests = true;
+      reasons.push(`${changedPath}: shared browser renderer`);
       continue;
     }
 
@@ -371,13 +454,13 @@ export function listChangedPathsFromGit(params: {
 }
 
 function runGitNameOnlyDiff(extraArgs: string[], cwd = process.cwd()): string[] {
-  const output = execFileSync("git", ["diff", "--name-only", ...extraArgs], {
+  const output = execFileSync("git", ["diff", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return output.split("\0").filter(Boolean);
 }
 
 function gitOutputText(value: unknown) {
@@ -398,26 +481,20 @@ function isGitNoMergeBaseError(error: unknown) {
 }
 
 function runGitLsFiles(extraArgs: string[], cwd = process.cwd()): string[] {
-  const output = execFileSync("git", ["ls-files", ...extraArgs], {
+  const output = execFileSync("git", ["ls-files", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return output.split("\0").filter(Boolean);
 }
 
 /**
  * Lists staged changed paths for pre-commit checks.
  */
 export function listStagedChangedPaths(cwd = process.cwd()) {
-  const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"], {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
-  });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd);
 }
 
 /**
@@ -426,55 +503,37 @@ export function listStagedChangedPaths(cwd = process.cwd()) {
 function classifyPackageJsonChangeFromGit(params: PackageJsonGitParams) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
-    if (isLiveDockerPackageScriptOnlyChange(before, after)) {
-      return "liveDockerTooling";
-    }
-    return isPackageScriptOnlyChange(before, after) ? "tooling" : null;
+    return classifyPackageJsonScriptChange(before, after);
   } catch {
     return null;
   }
 }
 
-/**
- * Checks whether package scripts changed only live Docker script entries.
- * @internal Directly tested script implementation detail.
- */
-export function isLiveDockerPackageScriptOnlyChange(before: string, after: string): boolean {
+function classifyPackageJsonScriptChange(
+  before: string,
+  after: string,
+): "liveDockerTooling" | "tooling" | null {
   const beforePackage = parsePackageJson(before);
   const afterPackage = parsePackageJson(after);
   if (!beforePackage || !afterPackage) {
-    return false;
+    return null;
   }
-  const beforeAllowed = extractLiveDockerPackageScripts(beforePackage);
-  const afterAllowed = extractLiveDockerPackageScripts(afterPackage);
-  const beforeStripped = stripLiveDockerPackageScripts(beforePackage);
-  const afterStripped = stripLiveDockerPackageScripts(afterPackage);
-
-  return (
-    stableStringify(beforeStripped) === stableStringify(afterStripped) &&
-    stableStringify(beforeAllowed) !== stableStringify(afterAllowed)
-  );
-}
-
-/**
- * Checks whether package.json changes are limited to scripts.
- * @internal Directly tested script implementation detail.
- */
-export function isPackageScriptOnlyChange(before: string, after: string): boolean {
-  const beforePackage = parsePackageJson(before);
-  const afterPackage = parsePackageJson(after);
-  if (!beforePackage || !afterPackage) {
-    return false;
+  const { scripts: beforeScripts, ...beforeMetadata } = beforePackage;
+  const { scripts: afterScripts, ...afterMetadata } = afterPackage;
+  if (
+    stableStringify(beforeMetadata) !== stableStringify(afterMetadata) ||
+    stableStringify(isRecord(beforeScripts) ? beforeScripts : {}) ===
+      stableStringify(isRecord(afterScripts) ? afterScripts : {})
+  ) {
+    return null;
   }
-  const beforeScripts = extractPackageScripts(beforePackage);
-  const afterScripts = extractPackageScripts(afterPackage);
-  const beforeStripped = stripPackageScripts(beforePackage);
-  const afterStripped = stripPackageScripts(afterPackage);
-
-  return (
-    stableStringify(beforeStripped) === stableStringify(afterStripped) &&
-    stableStringify(beforeScripts) !== stableStringify(afterScripts)
-  );
+  // Coercing missing/non-record scripts to {} must not grant the narrower live-Docker lane.
+  return isRecord(beforeScripts) &&
+    isRecord(afterScripts) &&
+    stableStringify(withoutLiveDockerScripts(beforeScripts)) ===
+      stableStringify(withoutLiveDockerScripts(afterScripts))
+    ? "liveDockerTooling"
+    : "tooling";
 }
 
 function parsePackageJson(value: string) {
@@ -510,39 +569,10 @@ function readGitText(ref: string, filePath: string) {
   });
 }
 
-function extractLiveDockerPackageScripts(packageJson: Record<string, unknown>) {
-  const scripts = packageJson.scripts;
-  if (!isRecord(scripts)) {
-    return {};
-  }
+function withoutLiveDockerScripts(scripts: Record<string, unknown>) {
   return Object.fromEntries(
-    Object.entries(scripts).filter(([name]) => LIVE_DOCKER_PACKAGE_SCRIPT_RE.test(name)),
+    Object.entries(scripts).filter(([name]) => !LIVE_DOCKER_PACKAGE_SCRIPT_RE.test(name)),
   );
-}
-
-function stripLiveDockerPackageScripts(packageJson: Record<string, unknown>) {
-  const clone = structuredClone(packageJson);
-  const scripts = clone.scripts;
-  if (!isRecord(scripts)) {
-    return clone;
-  }
-  for (const name of Object.keys(scripts)) {
-    if (LIVE_DOCKER_PACKAGE_SCRIPT_RE.test(name)) {
-      delete scripts[name];
-    }
-  }
-  return clone;
-}
-
-function extractPackageScripts(packageJson: Record<string, unknown>) {
-  const scripts = packageJson.scripts;
-  return isRecord(scripts) ? scripts : {};
-}
-
-function stripPackageScripts(packageJson: Record<string, unknown>) {
-  const clone = structuredClone(packageJson);
-  delete clone.scripts;
-  return clone;
 }
 
 /**
@@ -608,6 +638,7 @@ function parseArgs(argv: string[]) {
     },
   );
   parsed.paths.push(...explicitPaths);
+  parsed.paths = parsed.paths.map((changedPath) => normalizeChangedPath(changedPath));
   return parsed;
 }
 

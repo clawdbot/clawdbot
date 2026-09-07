@@ -19,7 +19,7 @@ export function renderChatTypingIndicator(
   return html`<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside">
     ${previews.map(
       (actor) => html`<div class="agent-chat__typing-preview-row">
-        ${renderChatAvatar("user", undefined, undefined, undefined, undefined, {
+        ${renderChatAvatar("user", undefined, undefined, undefined, {
           id: actor.id,
           name: actor.label,
         })}
@@ -31,24 +31,26 @@ export function renderChatTypingIndicator(
         </div>
       </div>`,
     )}
-    ${indicators.length
-      ? html`<div class="agent-chat__typing-dots-row">
-          <span class="agent-chat__typing-avatars" aria-hidden="true">
-            ${indicators.slice(0, 3).map((actor) =>
-              renderChatAvatar("user", undefined, undefined, undefined, undefined, {
-                id: actor.id,
-                name: actor.label,
-              }),
-            )}
-          </span>
-          <span class="agent-chat__typing-bubble" aria-hidden="true">
-            <svg class="agent-chat__typing-tail" viewBox="0 0 12 12">
-              <path d="M12 0c-.5 5.5-3.5 9.5-11 11 4.5-3.5 5.5-7 5.5-11H12Z"></path>
-            </svg>
-            <span></span><span></span><span></span>
-          </span>
-        </div>`
-      : null}
+    ${
+      indicators.length
+        ? html`<div class="agent-chat__typing-dots-row">
+            <span class="agent-chat__typing-avatars" aria-hidden="true">
+              ${indicators.slice(0, 3).map((actor) =>
+                renderChatAvatar("user", undefined, undefined, undefined, {
+                  id: actor.id,
+                  name: actor.label,
+                }),
+              )}
+            </span>
+            <span class="agent-chat__typing-bubble" aria-hidden="true">
+              <svg class="agent-chat__typing-tail" viewBox="0 0 12 12">
+                <path d="M12 0c-.5 5.5-3.5 9.5-11 11 4.5-3.5 5.5-7 5.5-11H12Z"></path>
+              </svg>
+              <span></span><span></span><span></span>
+            </span>
+          </div>`
+        : null
+    }
     <span class="sr-only" role="status">${status}</span>
   </div>`;
 }

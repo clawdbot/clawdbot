@@ -76,13 +76,15 @@ function resolveDashboardCapabilityIds(
     .filter((value) => value !== null);
 }
 
-export function resolvePluginSurface(manifest: PluginSurfaceManifest) {
-  const parts = [];
+// Returns one surface item per line so the reference template can render a list.
+// STE bans the semicolon, so these items must never be joined into one sentence.
+export function resolvePluginSurface(manifest: PluginSurfaceManifest): string[] {
+  const parts: string[] = [];
   if (Array.isArray(manifest.channels) && manifest.channels.length > 0) {
-    parts.push(`channels: ${formatIdentifiers(manifest.channels)}`);
+    parts.push(`Channels: ${formatIdentifiers(manifest.channels)}`);
   }
   if (Array.isArray(manifest.providers) && manifest.providers.length > 0) {
-    parts.push(`providers: ${formatIdentifiers(manifest.providers)}`);
+    parts.push(`Providers: ${formatIdentifiers(manifest.providers)}`);
   }
   const cliCommands = [
     ...new Set(
@@ -103,27 +105,24 @@ export function resolvePluginSurface(manifest: PluginSurfaceManifest) {
     ),
   ].toSorted((left, right) => left.localeCompare(right));
   if (slashCommands.length > 0) {
-    parts.push(`slash commands: ${formatIdentifiers(slashCommands.map((name) => `/${name}`))}`);
+    parts.push(`Slash commands: ${formatIdentifiers(slashCommands.map((name) => `/${name}`))}`);
   }
   const contracts = Object.keys(manifest.contracts ?? {}).toSorted((left, right) =>
     left.localeCompare(right),
   );
   if (contracts.length > 0) {
-    parts.push(`contracts: ${formatIdentifiers(contracts)}`);
+    parts.push(`Contracts: ${formatIdentifiers(contracts)}`);
   }
   const dashboardDataBindings = resolveDashboardCapabilityIds(manifest, "dataBindings");
   if (dashboardDataBindings.length > 0) {
-    parts.push(`dashboard data bindings: ${formatIdentifiers(dashboardDataBindings)}`);
+    parts.push(`Dashboard data bindings: ${formatIdentifiers(dashboardDataBindings)}`);
   }
   const dashboardActionVerbs = resolveDashboardCapabilityIds(manifest, "actionVerbs");
   if (dashboardActionVerbs.length > 0) {
-    parts.push(`dashboard action verbs: ${formatIdentifiers(dashboardActionVerbs)}`);
+    parts.push(`Dashboard action verbs: ${formatIdentifiers(dashboardActionVerbs)}`);
   }
   if (Array.isArray(manifest.skills) && manifest.skills.length > 0) {
-    parts.push("skills");
+    parts.push("Skills");
   }
-  if (parts.length === 0) {
-    return "plugin";
-  }
-  return parts.join("; ");
+  return parts;
 }

@@ -94,21 +94,20 @@ function describeMissingHarnessRegistration(
       continue;
     }
     const plugin = context?.metadataSnapshot?.byPluginId.get(pluginId);
-    if (!plugin) {
-      blockers.push(`Owner plugin "${pluginId}" is absent from this prepared plugin generation`);
-      continue;
-    }
     const activation = resolveEffectivePluginActivationState({
       id: pluginId,
-      origin: plugin.origin,
+      // Codex's fallback owner is external; global exposes policy blockers without inventing defaults.
+      origin: plugin?.origin ?? "global",
       config: plugins,
       rootConfig: activationSourceConfig,
-      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+      enabledByDefault: plugin ? isPluginEnabledByDefaultForPlatform(plugin) : undefined,
     });
     if (!activation.activated) {
       blockers.push(
         `Owner plugin "${pluginId}" is not activatable${activation.reason ? ` (${activation.reason})` : ""}`,
       );
+    } else if (!plugin) {
+      blockers.push(`Owner plugin "${pluginId}" is absent from this prepared plugin generation`);
     }
   }
   const ownerField = ownerPluginIds.length === 1 ? "ownerPluginId" : "ownerPluginIds";
@@ -204,11 +203,12 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     requestTransportOverrides: params.requestTransportOverrides,
   });
   const requestedRuntime = pinnedHarnessId ?? runtimeOverride;
-  const runtime =
-    requestedRuntime && !isDefaultAgentRuntimeId(requestedRuntime)
-      ? requestedRuntime
-      : policy.runtime;
+  const explicitRuntime = isDefaultAgentRuntimeId(requestedRuntime) ? undefined : requestedRuntime;
+  const runtime = explicitRuntime ?? policy.runtime;
+  // Harness selection owns implicit preferences and their unavailable-runtime fallback.
+  // Authored policies and session pins still require their selected registration.
   if (
+    (!explicitRuntime && policy.runtimeSource === "implicit") ||
     isDefaultAgentRuntimeId(runtime) ||
     runtime === OPENCLAW_AGENT_RUNTIME_ID ||
     isCliRuntimeAliasForProvider({

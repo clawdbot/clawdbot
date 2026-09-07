@@ -36,6 +36,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean; queue?: string };
   "continue-on-error"?: boolean | string;
   environment?: string;
   if?: string;
@@ -475,25 +476,16 @@ describe("Vercel Container Registry publishing", () => {
     const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
     const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
     const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
-    const verifyAttestations = requireJob(dockerRelease, "verify-attestations");
+    const dockerPublish = requireJob(dockerRelease, "publish");
     const releasePublish = requireJob(releaseWorkflow, "publish_vcr");
     const reusablePublish = requireJob(reusable, "publish");
 
-    expect(verifyAttestations.outputs?.vcr_source_digests).toBe(
-      "${{ steps.vcr_source_digests.outputs.value }}",
+    expect(dockerPublish.outputs?.vcr_source_digests).toBe(
+      "${{ steps.promote.outputs.vcr_source_digests }}",
     );
-    expect(dockerRelease.on?.workflow_call?.outputs?.vcr_source_digests).toEqual({
-      description: "Newline-delimited attestation-verified immutable GHCR source digests",
-      value: "${{ jobs.verify-attestations.outputs.vcr_source_digests }}",
-    });
-    const immutableSourceStep = verifyAttestations.steps?.find(
-      (step) => step.name === "Resolve and verify immutable VCR source refs",
+    expect(dockerRelease.on?.workflow_call?.outputs?.vcr_source_digests?.value).toBe(
+      "${{ jobs.publish.outputs.vcr_source_digests }}",
     );
-    expect(immutableSourceStep?.run).toContain("docker buildx imagetools inspect");
-    expect(immutableSourceStep?.run).toContain("${GHCR_IMAGE}@${digest}");
-    expect(immutableSourceStep?.run).toContain("verify-docker-attestations.mjs");
-    expect(immutableSourceStep?.run).toContain("${aliases[$index]}=${digest}");
-    expect(immutableSourceStep?.run).not.toContain("${aliases[$index]}=${immutable_ref}");
 
     expect(releasePublish.with?.source_digests).toBe(
       "${{ needs.publish_docker.outputs.vcr_source_digests }}",
@@ -538,7 +530,7 @@ describe("Vercel Container Registry publishing", () => {
     const manualResolve = requireJob(manualPromotion, "resolve");
     const manualApproval = requireJob(manualPromotion, "approve");
 
-    expect(dockerRelease.concurrency).toEqual({
+    expect(requireJob(dockerRelease, "publish").concurrency).toEqual({
       group: "docker-release-publish",
       "cancel-in-progress": false,
       queue: "max",

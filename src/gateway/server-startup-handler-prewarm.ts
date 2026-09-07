@@ -16,25 +16,19 @@ type GatewayHandlerPrewarmItem = {
   load: () => Promise<unknown>;
 };
 
-type GatewayHandlerPrewarmHandle = {
-  stop: () => void;
-};
-
 async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
   const [{ loadCombinedSessionStoreForGatewayCore }, { listSessionsFromStoreAsync }] =
     await Promise.all([
       import("../config/sessions/combined-store-gateway.js"),
       import("./session-utils-list.js"),
     ]);
-  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
+  const loaded = loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId,
     projection: "list",
   });
   await listSessionsFromStoreAsync({
     cfg,
-    durableStorePath,
-    storePath,
-    store,
+    ...loaded,
     opts: {
       agentId,
       configuredAgentsOnly: true,
@@ -99,7 +93,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   log: { info?: (msg: string) => void; warn: (msg: string) => void };
   items?: readonly GatewayHandlerPrewarmItem[];
   waitForPostReadyWork?: () => Promise<void>;
-}): GatewayHandlerPrewarmHandle {
+}): GatewayIdleTaskHandle {
   // Frequent updater restarts make cold dashboard data the remaining slow tier.
   // Keep bounded session reads first and process-stable plugin data second.
   // Provider catalogs stay request-driven because their adapters may do unbounded external work.
@@ -135,8 +129,8 @@ export function scheduleGatewayHandlerPrewarm(params: {
               ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
               : load());
           } finally {
-            idleTask = undefined;
-            scheduleNext();
+            // Keep the outgoing join published until its lease and warning handler settle.
+            void Promise.resolve(idleTask?.stop()).then(scheduleNext, scheduleNext);
           }
         },
         log: params.log,
@@ -157,8 +151,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   return {
     stop: () => {
       stopped = true;
-      idleTask?.stop();
-      idleTask = undefined;
+      return idleTask?.stop();
     },
   };
 }

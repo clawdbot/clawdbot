@@ -43,13 +43,11 @@ describe("resolveCronDeliveryPreview", () => {
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       {},
       "avery",
-      {
+      expect.objectContaining({
         channel: "last",
-        to: undefined,
-        threadId: undefined,
-        accountId: undefined,
         sessionKey: "agent:avery:telegram:direct:direct-123",
-      },
+        sessionTarget: job.sessionTarget,
+      }),
       { dryRun: true },
     );
     expect(preview.detail).toBe(
@@ -87,13 +85,14 @@ describe("resolveCronDeliveryPreview", () => {
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       {},
       "avery",
-      {
+      expect.objectContaining({
         channel: "topicchat",
         to: "room#42",
         threadId: 42,
         accountId: "ops",
         sessionKey: undefined,
-      },
+        sessionTarget: "isolated",
+      }),
       { dryRun: true },
     );
     expect(preview).toEqual({
@@ -164,13 +163,11 @@ describe("resolveCronDeliveryPreview", () => {
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       {},
       "avery",
-      {
-        channel: "last",
-        to: undefined,
+      expect.objectContaining({
         threadId: 0,
-        accountId: undefined,
         sessionKey: undefined,
-      },
+        sessionTarget: "isolated",
+      }),
       { dryRun: true },
     );
     expect(preview).toEqual({

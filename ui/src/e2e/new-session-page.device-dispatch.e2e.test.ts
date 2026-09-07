@@ -9,6 +9,7 @@ import {
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -231,6 +232,10 @@ suite.define(() => {
           suite,
           page,
           `failed-topology-${value.replace(":", "-")}.png`,
+          {
+            surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+            content: [selectedDevice, automaticDevice],
+          },
         );
         expect(await start.isDisabled()).toBe(true);
         expect(await selectedDevice.isDisabled()).toBe(true);
@@ -293,8 +298,8 @@ suite.define(() => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
       if (preference.kind === "cloud") {
-        // Settle recovery scope after discovery starts: both the retired and
-        // replacement catalog request must stay held until restoration resumes.
+        // Browser recovery hydration must not restart the authenticated catalog
+        // request or let a remembered remote destination fall back to Local.
         await page.addInitScript(() => {
           const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
           const delayed = new Promise<void>((resolve) => {
@@ -355,13 +360,14 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
         await expect
-          .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+          .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
           .toBe("true");
         if (preference.kind === "cloud") {
           await page.evaluate(() => {
             window.dispatchEvent(new Event("test-release-recovery-scope"));
           });
-          await gateway.waitForRequest("environments.list", { after: 1 });
+          await waitForGatewayRecoveryScope(page);
+          expect(await gateway.getRequests("environments.list")).toHaveLength(1);
         }
         await page.locator(".new-session-page__message").fill("keep my chosen remote destination");
         const start = page.getByRole("button", { name: "Start session" });

@@ -198,6 +198,8 @@ export function createCodexNativeHookRelay(params: {
   sessionId: string;
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
+  autoApproveMcpTools?: boolean;
+  projectedMcpServers?: Parameters<typeof registerNativeHookRelay>[0]["projectedMcpServers"];
   runId: string;
   channelId?: string;
   requester?: NonNullable<PluginHookToolContext["requester"]>;
@@ -208,6 +210,7 @@ export function createCodexNativeHookRelay(params: {
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParams["hostCapabilities"];
+  assertCurrent?: () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): CodexNativeHookRelay | undefined {
   if (params.options?.enabled === false) {
@@ -247,6 +250,8 @@ export function createCodexNativeHookRelay(params: {
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
+    autoApproveMcpTools: params.autoApproveMcpTools,
+    projectedMcpServers: params.projectedMcpServers,
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.requester ? { requester: params.requester } : {}),
@@ -261,7 +266,10 @@ export function createCodexNativeHookRelay(params: {
     }),
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
-    assertActive: params.hostCapabilities.assertActive,
+    assertActive: () => {
+      params.hostCapabilities.assertActive();
+      params.assertCurrent?.();
+    },
     retention: {
       readClaim: readCodexNativeChildThreadId,
       // A child claim identifies the subject; successful parent finalization

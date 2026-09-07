@@ -39,6 +39,7 @@ import {
   extractLatestToolOutput,
   extractSlackMpimRetainedBotNonce,
   extractAllUserTexts,
+  extractUserTurnTexts,
   extractAllRequestTexts,
   extractCurrentImageRequest,
   parseToolOutputJson,
@@ -126,7 +127,7 @@ export function readForkedContextCompletion(input: ResponsesInputItem[]) {
     /(?:^|\n)\d+\. qa-fork-context\nstatus: ([^\n]+)\nChild result[^\n]*\n<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/.exec(
       current,
     );
-  if (settled && current.includes("sourceTool=subagent_announce")) {
+  if (settled && current.includes("sourceTool=subagent_settle")) {
     const result = settled[2];
     return settled[1] === "ok" &&
       result &&
@@ -173,7 +174,7 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
         .filter((value): value is string => typeof value === "string")
         .join("\n")
     : "";
-  const userTexts = extractAllUserTexts(input);
+  const userTexts = extractUserTurnTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";

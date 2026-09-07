@@ -3,10 +3,10 @@ import {
   defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
-  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import {
   hasConfigTrancheLegacyKeys,
   migrateConfigTranche,
@@ -52,6 +52,48 @@ function moveKey(
     changes.push(`Removed ${path}.${legacyKey} (${path}.${canonicalKey} already set).`);
   }
   delete owner[legacyKey];
+}
+
+function migrateMessageCrossContext(raw: Record<string, unknown>, changes: string[]): void {
+  const globalMessage = getRecord(getRecord(raw.tools)?.message);
+  const globalBypass = globalMessage?.allowCrossContextSend;
+  const globalCrossContext = getRecord(globalMessage?.crossContext);
+  const migrate = (message: Record<string, unknown> | null, path: string, agent: boolean) => {
+    if (!message) {
+      return;
+    }
+    const legacy = message.allowCrossContextSend;
+    const inheritedBypass = agent && globalBypass === true;
+    if (legacy === undefined && !inheritedBypass) {
+      return;
+    }
+    const crossContext = getRecord(message.crossContext) ?? {};
+    // The shipped legacy flag bypassed both checks. An agent's false masked the
+    // root bypass, so preserve that effective policy before changing the root.
+    if ((legacy ?? (agent ? globalBypass : undefined)) === true) {
+      message.crossContext = {
+        ...crossContext,
+        allowWithinProvider: true,
+        allowAcrossProviders: true,
+      };
+    } else if (inheritedBypass) {
+      message.crossContext = {
+        ...crossContext,
+        allowWithinProvider:
+          (crossContext.allowWithinProvider ?? globalCrossContext?.allowWithinProvider) !== false,
+        allowAcrossProviders:
+          (crossContext.allowAcrossProviders ?? globalCrossContext?.allowAcrossProviders) === true,
+      };
+    }
+    delete message.allowCrossContextSend;
+    changes.push(`Moved ${path}.allowCrossContextSend → ${path}.crossContext.`);
+  };
+  visitAgentConfigScopes(raw, (scope, path) => {
+    if (path !== "agents.defaults") {
+      migrate(getRecord(getRecord(scope.tools)?.message), `${path}.tools.message`, true);
+    }
+  });
+  migrate(globalMessage, "tools.message", false);
 }
 
 function migrateTruncateAfterCompaction(raw: Record<string, unknown>, changes: string[]): void {
@@ -405,6 +447,61 @@ function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
   LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
   defineLegacyConfigMigration({
+    id: "runtime.automatic-local-model-lean",
+    describe: "Remove onboarding-owned local model lean settings",
+    legacyRules: [
+      rule(
+        ["wizard", "localModelLeanAutoModel"],
+        "wizard.localModelLeanAutoModel is retired; local models now use Tool Search without reducing their capabilities.",
+      ),
+    ],
+    apply: (raw, changes) => {
+      const wizard = getRecord(raw.wizard);
+      if (!wizard || !Object.hasOwn(wizard, "localModelLeanAutoModel")) {
+        return;
+      }
+      const autoModel = wizard.localModelLeanAutoModel;
+      const defaults = getRecord(getRecord(raw.agents)?.defaults);
+      const model = defaults?.model;
+      const primary = typeof model === "string" ? model : getRecord(model)?.primary;
+      const experimental = getRecord(defaults?.experimental);
+      // The shipped marker owned only a matching default model's true flag.
+      // A changed model or explicit false relinquished that ownership.
+      if (experimental?.localModelLean === true) {
+        if (typeof autoModel === "string" && autoModel === primary) {
+          delete experimental.localModelLean;
+          changes.push("Removed onboarding-owned agents.defaults.experimental.localModelLean.");
+        } else {
+          changes.push(
+            "Retained explicit or unowned agents.defaults.experimental.localModelLean=true; remove it or set it to false to restore the full tool capabilities through Tool Search.",
+          );
+        }
+      }
+      delete wizard.localModelLeanAutoModel;
+      changes.push("Removed retired wizard.localModelLeanAutoModel.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.messages-suppress-tool-errors",
+    describe: "Remove retired tool failure warning suppression",
+    legacyRules: [
+      rule(
+        ["messages", "suppressToolErrors"],
+        "messages.suppressToolErrors is retired; tool failure warnings now appear only when a run ends without a reply.",
+      ),
+    ],
+    apply: (raw, changes) => {
+      const messages = getRecord(raw.messages);
+      if (!messages || !Object.hasOwn(messages, "suppressToolErrors")) {
+        return;
+      }
+      delete messages.suppressToolErrors;
+      changes.push(
+        "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "runtime.retired-internal-hook-handlers",
     describe: "Remove retired internal hook handler registrations",
     legacyRules: [
@@ -544,6 +641,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         ["tools", "message", "allowCrossContextSend"],
         "tools.message.allowCrossContextSend moved to tools.message.crossContext.",
       ),
+      rule(
+        ["agents"],
+        "Per-agent tools.message.allowCrossContextSend moved to tools.message.crossContext on the same agent.",
+        (value) => {
+          let found = false;
+          visitAgentConfigScopes({ agents: value }, (scope, path) => {
+            found ||=
+              path !== "agents.defaults" &&
+              Object.hasOwn(
+                getRecord(getRecord(scope.tools)?.message) ?? {},
+                "allowCrossContextSend",
+              );
+          });
+          return found;
+        },
+      ),
       rule(["tools", "experimental"], "tools.experimental.planTool moved to tools.updatePlan."),
       rule(
         ["talk", "realtime", "voice"],
@@ -593,24 +706,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         delete media.asyncCompletion;
         changes.push("Removed retired tools.media.asyncCompletion.directSend.");
       }
-      const messageTool = getRecord(getRecord(raw.tools)?.message);
-      if (messageTool && Object.hasOwn(messageTool, "allowCrossContextSend")) {
-        const enabled = messageTool.allowCrossContextSend === true;
-        if (enabled) {
-          const crossContext = getRecord(messageTool.crossContext) ?? {};
-          if (crossContext.allowWithinProvider === undefined) {
-            crossContext.allowWithinProvider = true;
-          }
-          if (crossContext.allowAcrossProviders === undefined) {
-            crossContext.allowAcrossProviders = true;
-          }
-          messageTool.crossContext = crossContext;
-          changes.push("Moved tools.message.allowCrossContextSend → tools.message.crossContext.");
-        } else {
-          changes.push("Removed tools.message.allowCrossContextSend.");
-        }
-        delete messageTool.allowCrossContextSend;
-      }
+      migrateMessageCrossContext(raw, changes);
       // planTool was the only tools.experimental member, so the strict schema now
       // rejects the whole container; lift the value, then drop the empty parent.
       const tools = getRecord(raw.tools);

@@ -17,9 +17,11 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import type { SessionActor } from "./session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
+import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 export type RestartTombstoneRecoveryResult =
   | {
@@ -129,9 +131,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
       }
 
       const sourceEvents = loadTranscriptEventsFromDatabase(database, source.sessionId);
-      const header = sourceEvents.find(
-        (event): event is Record<string, unknown> => isRecord(event) && event.type === "session",
-      );
+      const header = findSessionTranscriptHeader(sourceEvents);
       if (!header) {
         result = { status: "conflict", reason: "transcript-missing" };
         return;
@@ -155,6 +155,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
             ...createSessionTranscriptHeader({
               cwd: typeof header.cwd === "string" ? header.cwd : undefined,
               sessionId: successorSessionId,
+              version: header.version ?? MIN_READABLE_SESSION_VERSION,
             }),
             parentSession,
           },
@@ -175,6 +176,11 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
           },
         },
         archivedAt: source.archivedAt ?? now,
+        ...(source.archiveReason
+          ? { archiveReason: source.archiveReason }
+          : source.archivedAt === undefined
+            ? { archiveReason: "restart-recovery" as const }
+            : {}),
         ...(source.archivedBy === undefined && params.archivedBy
           ? { archivedBy: params.archivedBy }
           : {}),
@@ -200,6 +206,6 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
     }, toDatabaseOptions(resolved));
   });
 
-  emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+  emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
   return result;
 }

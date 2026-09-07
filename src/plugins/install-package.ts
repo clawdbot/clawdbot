@@ -314,11 +314,8 @@ async function installPluginFromPackageDir(
   preparedTarget = await resolvePreparedTargetForPluginId(plugin.pluginId);
   const effectiveMode = preparedTarget.effectiveMode;
   params.onEffectiveMode?.(effectiveMode);
-  const hasBundleManifest = Boolean(runtime.detectBundleManifestFormat(params.packageDir));
   const shouldInstallRuntimeDeps =
-    plugin.hasRuntimeDependencies &&
-    !hasBundleManifest &&
-    params.installPolicyRequest?.kind === "plugin-archive";
+    plugin.hasRuntimeDependencies && params.installPolicyRequest?.kind === "plugin-archive";
 
   return await installPluginDirectoryIntoExtensions(
     copyPluginInstallTransactionRequest(params, {
@@ -408,6 +405,7 @@ export async function installPluginFromArchive(
             requirePluginManifest: true,
             installPolicyRequest,
             onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+            beforePersistentApply: params.beforePersistentApply,
             onEffectiveMode: (resolvedMode) => {
               effectiveMode = resolvedMode;
             },

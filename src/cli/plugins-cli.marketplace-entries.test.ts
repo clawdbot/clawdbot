@@ -197,7 +197,7 @@ describe("plugins marketplace entries", () => {
     expect(JSON.stringify(mocks.defaultRuntime.writeJson.mock.calls)).not.toContain(privateQuery);
   });
 
-  it("prints bundled fallback entries without failing", async () => {
+  it("prints npm first even for a catalog with the old ClawHub default", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
       source: "bundled-fallback",
@@ -209,7 +209,7 @@ describe("plugins marketplace entries", () => {
             install: {
               clawhubSpec: "clawhub:@openclaw/acpx",
               npmSpec: "@openclaw/acpx",
-              defaultChoice: "npm",
+              defaultChoice: "clawhub",
             },
           },
         },

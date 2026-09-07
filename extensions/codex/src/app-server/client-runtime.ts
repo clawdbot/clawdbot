@@ -1,12 +1,13 @@
 /** Client-scoped Codex auth and account observers. */
+import { createHash } from "node:crypto";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
+import type { CodexAppServerAuthProfileLookup } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject, type CodexServiceTier, type JsonObject } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
-import type { CodexAppServerAuthProfileLookup } from "./session-binding.js";
 import { withTimeout } from "./timeout.js";
 
 type ClientRuntimeContext = Omit<CodexAppServerAuthProfileLookup, "agentDir"> & {
@@ -23,11 +24,13 @@ type ClientRuntime = {
   releasingThreads: Map<string, ThreadReleaseTransition>;
   protectedThreads: Map<string, number>;
   sessionMetadata: Map<string, { sessionsRoot: string; rolloutPath: string; metadata: JsonObject }>;
+  workspaceReferences: Map<string, { digest?: string; needsReintroduction: boolean }>;
   evictionTimer?: ReturnType<typeof setTimeout>;
 };
 
 type RetainedLiveThread = {
   configFingerprint?: string;
+  ephemeralPolicy?: string;
   serviceTier?: CodexServiceTier | null;
   expiresAt: number;
   release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
@@ -42,6 +45,8 @@ type ThreadReleaseTransition = {
 export type CodexAppServerLiveThreadOwnership = {
   assertCurrent: () => void;
   configFingerprint?: string;
+  /** Ephemeral configuration is creation-owned and cannot be refreshed or cold-resumed. */
+  ephemeralPolicy?: string;
   serviceTier?: CodexServiceTier | null;
   release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
 };
@@ -67,6 +72,39 @@ const claimedThreadReleaseTokens = new WeakMap<
 export function isCodexAppServerClientRuntimeLive(client: CodexAppServerClient): boolean {
   const runtime = configuredClients.get(client);
   return runtime !== undefined && !runtime.closed;
+}
+
+/** Reference history is only trusted while this native subscription stays warm. */
+export function forgetCodexWorkspaceReferences(
+  client: CodexAppServerClient,
+  threadId: string,
+): void {
+  configuredClients.get(client)?.workspaceReferences.delete(threadId);
+}
+
+/** Record accepted input without clearing a compaction observed during turn/start. */
+export function prepareCodexWorkspaceReferences(
+  client: CodexAppServerClient,
+  threadId: string,
+  reference: string | undefined,
+) {
+  const runtime = configuredClients.get(client);
+  const digest = createHash("sha256")
+    .update(reference ?? "")
+    .digest("hex");
+  const previous = runtime?.workspaceReferences.get(threadId) ?? { needsReintroduction: true };
+  if (runtime && !runtime.closed) {
+    runtime.workspaceReferences.set(threadId, previous);
+  }
+  return {
+    include: previous.needsReintroduction || previous.digest !== digest,
+    accepted: () => {
+      if (!runtime || runtime.closed || runtime.workspaceReferences.get(threadId) !== previous) {
+        return;
+      }
+      runtime.workspaceReferences.set(threadId, { digest, needsReintroduction: false });
+    },
+  };
 }
 
 /** Immutable declarations are data owned by this physical client, never retained executors. */
@@ -131,6 +169,7 @@ export function ensureCodexAppServerClientRuntime(
     releasingThreads: new Map(),
     protectedThreads: new Map(),
     sessionMetadata: new Map(),
+    workspaceReferences: new Map(),
   };
   configuredClients.set(client, runtime);
   client.addCloseHandler(() => {
@@ -145,6 +184,7 @@ export function ensureCodexAppServerClientRuntime(
     runtime.claimedThreads.clear();
     runtime.protectedThreads.clear();
     runtime.sessionMetadata.clear();
+    runtime.workspaceReferences.clear();
   });
   client.addRequestHandler(async (request) => {
     if (request.method !== "account/chatgptAuthTokens/refresh") {
@@ -185,6 +225,20 @@ export function ensureCodexAppServerClientRuntime(
     }
   });
   client.addNotificationHandler((notification) => {
+    if (
+      notification.method === "item/completed" &&
+      isJsonObject(notification.params) &&
+      isJsonObject(notification.params.item) &&
+      notification.params.item.type === "contextCompaction" &&
+      typeof notification.params.threadId === "string"
+    ) {
+      const threadId = notification.params.threadId;
+      // Observe manual and automatic compaction even without an active turn projector.
+      const previous = runtime.workspaceReferences.get(threadId);
+      if (previous) {
+        runtime.workspaceReferences.set(threadId, { ...previous, needsReintroduction: true });
+      }
+    }
     if (notification.method === "account/rateLimits/updated") {
       mergeCodexRateLimitsUpdate(client, notification.params);
       return;
@@ -205,6 +259,7 @@ export function ensureCodexAppServerClientRuntime(
         runtime.retainedThreads.delete(threadId);
         runtime.claimedThreads.delete(threadId);
         runtime.sessionMetadata.delete(threadId);
+        runtime.workspaceReferences.delete(threadId);
         scheduleRetainedThreadEviction(client, runtime);
       }
     }
@@ -283,6 +338,7 @@ async function releaseRetainedThread(
   runtime.releasingThreads.set(threadId, transition);
   try {
     await transition.completion;
+    runtime.workspaceReferences.delete(threadId);
     return true;
   } catch (error) {
     if (
@@ -294,7 +350,9 @@ async function releaseRetainedThread(
     ) {
       // A failed unsubscribe leaves the native subscription alive. Restore its
       // exact callback and LRU position; renewing TTL prevents a zero-delay retry spin.
-      retained.expiresAt = Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
+      if (retained.ephemeralPolicy === undefined) {
+        retained.expiresAt = Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
+      }
       const newerThreads = [...runtime.retainedThreads.entries()].filter(
         ([candidateThreadId]) => !olderThreadIds.has(candidateThreadId),
       );
@@ -332,14 +390,15 @@ async function evictExcessIdleThreads(
   client: CodexAppServerClient,
   runtime: ClientRuntime,
 ): Promise<void> {
-  let idleThreadIds = [...runtime.retainedThreads.keys()].filter(
-    (threadId) => !runtime.protectedThreads.has(threadId),
-  );
-  while (idleThreadIds.length > CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE) {
-    await releaseRetainedThread(client, runtime, idleThreadIds[0]!);
-    idleThreadIds = [...runtime.retainedThreads.keys()].filter(
-      (threadId) => !runtime.protectedThreads.has(threadId),
+  const idleThreads = () =>
+    [...runtime.retainedThreads].filter(
+      ([threadId, thread]) =>
+        thread.ephemeralPolicy === undefined && !runtime.protectedThreads.has(threadId),
     );
+  let idleThreadIds = idleThreads();
+  while (idleThreadIds.length > CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE) {
+    await releaseRetainedThread(client, runtime, idleThreadIds[0]![0]);
+    idleThreadIds = idleThreads();
   }
 }
 
@@ -350,6 +409,7 @@ export async function retainCodexAppServerLiveThread(
   releaseThread?: (threadId: string, assertCurrent?: () => void) => Promise<void>,
   configFingerprint?: string,
   serviceTier?: CodexServiceTier | null,
+  ephemeralPolicy?: string,
 ): Promise<boolean> {
   const runtime = configuredClients.get(client);
   if (!runtime || runtime.closed) {
@@ -374,8 +434,14 @@ export async function retainCodexAppServerLiveThread(
   runtime.retainedThreads.delete(threadId);
   const retained: RetainedLiveThread = {
     configFingerprint,
+    ephemeralPolicy,
     serviceTier,
-    expiresAt: Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
+    // Ephemeral history has no disk resume source. Preserve its existing client lifetime,
+    // rather than subjecting it to the persistent registry's idle eviction.
+    expiresAt:
+      ephemeralPolicy === undefined
+        ? Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS
+        : Number.POSITIVE_INFINITY,
     release:
       (releaseThread ? (physicalThreadReleases.get(releaseThread) ?? releaseThread) : undefined) ??
       (async (releasedThreadId, assertCurrent) => {
@@ -512,6 +578,7 @@ function claimCodexAppServerThreadOwnership(
       await transition.completion;
       if (runtime.claimedThreads.get(threadId) === claimed) {
         runtime.claimedThreads.delete(threadId);
+        runtime.workspaceReferences.delete(threadId);
       }
     } finally {
       if (runtime.releasingThreads.get(threadId) === transition) {
@@ -526,6 +593,7 @@ function claimCodexAppServerThreadOwnership(
   return {
     assertCurrent,
     configFingerprint: retained.configFingerprint,
+    ephemeralPolicy: retained.ephemeralPolicy,
     serviceTier: retained.serviceTier,
     release,
   };
@@ -582,6 +650,7 @@ export async function unsubscribeCodexAppServerLiveThread(
     await client.request("thread/unsubscribe", { threadId }, { timeoutMs, assertCurrent });
     // Revalidate before successful release removes its own claim below.
     assertCurrent?.();
+    runtime?.workspaceReferences.delete(threadId);
   });
   const ownsTransition = runtime !== undefined && transition === undefined;
   if (transition) {
@@ -647,7 +716,9 @@ export function protectCodexAppServerLiveThread(
       if (retained) {
         // A detached child is live activity, not parent idleness. Its terminal
         // delivery starts the parent's normal warm-session retention window.
-        retained.expiresAt = Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
+        if (retained.ephemeralPolicy === undefined) {
+          retained.expiresAt = Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
+        }
         runtime.retainedThreads.delete(threadId);
         runtime.retainedThreads.set(threadId, retained);
       }

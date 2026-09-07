@@ -163,6 +163,50 @@ function createVideoCfg(params: { provider: string; model: string }): OpenClawCo
 }
 
 describe("runCapability local no-auth audio providers", () => {
+  it("runs provider-owned audio without resolving an unrelated API key", async () => {
+    modelAuthTestControl.forceMissingProvider = true;
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withAudioFixture("openclaw-prepared-audio", async ({ ctx, media, cache }) => {
+        const provider = {
+          id: "prepared-audio",
+          capabilities: ["audio" as const],
+          transcribeAudioWithContext: async (context: {
+            agentDir?: string;
+            profile?: string;
+            model?: string;
+            buffer: Buffer;
+            language?: string;
+          }) => {
+            expect(context.agentDir).toBe(agentDir);
+            expect(context.profile).toBe("prepared-audio:account");
+            expect(context.model).toBe("prepared-model");
+            expect(context.buffer.byteLength).toBeGreaterThan(1024);
+            expect(context.language).toBe("de");
+            return { ok: true as const, value: { text: "prepared transcript" } };
+          },
+        };
+        const result = await runCapability({
+          capability: "audio",
+          cfg: createAudioCfg({
+            provider: provider.id,
+            model: "prepared-model",
+            entry: { profile: "prepared-audio:account", language: "de" },
+          }),
+          ctx,
+          attachments: cache,
+          media,
+          agentDir,
+          providerRegistry: buildProviderRegistry({ [provider.id]: provider }),
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(result.outputs[0]?.text).toBe("prepared transcript");
+        expect(result.outputs[0]?.model).toBe("prepared-model");
+        expect(result.decision.attachments[0]?.chosen?.model).toBe("prepared-model");
+      });
+    });
+  });
+
   it("allows a local no-auth audio provider when configured as a local models provider", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {

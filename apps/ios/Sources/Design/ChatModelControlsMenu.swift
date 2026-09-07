@@ -290,7 +290,9 @@ struct ChatModelControlsMenuItems: View {
     private var modelPicker: some View {
         let sections = self.viewModel.modelPickerSections
         return Group {
-            ChatActionMenuSectionHeader(title: "Model")
+            ChatActionMenuSectionHeader(
+                title: "Model",
+                detail: self.viewModel.modelSelectionTargetDescription)
             self.modelOption(
                 title: self.defaultModelLabel,
                 providerID: self.defaultProviderID,
@@ -543,7 +545,8 @@ struct ChatModelControlsMenuItems: View {
                 title: model.displayLabel,
                 providerID: ChatModelMenuPresentation.providerID(for: model),
                 selectionID: model.selectionID,
-                showsDefaultBadge: self.viewModel.isDefaultModel(model))
+                showsDefaultBadge: self.viewModel.isDefaultModel(model),
+                unavailableDescription: self.viewModel.modelUnavailableDescription(model))
         }
     }
 
@@ -612,7 +615,8 @@ struct ChatModelControlsMenuItems: View {
         title: String,
         providerID: String?,
         selectionID: String,
-        showsDefaultBadge: Bool = false) -> some View
+        showsDefaultBadge: Bool = false,
+        unavailableDescription: String? = nil) -> some View
     {
         let isSelected = self.viewModel.isSelectedModel(selectionID)
         return Button {
@@ -622,9 +626,16 @@ struct ChatModelControlsMenuItems: View {
             HStack(spacing: 12) {
                 ChatModelProviderIcon(providerID: providerID)
                     .frame(width: ChatActionMenuMetric.iconWidth, alignment: .leading)
-                Text(title)
-                    .font(OpenClawType.body)
-                    .multilineTextAlignment(.leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(OpenClawType.body)
+                        .multilineTextAlignment(.leading)
+                    if let unavailableDescription {
+                        Text(unavailableDescription)
+                            .font(OpenClawType.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 if showsDefaultBadge {
                     Text("Default")
                         .font(OpenClawType.caption)
@@ -643,9 +654,10 @@ struct ChatModelControlsMenuItems: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(self.viewModel.isUpdatingSessionSettings)
+        .disabled(self.viewModel.isUpdatingSessionSettings || unavailableDescription != nil)
         .accessibilityLabel(title)
         .accessibilityValue(isSelected ? String(localized: "Selected") : "")
+        .accessibilityHint(unavailableDescription ?? "")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 

@@ -1,29 +1,25 @@
-import { initialState, Task } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
 import { t } from "../../i18n/index.ts";
+import { downloadTextFile } from "../../lib/download.ts";
 import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { currentLocalDate, toUsageErrorMessage } from "./helpers.ts";
-import { downloadTextFile } from "./query.ts";
+import { createUsageRequest } from "./request.ts";
 import type { UsageJsonExport, UsageSessionEntry } from "./types.ts";
 
-function sessionIdentity({ agentId, key }: UsageSessionEntry): string {
-  return JSON.stringify([agentId, key]);
+// Logical keys can be reused after deletion; context belongs to a concrete session.
+function sessionIdentity({ agentId, key, sessionId }: UsageSessionEntry): string {
+  return JSON.stringify([agentId, key, sessionId]);
 }
 
-export function createUsageJsonExportTask(
+export function createUsageJsonExportRequest(
   host: ReactiveControllerHost,
   gateway: GatewayPageController,
   query: () => SessionUsageQuery,
 ) {
-  return new Task(host, {
-    autoRun: false,
-    args: (): readonly [UsageJsonExport | null] => [null],
-    task: async ([data], { signal }) => {
-      if (!data) {
-        return initialState;
-      }
+  return createUsageRequest(host, {
+    task: async (data: UsageJsonExport, { signal }) => {
       const connection = gateway.capture();
       if (!connection) {
         throw new Error(t("common.offline"));
@@ -58,7 +54,7 @@ export function createUsageJsonExportTask(
     },
     onComplete: ({ connection, filename, data }) => {
       if (gateway.isCurrent(connection)) {
-        downloadTextFile(filename, JSON.stringify(data, null, 2), "application/json");
+        downloadTextFile(filename, JSON.stringify(data, null, 2), "application/json;charset=utf-8");
       }
     },
     onError: (error) => {

@@ -63,6 +63,46 @@ describe("applyQueueRuntimeSettings", () => {
 });
 
 describe("queue summary helpers", () => {
+  it.each([
+    { limit: undefined, retained: ["new"], elided: ["first", "second"] },
+    { limit: 1.5, retained: ["new"], elided: ["first", "second"] },
+    { limit: 1 - Number.EPSILON / 2, retained: [], elided: ["first", "second", "new"] },
+    { limit: 2, retained: ["second", "new"], elided: ["first"] },
+    { limit: 0, retained: [], elided: ["first", "second", "new"] },
+    { limit: -1, retained: [], elided: ["first", "second", "new"] },
+    { limit: -Infinity, retained: [], elided: ["first", "second", "new"] },
+    { limit: Infinity, retained: ["first", "second", "new"], elided: [] },
+    { limit: Number.NaN, retained: ["first", "second", "new"], elided: [] },
+  ])("preserves ordered summary elisions at limit $limit", ({ limit, retained, elided }) => {
+    const queue = {
+      items: ["new"],
+      cap: 1,
+      dropPolicy: "summarize" as const,
+      droppedCount: 2,
+      summaryLines: ["first", "second"],
+    };
+    const calls: Array<[string, string[]]> = [];
+
+    expect(
+      applyQueueDropPolicy({
+        queue,
+        summaryLimit: limit,
+        summarize: (item) => item,
+        onDrop: (items) => calls.push(["drop", items]),
+        onSummaryElide: (lines) => calls.push(["elide", lines]),
+      }),
+    ).toBe(true);
+
+    expect(queue).toEqual({
+      items: [],
+      cap: 1,
+      dropPolicy: "summarize",
+      droppedCount: 3,
+      summaryLines: retained,
+    });
+    expect(calls).toEqual([["drop", ["new"]], ...(elided.length > 0 ? [["elide", elided]] : [])]);
+  });
+
   it("renders pending summary state without mutating it", () => {
     const state = {
       droppedCount: 2,

@@ -13,9 +13,6 @@ import rust from "highlight.js/lib/languages/rust";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
-import { directive, type ElementPart } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
@@ -26,7 +23,6 @@ const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const CODE_PREVIEW_LINE_COUNT = 7;
 const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
 const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
-let codeBlockRegionSequence = 0;
 
 for (const [language, definition] of Object.entries({
   bash,
@@ -62,7 +58,7 @@ function shouldRenderCodeBlockInteraction(env: unknown): boolean {
   return codeBlockRenderEnv(env)?.codeBlockInteraction === "interactive";
 }
 
-function encodeBlockArtCodeBlockCopyPayload(value: string): string {
+function encodeCodeBlockCopyPayload(value: string): string {
   return `${blockArtCopyPayloadPrefix}${JSON.stringify(value)}`;
 }
 
@@ -99,9 +95,10 @@ export function handleMarkdownCodeBlockClick(event: Event): void {
   const code = decodeCodeBlockCopyPayload(button.dataset.code ?? "", button.dataset.codeEncoding);
   const attempt = (codeBlockCopyAttempts.get(button) ?? 0) + 1;
   codeBlockCopyAttempts.set(button, attempt);
-  void copyToClipboard(code).then((copied) => {
+  const isCurrent = () => button.isConnected && codeBlockCopyAttempts.get(button) === attempt;
+  void copyToClipboard(code, isCurrent).then((copied) => {
     // Clipboard writes can finish out of click order; older attempts must not own feedback.
-    if (codeBlockCopyAttempts.get(button) !== attempt) {
+    if (!isCurrent()) {
       return;
     }
     button.classList.toggle("copied", copied);
@@ -142,7 +139,7 @@ function handleCodeBlockDisclosure(target: Element): void {
   updateCodeBlockWidthOverflow(wrapper);
 }
 
-function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
+export function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
   const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport");
   const code = viewport?.querySelector<HTMLElement>("code");
   if (!viewport || !code) {
@@ -152,118 +149,6 @@ function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
     !wrapper.classList.contains("is-wrapped") && code.scrollWidth > viewport.clientWidth + 1;
   wrapper.classList.toggle("has-horizontal-overflow", overflowing);
 }
-
-const initializedCodeBlocks = new WeakSet<HTMLElement>();
-class MarkdownCodeBlocksDirective extends AsyncDirective {
-  private root: Element | undefined;
-  private scanPending = false;
-  private readonly observedNodes = new Set<HTMLElement>();
-  private readonly resizeObserver =
-    typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver((entries) => {
-          const wrappers = new Set(
-            entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
-          );
-          for (const wrapper of wrappers) {
-            if (wrapper) {
-              updateCodeBlockWidthOverflow(wrapper);
-            }
-          }
-        });
-
-  render() {
-    return nothing;
-  }
-
-  override update(part: ElementPart) {
-    this.root = part.element;
-    this.scheduleScan();
-    return nothing;
-  }
-
-  protected override disconnected(): void {
-    // A final route-away has no later scan to release detached transcript trees.
-    this.resizeObserver?.disconnect();
-    this.observedNodes.clear();
-  }
-
-  protected override reconnected(): void {
-    this.scheduleScan();
-  }
-
-  private scheduleScan(): void {
-    if (this.scanPending || !this.isConnected) {
-      return;
-    }
-    this.scanPending = true;
-    // Element directives commit before their children. Coalesce after the commit,
-    // and fence queued scans when the host is removed before the microtask runs.
-    queueMicrotask(() => {
-      this.scanPending = false;
-      if (this.isConnected && this.root?.isConnected) {
-        this.scan(this.root);
-      }
-    });
-  }
-
-  private scan(root: Element): void {
-    if (root.querySelector(".markdown-mermaid pre code")) {
-      void import("./markdown-mermaid.ts").then(
-        ({ mountMermaidBlocks }) => {
-          if (
-            this.isConnected &&
-            this.root === root &&
-            root.isConnected &&
-            mountMermaidBlocks(root)
-          ) {
-            this.scheduleScan();
-          }
-        },
-        () => {
-          for (const block of root.querySelectorAll(".markdown-mermaid")) {
-            block.classList.remove("markdown-mermaid");
-            block.prepend(t("chat.mermaid.error"));
-          }
-        },
-      );
-    }
-    for (const node of this.observedNodes) {
-      if (!root.contains(node)) {
-        this.resizeObserver?.unobserve(node);
-        this.observedNodes.delete(node);
-      }
-    }
-    for (const wrapper of root.querySelectorAll<HTMLElement>(".code-block-wrapper")) {
-      const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport");
-      const code = viewport?.querySelector<HTMLElement>("code");
-      if (!viewport || !code) {
-        continue;
-      }
-      if (!initializedCodeBlocks.has(wrapper)) {
-        initializedCodeBlocks.add(wrapper);
-        const expandButton = wrapper.querySelector<HTMLButtonElement>(".code-block-expand");
-        if (expandButton) {
-          const regionId = `code-block-${++codeBlockRegionSequence}`;
-          viewport.id = regionId;
-          expandButton.setAttribute("aria-controls", regionId);
-        }
-      }
-      // A reconnected host reuses initialized DOM but must reacquire observation.
-      for (const node of [viewport, code]) {
-        if (!this.observedNodes.has(node)) {
-          this.observedNodes.add(node);
-          this.resizeObserver?.observe(node);
-        }
-      }
-      if (!this.resizeObserver) {
-        updateCodeBlockWidthOverflow(wrapper);
-      }
-    }
-  }
-}
-
-export const markdownCodeBlocks = directive(MarkdownCodeBlocksDirective);
 
 /** Highlight a snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
 export function highlightCodeHtml(text: string, lang: string): string {
@@ -316,18 +201,10 @@ function renderCodeBlockHeader(lang: string, actions: string): string {
   return `<div class="code-block-header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${actions}</div></div>`;
 }
 
-function renderCodeBlockCopyButton(
-  text: string,
-  blockArt: boolean,
-  copyTextOverride: string | undefined,
-): string {
-  const copyText = copyTextOverride ?? text;
-  const copyPayload = blockArt ? encodeBlockArtCodeBlockCopyPayload(copyText) : copyText;
-  const attrSafe = escapeMarkdownHtml(copyPayload);
-  const encodingAttr = blockArt
-    ? ` data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}"`
-    : "";
-  return `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
+function renderCodeBlockCopyButton(text: string): string {
+  // Attribute sanitization trims plain values; encode copied whitespace with the text.
+  const attrSafe = escapeMarkdownHtml(encodeCodeBlockCopyPayload(text));
+  return `<button type="button" class="code-block-copy" data-code="${attrSafe}" data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}" aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
 }
 
 export function renderMarkdownCodeBlock(
@@ -342,7 +219,7 @@ export function renderMarkdownCodeBlock(
     return codeBlock;
   }
   const copyButton = shouldRenderCodeBlockCopy(env)
-    ? renderCodeBlockCopyButton(text, blockArt, options.copyText)
+    ? renderCodeBlockCopyButton(options.copyText ?? text)
     : "";
   // Reveal and wrap controls are inert without a host that runs the code-block
   // lifecycle, so only interaction-owning hosts get the collapsible markup.

@@ -1,12 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { transferRepoE2eArtifacts } from "../../scripts/repo-e2e-artifacts.mts";
 import { resolveBuildRequirement } from "../../scripts/run-node.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 function fixture() {
   const root = fs.realpathSync(tempDirs.make("repo-e2e-artifacts-"));
@@ -92,13 +92,21 @@ describe("repo E2E artifact transfer", () => {
       ]) {
         fs.rmSync(path.join(root, output), { recursive: true });
       }
-      // Reproduce a plain archive restore's false freshness miss before exercising the owner.
+      // Clean Git state outranks archive mtimes; restore still refreshes the local stamp.
       execFileSync("tar", ["-xzf", path.join(artifact, "repo-e2e-build.tar.gz")], { cwd: root });
-      expect(requirement(root)).toMatchObject({ shouldBuild: true, reason: "config_newer" });
+      expect(requirement(root)).toEqual({ shouldBuild: false, reason: "clean" });
+      expect(fs.statSync(path.join(root, "dist/.buildstamp")).mtimeMs).toBeLessThan(
+        fs.statSync(path.join(root, "package.json")).mtimeMs,
+      );
       transferRepoE2eArtifacts("restore", artifact, profile, root);
       expect(requirement(root)).toEqual({ shouldBuild: false, reason: "clean" });
+      expect(fs.statSync(path.join(root, "dist/.buildstamp")).mtimeMs).toBeGreaterThanOrEqual(
+        fs.statSync(path.join(root, "package.json")).mtimeMs,
+      );
       expect(fs.readlinkSync(path.join(root, "dist-runtime/index.js"))).toBe("../dist/index.js");
-      expect(fs.statSync(path.join(root, "dist/index.js")).mode & 0o777).toBe(0o755);
+      expect(execFileSync(path.join(root, "dist/index.js"), { encoding: "utf8" })).toBe(
+        "artifact\n",
+      );
       expect(fs.readFileSync(path.join(root, "dist/private-qa.js"), "utf8")).toBe("private QA\n");
       expect(fs.readFileSync(path.join(root, "packages/demo/dist/index.d.ts"), "utf8")).toContain(
         "ready",
@@ -115,22 +123,45 @@ describe("repo E2E artifact transfer", () => {
     },
   );
 
-  it.each(["targetSha", "profile", "node", "platform", "arch", "privateQa"])(
-    "rejects mismatched %s before extraction",
-    (field) => {
-      const { root, artifact } = fixture();
-      transferRepoE2eArtifacts("pack", artifact, "full", root);
-      const manifest = path.join(artifact, "repo-e2e-build.json");
-      const recorded = JSON.parse(fs.readFileSync(manifest, "utf8"));
-      recorded.identity[field] = "mismatched";
-      fs.writeFileSync(manifest, JSON.stringify(recorded));
-      fs.rmSync(path.join(root, "dist"), { recursive: true });
-      expect(() => transferRepoE2eArtifacts("restore", artifact, "full", root)).toThrow(
-        "artifact identity differs",
-      );
-      expect(fs.existsSync(path.join(root, "dist"))).toBe(false);
-    },
-  );
+  describe("identity validation", { concurrent: false }, () => {
+    let root: string;
+    let artifact: string;
+    let manifest: string;
+    let originalManifest: string;
+
+    beforeAll(() => {
+      vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+      try {
+        ({ root, artifact } = fixture());
+        transferRepoE2eArtifacts("pack", artifact, "full", root);
+        manifest = path.join(artifact, "repo-e2e-build.json");
+        originalManifest = fs.readFileSync(manifest, "utf8");
+        fs.rmSync(path.join(root, "dist"), { recursive: true });
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it.each(["targetSha", "profile", "node", "platform", "arch", "privateQa"])(
+      "rejects mismatched %s before extraction",
+      (field) => {
+        // Each probe changes one field of the pristine identity while reusing the real archive.
+        const recorded = JSON.parse(originalManifest);
+        recorded.identity[field] = "mismatched";
+        fs.writeFileSync(manifest, JSON.stringify(recorded));
+        try {
+          expect(fs.existsSync(path.join(root, "dist"))).toBe(false);
+          expect(() => transferRepoE2eArtifacts("restore", artifact, "full", root)).toThrow(
+            "artifact identity differs",
+          );
+          expect(fs.existsSync(path.join(root, "dist"))).toBe(false);
+        } finally {
+          fs.writeFileSync(manifest, originalManifest);
+          fs.rmSync(path.join(root, "dist"), { recursive: true, force: true });
+        }
+      },
+    );
+  });
 
   it("rejects corrupt archives before extraction", () => {
     const { root, artifact } = fixture();

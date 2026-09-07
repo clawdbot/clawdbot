@@ -154,6 +154,12 @@ describe("createAgentCapability lifecycle", () => {
     await expect(agents.ensureList()).resolves.toEqual(first);
     expect(request).toHaveBeenCalledTimes(1);
 
+    const notify = vi.fn();
+    const unsubscribe = agents.subscribe(notify);
+    harness.publish(true);
+    harness.publish(true);
+    expect(notify).not.toHaveBeenCalled();
+
     const refresh = agents.refreshList();
     const sharedRefresh = agents.ensureList();
     expect(request).toHaveBeenCalledTimes(2);
@@ -167,6 +173,8 @@ describe("createAgentCapability lifecycle", () => {
     harness.publish(true);
     await expect(agents.ensureList()).resolves.toEqual(reconnected);
     expect(request).toHaveBeenCalledTimes(3);
+    expect(notify).toHaveBeenCalledTimes(6);
+    unsubscribe();
     agents.dispose();
   });
 

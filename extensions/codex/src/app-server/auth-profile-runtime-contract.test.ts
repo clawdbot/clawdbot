@@ -132,12 +132,21 @@ async function writeCodexAppServerBinding(
   );
 }
 
-function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "thread/resume" }) {
+function createCodexAuthProfileHarness(params: {
+  startMethod: "thread/start" | "thread/resume";
+  persistedThreads?: string[];
+}) {
   const seenAuthProfileIds: Array<string | undefined> = [];
   const seenAgentDirs: Array<string | undefined> = [];
   const seenClientOptions: CodexAppServerClientOptions[] = [];
   const harness = createAppServerHarness(
     async (method) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === params.startMethod) {
         return threadStartResult("thread-auth-contract", { cwd: "" });
       }
@@ -147,6 +156,7 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
       throw new Error(`unexpected method: ${method}`);
     },
     {
+      persistedThreads: params.persistedThreads,
       onStart(authProfileId, agentDir, options) {
         seenAuthProfileIds.push(authProfileId);
         seenAgentDirs.push(agentDir);
@@ -205,7 +215,10 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
   });
 
   it("reuses a bound OpenAI Codex auth profile when resume params omit authProfileId", async () => {
-    const harness = createCodexAuthProfileHarness({ startMethod: "thread/resume" });
+    const harness = createCodexAuthProfileHarness({
+      startMethod: "thread/resume",
+      persistedThreads: ["thread-auth-contract"],
+    });
     const sessionFile = path.join(tmpDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-auth-contract",
@@ -230,7 +243,10 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
   });
 
   it("prefers an explicit runtime auth profile over a stale persisted binding", async () => {
-    const harness = createCodexAuthProfileHarness({ startMethod: "thread/resume" });
+    const harness = createCodexAuthProfileHarness({
+      startMethod: "thread/resume",
+      persistedThreads: ["thread-auth-contract"],
+    });
     const sessionFile = path.join(tmpDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-auth-contract",

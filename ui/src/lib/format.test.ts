@@ -65,6 +65,10 @@ describe("formatAgo", () => {
 });
 
 describe("localized durations", () => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
+  });
+
   it.each([undefined, null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
     "preserves invalid duration fallbacks for %s",
     (durationMs) => {
@@ -85,29 +89,43 @@ describe("localized durations", () => {
     { durationMs: 59_500, expected: "1m" },
     { durationMs: 92_000, expected: "1m 32s" },
     { durationMs: 3_660_000, expected: "1h 1m" },
+    { durationMs: 3_630_000, expected: "1h 30s" },
+    { durationMs: 86_430_000, expected: "1d 30s" },
+    { durationMs: 86_460_000, expected: "1d 1m" },
     { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
   ])("formats $durationMs ms with separated compact units", ({ durationMs, expected }) => {
     expect(formatDurationCompact(durationMs)).toBe(expected);
   });
 
-  it("switches human durations to days at 24 hours", () => {
-    expect(formatDurationHuman(36 * 60 * 60 * 1000)).toBe("2d");
+  it.each([
+    { durationMs: 999.6, expected: "1s" },
+    { durationMs: 3_569_999, expected: "59m" },
+    { durationMs: 5_371_000, expected: "1h" },
+    { durationMs: 84_599_000, expected: "23h" },
+    { durationMs: 127_799_000, expected: "1d" },
+    { durationMs: 36 * 60 * 60 * 1000, expected: "2d" },
+  ])("rounds $durationMs ms once for human display", ({ durationMs, expected }) => {
+    expect(formatDurationHuman(durationMs)).toBe(expected);
   });
 
-  it("uses the active locale for both duration formats", async () => {
-    await i18n.setLocale("fr");
-    try {
-      const minute = new Intl.NumberFormat("fr", {
+  it.each(["fr", "de", "ar"] as const)("preserves duration quantities in %s", async (locale) => {
+    await i18n.setLocale(locale);
+    const unit = (value: number, unitName: string) =>
+      new Intl.NumberFormat(locale, {
         style: "unit",
-        unit: "minute",
+        unit: unitName,
         unitDisplay: "narrow",
         maximumFractionDigits: 0,
-      }).format(1);
-      expect(formatDurationCompact(60_000)).toBe(minute);
-      expect(formatDurationHuman(60_000)).toBe(minute);
-    } finally {
-      await i18n.setLocale("en");
-    }
+      }).format(value);
+    expect(formatDurationCompact(60_000)).toBe(unit(1, "minute"));
+    expect(formatDurationHuman(60_000)).toBe(unit(1, "minute"));
+    expect(formatDurationHuman(5_371_000)).toBe(unit(1, "hour"));
+    expect(formatDurationHuman(127_799_000)).toBe(unit(1, "day"));
+    expect(formatDurationCompact(3_630_000)).toBe(`${unit(1, "hour")} ${unit(30, "second")}`);
+    expect(formatDurationCompact(86_460_000)).toBe(`${unit(1, "day")} ${unit(1, "minute")}`);
+    expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationHuman(0)).toBe(unit(0, "millisecond"));
+    expect(formatDurationHuman(undefined, "missing")).toBe("missing");
   });
 });
 

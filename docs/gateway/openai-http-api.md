@@ -105,6 +105,21 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session. For custom apps, reuse the same `user` value per conversation thread; avoid account-level identifiers unless you want multiple conversations/devices to share one OpenClaw session. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients/threads, with application-owned keys that avoid the reserved namespaces above.
 
+### Explicit incognito session continuation
+
+Explicitly selecting or continuing an incognito conversation with `x-openclaw-session-key` (the `sessionKey` override) requires effective `operator.admin` authority. This rule follows authority, not ingress: it denies both trusted-proxy callers without owner/admin authority and private `gateway.auth.mode="none"` callers that explicitly narrow `x-openclaw-scopes` below admin (for example, to `operator.write`). Either receives HTTP `403` with a `forbidden` error. A profile-less private no-auth caller on this path gets `missing scope: operator.admin`; for a profile-backed caller, the response hides the private target with this error shape (where `<sessionKey>` is the requested override):
+
+```json
+{
+  "error": {
+    "message": "Incognito session \"<sessionKey>\" was not found.",
+    "type": "forbidden"
+  }
+}
+```
+
+Owner/admin callers keep explicit incognito session continuation. A private no-auth request without `x-openclaw-scopes` receives the default operator scopes, including `operator.admin`, and is therefore treated as owner/admin. Reserved internal namespace overrides (`subagent:`, `cron:`, `acp:`) remain a separate validation failure and still return HTTP `400` with `invalid_request_error`.
+
 ## Request limits
 
 The endpoint uses built-in limits of 20 MB per request body, 8 `image_url`
@@ -211,7 +226,11 @@ If `stream_options.include_usage=true`, a trailing usage chunk is emitted before
 
 After receiving `tool_calls`, execute the requested function(s) and send a follow-up request that includes the prior assistant tool-call message plus one or more `role: "tool"` messages with matching `tool_call_id`. This continues the same agent reasoning loop to produce the final answer.
 
+If a tool produces no text, still include its result with `content: ""` or an empty text-part array. An empty result completes the call; omitting the result does not. Legacy `role: "function"` results may use `content: null` with their function `name`.
+
 ## Streaming (SSE)
+
+Streaming preserves repeated content from separate assistant messages. If a correction cannot be represented by appending to text already sent, the stream reports an error rather than completing with inconsistent content.
 
 Set `stream: true` to receive Server-Sent Events:
 
@@ -220,6 +239,8 @@ Set `stream: true` to receive Server-Sent Events:
 - Stream ends with `data: [DONE]`
 
 Failed agent runs, including whole-agent timeouts, return an error instead of a successful completion. A streaming failure emits an `error` object followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
+
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
 
 ## Open WebUI quick setup
 

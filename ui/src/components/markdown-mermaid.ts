@@ -1,3 +1,8 @@
+import {
+  MermaidTransientError,
+  renderMermaidSvg,
+  type MermaidTheme,
+} from "@openclaw/mermaid-renderer";
 import { css, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
@@ -5,7 +10,6 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { resolveThemeColor } from "../lib/theme-color.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
-import { renderMermaidSvg, type MermaidTheme } from "./markdown-mermaid.runtime.ts";
 import "./image-lightbox.ts";
 import "./web-awesome.ts";
 
@@ -51,8 +55,7 @@ class OpenClawMermaid extends OpenClawLitElement {
   @state() private imageUrl = "";
   @state() private showSource = false;
   @state() private expanded = false;
-  @state() private pending = false;
-  @state() private failed = false;
+  @state() private renderStatus: "rendering" | "error" | "rendererError" | "imageError" | undefined;
   @state() private copyResult: boolean | undefined;
   private renderKey = "";
   private generation = 0;
@@ -224,18 +227,14 @@ class OpenClawMermaid extends OpenClawLitElement {
   }
 
   private async renderDiagram() {
-    if (!this.isConnected) {
-      return;
-    }
     const theme = currentTheme();
     const key = JSON.stringify([this.source, theme]);
-    if (key === this.renderKey) {
+    if (!this.isConnected || key === this.renderKey) {
       return;
     }
     this.renderKey = key;
     const generation = ++this.generation;
-    this.pending = true;
-    this.failed = false;
+    this.renderStatus = "rendering";
     try {
       const svg = await cachedDiagram(key, this.source, theme);
       // Remounts, edits and theme switches can overtake asynchronous layout.
@@ -245,28 +244,27 @@ class OpenClawMermaid extends OpenClawLitElement {
       }
       this.releaseImage();
       this.imageUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
-    } catch {
+      this.renderStatus = undefined;
+    } catch (error) {
       if (this.isConnected && generation === this.generation) {
         this.releaseImage();
-        this.failed = true;
-      }
-    } finally {
-      if (this.isConnected && generation === this.generation) {
-        this.pending = false;
+        this.renderStatus = error instanceof MermaidTransientError ? "rendererError" : "error";
       }
     }
   }
 
   private async copySource() {
     const attempt = ++this.copyAttempt;
-    const copied = await copyToClipboard(this.source);
-    if (this.isConnected && attempt === this.copyAttempt) {
+    const isCurrent = () => this.isConnected && attempt === this.copyAttempt;
+    const copied = await copyToClipboard(this.source, isCurrent);
+    if (isCurrent()) {
       this.copyResult = copied;
     }
   }
 
   override render() {
-    const sourceVisible = this.showSource || this.failed;
+    const failed = this.renderStatus !== undefined && this.renderStatus !== "rendering";
+    const sourceVisible = this.showSource || failed;
     const copyLabel = t(
       this.copyResult === undefined
         ? "chat.mermaid.copySource"
@@ -284,11 +282,9 @@ class OpenClawMermaid extends OpenClawLitElement {
           @click=${() => void this.copySource()}
         >
           <span aria-hidden="true"
-            >${this.copyResult === undefined
-              ? icons.copy
-              : this.copyResult
-                ? icons.check
-                : icons.x}</span
+            >${
+              this.copyResult === undefined ? icons.copy : this.copyResult ? icons.check : icons.x
+            }</span
           >
         </button>
         <wa-dropdown
@@ -326,34 +322,38 @@ class OpenClawMermaid extends OpenClawLitElement {
       <span class="copy-feedback" aria-live="polite"
         >${this.copyResult === undefined ? nothing : copyLabel}</span
       >
-      ${this.failed
-        ? html`<p class="status" role="status">${t("chat.mermaid.error")}</p>`
-        : this.pending && !this.imageUrl
-          ? html`<p class="status" role="status">${t("chat.mermaid.rendering")}</p>`
-          : nothing}
-      ${sourceVisible
-        ? html`<pre><code>${this.source}</code></pre>`
-        : this.imageUrl
-          ? html`<div class="preview">
-              <img
-                src=${this.imageUrl}
-                alt=${t("chat.mermaid.title")}
-                @error=${() => {
-                  this.failed = true;
-                  this.releaseImage();
-                }}
-              />
-            </div>`
-          : nothing}
-      ${this.expanded && this.imageUrl
-        ? html`<openclaw-image-lightbox
-            src=${this.imageUrl}
-            .imageTitle=${t("chat.mermaid.title")}
-            @image-lightbox-close=${() => {
-              this.expanded = false;
-            }}
-          ></openclaw-image-lightbox>`
-        : nothing}
+      ${
+        this.renderStatus && (failed || !this.imageUrl)
+          ? html`<p class="status" role="status">${t(`chat.mermaid.${this.renderStatus}`)}</p>`
+          : nothing
+      }
+      ${
+        sourceVisible
+          ? html`<pre><code>${this.source}</code></pre>`
+          : this.imageUrl
+            ? html`<div class="preview">
+                <img
+                  src=${this.imageUrl}
+                  alt=${t("chat.mermaid.title")}
+                  @error=${() => {
+                    this.renderStatus = "imageError";
+                    this.releaseImage();
+                  }}
+                />
+              </div>`
+            : nothing
+      }
+      ${
+        this.expanded && this.imageUrl
+          ? html`<openclaw-image-lightbox
+              src=${this.imageUrl}
+              .imageTitle=${t("chat.mermaid.title")}
+              @image-lightbox-close=${() => {
+                this.expanded = false;
+              }}
+            ></openclaw-image-lightbox>`
+          : nothing
+      }
     `;
   }
 }

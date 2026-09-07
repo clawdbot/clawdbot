@@ -13,11 +13,18 @@ describe("normalizeMcpToolCatalog", () => {
     ["relative references", "child", "./child"],
     ["local fragments", "#value", "#value"],
     ["reserved path escapes", "a%3Ab", "a%3Ab"],
-  ])("validates tool output schemas with %s", (_label, id, ref) => {
+    [
+      "draft-2020 embedded resources",
+      "value",
+      "./value",
+      "https://json-schema.org/draft/2020-12/schema",
+    ],
+  ])("validates tool output schemas with %s", (_label, id, ref, $schema?: string) => {
     const normalized = normalizeMcpToolCatalog(
       [
         tool("referenced", {
           outputSchema: {
+            ...($schema ? { $schema } : {}),
             $id: "https://schema.example/root",
             type: "object",
             definitions: { value: { $id: id, type: "string" } },

@@ -1,9 +1,9 @@
-import { vi } from "vitest";
+import { type Mock, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 
 export function createPendingResponse(params: { prefix?: string; status?: number } = {}) {
   const readStarted = createDeferred();
-  const cancel = vi.fn();
+  const cancel: Mock<(reason?: unknown) => void> = vi.fn();
   let prefix = params.prefix;
   let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
   const response = new Response(

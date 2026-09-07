@@ -4,7 +4,11 @@ import {
   readControlUiBuildMismatchId,
   resolveSafeTimeoutDelayMs,
 } from "@openclaw/gateway-client/browser";
-import { isGatewayRestartUnavailableError } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isGatewayRestartUnavailableError,
+  isGatewaySuspendUnavailableError,
+} from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 // Control UI module owns the application gateway store: the reactive
 // snapshot around GatewayBrowserClient consumed by the app shell.
@@ -19,6 +23,7 @@ import {
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
+import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
@@ -31,7 +36,12 @@ import type {
   ApplicationGatewayConnection,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
+import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import {
+  createGatewayControlUiReloadOptions,
+  isSameOriginGateway,
+} from "./gateway-control-ui-reload.ts";
+import { createGatewayEventLog, notifyGatewayObservers } from "./gateway-observers.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -50,23 +60,14 @@ const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserC
 // Grace window before offline presentation appears; reconnects never wait.
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
-function notifyGatewayObservers<T>(
-  listeners: ReadonlySet<(value: T) => void>,
-  value: T,
-  errorLabel: string,
-  isCurrent?: (value: T) => boolean,
-): void {
-  // Snapshot membership because callbacks may mutate subscriptions or replace their owner.
-  for (const listener of Array.from(listeners)) {
-    if (isCurrent && !isCurrent(value)) {
-      return;
-    }
-    try {
-      listener(value);
-    } catch (error) {
-      console.error(`[gateway] ${errorLabel} handler error:`, error);
-    }
-  }
+function readSuspensionPhase(payload: unknown): ApplicationGatewaySnapshot["suspensionPhase"] {
+  const phase = asOptionalRecord(payload)?.phase;
+  return phase === "accepting" ||
+    phase === "preparing" ||
+    phase === "draining" ||
+    phase === "prepared"
+    ? phase
+    : undefined;
 }
 
 function sameSelfUser(
@@ -91,6 +92,10 @@ export function createApplicationGateway(
     persistDefaultConnectionSettings?: boolean;
     resourceBasePath?: string;
     bootstrapProfile?: ControlUiBootstrapProfileHint;
+    clientOptions?: Pick<
+      GatewayBrowserClientOptions,
+      "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+    >;
   } = {},
 ): ApplicationGateway {
   let settings = initialSettings;
@@ -113,6 +118,7 @@ export function createApplicationGateway(
     sessionKey: settings.sessionKey,
     lastError: null,
     lastErrorCode: null,
+    lastErrorAuthReason: null,
     selfUser: null,
   };
   let client: GatewayBrowserClient | null = null;
@@ -130,35 +136,39 @@ export function createApplicationGateway(
   const isCurrentClient = (expected: GatewayBrowserClient | null) =>
     !stopped && client === expected;
   let offlineIndicatorTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let restartDeadlineTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  const unavailableDeadlines: Partial<
+    Record<"restartPending" | "suspensionPhase", ReturnType<typeof globalThis.setTimeout>>
+  > = {};
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
-  let eventLog: EventLogEntry[] = [];
+  const eventLog = createGatewayEventLog();
+  const publishEventLogRetirement = (events: readonly EventLogEntry[]) => {
+    // Retirement remains valid after a reentrant stop or same-account client replacement.
+    notifyGatewayObservers(
+      eventLogListeners,
+      events,
+      "event",
+      (current) => current === eventLog.entries,
+    );
+  };
   const clearOfflineIndicatorTimer = () => {
-    if (offlineIndicatorTimer !== null) {
-      globalThis.clearTimeout(offlineIndicatorTimer);
-      offlineIndicatorTimer = null;
-    }
+    globalThis.clearTimeout(offlineIndicatorTimer ?? undefined);
+    offlineIndicatorTimer = null;
   };
-  const clearRestartDeadlineTimer = () => {
-    if (restartDeadlineTimer !== null) {
-      globalThis.clearTimeout(restartDeadlineTimer);
-      restartDeadlineTimer = null;
+  const setUnavailableDeadline = (key: keyof typeof unavailableDeadlines, expectedMs?: number) => {
+    globalThis.clearTimeout(unavailableDeadlines[key]);
+    delete unavailableDeadlines[key];
+    if (expectedMs === undefined) {
+      return;
     }
-  };
-  const scheduleRestartDeadline = (restartExpectedMs?: number) => {
-    clearRestartDeadlineTimer();
-    restartDeadlineTimer = globalThis.setTimeout(
+    unavailableDeadlines[key] = globalThis.setTimeout(
       () => {
-        restartDeadlineTimer = null;
-        if (!stopped) {
-          setSnapshot({ ...snapshot, restartPending: false });
-        }
+        delete unavailableDeadlines[key];
+        setSnapshot({ ...snapshot, [key]: key === "restartPending" ? false : undefined });
       },
-      // Floor 15s: a failed restart must degrade to the offline pill, never
-      // wear the amber state forever.
-      resolveSafeTimeoutDelayMs((restartExpectedMs ?? 0) * 3, { minMs: 15_000 }),
+      // Floor 15s: stale lifecycle evidence must degrade to the ordinary offline pill.
+      resolveSafeTimeoutDelayMs(expectedMs * 3, { minMs: 15_000 }),
     );
   };
   const scheduleOfflineIndicator = () => {
@@ -182,7 +192,10 @@ export function createApplicationGateway(
       clearOfflineIndicatorTimer();
       snapshot = next.offlineStable ? { ...next, offlineStable: false } : next;
     } else {
-      snapshot = next;
+      // A disconnected transport cannot vouch for admission; the next hello replaces it.
+      snapshot = unavailableDeadlines.suspensionPhase
+        ? next
+        : { ...next, suspensionPhase: undefined };
       scheduleOfflineIndicator();
     }
     notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
@@ -284,7 +297,15 @@ export function createApplicationGateway(
   };
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
     const eventClient = client;
-    if (event.event === "shutdown") {
+    if (event.event === "gateway.suspension") {
+      const suspensionPhase = readSuspensionPhase(event.payload);
+      if (suspensionPhase) {
+        setSnapshot({ ...snapshot, suspensionPhase });
+        if (!isCurrentClient(eventClient)) {
+          return;
+        }
+      }
+    } else if (event.event === "shutdown") {
       // Only a restart-bearing shutdown arms the amber state; an ordinary stop
       // (restartExpectedMs absent) flows through the normal offline pill so the
       // retry action stays reachable. Hostile values fall to the timer clamp.
@@ -294,7 +315,7 @@ export function createApplicationGateway(
           ? payload.restartExpectedMs
           : undefined;
       if (typeof expected === "number") {
-        scheduleRestartDeadline(expected);
+        setUnavailableDeadline("restartPending", expected);
         setSnapshot({ ...snapshot, restartPending: true });
         if (!isCurrentClient(eventClient)) {
           return;
@@ -315,16 +336,14 @@ export function createApplicationGateway(
         }
       }
     }
-    eventLog = [{ ts: Date.now(), event: event.event, payload: event.payload }, ...eventLog].slice(
-      0,
-      250,
-    );
+    const entries = eventLog.record(event);
     const ownsEventLog = (current: readonly EventLogEntry[]) =>
-      current === eventLog && isCurrentClient(eventClient);
-    notifyGatewayObservers(eventLogListeners, eventLog, "event", ownsEventLog);
+      current === eventLog.entries && isCurrentClient(eventClient);
+    notifyGatewayObservers(eventLogListeners, entries, "event", ownsEventLog);
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
+    setUnavailableDeadline("suspensionPhase");
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
     const nextGatewayUrl = connectionOverrides.gatewayUrl ?? connection.gatewayUrl;
@@ -358,6 +377,7 @@ export function createApplicationGateway(
       nextConnection.password !== connection.password ||
       nextConnection.bootstrapToken !== connection.bootstrapToken ||
       nextConnection.bootstrapProfile !== connection.bootstrapProfile;
+    const retiredEventLog = credentialsChanged ? eventLog.resetConnection() : null;
     if (credentialsChanged) {
       connectionRevision += 1;
       void clearStoredChatSnapshots();
@@ -384,16 +404,19 @@ export function createApplicationGateway(
       everConnected = false;
     }
     connection = nextConnection;
-    // Trust the connected gateway's origin for avatar route resolution so
-    // split-origin Control UI deployments load uploaded/proxied avatars.
-    setAvatarGatewayOrigin(
-      nextConnection.gatewayUrl,
-      resolveControlUiAuthHeader({
-        settings: { token: nextConnection.token },
-        password: nextConnection.password,
-      }),
-      options.resourceBasePath,
-    );
+    // Both connection setup and hello bind resources to this connection's credentials.
+    const updateAvatarContext = (hello?: GatewayHelloOk) => {
+      setAvatarGatewayOrigin(
+        nextConnection.gatewayUrl,
+        resolveControlUiAuthCandidates({
+          hello,
+          settings: nextConnection,
+          password: nextConnection.password,
+        }),
+        options.resourceBasePath,
+      );
+    };
+    updateAvatarContext();
     updateSettings(
       {
         gatewayUrl: nextConnection.gatewayUrl,
@@ -419,14 +442,27 @@ export function createApplicationGateway(
         : undefined,
       bootstrapProfile: nextConnection.bootstrapProfile,
       password: nextConnection.password.trim() ? nextConnection.password : undefined,
-      clientName: "openclaw-control-ui",
+      clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
       clientBuildId: CONTROL_UI_BUILD_INFO.buildId,
-      mode: "webchat",
-      instanceId: generateUUID(),
+      platform: options.clientOptions?.platform,
+      deviceFamily: options.clientOptions?.deviceFamily,
+      mode: options.clientOptions?.mode ?? "webchat",
+      instanceId: options.clientOptions?.instanceId ?? generateUUID(),
+      scopes: options.clientOptions?.scopes,
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;
+        }
+        setUnavailableDeadline("suspensionPhase");
+        // A successful hello retires bootstrap; the client has processed any issued device grant.
+        connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        const retiredAuthLog = eventLog.bindRecoveryScope(hello.auth?.recoveryScope);
+        if (retiredAuthLog) {
+          publishEventLogRetirement(retiredAuthLog);
+          if (!isCurrentClient(nextClient)) {
+            return;
+          }
         }
         const exactBuildIdentityAvailable = Boolean(hello.server?.buildId?.trim());
         const controlUiBuildFresh = !(
@@ -450,23 +486,21 @@ export function createApplicationGateway(
             selfUser: null,
             lastError: null,
             lastErrorCode: null,
+            lastErrorAuthReason: null,
           });
           const targetBuildId = hello.server?.buildId?.trim() || hello.server?.version?.trim();
           if (targetBuildId) {
-            void scheduleStaleChunkReload({ buildId: targetBuildId });
+            void scheduleStaleChunkReload({
+              buildId: targetBuildId,
+              ...createGatewayControlUiReloadOptions(
+                gateway,
+                () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
+              ),
+            });
           }
           return;
         }
-        setAvatarGatewayOrigin(
-          nextConnection.gatewayUrl,
-          resolveControlUiAuthHeader({
-            hello,
-            settings: { token: nextConnection.token },
-            password: nextConnection.password,
-          }),
-          options.resourceBasePath,
-        );
-        connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        updateAvatarContext(hello);
         if (persistConnectionSettings) {
           settings = loadSettings();
         }
@@ -487,12 +521,13 @@ export function createApplicationGateway(
           hello.pluginSurfaceUrls?.canvas,
         );
         const canvasLeaseGeneration = beginCanvasSurfaceLease(nextClient);
-        clearRestartDeadlineTimer();
+        setUnavailableDeadline("restartPending");
         setSnapshot({
           ...snapshot,
           client: nextClient,
           phase: "connected",
           restartPending: false,
+          suspensionPhase: readSuspensionPhase(asOptionalRecord(hello.snapshot)?.suspension),
           hello,
           canvasPluginSurfaceUrl,
           // Trim guards a whitespace-only defaultId from becoming a truthy selection.
@@ -500,6 +535,7 @@ export function createApplicationGateway(
           sessionKey,
           lastError: null,
           lastErrorCode: null,
+          lastErrorAuthReason: null,
           selfUser: resolveSelfPresenceUser(
             readPresenceEntries(hello.snapshot) ?? [],
             nextClient.instanceId,
@@ -524,7 +560,13 @@ export function createApplicationGateway(
         stopCanvasSurfaceLease();
         const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
         if (mismatchedBuildId) {
-          void scheduleStaleChunkReload({ buildId: mismatchedBuildId });
+          void scheduleStaleChunkReload({
+            buildId: mismatchedBuildId,
+            ...createGatewayControlUiReloadOptions(
+              gateway,
+              () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
+            ),
+          });
         }
         const startupPending =
           mismatchedBuildId === null &&
@@ -539,8 +581,13 @@ export function createApplicationGateway(
         // "restarting", so the amber state stays honest for another window.
         const restartPending = isGatewayRestartUnavailableError(error);
         if (restartPending) {
-          scheduleRestartDeadline();
+          setUnavailableDeadline("restartPending", 0);
         }
+        const suspensionPhase = isGatewaySuspendUnavailableError(error)
+          ? (readSuspensionPhase(error?.details) ?? "prepared")
+          : undefined;
+        // Display-only evidence; admission is still re-derived from the next hello.
+        setUnavailableDeadline("suspensionPhase", suspensionPhase ? 0 : undefined);
         setSnapshot({
           ...snapshot,
           client: nextClient,
@@ -560,12 +607,14 @@ export function createApplicationGateway(
           canvasPluginSurfaceUrl: null,
           selfUser: null,
           restartPending: restartPending || snapshot.restartPending === true,
+          suspensionPhase,
           lastError: startupPending
             ? null
             : error?.message
               ? formatUiError(error.message)
               : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
           lastErrorCode: startupPending ? null : lastErrorCode,
+          lastErrorAuthReason: startupPending ? null : readConnectionAuthReason(error?.details),
         });
       },
       onGap: ({ expected, received }) => {
@@ -576,6 +625,7 @@ export function createApplicationGateway(
           ...snapshot,
           lastError: `event gap detected (expected seq ${expected}, got ${received}); reconnecting`,
           lastErrorCode: null,
+          lastErrorAuthReason: null,
         });
         if (isCurrentClient(nextClient)) {
           connect();
@@ -612,7 +662,11 @@ export function createApplicationGateway(
       sessionKey: nextSessionKey,
       lastError: null,
       lastErrorCode: null,
+      lastErrorAuthReason: null,
     });
+    if (retiredEventLog) {
+      publishEventLogRetirement(retiredEventLog);
+    }
     if (isCurrentClient(nextClient)) {
       nextClient.start();
     }
@@ -629,7 +683,10 @@ export function createApplicationGateway(
       return connectionRevision;
     },
     get eventLog() {
-      return eventLog;
+      return eventLog.entries;
+    },
+    get eventLogRevision() {
+      return eventLog.revision;
     },
     connect,
     setSessionKey: (sessionKey) => {
@@ -647,7 +704,8 @@ export function createApplicationGateway(
     stop: () => {
       stopped = true;
       clearOfflineIndicatorTimer();
-      clearRestartDeadlineTimer();
+      setUnavailableDeadline("restartPending");
+      setUnavailableDeadline("suspensionPhase");
       stopCanvasSurfaceLease();
       client?.stop();
       client = null;
@@ -664,6 +722,7 @@ export function createApplicationGateway(
         selfUser: null,
         lastError: null,
         lastErrorCode: null,
+        lastErrorAuthReason: null,
       });
     },
     subscribe: (listener) => {
@@ -686,14 +745,6 @@ export function createApplicationGateway(
     },
   };
   return gateway;
-}
-
-function isSameOriginGateway(gatewayUrl: string): boolean {
-  try {
-    return new URL(gatewayUrl.replace(/^ws/u, "http")).origin === globalThis.location?.origin;
-  } catch {
-    return false;
-  }
 }
 
 function normalizeCanvasPluginSurfaceUrl(value: string | undefined): string | null {

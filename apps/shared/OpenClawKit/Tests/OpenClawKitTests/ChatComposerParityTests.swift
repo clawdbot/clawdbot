@@ -81,6 +81,25 @@ struct ChatReplyQuoteTests {
 
 @MainActor
 struct ChatComposerStateTests {
+    @Test func `model selection target describes only gateway owned values`() {
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        let expectations: [(String?, String?)] = [
+            ("session", "Changes this session only"),
+            ("agent", "Changes this agent's default"),
+            ("global", "Changes the global default"),
+            ("future-target", nil),
+            (nil, nil),
+        ]
+
+        for (target, expected) in expectations {
+            viewModel.sessionDefaults = OpenClawChatSessionsDefaults(
+                model: nil,
+                contextTokens: nil,
+                modelSelectionTarget: target)
+            #expect(viewModel.modelSelectionTargetDescription == expected)
+        }
+    }
+
     @Test func `model selection matches qualified choices after gateway readback`() {
         let choices = [
             OpenClawChatModelChoice(

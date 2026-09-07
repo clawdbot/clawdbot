@@ -50,7 +50,7 @@ actor TalkModeRuntime {
         }
     }
 
-    private var recognizer: SFSpeechRecognizer?
+    private var recognizerCache = SpeechRecognizerCache()
     private var audioEngine: AVAudioEngine?
     private var audioInputObserver: AudioInputDeviceObserver?
     private var activeInputResolution: AudioInputDeviceResolution?
@@ -319,9 +319,7 @@ actor TalkModeRuntime {
                 Locale.autoupdatingCurrent.identifier,
             ],
             supportedLocaleIDs: supportedLocaleIDs)
-        let recognizer = localeID
-            .map { SFSpeechRecognizer(locale: Locale(identifier: $0)) }
-            ?? SFSpeechRecognizer()
+        let recognizer = self.recognizerCache.recognizer(localeID: localeID)
         guard let recognizer, recognizer.isAvailable else {
             self.logger.error("talk recognizer unavailable")
             return false
@@ -355,7 +353,6 @@ actor TalkModeRuntime {
             },
             discard: { $0.discard() },
             publish: { preparedCapture in
-                self.recognizer = recognizer
                 self.recognitionRequest = preparedCapture.request
                 self.audioEngine = preparedCapture.engine
                 self.activeInputResolution = preparedCapture.activeInputResolution
@@ -418,7 +415,6 @@ actor TalkModeRuntime {
         self.audioEngine?.stop()
         self.audioEngine = nil
         self.activeInputResolution = nil
-        self.recognizer = nil
         self.rmsTask?.cancel()
         self.rmsTask = nil
     }
@@ -729,11 +725,11 @@ extension TalkModeRuntime {
         return await withTaskGroup(of: String?.self) { group in
             group.addTask { [runId, sessionKey] in
                 var latestText: String?
-                for await push in stream {
+                for await delivery in stream {
                     if Task.isCancelled {
                         return latestText
                     }
-                    guard case let .event(evt) = push else { continue }
+                    guard delivery.isCurrent, case let .event(evt) = delivery.push else { continue }
                     guard evt.event == "chat", let payload = evt.payload else { continue }
                     guard let chatEvent = try? GatewayPayloadDecoding.decode(
                         payload,
@@ -1187,7 +1183,7 @@ extension TalkModeRuntime {
                     TalkMLXSpeechSynthesizer.SynthesizeError.timedOut
                 },
                 operation: { [self] in
-                    return try await self.streamMLXVoice(
+                    try await self.streamMLXVoice(
                         text: input.cleanedText,
                         modelRepo: modelRepo,
                         language: input.language,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
@@ -90,8 +91,6 @@ const gatewayServiceReadCommand = vi.hoisted(() => vi.fn());
 const startGatewayService = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() =>
   vi.fn(async () => ({
-    token: undefined,
-    tokenRefConfigured: true,
     warnings: [],
   })),
 );
@@ -770,7 +769,7 @@ describe("finalizeSetupWizard", () => {
     );
   });
 
-  it("bounds the bootstrap hatch TUI run timeout", async () => {
+  it("seeds the bootstrap hatch message for a ready catalog with a bounded timeout", async () => {
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
     const select = vi.fn(async (params: { message: string }) => {
       if (params.message === "How do you want to hatch your agent?") {
@@ -791,6 +790,35 @@ describe("finalizeSetupWizard", () => {
       message: "Wake up, my friend!",
       initialMessageTimeoutMs: 300_000,
     });
+  });
+
+  it("finishes without a hatch message when the prepared catalog owner was replaced", async () => {
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    loadModelCatalog.mockRejectedValueOnce(
+      new PreparedModelCatalogConfigReplacedError("/tmp/replaced-agent"),
+    );
+    const prompter = createLaterPrompter();
+
+    await expect(
+      finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter })),
+    ).resolves.toEqual({ launchedTui: true });
+
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: undefined,
+      }),
+    );
+    expect(resolveDefaultModelCatalogFacts).not.toHaveBeenCalled();
+    expect(resolveDefaultModelAuthStatus).not.toHaveBeenCalled();
+  });
+
+  it("propagates unrelated prepared catalog failures", async () => {
+    const error = new Error("catalog read failed");
+    loadModelCatalog.mockRejectedValueOnce(error);
+
+    await expect(finalizeSetupWizard(createFinalizeArgs("quickstart"))).rejects.toBe(error);
+
+    expect(runTui).not.toHaveBeenCalled();
   });
 
   it("passes physical catalog routes into the bootstrap auth decision", async () => {
@@ -1564,8 +1592,6 @@ describe("finalizeSetupWizard", () => {
       });
       if (failure === "auth") {
         resolveGatewayInstallToken.mockImplementationOnce(async () => ({
-          token: undefined,
-          tokenRefConfigured: true,
           warnings: [],
           unavailableReason: "replacement auth unavailable",
         }));

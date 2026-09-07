@@ -2,7 +2,6 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
@@ -14,6 +13,8 @@ import {
   configuredOwnersAreRequestVisible,
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
+import { preparedModelInventoryKey } from "./prepared-model-runtime.facts.js";
+import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimeOwnerRetention,
@@ -51,7 +52,10 @@ import {
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
-import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeCatalogMode,
+  PreparedModelRuntimeLeaseOptions,
+} from "./prepared-model-runtime.types.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 export {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -295,13 +299,7 @@ const preparedModelRuntimeLeaseContext = {
 /** Acquires a run generation from configured facts; full catalog discovery is explicit. */
 export async function acquireAgentRunPreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
-  options: {
-    retainIdleRunOwner?: boolean;
-    catalogMode?: PreparedModelRuntimeCatalogMode;
-    pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
-    abortSignal?: AbortSignal;
-  } = {},
+  options: PreparedModelRuntimeLeaseOptions = {},
 ): Promise<PreparedModelRuntimeLease> {
   return await acquirePreparedModelRuntimeLeaseFromOwners(
     rawInput,
@@ -373,21 +371,22 @@ export async function prepareModelRuntimeSnapshot(
   );
 }
 
-/** Refreshes stale inventory only for an explicit catalog read; turn admission remains static. */
-export async function refreshStalePreparedModelRuntimeCatalog(
+/** Initializes or refreshes inventory on catalog demand; turn admission remains static. */
+export async function refreshPreparedModelRuntimeCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
+  options: { refresh?: boolean } = {},
 ): Promise<ModelCatalogSnapshot | undefined> {
   const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
-  if (
-    !owner ||
-    owners.get(ownerKey(owner.input)) !== owner ||
-    !owner.catalogStale ||
-    !snapshot.loadFullModelCatalog
-  ) {
+  if (!owner || owners.get(ownerKey(owner.input)) !== owner || !snapshot.loadFullModelCatalog) {
+    return undefined;
+  }
+  const currentCatalog = snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog;
+  const refresh = options.refresh === true || owner.catalogStale;
+  if (!refresh && isPreparedModelCatalogFull(currentCatalog)) {
     return undefined;
   }
   const generation = owner.generation;
-  const catalog = await snapshot.loadFullModelCatalog({ refresh: true });
+  const catalog = await snapshot.loadFullModelCatalog({ refresh });
   if (
     owner.catalogStale &&
     owner.generation === generation &&
@@ -458,6 +457,13 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const catalogMode = options.catalogMode ?? "live";
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
+  const inventories = new Map(
+    [...owners.values()].flatMap((owner) =>
+      owner.provenance === "configured" && owner.catalogInventory
+        ? [[owner.catalogInventory.key, owner.catalogInventory] as const]
+        : [],
+    ),
+  );
   updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
     retainedConfig: config,
   });
@@ -493,6 +499,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
       catalogMode,
       existing?.provenance === "configured" ? existing : undefined,
     );
+    owner.catalogInventory = inventories.get(preparedModelInventoryKey(input));
     return { input, owner };
   });
   await publishPreparedModelRuntimeOwnerBatch({

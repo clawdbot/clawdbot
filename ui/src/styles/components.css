@@ -22,6 +22,115 @@
   font-size: 14px;
 }
 
+.connect-splash--skeleton {
+  position: relative;
+  align-items: stretch;
+}
+
+.connect-splash__layout {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.connect-splash__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 28px 24px;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.connect-splash__new-session {
+  height: 40px;
+  margin: 16px 0;
+}
+
+.connect-splash--skeleton .connect-splash__status {
+  position: absolute;
+  inset: auto 24px 12px;
+  margin: 0;
+  text-align: center;
+}
+
+.loading-skeleton {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: min(50dvh, 360px);
+  padding: 24px 32px 40px;
+}
+
+.loading-skeleton__header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.loading-skeleton__avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+}
+
+.loading-skeleton__title {
+  width: 140px;
+}
+
+.loading-skeleton__messages {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 48px;
+  width: min(100%, 760px);
+  margin: 24px auto 0;
+}
+
+.loading-skeleton__message {
+  display: grid;
+  gap: 14px;
+  width: 85%;
+}
+
+.loading-skeleton__message--user {
+  align-self: flex-end;
+  width: 48%;
+}
+
+.loading-skeleton__composer {
+  flex: none;
+  width: min(100%, 760px);
+  height: 112px;
+  margin: auto auto 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+@media (max-width: 768px) {
+  .connect-splash__layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connect-splash__sidebar {
+    display: none;
+  }
+
+  .loading-skeleton {
+    gap: 24px;
+    padding: 20px 20px 40px;
+  }
+}
+
 openclaw-session-owner-chip {
   display: inline-flex;
   flex: none;
@@ -706,6 +815,26 @@ openclaw-session-owner-chip {
   box-shadow: var(--shadow-lg);
 }
 
+/* Settings outcomes can use the lower corner without covering chat controls.
+ * Keep this opt-in so anchored notices and the shell's top placement stay intact. */
+.app-toast--bottom {
+  top: auto;
+  bottom: calc(20px + var(--safe-area-bottom));
+  width: min(380px, calc(100vw - 32px));
+  padding: 8px 8px 8px 16px;
+  border-radius: var(--radius-lg);
+  transition:
+    opacity 180ms ease-out,
+    translate 180ms ease-out;
+}
+
+@starting-style {
+  .app-toast--bottom {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+
 .app-toast--anchored {
   right: auto;
   left: var(--app-toast-anchor-center);
@@ -771,7 +900,8 @@ openclaw-session-owner-chip {
 
   /* The unanchored chat toast shares the viewport with shell and pane chrome.
      Anchored permission toasts already carry a measured pane-header offset. */
-  openclaw-toast-host[data-toast-placement="shell"] .app-toast:not(.app-toast--anchored) {
+  openclaw-toast-host[data-toast-placement="shell"]
+    .app-toast:not(.app-toast--anchored, .app-toast--bottom) {
     top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
   }
 
@@ -779,6 +909,10 @@ openclaw-session-owner-chip {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
     max-width: none;
+  }
+
+  .app-toast--bottom {
+    width: auto;
   }
 
   .app-toast--anchored {
@@ -853,7 +987,32 @@ openclaw-session-owner-chip {
   line-height: 1;
 }
 
+.app-toast--bottom .app-toast__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: var(--bg-muted);
+  color: var(--text-strong);
+}
+
+.app-toast--bottom .app-toast__message {
+  flex: 1 1 auto;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.app-toast--bottom .app-toast__dismiss {
+  width: 44px;
+  height: 44px;
+}
+
+.app-toast--bottom .app-toast__dismiss svg {
+  width: 16px;
+  height: 16px;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .app-toast--bottom,
   .app-toast--anchored,
   .app-toast--anchored[data-active="true"],
   .app-toast--anchored[data-active="false"] {
@@ -1038,6 +1197,10 @@ openclaw-session-progress-hovercard-provider {
   background: var(--ok);
 }
 
+.person-activity-card__status--offline > span {
+  background: var(--muted);
+}
+
 .person-activity-card__facts {
   display: grid;
   gap: 12px;
@@ -1209,291 +1372,6 @@ openclaw-session-progress-hovercard-provider {
   .person-activity-card a {
     min-height: 44px;
     align-items: center;
-  }
-}
-
-.github-link-hovercard {
-  position: fixed;
-  inset: auto;
-  margin: 0;
-  z-index: 1990;
-  width: min(440px, calc(100vw - 24px));
-  min-height: 112px;
-  padding: 16px;
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
-  box-shadow: var(--overlay-shadow);
-  color: var(--text);
-  font-family: var(--font-body);
-  /* Interactive by design: hover intent and text selection both need the card to
-     receive pointer events (see github-link-hovercard.runtime.ts). */
-  pointer-events: auto;
-  opacity: 0;
-  transform: translateY(-5px) scale(0.99);
-  transform-origin: bottom left;
-  transition:
-    opacity var(--duration-normal) var(--ease-out),
-    transform var(--duration-normal) var(--ease-out);
-}
-
-.github-link-hovercard[data-side="bottom"] {
-  transform: translateY(5px) scale(0.99);
-  transform-origin: top left;
-}
-
-.github-link-hovercard[data-open="true"] {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-}
-
-.github-link-hovercard__header,
-.github-link-hovercard__footer {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.github-link-hovercard__header {
-  gap: 9px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.github-link-hovercard__state {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  font-weight: 600;
-}
-
-.github-link-hovercard__state[data-tone="open"] {
-  color: var(--ok);
-}
-
-.github-link-hovercard__state[data-tone="danger"] {
-  color: var(--danger);
-}
-
-.github-link-hovercard__state[data-tone="purple"] {
-  color: var(--pr-merged);
-}
-
-.github-link-hovercard__state-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
-}
-
-/* The repo reference and author are links too, but the title owns the card's
-   only underline; the rest stay text until hovered or focused. */
-.github-link-hovercard__repo {
-  min-width: 0;
-  color: inherit;
-  overflow: hidden;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__repo:hover,
-.github-link-hovercard__repo:focus-visible,
-.github-link-hovercard__author:hover,
-.github-link-hovercard__author:focus-visible {
-  color: var(--text-strong);
-  text-decoration: none;
-}
-
-.github-link-hovercard__time {
-  flex: 0 0 auto;
-  margin-left: auto;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__title {
-  display: block;
-  margin: 15px 0 17px;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 650;
-  letter-spacing: -0.012em;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-  text-decoration: none;
-}
-
-.github-link-hovercard__title:hover,
-.github-link-hovercard__title:focus-visible {
-  text-decoration: underline;
-}
-
-.github-link-hovercard__footer {
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.github-link-hovercard__author,
-.github-link-hovercard__metrics {
-  display: inline-flex;
-  align-items: center;
-}
-
-.github-link-hovercard__coauthors {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  margin-left: 6px;
-}
-
-/* Overlap reads as one group; the ring keeps faces separable against the card. */
-.github-link-hovercard__coauthors .github-link-hovercard__avatar {
-  width: 21px;
-  height: 21px;
-  box-shadow: 0 0 0 2px var(--surface-1);
-}
-
-.github-link-hovercard__coauthors .github-link-hovercard__avatar + .github-link-hovercard__avatar {
-  margin-left: -7px;
-}
-
-.github-link-hovercard__coauthors-more {
-  margin-left: 5px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.github-link-hovercard__author {
-  min-width: 0;
-  gap: 8px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-md);
-  overflow: hidden;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__avatar {
-  width: 25px;
-  height: 25px;
-  flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 82%, transparent);
-  border-radius: 50%;
-  background: var(--bg-muted);
-  object-fit: cover;
-}
-
-.github-link-hovercard__metrics {
-  flex: 0 0 auto;
-  gap: 6px;
-}
-
-.github-link-hovercard__metrics--diff .github-link-hovercard__metric {
-  padding: 0;
-  background: none;
-}
-
-.github-link-hovercard__metric {
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-muted) 82%, transparent);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__metric--additions {
-  color: var(--ok);
-}
-
-.github-link-hovercard__metric--deletions {
-  color: var(--danger);
-}
-
-.github-link-hovercard__unavailable {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 80px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.github-link-hovercard__skeleton .skeleton {
-  display: block;
-  height: 14px;
-  border-radius: var(--radius-sm);
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--badge {
-  width: 60px;
-  height: 25px;
-  flex-shrink: 0;
-  border-radius: var(--radius-full);
-}
-
-.github-link-hovercard__placeholder--repo {
-  width: 45%;
-}
-
-.github-link-hovercard__placeholder--time {
-  width: 14%;
-  margin-left: auto;
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--title {
-  width: 90%;
-  height: 20px;
-}
-
-.github-link-hovercard__placeholder--author {
-  width: 35%;
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--metrics {
-  width: 38%;
-  height: 25px;
-}
-
-@media (max-width: 560px) {
-  .github-link-hovercard {
-    padding: 14px;
-  }
-
-  .github-link-hovercard__header {
-    flex-wrap: wrap;
-  }
-
-  .github-link-hovercard__time {
-    margin-left: 0;
-  }
-
-  .github-link-hovercard__title {
-    margin: 13px 0 15px;
-  }
-
-  .github-link-hovercard__footer {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .github-link-hovercard__metrics--diff {
-    align-self: flex-end;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .github-link-hovercard {
-    transition: none;
   }
 }
 
@@ -1900,7 +1778,7 @@ select.input {
   color: var(--ok);
 }
 
-/* Pending routes share the native mascot without exposing transient panel text. */
+/* Pending routes reserve the content layout without exposing transient panel text. */
 .lazy-view-state--loading {
   display: grid;
   flex: 1 1 auto;
@@ -1982,60 +1860,6 @@ select.input {
   font-size: 11px;
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-/* Compaction indicator */
-.compaction-indicator {
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  line-height: 1.2;
-  padding: 6px 14px;
-  margin-bottom: 8px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-  color: var(--text);
-  white-space: nowrap;
-  user-select: none;
-  animation: fade-in 0.2s var(--ease-out);
-}
-
-.compaction-indicator svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
-}
-
-.compaction-indicator--active {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 35%, transparent);
-}
-
-.compaction-indicator--active svg {
-  animation: compaction-spin 1s linear infinite;
-}
-
-.compaction-indicator--complete {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
-}
-
-.compaction-indicator--fallback {
-  color: var(--warn-strong);
-  border-color: color-mix(in srgb, var(--warn-strong) 35%, transparent);
-}
-
-.compaction-indicator--fallback-cleared {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 @keyframes compaction-spin {
@@ -2496,7 +2320,6 @@ openclaw-chat-session-rail {
 }
 
 :root[data-theme-mode="light"] .code-block,
-:root[data-theme-mode="light"] .list-item,
 :root[data-theme-mode="light"] .chip {
   background: var(--bg);
 }
@@ -2732,69 +2555,8 @@ openclaw-chat-session-rail {
   container-type: inline-size;
 }
 
-.list-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
-  gap: 16px;
-  align-items: start;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 12px;
-  background: var(--card);
-  transition: border-color var(--duration-fast) ease;
-}
-
-.list-item-clickable {
-  text-decoration: none;
-}
-
-.list-item-clickable:hover {
-  border-color: var(--border-strong);
-}
-
-.list-main {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
 .list-title {
   font-weight: 500;
-}
-
-.list-sub {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.list-meta {
-  text-align: right;
-  color: var(--muted);
-  font-size: 12px;
-  display: grid;
-  gap: 4px;
-  min-width: 200px;
-}
-
-.list-meta .btn {
-  padding: 6px 10px;
-}
-
-.list-meta .field input,
-.list-meta .field textarea,
-.list-meta .field select {
-  width: 100%;
-}
-
-@container (max-width: 560px) {
-  .list-item {
-    grid-template-columns: 1fr;
-  }
-
-  .list-meta {
-    min-width: 0;
-    text-align: left;
-  }
 }
 
 /* ===========================================
@@ -3098,116 +2860,6 @@ td.data-table-key-col {
 .data-table-pagination__controls button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-/* ===========================================
-   Log Stream
-   =========================================== */
-
-.log-stream {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  max-height: calc(100vh - 280px);
-  min-height: 200px;
-  overflow: auto;
-  container-type: inline-size;
-}
-
-.log-row {
-  display: grid;
-  grid-template-columns: 90px 70px minmax(140px, 200px) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  transition: background var(--duration-fast) ease;
-}
-
-.log-row:hover {
-  background: var(--bg-hover);
-}
-
-.log-row:last-child {
-  border-bottom: none;
-}
-
-.log-time {
-  color: var(--muted);
-  font-family: var(--mono);
-}
-
-.log-level {
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 2px 6px;
-  width: fit-content;
-}
-
-.log-level.trace,
-.log-level.debug {
-  color: var(--muted);
-}
-
-.log-level.info {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 30%, transparent);
-}
-
-.log-level.warn {
-  color: var(--warn);
-  border-color: var(--warn-subtle);
-}
-
-.log-level.error,
-.log-level.fatal {
-  color: var(--danger);
-  border-color: var(--danger-subtle);
-}
-
-.log-chip.trace,
-.log-chip.debug {
-  color: var(--muted);
-}
-
-.log-chip.info {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 30%, transparent);
-}
-
-.log-chip.warn {
-  color: var(--warn);
-  border-color: var(--warn-subtle);
-}
-
-.log-chip.error,
-.log-chip.fatal {
-  color: var(--danger);
-  border-color: var(--danger-subtle);
-}
-
-.log-subsystem {
-  color: var(--muted);
-  font-family: var(--mono);
-}
-
-.log-message {
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--mono);
-}
-
-@container (max-width: 620px) {
-  .log-row {
-    grid-template-columns: 70px 60px minmax(0, 1fr);
-  }
-
-  .log-subsystem {
-    display: none;
-  }
 }
 
 /* ===========================================
@@ -3700,13 +3352,18 @@ td.data-table-key-col {
   min-width: 0;
 }
 
-.agent-scope-control__label {
+.agent-scope-control__label,
+.agent-scope-control .agent-select__menu-title {
   color: var(--muted);
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.agent-scope-control .agent-select__menu-title {
+  padding: 4px 8px 2px;
 }
 
 .agent-scope-control openclaw-agent-select {
@@ -3749,6 +3406,9 @@ td.data-table-key-col {
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   color: var(--text);
+  /* Keep page content from showing through Web Awesome's menu fade.
+   * The scale animation still communicates that the picker opened. */
+  opacity: 1 !important;
 }
 
 .agent-select__trigger {
@@ -3772,7 +3432,7 @@ td.data-table-key-col {
 }
 
 :root[data-theme-mode="light"] .agent-select__trigger {
-  background: white;
+  background: var(--bg-elevated);
 }
 
 .agent-select__trigger:focus-visible {
@@ -3856,9 +3516,17 @@ td.data-table-key-col {
 }
 
 .agent-select__option {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
+  padding: 6px 8px;
+  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
+}
+
+.agent-select__option[data-selected] {
+  background: var(--menu-selected);
 }
 
 .agent-select__separator {
@@ -6125,4 +5793,12 @@ td.data-table-key-col {
 .person-activity-avatar-link {
   display: block;
   line-height: 0;
+}
+
+.plugin-ui-recovery {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 110;
+  box-shadow: var(--shadow-md);
 }

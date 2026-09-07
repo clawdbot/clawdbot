@@ -6,7 +6,8 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { renderMessageMarkdown, resolveMessageActionDetails } from "./chat-message-markdown.ts";
+import { resolveMessageActionDetails } from "./chat-message-markdown.ts";
+import { renderMessageMarkdown } from "./chat-message-text.ts";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
 
@@ -109,6 +110,21 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
     expect(loaded?.fullMessage?.messageId).toBe("msg-oversized");
     expect(loaded?.markdown).toBe("Recovered full assistant content.");
     expect(loaded?.replyTarget?.text).toBe("Recovered full assistant content.");
+  });
+
+  it("projects an omitted historical image into reply text", () => {
+    const details = resolveMessageActionDetails({
+      message: {
+        role: "assistant",
+        content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
+        __openclaw: { id: "msg-omitted-image" },
+      },
+      messageId: "msg-omitted-image",
+      onReply: () => {},
+      senderLabel: "assistant",
+    });
+
+    expect(details?.replyTarget?.text).toBe("Image · Omitted from history · 12 KB");
   });
 });
 

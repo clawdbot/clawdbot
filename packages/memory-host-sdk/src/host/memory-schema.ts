@@ -50,6 +50,7 @@ export {
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
 } from "./memory-schema-base.js";
 
 // SQLite schema setup for builtin memory index, embedding cache, and FTS.

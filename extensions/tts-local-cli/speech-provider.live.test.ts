@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveFfmpegBin, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
-import type { SpeechProviderConfig } from "openclaw/plugin-sdk/speech-core";
+import type { SpeechProviderConfig, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildCliSpeechProvider } from "./speech-provider.js";
@@ -45,20 +45,26 @@ copyFileSync(${JSON.stringify(wavPath)}, process.argv[outIndex + 1]);
         timeoutMs: 30_000,
       };
 
-      const result = await buildCliSpeechProvider().synthesize({
+      const provider = buildCliSpeechProvider();
+      const request: SpeechSynthesisRequest = {
         text: "hello world",
         cfg: {} as OpenClawConfig,
         providerConfig,
         providerOverrides: {},
         timeoutMs: 30_000,
         target: "voice-note",
-      });
+      };
+      const result = await provider.synthesize(request);
 
       expect(result.outputFormat).toBe("opus");
       expect(result.fileExtension).toBe(".ogg");
       expect(result.voiceCompatible).toBe(true);
       expect(result.audioBuffer.byteLength).toBeGreaterThan(0);
       expect(readFileSync(wavPath).byteLength).toBeGreaterThan(0);
+
+      const telephony = await provider.synthesizeTelephony?.(request);
+      expect(telephony).toMatchObject({ outputFormat: "pcm", sampleRate: 16_000 });
+      expect(telephony?.audioBuffer.byteLength).toBeGreaterThan(0);
     });
   }, 30_000);
 

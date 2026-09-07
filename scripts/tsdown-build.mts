@@ -105,6 +105,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/build-artifact-cache.mts",
   "scripts/lib/dist-artifact-ownership.mts",
   "scripts/lib/managed-child-process.mts",
+  "scripts/lib/vitest-resource-ownership.mts",
   "scripts/lib/direct-run.mjs",
   "scripts/lib/repo-root.mjs",
   "scripts/lib/local-check-runtime.mts",
@@ -120,6 +121,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
   "scripts/lib/root-package-bundled-plugin-excludes.mjs",
   "scripts/lib/tsdown-config-groups.mts",
+  "scripts/lib/tsdown-declaration-boundary.mts",
   "scripts/lib/tsdown-output-roots.mts",
 ];
 export const TSDOWN_PACKAGES_CACHE_INPUT = {
@@ -267,7 +269,7 @@ export function cleanTsdownOutputRoots(params: OutputRootParams = {}) {
   const rootPaths = assertTsdownCleanOutputRoots({ cwd, fs: fsImpl, pathImpl, roots });
   const protectedDeclarationPaths =
     env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
-      ? listExistingDeclarationOutputPaths(cwd, fsImpl, roots)
+      ? listExistingGeneratedDeclarationOutputPaths(cwd, fsImpl, roots)
       : new Set<string>();
   const protectedPaths = new Set([
     ...protectedDeclarationPaths,
@@ -323,7 +325,11 @@ function cleanOutputRootExcept(rootPath: string, protectedPaths: Set<string>, fs
   }
 }
 
-function listExistingDeclarationOutputPaths(cwd: string, fsImpl: typeof fs, roots: string[]) {
+function listExistingGeneratedDeclarationOutputPaths(
+  cwd: string,
+  fsImpl: typeof fs,
+  roots: string[],
+) {
   const protectedPaths = new Set<string>();
   for (const root of roots) {
     collectDeclarationOutputPaths(path.resolve(cwd, root), protectedPaths, fsImpl);
@@ -370,7 +376,7 @@ function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, f
   return protectedPaths;
 }
 
-/** Full declaration publication shares the runtime cleaner's protected subtrees. */
+/** Publish generated declarations without claiming runtime assets or protected subtrees. */
 export function listReplaceableTsdownDeclarationOutputs(params: OutputRootParams = {}) {
   const cwd = path.resolve(params.cwd ?? process.cwd());
   const fsImpl = params.fs ?? fs;
@@ -379,7 +385,7 @@ export function listReplaceableTsdownDeclarationOutputs(params: OutputRootParams
   const protectedPaths = [
     ...listExistingPreservedOutputPaths(cwd, params.env ?? process.env, fsImpl),
   ];
-  return [...listExistingDeclarationOutputPaths(cwd, fsImpl, roots)]
+  return [...listExistingGeneratedDeclarationOutputPaths(cwd, fsImpl, roots)]
     .filter(
       (file) =>
         !protectedPaths.some(

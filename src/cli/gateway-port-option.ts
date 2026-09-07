@@ -9,17 +9,7 @@ export function parseGatewayPortOption(raw: unknown, flagName = "--port"): numbe
     return undefined;
   }
 
-  const value =
-    typeof raw === "string"
-      ? raw.trim()
-      : typeof raw === "number" || typeof raw === "bigint"
-        ? String(raw)
-        : "";
-  if (!value) {
-    return undefined;
-  }
-
-  const parsed = parseStrictPositiveInteger(value);
+  const parsed = parseStrictPositiveInteger(typeof raw === "bigint" ? String(raw) : raw);
   if (parsed === undefined || parsed > MAX_TCP_PORT) {
     throw new Error(`${flagName} must be an integer between 1 and ${MAX_TCP_PORT}.`);
   }

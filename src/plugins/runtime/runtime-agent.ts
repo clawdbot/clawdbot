@@ -16,7 +16,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
+import * as session from "../../config/sessions/lifecycle.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
@@ -31,7 +31,6 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
-import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import {
   captureSessionInitializationOwner,
@@ -49,49 +48,16 @@ import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
-type RuntimeSessionStoreReadParams = {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  hydrateSkillPromptRefs?: boolean;
-  sessionKey: string;
-  readConsistency?: "latest";
-  storePath?: string;
-};
-
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
-  readOnly?: boolean;
-};
-
-type RuntimeSessionStoreEntrySummary = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
-
-type RuntimeSessionStoreEntryUpdateParams = {
-  storePath: string;
-  sessionKey: string;
-  update: (
-    entry: SessionEntry,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  requireWriteSuccess?: boolean;
-};
-
-type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
-  fallbackEntry?: SessionEntry;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
-  preserveActivity?: boolean;
-  replaceEntry?: boolean;
-  update: (
-    entry: SessionEntry,
-    context: { existingEntry?: SessionEntry },
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-};
-
-type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
-  entry: SessionEntry;
-};
+type RuntimeSession = PluginRuntime["agent"]["session"];
+type RuntimeSessionStoreReadParams = Parameters<RuntimeSession["getSessionEntry"]>[0];
+type RuntimeSessionStoreListParams = NonNullable<
+  Parameters<RuntimeSession["listSessionEntries"]>[0]
+>;
+type RuntimeSessionStoreEntrySummary = ReturnType<RuntimeSession["listSessionEntries"]>[number];
+type RuntimeSessionStoreEntryUpdateParams = Parameters<
+  RuntimeSession["updateSessionStoreEntry"]
+>[0];
+type RuntimeUpsertSessionEntryParams = Parameters<RuntimeSession["upsertSessionEntry"]>[0];
 
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
@@ -140,9 +106,10 @@ function listSessionEntries(
 }
 
 async function patchSessionEntry(
-  params: RuntimeSessionStoreEntryPatchParams,
+  params: Parameters<PluginRuntime["agent"]["session"]["patchSessionEntry"]>[0],
 ): Promise<SessionEntry | null> {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
+    assertCommitAllowed: params.assertCommitAllowed,
     fallbackEntry: params.fallbackEntry,
     maintenanceConfig:
       params.maintenanceConfig !== undefined
@@ -639,11 +606,11 @@ async function runWithSessionWorkAdmission<T>(
         ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
         : Boolean(currentEntry);
       if (changed) {
-        throw new Error(`Session "${params.sessionKey}" changed while starting work. Retry.`);
+        throw session.createSessionWorkStartChangedError(params.sessionKey);
       }
-      const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, currentEntry);
-      if (archivedSessionError) {
-        throw new Error(archivedSessionError);
+      const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
+      if (startError) {
+        throw new Error(startError);
       }
     },
   });

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { toolsGitHubHandlers } from "./tools-github.js";
 
 const github = vi.hoisted(() => ({
@@ -116,6 +117,7 @@ describe("tools.github handlers", () => {
     expect(oauth.refreshEffectiveIdentity).not.toHaveBeenCalled();
     expect(github.status).toHaveBeenCalledWith({
       config: {},
+      sourceConfig: {},
       agentId: "main",
       selectedScope: "system",
     });
@@ -314,6 +316,21 @@ describe("tools.github handlers", () => {
     expect(JSON.stringify(respond.mock.calls)).toContain("GitHub authorization polling failed");
     expect(JSON.stringify(respond.mock.calls)).not.toContain("device_code");
     expect(JSON.stringify(respond.mock.calls)).not.toContain("access_token");
+  });
+
+  it("returns installation guidance when the Gateway host has no GitHub CLI", async () => {
+    oauth.startAuthorization.mockRejectedValue(new GitHubCliUnavailableError());
+
+    const respond = await invoke("tools.github.authorize.start", {
+      scope: "system",
+      agentId: "main",
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(JSON.stringify(respond.mock.calls)).toContain(
+      "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.",
+    );
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("device_code");
   });
 
   it("fails closed when the secrets owner rejects the handoff", async () => {

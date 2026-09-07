@@ -24,7 +24,6 @@ vi.mock("./cli-auth-seam.js", () => {
   };
 });
 
-import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import { CLAUDE_CLI_NATIVE_AUTH_MARKER } from "./cli-constants.js";
 import anthropicPlugin from "./index.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
@@ -135,42 +134,6 @@ describe("anthropic provider replay hooks", () => {
     expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["Opus", "claude-opus-5"],
-    ["Sonnet", "claude-sonnet-5"],
-    ["Fable", "claude-fable-5"],
-  ])("publishes Claude %s 5 CLI metadata without downgrading its API contract", (family, id) => {
-    expect(buildClaudeCliCatalogEntries().find((model) => model.id === id)).toMatchObject({
-      id,
-      name: `Claude ${family} 5 (Claude CLI)`,
-      contextWindow: 1_000_000,
-      contextWindows: [
-        { id: "200k", label: "200K", contextWindow: 200_000 },
-        { id: "1m", label: "1M", contextWindow: 1_000_000 },
-      ],
-      contextWindowDefault: "1m",
-      maxTokens: 128_000,
-      mediaInput: {
-        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-      },
-    });
-  });
-
-  it("keeps bare Claude CLI context plan-safe while publishing output limits", () => {
-    const models = buildClaudeCliCatalogEntries();
-    for (const id of [
-      "claude-opus-4-8",
-      "claude-opus-4-7",
-      "claude-opus-4-6",
-      "claude-sonnet-4-6",
-    ]) {
-      expect(models.find((model) => model.id === id)).toMatchObject({
-        contextWindow: 200_000,
-        maxTokens: 128_000,
-      });
-    }
-  });
-
   it("owns native reasoning output mode for Claude transports", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -248,6 +211,7 @@ describe("anthropic provider replay hooks", () => {
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
       preserveNativeAnthropicToolUseIds: true,
+      appendOnlyRuntimeContext: false,
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
@@ -255,25 +219,33 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
-  it("preserves Fable thinking in its same-model replay policy", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    const fableContext = {
-      provider: "anthropic",
-      modelApi: "anthropic-messages",
-      modelId: "claude-fable-5",
-    };
+  it.each([
+    ["claude-fable-5", false],
+    ["claude-fable-5-1", true],
+    ["claude-mythos-5-1", false],
+  ])(
+    "preserves thinking and scopes runtime context for %s",
+    async (modelId, appendOnlyRuntimeContext) => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const fableContext = {
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId,
+      };
 
-    expect(provider.buildReplayPolicy?.(fableContext)).toEqual({
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveNativeAnthropicToolUseIds: true,
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    });
-  });
+      expect(provider.buildReplayPolicy?.(fableContext)).toEqual({
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        preserveNativeAnthropicToolUseIds: true,
+        appendOnlyRuntimeContext,
+        preserveSignatures: true,
+        repairToolUseResultPairing: true,
+        validateAnthropicTurns: true,
+        allowSyntheticToolResults: true,
+      });
+    },
+  );
 
   it.each([
     ["provider", "anthropic"],
@@ -398,6 +370,10 @@ describe("anthropic provider replay hooks", () => {
     });
     const models = requireRecord(next?.agents?.defaults?.models, "models");
     for (const modelId of [
+      "anthropic/claude-opus-5",
+      "anthropic/claude-sonnet-5",
+      "anthropic/claude-fable-5",
+      "anthropic/claude-fable-5-1",
       "anthropic/claude-opus-4-8",
       "anthropic/claude-opus-4-7",
       "anthropic/claude-sonnet-4-6",
@@ -685,14 +661,14 @@ describe("anthropic provider replay hooks", () => {
   });
 
   const claude5ContractCases: Claude5ContractCase[] = [
-    {
-      name: "resolves Claude Opus 5 with its exact API contract",
-      modelId: "claude-opus-5",
+    ...["claude-opus-5", "opus", "opus-5"].map((modelId) => ({
+      name: `resolves ${modelId} with its exact API contract`,
+      modelId,
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
       checksMedia: true,
       restoresMissingCost: true,
-    },
+    })),
     {
       name: "resolves Claude Fable 5 with its always-adaptive model contract",
       modelId: "claude-fable-5",
@@ -702,10 +678,20 @@ describe("anthropic provider replay hooks", () => {
       checksCliPolicy: true,
     },
     {
+      name: "resolves Claude Fable 5.1 with its always-adaptive model contract",
+      modelId: "claude-fable-5-1",
+      cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+      checksMedia: true,
+      restoresMissingCost: true,
+      checksCliPolicy: true,
+    },
+    {
       name: "resolves Claude Sonnet 5 with its exact API contract",
       modelId: "claude-sonnet-5",
       cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      restoresMissingCost: true,
     },
   ];
 
@@ -719,9 +705,6 @@ describe("anthropic provider replay hooks", () => {
       restoresMissingCost,
       checksCliPolicy,
     }) => {
-      // This table describes the promotional contract before the September pricing cutover.
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 7, 31));
-      onTestFinished(() => clock.mockRestore());
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const resolved = provider.resolveDynamicModel?.({
         provider: "anthropic",
@@ -750,7 +733,7 @@ describe("anthropic provider replay hooks", () => {
         modelId,
       } as never);
       expect(levelIds(profile)).toStrictEqual(
-        modelId === "claude-fable-5"
+        checksCliPolicy
           ? ["minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
           : ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
       );
@@ -798,31 +781,16 @@ describe("anthropic provider replay hooks", () => {
     },
   );
 
-  it("normalizes a Sonnet 5 model without cost metadata instead of crashing", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    const resolved = provider.resolveDynamicModel?.({
-      provider: "anthropic",
-      modelId: "claude-sonnet-5",
-      modelRegistry: createModelRegistry([]),
-    } as ProviderResolveDynamicModelContext);
-
-    const costlessModel = {
-      ...(resolved as ProviderRuntimeModel),
-      cost: undefined,
-    } as unknown as ProviderRuntimeModel;
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "anthropic",
-      modelId: "claude-sonnet-5",
-      model: costlessModel,
-    } as never);
-    // Compare against the resolver's own cost so the assertion survives the
-    // promotional -> standard pricing cutover.
-    expect(normalized?.cost).toEqual((resolved as ProviderRuntimeModel).cost);
-  });
-
-  it.each(["claude-sonnet-5", "claude-opus-5"])(
-    "uses operator-configured %s pricing for assistant usage",
-    async (modelId) => {
+  it.each([
+    { modelId: "claude-sonnet-5", pricingSource: "configured" },
+    { modelId: "claude-opus-5", pricingSource: "configured" },
+    { modelId: "claude-fable-5", pricingSource: "configured" },
+    { modelId: "claude-fable-5-1", pricingSource: "configured" },
+    { modelId: "claude-fable-5-custom", pricingSource: "discovered" },
+    { modelId: "claude-opus-4-8", pricingSource: "discovered" },
+  ])(
+    "uses $pricingSource $modelId pricing for assistant usage",
+    async ({ modelId, pricingSource }) => {
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const configuredCost = { input: 777, output: 888, cacheRead: 999, cacheWrite: 666 };
       const config: NonNullable<ProviderResolveDynamicModelContext["config"]> = {
@@ -846,7 +814,7 @@ describe("anthropic provider replay hooks", () => {
         },
       };
       const discoveredModel = provider.resolveDynamicModel?.({
-        config,
+        config: pricingSource === "configured" ? config : {},
         provider: "anthropic",
         modelId,
         modelRegistry: createModelRegistry([]),
@@ -859,7 +827,7 @@ describe("anthropic provider replay hooks", () => {
       };
       const resolvedModel =
         provider.normalizeResolvedModel?.({
-          config,
+          config: pricingSource === "configured" ? config : {},
           provider: "anthropic",
           modelId,
           model: configuredModel,
@@ -935,11 +903,13 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
-  it("rolls Claude Sonnet 5 to standard pricing on September 1, 2026", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(Date.UTC(2026, 8, 1));
-    try {
+  it.each(["2026-08-31T23:59:59Z", "2026-09-01T00:00:00Z", "2027-01-01T00:00:00Z"])(
+    "keeps published Sonnet 5 pricing on %s",
+    async (timestamp) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(timestamp));
+      onTestFinished(() => clock.mockRestore());
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const expectedCost = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
       const model = {
         id: "claude-sonnet-5",
         name: "Claude Sonnet 5",
@@ -947,31 +917,34 @@ describe("anthropic provider replay hooks", () => {
         api: "anthropic-messages",
         reasoning: true,
         input: ["text", "image"],
-        cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
         contextWindow: 1_000_000,
         contextTokens: 1_000_000,
         maxTokens: 128_000,
         thinkingLevelMap: { xhigh: "xhigh", max: "max" },
       } as ProviderRuntimeModel;
 
-      expect(
-        provider.normalizeResolvedModel?.({
-          provider: "anthropic",
-          modelId: model.id,
-          model,
-        } as never)?.cost,
-      ).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+      for (const candidate of [
+        model,
+        { ...model, id: "deployment-sonnet", params: { canonicalModelId: model.id } },
+      ]) {
+        expect(
+          provider.normalizeResolvedModel?.({
+            provider: "anthropic",
+            modelId: candidate.id,
+            model: candidate,
+          } as never)?.cost,
+        ).toEqual(expectedCost);
+      }
       expect(
         provider.resolveDynamicModel?.({
           provider: "anthropic",
           modelId: "claude-sonnet-5-20260901",
           modelRegistry: createModelRegistry([]),
         } as ProviderResolveDynamicModelContext)?.cost,
-      ).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      ).toEqual(expectedCost);
+    },
+  );
 
   it("does not apply direct API pricing to Claude CLI Sonnet 5", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
@@ -1466,15 +1439,15 @@ describe("anthropic provider replay hooks", () => {
   ] as const)(
     "publishes native Claude auth only when its CLI reports $status",
     async ({ status, authenticated }) => {
-      probeClaudeCliAuthStatusMock.mockReturnValue({ status });
+      probeClaudeCliAuthStatusMock.mockResolvedValue({ status });
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const config = {};
 
-      const runtimeAuth = provider.resolveSyntheticAuth?.({
+      const runtimeAuth = await provider.prepareSyntheticAuth?.({
         config,
         provider: "claude-cli",
       } as never);
-      const discoveryAuth = anthropicProviderDiscovery.resolveSyntheticAuth?.({
+      const discoveryAuth = await anthropicProviderDiscovery.prepareSyntheticAuth?.({
         config,
         provider: "claude-cli",
       } as never);
@@ -1489,40 +1462,12 @@ describe("anthropic provider replay hooks", () => {
             : undefined,
         );
       }
+      expect(
+        await provider.prepareSyntheticAuth?.({ provider: "claude-cli" } as never),
+      ).toBeUndefined();
       expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledOnce();
     },
   );
-
-  it("reuses native login facts within one config generation and reprobes its replacement", async () => {
-    probeClaudeCliAuthStatusMock.mockReturnValue({ status: "available" });
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    const firstConfig = {};
-
-    for (let request = 0; request < 4; request += 1) {
-      expect(
-        anthropicProviderDiscovery.resolveSyntheticAuth?.({
-          config: firstConfig,
-          provider: "claude-cli",
-        } as never)?.apiKey,
-      ).toBe(CLAUDE_CLI_NATIVE_AUTH_MARKER);
-      expect(
-        provider.resolveSyntheticAuth?.({ config: firstConfig, provider: "claude-cli" } as never)
-          ?.apiKey,
-      ).toBe(CLAUDE_CLI_NATIVE_AUTH_MARKER);
-    }
-    expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledOnce();
-
-    probeClaudeCliAuthStatusMock.mockReturnValue({ status: "missing" });
-    expect(
-      anthropicProviderDiscovery.resolveSyntheticAuth?.({
-        config: {},
-        provider: "claude-cli",
-      } as never),
-    ).toBeUndefined();
-    expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledTimes(2);
-    expect(provider.resolveSyntheticAuth?.({ provider: "claude-cli" } as never)).toBeUndefined();
-    expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledTimes(2);
-  });
 
   it("does not copy native Claude auth during anthropic cli migration", async () => {
     probeClaudeCliAuthStatusMock.mockReturnValue({ status: "available" });

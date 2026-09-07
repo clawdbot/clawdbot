@@ -85,10 +85,11 @@ describe("plugin SDK fetch runtime", () => {
     await releaseFinished.promise;
   });
 
-  it("awaits upstream cancellation before release", async () => {
+  it("awaits both upstream cancellation and owner release", async () => {
     const pullStarted = createDeferred();
     const cancelGate = createDeferred();
-    const release = vi.fn(async () => {});
+    const releaseGate = createDeferred();
+    const release = vi.fn(async () => await releaseGate.promise);
     const reason = new Error("consumer stopped");
     const upstreamCancel = vi.fn(async () => {
       await cancelGate.promise;
@@ -109,16 +110,84 @@ describe("plugin SDK fetch runtime", () => {
     const read = reader.read();
     await pullStarted.promise;
 
-    const cancellation = reader.cancel(reason);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
+    let settled = false;
+    const cancellation = reader.cancel(reason).finally(() => {
+      settled = true;
     });
-    expect(upstreamCancel).toHaveBeenCalledWith(reason);
-    expect(release).not.toHaveBeenCalled();
-
-    cancelGate.resolve();
-    await cancellation;
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(upstreamCancel).toHaveBeenCalledWith(reason);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+      cancelGate.resolve();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+    } finally {
+      cancelGate.resolve();
+      releaseGate.resolve();
+      await cancellation;
+      reader.releaseLock();
+    }
     await expect(read).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  it("releases a cancelled response before its capture tee settles", async () => {
+    const sourceCancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel: sourceCancel }));
+    const capture = response.clone();
+    const release = vi.fn(async () => await capture.body?.cancel("capture stopped"));
+    const wrapped = responseWithRelease(response, release);
+    let settled = false;
+    const cancellation = wrapped.body?.cancel("consumer stopped").then(() => {
+      settled = true;
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(sourceCancel).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(true);
+      expect(response.body?.locked).toBe(false);
+    } finally {
+      await capture.body?.cancel("test cleanup");
+      await cancellation;
+    }
+  });
+
+  it.each(["read", "cancel"] as const)("preserves release failure during %s", async (operation) => {
+    const releaseError = new Error("release failed");
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (operation === "read") {
+          controller.error(new Error("source failed"));
+        }
+      },
+    });
+    const release = vi.fn(async () => {
+      throw releaseError;
+    });
+    const wrapped = responseWithRelease(new Response(source), release);
+    const result = operation === "read" ? wrapped.text() : wrapped.body?.cancel();
+
+    await expect(result).rejects.toBe(releaseError);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles cancellation after release when upstream cancellation fails", async () => {
+    const source = new ReadableStream<Uint8Array>({
+      cancel() {
+        throw new Error("upstream cancellation failed");
+      },
+    });
+    const release = vi.fn(async () => {});
+    const wrapped = responseWithRelease(new Response(source), release);
+
+    await expect(wrapped.body?.cancel()).resolves.toBeUndefined();
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

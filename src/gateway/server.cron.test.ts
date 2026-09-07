@@ -14,6 +14,8 @@ import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -751,23 +753,31 @@ describe("gateway server cron", () => {
       expect(compactJobs).toHaveLength(1);
       expect(compactJobs?.[0]).toMatchObject({
         id: dailyJobId,
+        effectiveAgentId: "main",
         name: "daily",
         enabled: true,
         scheduleKind: "every",
+        schedule: { kind: "every", everyMs: 60_000 },
+        lastRunAt: null,
         lastRunStatus: null,
       });
       expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
         [
+          "effectiveAgentId",
           "enabled",
           "id",
           "lastRunAtMs",
+          "lastRunAt",
           "lastRunError",
           "lastRunStatus",
           "name",
           "nextRunAtMs",
+          "nextRunAt",
           "scheduleKind",
+          "schedule",
         ].toSorted(),
       );
+      expect(Date.parse(String(compactJobs?.[0]?.nextRunAt))).toBe(compactJobs?.[0]?.nextRunAtMs);
       expect(
         (compactListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,
       ).toBeUndefined();
@@ -1525,6 +1535,7 @@ describe("gateway server cron", () => {
       const agentIds = Object.keys(cronState.getRuntimeConfig().agents?.entries ?? {});
       expect(agentIds).toContain("main");
       expect(agentIds).toContain("ops");
+      expect(cronState.cron.getDefaultAgentId()).toBe("main");
 
       const before = await directCronReq(cronState, "cron.get", { id: jobId });
       const updateRes = await directCronReq(cronState, "cron.update", {
@@ -1548,6 +1559,21 @@ describe("gateway server cron", () => {
         name: "renamed after default drift",
         agentId: "ops",
       });
+
+      const afterRename = await directCronReq(cronState, "cron.get", { id: jobId });
+      for (const bindingPatch of [
+        { agentId: "ops" },
+        { sessionTarget: "main" },
+        { payload: { kind: "systemEvent", text: "new work" } },
+      ]) {
+        const retargeted = await directCronReq(cronState, "cron.update", {
+          id: jobId,
+          patch: { name: "must not persist binding", ...bindingPatch },
+        });
+        expect(retargeted.ok).toBe(false);
+        expect(retargeted.error?.message).toContain('sessionTarget "main" is only valid');
+        expect(await directCronReq(cronState, "cron.get", { id: jobId })).toEqual(afterRename);
+      }
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }
@@ -1815,6 +1841,7 @@ describe("gateway server cron", () => {
       );
       const runtime = createPluginRuntime();
       const context = {
+        trackExecution: trackAsyncWork,
         cron: cronState.cron,
         cronStorePath: cronState.storePath,
         logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -2393,6 +2420,104 @@ describe("gateway server cron", () => {
       expect(completionCall.body).not.toHaveProperty("summary");
       expect(completionCall.body).not.toHaveProperty("diagnostics");
       expect(JSON.stringify(completionCall.body)).not.toContain("SECRET_TOKEN");
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
+
+  test("persists settled failure-alert outcomes for cron get and list", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-failure-alert-outcomes-",
+      cronEnabled: false,
+    });
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const expectOutcome = async (jobId: string, expected: Record<string, unknown>) => {
+      await vi.waitFor(async () => {
+        const getResult = await rpcReq(ws, "cron.get", { id: jobId });
+        expect(getResult.payload).toMatchObject(expected);
+        for (const compact of [false, true]) {
+          const listResult = await rpcReq(ws, "cron.list", {
+            compact,
+            includeDeliveryPreviews: false,
+          });
+          const listed = (
+            listResult.payload as { jobs?: Array<Record<string, unknown>> } | null
+          )?.jobs?.find((job) => job.id === jobId);
+          expect(listed).toMatchObject(expected);
+        }
+      });
+    };
+
+    try {
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "job failed" });
+      const deliveredJobId = await addWebhookCronJob({
+        ws,
+        name: "delivered failure alert",
+        sessionTarget: "isolated",
+        delivery: { mode: "none" },
+        failureAlert: {
+          after: 1,
+          mode: "webhook",
+          to: "https://example.invalid/delivered-failure-alert",
+        },
+      });
+      await runCronJobAndWaitForFinished(ws, deliveredJobId);
+      await expectOutcome(deliveredJobId, {
+        lastFailureNotificationDelivered: true,
+        lastFailureNotificationDeliveryStatus: "delivered",
+      });
+
+      fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("alert transport rejected"));
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "job failed" });
+      const failedJobId = await addWebhookCronJob({
+        ws,
+        name: "failed failure alert",
+        sessionTarget: "isolated",
+        delivery: { mode: "none" },
+        failureAlert: {
+          after: 1,
+          mode: "webhook",
+          to: "https://example.invalid/failed-failure-alert",
+        },
+      });
+      await runCronJobAndWaitForFinished(ws, failedJobId);
+      await expectOutcome(failedJobId, {
+        lastFailureNotificationDelivered: false,
+        lastFailureNotificationDeliveryStatus: "not-delivered",
+        lastFailureNotificationDeliveryError: expect.stringContaining("alert transport rejected"),
+      });
+
+      sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (params) => {
+        params.onDeliveryAttempt?.(false);
+        return {
+          status: "suppressed",
+          results: [],
+          receipt: {
+            primaryPlatformMessageId: undefined,
+            platformMessageIds: [],
+            parts: [],
+            sentAt: 0,
+          },
+          reason: "adapter_returned_no_send",
+        };
+      });
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "job failed" });
+      const unreachedJobId = await addWebhookCronJob({
+        ws,
+        name: "unreached failure alert",
+        sessionTarget: "isolated",
+        delivery: { mode: "none" },
+        failureAlert: { after: 1, mode: "announce", channel: "last" },
+      });
+      await runCronJobAndWaitForFinished(ws, unreachedJobId);
+      await expectOutcome(unreachedJobId, {
+        lastFailureNotificationDelivered: false,
+        lastFailureNotificationDeliveryStatus: "not-delivered",
+        lastFailureNotificationDeliveryError: expect.stringContaining("adapter_returned_no_send"),
+      });
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

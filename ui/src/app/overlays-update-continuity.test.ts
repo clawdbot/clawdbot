@@ -1,66 +1,19 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as buildInfo from "../build-info.ts";
 import { showToast } from "../lib/toast.ts";
-import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import {
-  client,
-  createGatewayHarness,
-  deferred,
-  flushMicrotasks,
-  type RequestFn,
-} from "./overlays-access.test-support.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
+import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
+import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { updateRunHarness } from "./update-run.test-support.ts";
 
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
-const HANDOFF_MS = 35 * 60_000;
-const HANDOFF_ID = "handoff-current";
-const HANDOFF_RESPONSE = {
-  ok: true,
-  handoff: { status: "started" },
-  result: { status: "skipped", reason: "managed-service-handoff-started" },
-  sentinel: { payload: { stats: { handoffId: HANDOFF_ID } } },
-};
-const HANDOFF_PENDING = {
-  sentinel: {
-    kind: "update",
-    status: "skipped",
-    stats: { handoffId: HANDOFF_ID, reason: "managed-service-handoff-started" },
-  },
-};
-const HANDOFF_SUCCESS = {
-  sentinel: {
-    kind: "update",
-    status: "ok",
-    stats: { handoffId: HANDOFF_ID, after: { version: "2.0.0" } },
-  },
-};
-
-function createUpdateHarness(request: RequestFn) {
-  const harness = createGatewayHarness(client(request));
-  harness.update({
-    hello: {
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      server: { version: "1.0.0" },
-      snapshot: {
-        updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
-      },
-    } as ApplicationGatewaySnapshot["hello"],
-  });
-  return harness;
-}
-
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.setSystemTime(1_000_000);
-  vi.mocked(showToast).mockClear();
-  const values = new Map<string, string>();
-  vi.stubGlobal("sessionStorage", {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => values.set(key, value),
-    removeItem: (key: string) => values.delete(key),
-  });
+  vi.setSystemTime(10_000);
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  vi.stubGlobal("localStorage", createStorageMock());
 });
 
 afterEach(() => {
@@ -69,213 +22,172 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("application update attempt continuity", () => {
-  it("ends the waiting state when a failed-closed Gateway never reconnects", async () => {
-    const request = vi.fn<RequestFn>(async (method) =>
-      method === "update.run" ? HANDOFF_RESPONSE : {},
-    );
-    const harness = createUpdateHarness(request);
+describe("server-owned update continuity", () => {
+  it("reads an accepted run and follows events through restart to a visible success row", async () => {
+    let run = updateRunFixture();
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "update.run") {
+        return { ok: true, runId: run.runId };
+      }
+      if (method === "update.runs.get") {
+        return { run };
+      }
+      if (method === "update.status" && run.status === "succeeded") {
+        return { updateAvailable: null };
+      }
+      return {};
+    });
+    const harness = updateRunHarness(request);
     const overlays = createApplicationOverlays(harness.gateway);
     try {
+      await flushMicrotasks();
       await overlays.runUpdate();
+      expect(request).toHaveBeenCalledWith("update.runs.get", { runId: run.runId });
+      expect(overlays.snapshot.updateRun).toEqual(run);
+      expect(overlays.snapshot.updateRunning || overlays.snapshot.updateReconciliationPending).toBe(
+        true,
+      );
+
+      for (const phase of ["activating", "restarting"] as const) {
+        run = updateRunFixture({ phase, updatedAtMs: run.updatedAtMs + 1 });
+        harness.emitEvent("update.run.changed", run);
+        await flushMicrotasks();
+        expect(overlays.snapshot.updateRun?.phase).toBe(phase);
+      }
+      const hello = harness.gateway.snapshot.hello;
       harness.update({ phase: "reconnecting", hello: null });
-      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+      await vi.advanceTimersByTimeAsync(40 * 60_000);
+      expect(overlays.snapshot.updateRun?.phase).toBe("restarting");
+      expect(overlays.snapshot.updateReconciliationPending || overlays.snapshot.updateRunning).toBe(
+        true,
+      );
+      expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
 
-      await vi.advanceTimersByTimeAsync(HANDOFF_MS);
-
-      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+      run = { ...run, phase: "verifying", updatedAtMs: run.updatedAtMs + 1 };
+      harness.update({ phase: "connected", hello });
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateRun?.phase).toBe("verifying");
+      run = {
+        ...run,
+        phase: "finished",
+        status: "succeeded",
+        updatedAtMs: run.updatedAtMs + 1,
+        after: { version: "2.0.0" },
+        finishedAtMs: Date.now(),
+        verification: {
+          serviceRunning: true,
+          versionMatch: true,
+          channelsReady: true,
+        },
+      };
+      harness.emitEvent("update.run.changed", run);
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateRun).toEqual(run);
       expect(overlays.snapshot.updateRunning).toBe(false);
-      expect(overlays.snapshot.updateStatusBanner).toMatchObject({ tone: "danger" });
-      expect(overlays.snapshot.updateStatusBanner?.text).toContain("openclaw update status");
-      expect(showToast).not.toHaveBeenCalled();
-    } finally {
-      overlays.dispose();
-    }
-  });
-
-  it("does not grant another handoff budget on a late reconnect", async () => {
-    const request = vi.fn<RequestFn>(async (method) =>
-      method === "update.run"
-        ? HANDOFF_RESPONSE
-        : method === "update.status"
-          ? HANDOFF_PENDING
-          : {},
-    );
-    const harness = createUpdateHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await overlays.runUpdate();
-      harness.update({ phase: "reconnecting", hello: null });
-      await vi.advanceTimersByTimeAsync(HANDOFF_MS - 1_000);
-      harness.update({ phase: "connected" });
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
-      expect(overlays.snapshot.updateStatusBanner?.tone).toBe("danger");
-    } finally {
-      overlays.dispose();
-    }
-  });
-
-  it.each(["before verification", "after verification"])(
-    "resumes after the stale document reloads %s and announces success once",
-    async (reloadMoment) => {
-      const firstRequest = vi.fn<RequestFn>(async (method) =>
-        method === "update.run"
-          ? HANDOFF_RESPONSE
-          : method === "update.status"
-            ? HANDOFF_SUCCESS
-            : {},
-      );
-      const firstHarness = createUpdateHarness(firstRequest);
-      const first = createApplicationOverlays(firstHarness.gateway);
-      await first.runUpdate();
-      if (reloadMoment === "after verification") {
-        vi.spyOn(buildInfo, "reloadControlUiIfStale")
-          .mockReturnValueOnce(true)
-          .mockReturnValue(false);
-        firstHarness.update({ phase: "reconnecting" });
-        firstHarness.update({ phase: "connected" });
-        await flushMicrotasks();
-        expect(first.snapshot.updateReconciliationPending).toBe(false);
-        expect(showToast).not.toHaveBeenCalled();
-      }
-      firstHarness.update({ phase: "reload-required", hello: null });
-      first.dispose();
-
-      const updateStatus = deferred();
-      const nextRequest = vi.fn<RequestFn>((method) =>
-        method === "update.status" ? updateStatus.promise : Promise.resolve({}),
-      );
-      const nextHarness = createUpdateHarness(nextRequest);
-      const next = createApplicationOverlays(nextHarness.gateway);
-      try {
-        await flushMicrotasks();
-        expect(next.snapshot.updateReconciliationPending).toBe(
-          reloadMoment === "before verification",
-        );
-        expect(nextRequest.mock.calls.map(([method]) => method)).toContain("update.status");
-        expect(nextRequest.mock.calls.map(([method]) => method)).not.toContain("update.run");
-
-        if (reloadMoment === "after verification") {
-          expect(showToast).toHaveBeenCalledOnce();
-        }
-        updateStatus.resolve(
-          reloadMoment === "before verification" ? HANDOFF_SUCCESS : { sentinel: null },
-        );
-        await flushMicrotasks();
-        expect(next.snapshot.updateReconciliationPending).toBe(false);
-        expect(showToast).toHaveBeenCalledOnce();
-        next.dispose();
-
-        const reloaded = createApplicationOverlays(nextHarness.gateway);
-        try {
-          await flushMicrotasks();
-          expect(reloaded.snapshot.updateReconciliationPending).toBe(false);
-          expect(showToast).toHaveBeenCalledOnce();
-        } finally {
-          reloaded.dispose();
-        }
-      } finally {
-        updateStatus.resolve({});
-        next.dispose();
-      }
-    },
-  );
-
-  it.each(["different Gateway", "revoked administrator", "expired attempt"] as const)(
-    "does not resume an update for a %s after reload",
-    async (boundary) => {
-      const request = vi.fn<RequestFn>(async (method) =>
-        method === "update.run" ? HANDOFF_RESPONSE : HANDOFF_SUCCESS,
-      );
-      const harness = createUpdateHarness(request);
-      const first = createApplicationOverlays(harness.gateway);
-      await first.runUpdate();
-      first.dispose();
-
-      if (boundary === "different Gateway") {
-        harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
-      } else if (boundary === "revoked administrator") {
-        harness.update({
-          hello: {
-            auth: { role: "operator", scopes: ["operator.read"] },
-          } as ApplicationGatewaySnapshot["hello"],
-        });
-      } else {
-        await vi.advanceTimersByTimeAsync(HANDOFF_MS + 1);
-      }
-      const reloaded = createApplicationOverlays(harness.gateway);
-      try {
-        await flushMicrotasks();
-        expect(reloaded.snapshot.updateReconciliationPending).toBe(false);
-        expect(showToast).not.toHaveBeenCalled();
-        if (boundary === "revoked administrator") {
-          harness.update({
-            hello: {
-              auth: { role: "operator", scopes: ["operator.admin"] },
-            } as ApplicationGatewaySnapshot["hello"],
-          });
-          await flushMicrotasks();
-          expect(reloaded.snapshot.updateReconciliationPending).toBe(false);
-          expect(showToast).not.toHaveBeenCalled();
-        }
-      } finally {
-        reloaded.dispose();
-      }
-    },
-  );
-
-  it("retires active reconciliation when the selected logical Gateway changes", async () => {
-    const request = vi.fn<RequestFn>(async (method) =>
-      method === "update.run" ? HANDOFF_RESPONSE : HANDOFF_SUCCESS,
-    );
-    const harness = createUpdateHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await overlays.runUpdate();
-      harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
-      harness.update({ phase: "connecting", client: client(request), hello: null });
-
-      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
-      harness.update({ phase: "connected" });
-      await flushMicrotasks();
-      expect(showToast).not.toHaveBeenCalled();
-    } finally {
-      overlays.dispose();
-    }
-  });
-
-  it.each(["ok", "error"])("ignores an earlier handoff's %s sentinel", async (status) => {
-    let response = {
-      sentinel: {
-        kind: "update",
-        status,
-        stats: { handoffId: "handoff-earlier", after: { version: "2.0.0" } },
-      },
-    };
-    const request = vi.fn<RequestFn>(async (method) =>
-      method === "update.run" ? HANDOFF_RESPONSE : method === "update.status" ? response : {},
-    );
-    const harness = createUpdateHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await overlays.runUpdate();
-      harness.update({ phase: "reconnecting" });
-      harness.update({ phase: "connected" });
-      await flushMicrotasks();
-
-      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
       expect(overlays.snapshot.updateStatusBanner).toBeNull();
+      expect(overlays.snapshot.updateAvailable).toBeNull();
       expect(showToast).not.toHaveBeenCalled();
+      expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
+      expect(sessionStorage.length).toBe(0);
+    } finally {
+      overlays.dispose();
+    }
+  });
 
-      response = HANDOFF_SUCCESS;
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
-      expect(showToast).toHaveBeenCalledOnce();
+  it("does not fetch an unchanged event, but fetches changed step details in the same phase", async () => {
+    let run = updateRunFixture();
+    const request = vi.fn<RequestFn>(async (method) =>
+      method === "update.runs.get" ? { run } : { activeRun: run },
+    );
+    const harness = updateRunHarness(request);
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateRun).toEqual(run);
+      const reads = () => request.mock.calls.filter(([method]) => method === "update.runs.get");
+      harness.emitEvent("update.run.changed", run);
+      harness.emitEvent("update.run.changed", run);
+      await flushMicrotasks();
+      expect(reads()).toHaveLength(0);
+      run = {
+        ...run,
+        updatedAtMs: run.updatedAtMs + 1,
+        steps: [
+          ...run.steps,
+          { step: "download", status: "in_progress", detail: "Downloading package" },
+        ],
+      };
+      harness.emitEvent("update.run.changed", run);
+      await flushMicrotasks();
+      expect(reads()).toHaveLength(1);
+      expect(overlays.snapshot.updateRun?.steps.at(-1)?.detail).toBe("Downloading package");
+    } finally {
+      overlays.dispose();
+    }
+  });
+
+  it.each(["activeRun", "lastRun"] as const)(
+    "discovers %s after a document reload without browser run storage",
+    async (field) => {
+      const run = updateRunFixture(
+        field === "lastRun"
+          ? {
+              phase: "finished",
+              status: "succeeded",
+              after: { version: "2.0.0" },
+              finishedAtMs: 5_000,
+            }
+          : {},
+      );
+      const request = vi.fn<RequestFn>(async (method) =>
+        method === "update.status" ? { [field]: run } : {},
+      );
+      const harness = updateRunHarness(request);
+      let overlays = createApplicationOverlays(harness.gateway);
+      try {
+        await flushMicrotasks();
+        expect(overlays.snapshot.updateRun).toEqual(run);
+        overlays.dispose();
+        overlays = createApplicationOverlays(harness.gateway);
+        await flushMicrotasks();
+        expect(overlays.snapshot.updateRun).toEqual(run);
+        expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
+        expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
+        expect(sessionStorage.length).toBe(0);
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+
+  it("keeps a known run on reconnect even when status retains another attempt", async () => {
+    let run = updateRunFixture();
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "update.run") {
+        return { ok: true, runId: run.runId };
+      }
+      if (method === "update.runs.get") {
+        return { run };
+      }
+      return {};
+    });
+    const harness = updateRunHarness(request);
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await overlays.runUpdate();
+      const statusReads = request.mock.calls.filter(
+        ([method]) => method === "update.status",
+      ).length;
+      harness.update({ phase: "reconnecting" });
+      run = { ...run, phase: "verifying", updatedAtMs: 3_000 };
+      harness.update({ phase: "connected" });
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateRun).toEqual(run);
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
+        statusReads,
+      );
+      expect(request.mock.calls.filter(([method]) => method === "update.runs.get")).toHaveLength(2);
     } finally {
       overlays.dispose();
     }

@@ -25,7 +25,7 @@ function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   return {
     loading: false,
     refreshDisabled: false,
-    status: { error: null, hasLoaded: false, stale: false },
+    status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     file: null,
     entries: [
       {
@@ -112,7 +112,12 @@ describe("renderLogs", () => {
       renderLogs(
         createProps({
           refreshDisabled: true,
-          status: { error: "logs unavailable", hasLoaded: false, stale: false },
+          status: {
+            error: "logs unavailable",
+            hasLoaded: false,
+            stale: false,
+            awaitingGateway: false,
+          },
         }),
       ),
       container,
@@ -121,9 +126,7 @@ describe("renderLogs", () => {
     expect(
       container.querySelector<HTMLButtonElement>(".settings-section__actions .btn")?.disabled,
     ).toBe(true);
-    expect(
-      container.querySelector<HTMLButtonElement>(".logs-refresh-status button")?.disabled,
-    ).toBe(true);
+    expect(container.querySelector(".logs-refresh-status button")).toBeNull();
   });
 
   it("renders the subtitle under the section header", () => {
@@ -156,15 +159,18 @@ describe("renderLogs", () => {
     },
   );
 
-  it("renders a panel-local retry and stale marker without hiding loaded logs", () => {
-    const onRefresh = vi.fn();
+  it("renders the error and stale marker without a retry button or hiding loaded logs", () => {
     const container = document.createElement("div");
 
     render(
       renderLogs(
         createProps({
-          status: { error: "logs unavailable", hasLoaded: true, stale: true },
-          onRefresh,
+          status: {
+            error: "logs unavailable",
+            hasLoaded: true,
+            stale: true,
+            awaitingGateway: false,
+          },
         }),
       ),
       container,
@@ -174,7 +180,6 @@ describe("renderLogs", () => {
     expect(status?.textContent).toContain("logs unavailable");
     expect(status?.textContent).toContain("Showing stale data");
     expect(container.textContent).toContain("matched line");
-    status?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(status?.querySelector("button")).toBeNull();
   });
 });

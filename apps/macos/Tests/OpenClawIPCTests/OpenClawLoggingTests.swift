@@ -34,13 +34,20 @@ struct OpenClawLoggingTests {
     @Test
     func `private values are not described`() {
         let value = DescribedValue()
-        let hidden: Logger.Message = "value=\(value, privacy: .private)"
+        var factoryCalls = 0
+        func makeValue() -> DescribedValue {
+            factoryCalls += 1
+            return value
+        }
+        let hidden: Logger.Message = "value=\(makeValue(), privacy: .private)"
         #expect(hidden.description == "value=<private>")
         #expect(value.descriptionReads == 0)
+        #expect(factoryCalls == 0)
 
-        let visible: Logger.Message = "value=\(value, privacy: .public)"
+        let visible: Logger.Message = "value=\(makeValue(), privacy: .public)"
         #expect(visible.description == "value=synthetic-description")
         #expect(value.descriptionReads == 1)
+        #expect(factoryCalls == 1)
     }
 }
 

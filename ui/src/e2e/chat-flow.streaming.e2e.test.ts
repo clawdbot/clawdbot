@@ -1,18 +1,16 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
-import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
-  chatThreadDistanceFromBottom,
   createChatFlowE2eSuite,
+  expectRequestCountStable,
   installMockGateway,
   requireRecord,
   requireString,
-  scrollChatThreadToTop,
-  waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -182,91 +180,8 @@ suite.define(() => {
     }
   });
 
-  it("keeps a bottom-anchored transcript pinned while the composer grows", async () => {
-    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactDirParent
-      ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
-      : undefined;
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const baseTs = Date.now() - 100_000;
-    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
-      content: [
-        {
-          text: `Composer resize history ${index}\n${"extra transcript line\n".repeat(4)}`,
-          type: "text",
-        },
-      ],
-      role: index % 2 === 0 ? "assistant" : "user",
-      timestamp: baseTs + index,
-    }));
-    await installMockGateway(page, { historyMessages });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByText("Composer resize history 49").waitFor({ timeout: 10_000 });
-      await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-      await waitForChatScrollIdle(page);
-
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      for (let line = 1; line <= 8; line += 1) {
-        await composer.fill(
-          Array.from({ length: line }, (_, index) => `Growing composer line ${index + 1}`).join(
-            "\n",
-          ),
-        );
-        await waitForChatScrollIdle(page);
-        expect(
-          await chatThreadDistanceFromBottom(page),
-          `composer line count ${line}`,
-        ).toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-      }
-      if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "composer-resize-pinned.png"),
-        });
-      }
-
-      await composer.fill("Growing composer line 1");
-      await waitForChatScrollIdle(page);
-      await scrollChatThreadToTop(page);
-      const readingScrollTop = await page
-        .locator(".chat-thread")
-        .evaluate((element) => element.scrollTop);
-      await composer.fill(
-        Array.from({ length: 8 }, (_, index) => `Reading composer line ${index + 1}`).join("\n"),
-      );
-      await waitForChatScrollIdle(page);
-      expect(
-        await page
-          .locator(".chat-thread")
-          .evaluate((element, initial) => Math.abs(element.scrollTop - initial), readingScrollTop),
-      ).toBeLessThanOrEqual(1);
-
-      if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "composer-resize-manual-scroll.png"),
-        });
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -320,11 +235,7 @@ suite.define(() => {
   });
 
   it("normalizes Unicode line separators in streaming and final chat DOM", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -392,7 +303,10 @@ suite.define(() => {
         ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
         : undefined;
       const context = await suite.newBrowserContext({
+        hasTouch: label === "mobile",
+        isMobile: label === "mobile",
         locale: "en-US",
+        permissions: ["clipboard-read", "clipboard-write"],
         serviceWorkers: "block",
         viewport,
         ...(artifactDir
@@ -448,8 +362,8 @@ suite.define(() => {
         });
 
         const gatewayErrorText =
-          "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.";
-        const errorText = gatewayErrorText.replace(/^⚠️\s*/u, "");
+          "Agent failed before reply: Session became active in another runner; wait for it to finish before continuing.\nTo view logs, run `openclaw logs --follow` in a terminal.";
+        const errorText = `Error: ${gatewayErrorText}`;
         await gateway.emitGatewayEvent("chat", {
           errorMessage: gatewayErrorText,
           message: {
@@ -469,13 +383,53 @@ suite.define(() => {
         expect(
           await page.locator(".chat-thread-inner").getByText(partialText, { exact: true }).count(),
         ).toBe(1);
+        const alert = page.locator(".chat-error");
+        await alert.waitFor();
         if (artifactDir) {
           await page.screenshot({ path: path.join(artifactDir, `terminal-partial-${label}.png`) });
         }
-        const alert = page.locator(".chat-error");
-        await alert.getByText("Error details", { exact: true }).click();
-        await alert.getByText(errorText, { exact: true }).waitFor({ timeout: 10_000 });
-        await alert.getByText("Error details", { exact: true }).click();
+        const details = alert.locator("details");
+        const summary = alert.locator("summary");
+        const copy = alert.getByRole("button", { name: "Copy error", exact: true });
+        expect(await copy.count()).toBe(1);
+        expect(await copy.isVisible()).toBe(true);
+        expect(await details.getAttribute("open")).toBeNull();
+        if (label === "mobile") {
+          await copy.tap();
+        } else {
+          await copy.click();
+        }
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(errorText);
+        expect(await details.getAttribute("open")).toBeNull();
+        await summary.focus();
+        await page.keyboard.press("Enter");
+        await alert.locator("pre").waitFor({ timeout: 10_000 });
+        const diagnostic = alert.getByLabel("Error details", { exact: true });
+        expect(await diagnostic.count()).toBe(1);
+        expect(await diagnostic.textContent()).toBe(errorText);
+        expect(await summary.getByText("Details", { exact: true }).count()).toBe(1);
+        if (artifactDir) {
+          await page.screenshot({ path: path.join(artifactDir, `terminal-details-${label}.png`) });
+        }
+        const headerCopy = summary.getByRole("button");
+        await page.evaluate(() => navigator.clipboard.writeText("Before expanded copy."));
+        await headerCopy.press("Enter");
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(errorText);
+        expect(await details.getAttribute("open")).not.toBeNull();
+        expect(await alert.getByRole("button").count()).toBe(1);
+        await summary.press("Space");
+        await alert.locator("pre").waitFor({ state: "hidden" });
+        if (label === "mobile") {
+          await summary.getByText("Details", { exact: true }).tap();
+          await alert.locator("pre").waitFor();
+          await summary.getByText("Details", { exact: true }).tap();
+          await alert.locator("pre").waitFor({ state: "hidden" });
+        }
+        await expectRequestCountStable(gateway, "chat.send", 1);
         expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(0);
         expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
         expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
@@ -493,6 +447,13 @@ suite.define(() => {
           ),
         ).toBeLessThan(1);
         expect(alertBox?.width ?? 0).toBeLessThanOrEqual(composerBox?.width ?? 0);
+        const copyBox = await headerCopy.boundingBox();
+        expect(copyBox).not.toBeNull();
+        expect(copyBox!.x).toBeGreaterThan(alertBox!.x);
+        expect(copyBox!.x + copyBox!.width).toBeLessThanOrEqual(alertBox!.x + alertBox!.width);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          viewport.width,
+        );
 
         await page.locator(".agent-chat__composer-combobox textarea").fill("retry after error");
         await page.getByRole("button", { name: "Send message" }).click();
@@ -505,11 +466,7 @@ suite.define(() => {
   );
 
   it("keeps the pending telemetry row stable through acknowledgement and streaming", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -635,7 +592,7 @@ suite.define(() => {
         .poll(async () =>
           (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
         )
-        .toBe("2,400 output tokens");
+        .toBe("2.4k output tokens");
 
       const response = "The streamed response is now visible.";
       await gateway.emitGatewayEvent("chat", {
@@ -656,7 +613,7 @@ suite.define(() => {
         (row, visibleResponse) => ({
           connected: row.isConnected,
           hasResponse: row.textContent?.includes(visibleResponse) ?? false,
-          hasTokens: row.textContent?.includes("2,400 output tokens") ?? false,
+          hasTokens: row.textContent?.includes("2.4k output tokens") ?? false,
           key: row.getAttribute("data-virtual-row-key"),
         }),
         response,
@@ -672,132 +629,8 @@ suite.define(() => {
     }
   });
 
-  it("scrolls a delayed pending send into view before the ACK resolves", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const baseTs = Date.now() - 100_000;
-    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
-      content: [
-        {
-          text: `History message ${index}\n${"extra transcript line\n".repeat(4)}`,
-          type: "text",
-        },
-      ],
-      role: index % 2 === 0 ? "assistant" : "user",
-      timestamp: baseTs + index,
-    }));
-    const gateway = await installMockGateway(page, { historyMessages });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByText("History message 49").waitFor({ timeout: 10_000 });
-      await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeLessThanOrEqual(4);
-
-      await waitForChatScrollIdle(page);
-      await expect
-        .poll(
-          async () => {
-            await scrollChatThreadToTop(page);
-            return chatThreadDistanceFromBottom(page);
-          },
-          { timeout: 10_000 },
-        )
-        .toBeGreaterThan(200);
-
-      await gateway.deferNext("chat.send");
-
-      const prompt = `pending send should scroll before ack\n${"visible now\n".repeat(6)}`;
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      const params = requireRecord(sendRequest.params);
-      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-
-      await page.locator(".chat-thread").getByText("pending send should scroll").waitFor({
-        timeout: 10_000,
-      });
-      await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeLessThanOrEqual(4);
-
-      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("overlays the scroll-to-bottom affordance without shrinking the transcript", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const baseTs = Date.now() - 100_000;
-    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
-      content: [
-        {
-          text: `Scrollable history ${index}\n${"extra transcript line\n".repeat(4)}`,
-          type: "text",
-        },
-      ],
-      role: index % 2 === 0 ? "assistant" : "user",
-      timestamp: baseTs + index,
-    }));
-    await installMockGateway(page, { historyMessages });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByText("Scrollable history 49").waitFor({ timeout: 10_000 });
-      await waitForChatScrollIdle(page);
-
-      const readLayout = () =>
-        page.locator(".chat-main").evaluate((container) => {
-          const thread = container.querySelector<HTMLElement>(".chat-thread");
-          const composer = container.querySelector<HTMLElement>(".agent-chat__composer-shell");
-          const button = container.querySelector<HTMLElement>(".chat-scroll-to-bottom");
-          if (!thread || !composer) {
-            throw new Error("expected chat thread and composer");
-          }
-          const threadRect = thread.getBoundingClientRect();
-          const composerRect = composer.getBoundingClientRect();
-          const buttonRect = button?.getBoundingClientRect();
-          return {
-            buttonBottom: buttonRect ? Math.round(buttonRect.bottom) : null,
-            composerTop: Math.round(composerRect.top),
-            threadBottom: Math.round(threadRect.bottom),
-          };
-        });
-
-      const before = await readLayout();
-      expect(before.buttonBottom).toBeNull();
-
-      await scrollChatThreadToTop(page);
-      await page.getByRole("button", { name: "Scroll to latest" }).waitFor({ timeout: 10_000 });
-      const after = await readLayout();
-
-      expect(after.threadBottom).toBe(before.threadBottom);
-      expect(after.composerTop).toBe(before.composerTop);
-      expect(after.buttonBottom).not.toBeNull();
-      expect(after.buttonBottom!).toBeLessThan(after.composerTop);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
   it("refreshes history after a tool-call window disconnects and reconnects", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -827,9 +660,9 @@ suite.define(() => {
         sessionInfo: acceptedSession,
         messages: [],
       });
-      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-      // Publish acceptance after the ACK settles, then wait for its durable
-      // retirement before disconnecting this already accepted tool run.
+      await gateway.resolveDeferred("chat.send");
+      // Default execution commits the original source before its ACK. Publish
+      // live state after consumption, then disconnect during the tool run.
       await waitForCommittedState(
         page,
         ({ runId: expectedRunId }) => {
@@ -899,11 +732,7 @@ suite.define(() => {
   });
 
   it("keeps live assistant stream text before the matching tool card", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 

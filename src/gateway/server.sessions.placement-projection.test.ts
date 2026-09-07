@@ -328,6 +328,7 @@ test.each([
     expect(result.ok).toBe(true);
     expect(result.payload?.session?.placement).toMatchObject({
       state: "failed",
+      recoveryAction: "restart",
       terminalReason: "cloud worker disappeared: provider reported lease destroyed",
       terminalAtMs: 400,
     });
@@ -341,3 +342,44 @@ test.each([
     }
   },
 );
+
+test("sessions.describe requires worker teardown before failed-placement restart", async () => {
+  await seedSessionRows();
+  const active = activePlacementRecord();
+  const placement = {
+    ...active,
+    state: "failed" as const,
+    turnClaim: null,
+    recoveryError: "worker unavailable",
+    terminalReason: "worker unavailable",
+    terminalAtMs: 400,
+  } satisfies WorkerSessionPlacementRecord;
+
+  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+    "sessions.describe",
+    { key: "main" },
+    {
+      context: {
+        workerSessionPlacementService: {
+          getMany: () => new Map([[placement.sessionId, placement]]),
+        },
+        workerEnvironmentService: {
+          get: () => ({
+            providerId: "machine0",
+            profileId: "team",
+            ownerEpoch: placement.activeOwnerEpoch,
+            state: "failed",
+            leaseId: "lease-live",
+          }),
+          inventoryVersion: () => 0,
+        },
+      },
+    },
+  );
+
+  expect(result.ok).toBe(true);
+  expect(result.payload?.session?.placement).toMatchObject({
+    state: "failed",
+    recoveryAction: "stop-first",
+  });
+});

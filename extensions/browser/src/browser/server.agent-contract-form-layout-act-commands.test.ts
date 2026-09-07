@@ -245,6 +245,9 @@ describe("browser control server", () => {
           input: { ref: "8", type: "   ", value: "trimmed-default" },
           expected: { ref: "8", type: "text", value: "trimmed-default" },
         },
+        { input: { ref: "9" }, expected: { ref: "9", type: "text" } },
+        { input: { ref: "10", value: null }, expected: { ref: "10", type: "text" } },
+        { input: { ref: "11", value: "" }, expected: { ref: "11", type: "text", value: "" } },
       ];
       for (const { input, expected } of fillCases) {
         const fill = await postJson<{ ok: boolean }>(`${base}/act`, {
@@ -261,6 +264,20 @@ describe("browser control server", () => {
           requirePwMock("fillFormViaPlaywright").mock.calls.length - 1,
         );
       }
+
+      const fillCallsAfterHappyPath = requirePwMock("fillFormViaPlaywright").mock.calls.length;
+      const fillUnsupportedKey = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
+        kind: "fill",
+        fields: [
+          { ref: "e1", value: "must-not-dispatch" },
+          { ref: "e2", value: "Neo", text: "unsupported" },
+        ],
+      });
+      expect(fillUnsupportedKey.code).toBe("ACT_INVALID_REQUEST");
+      expect(fillUnsupportedKey.error).toContain('fields[1] unsupported field key "text"');
+      expect(requirePwMock("fillFormViaPlaywright").mock.calls.length).toBe(
+        fillCallsAfterHappyPath,
+      );
 
       const resize = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "resize",

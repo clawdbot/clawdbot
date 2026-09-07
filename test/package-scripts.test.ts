@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { parseBuildAllArgs, resolveBuildAllSteps } from "../scripts/build-all.mts";
 import { detectChangedScope } from "../scripts/ci-changed-scope.mjs";
 
 type RootPackageJson = {
@@ -160,9 +161,9 @@ describe("package scripts", () => {
     );
   });
 
-  it("builds the native host before browser bootstrap E2E against real Chromium", () => {
+  it("builds runtime artifacts before browser bootstrap E2E against real Chromium", () => {
     expect(readPackageJson().scripts["test:e2e:browser-extension"]).toBe(
-      "pnpm build:ci-artifacts && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+      "node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     );
   });
 
@@ -178,11 +179,31 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs runtime postbuild before plugin SDK strict export checks", () => {
-    expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
-      "node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-exports.mts",
-    );
-  });
+  it.each(["build:strict-smoke", "build:plugin-sdk:strict-smoke"])(
+    "%s publishes canonical declarations before strict export checks",
+    (scriptName) => {
+      const script = expectDefined(readPackageJson().scripts[scriptName], scriptName);
+      const tokens = tokenizeCommand(script);
+      const buildAllIndex = tokens.indexOf("scripts/build-all.mts");
+      const targets =
+        buildAllIndex < 0
+          ? extractNodeScriptTargets(script)
+          : resolveBuildAllSteps(parseBuildAllArgs(tokens.slice(buildAllIndex + 1)).profile)
+              .filter((step) => step.kind !== "pnpm")
+              .flatMap((step) => extractNodeScriptTargets(["node", ...step.args].join(" ")));
+      const check = targets.indexOf("scripts/check-plugin-sdk-exports.mts");
+
+      expect(check).toBeGreaterThanOrEqual(0);
+      for (const prerequisite of [
+        "scripts/runtime-postbuild.mjs",
+        "scripts/write-plugin-sdk-entry-dts.ts",
+      ]) {
+        const publication = targets.indexOf(prerequisite);
+        expect(publication, prerequisite).toBeGreaterThanOrEqual(0);
+        expect(publication, prerequisite).toBeLessThan(check);
+      }
+    },
+  );
 
   it("builds generated plugin assets before Docker runtime postbuild", () => {
     const commands = expectDefined(

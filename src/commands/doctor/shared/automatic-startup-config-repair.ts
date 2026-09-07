@@ -3,15 +3,17 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "../../../config/config-path-mutation.js";
-import { replaceConfigFile } from "../../../config/config.js";
+import { resolveConfigSnapshotHash, transformConfigFile } from "../../../config/config.js";
 import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
+import { prepareConfigWriteTopology } from "../../../config/io.write-topology.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import {
   validateConfigObjectRaw,
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
+import { restoreDoctorConfigEnvRefs } from "./config-flow-steps.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { findDoctorLegacyConfigIssues } from "./legacy-config-issues.js";
 
@@ -132,9 +134,19 @@ export function isStartupConfigRepairResult(
   after: ConfigFileSnapshot,
 ): boolean {
   const plan = planAutomaticConfigRepair(before);
+  const unsetPaths = resolveManagedUnsetPathsForWrite(undefined);
   const expected = plan
     ? stampConfigWriteMetadata(
-        applyUnsetPathsForWrite(plan.config, resolveManagedUnsetPathsForWrite(undefined)),
+        applyUnsetPathsForWrite(
+          prepareConfigWriteTopology({
+            snapshot: before,
+            nextConfig: plan.config,
+            options: { persistCanonicalAgentRoster: true },
+            unsetPaths,
+            env: process.env,
+          }).nextConfig,
+          unsetPaths,
+        ),
         undefined,
         undefined,
         before.parsed,
@@ -153,14 +165,22 @@ export async function commitAutomaticConfigRepair(
   plan: AutomaticConfigRepairPlan,
   snapshot: ConfigFileSnapshot,
 ): Promise<void> {
-  await replaceConfigFile({
-    nextConfig: plan.config,
-    snapshot,
+  await transformConfigFile({
+    baseHash: resolveConfigSnapshotHash(snapshot) ?? undefined,
+    // Preflight can commit before the later Doctor health write. Preserve moved
+    // references here, under the same snapshot/hash and read-time environment.
+    transform: (_current, { snapshot: currentSnapshot }, { envSnapshotForRestore }) => ({
+      nextConfig: restoreDoctorConfigEnvRefs(plan.config, currentSnapshot, envSnapshotForRestore),
+    }),
     afterWrite: { mode: "none", reason: "automatic migration" },
     writeOptions: {
+      expectedConfigPath: snapshot.path,
       auditOrigin: "doctor",
       skipOutputLogs: true,
       skipRuntimeSnapshotRefresh: true,
+      // The reader retired legacy markers; persist their canonical owners in this write.
+      // Startup verification above uses the same writer topology preparation.
+      persistCanonicalAgentRoster: true,
     },
   });
 }

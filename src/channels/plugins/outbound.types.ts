@@ -256,6 +256,8 @@ export type ChannelOutboundAdapter = {
   renderPresentation?: (params: {
     payload: ReplyPayload;
     presentation: MessagePresentation;
+    /** Normalized original for readable fallbacks; native rendering uses presentation. */
+    sourcePresentation?: MessagePresentation;
     ctx: ChannelOutboundPayloadContext;
   }) => Promise<ReplyPayload | null> | ReplyPayload | null;
   pinDeliveredMessage?: (params: {

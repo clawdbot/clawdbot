@@ -11,6 +11,7 @@ type AnsiSegment =
   | { kind: "text"; value: string };
 
 export function matchAnsiOscAt(input: string, index: number): string | undefined {
+  // Reset the sticky matcher when callers interleave segment iterators.
   ansiOscAtIndexRegex.lastIndex = index;
   return ansiOscAtIndexRegex.exec(input)?.[0];
 }
@@ -76,6 +77,15 @@ export class AnsiSequenceStripper {
   private csiCompatPrefixOnly = false;
   private compatInParameters = false;
   private compatParameterDigits = 0;
+  private csi: string | undefined;
+
+  constructor(private readonly onCsi?: (sequence: string) => void) {}
+
+  private startCsi() {
+    this.state = "csi";
+    this.csiCompatPrefixOnly = true;
+    this.csi = this.onCsi ? "" : undefined;
+  }
 
   write(input: string): string {
     if (typeof input !== "string") {
@@ -99,8 +109,7 @@ export class AnsiSequenceStripper {
         if (code === 0x1b) {
           this.state = "escape";
         } else if (code === 0x9b) {
-          this.state = "csi";
-          this.csiCompatPrefixOnly = true;
+          this.startCsi();
         } else if (code === 0x9d) {
           this.state = "osc";
         } else {
@@ -138,7 +147,7 @@ export class AnsiSequenceStripper {
           this.state = "escape";
           index += 1;
         } else if (code === 0x9b) {
-          this.csiCompatPrefixOnly = true;
+          this.startCsi();
           index += 1;
         } else if (code === 0x9d) {
           this.state = "osc";
@@ -147,6 +156,11 @@ export class AnsiSequenceStripper {
           output.push(input.charAt(index));
           index += 1;
         } else if (code >= 0x20 && code <= 0x3f) {
+          // Only retain bounded CSI metadata; oversized controls are still stripped
+          // through their final byte, but never dispatch a truncated command.
+          if (this.csi !== undefined) {
+            this.csi = this.csi.length < 64 ? this.csi + input.charAt(index) : undefined;
+          }
           if (!isCompatPrefixCode(code)) {
             this.csiCompatPrefixOnly = false;
           }
@@ -159,6 +173,9 @@ export class AnsiSequenceStripper {
           this.compatParameterDigits = 0;
           index += 1;
         } else if (code >= 0x40 && code <= 0x7e) {
+          if (this.csi !== undefined) {
+            this.onCsi?.(this.csi + input.charAt(index));
+          }
           this.state = "text";
           index += 1;
         } else {
@@ -172,14 +189,12 @@ export class AnsiSequenceStripper {
           this.state = "osc";
           index += 1;
         } else if (code === 0x5b) {
-          this.state = "csi";
-          this.csiCompatPrefixOnly = true;
+          this.startCsi();
           index += 1;
         } else if (code === 0x1b) {
           index += 1;
         } else if (code === 0x9b) {
-          this.state = "csi";
-          this.csiCompatPrefixOnly = true;
+          this.startCsi();
           index += 1;
         } else if (code === 0x9d) {
           this.state = "osc";
@@ -210,8 +225,7 @@ export class AnsiSequenceStripper {
         this.state = "escape";
         index += 1;
       } else if (code === 0x9b) {
-        this.state = "csi";
-        this.csiCompatPrefixOnly = true;
+        this.startCsi();
         index += 1;
       } else if (code === 0x9d) {
         this.state = "osc";
@@ -244,6 +258,7 @@ export class AnsiSequenceStripper {
   }
 
   finish(): string {
+    this.csi = undefined;
     this.state = "text";
     this.csiCompatPrefixOnly = false;
     this.compatInParameters = false;
@@ -291,8 +306,7 @@ export function scanAnsiCsiAt(input: string, index: number): AnsiCsiScan | undef
   return { controls, ended, value: input.slice(index, cursor) };
 }
 
-export function splitAnsiSegments(input: string): AnsiSegment[] {
-  const segments: AnsiSegment[] = [];
+export function* iterateAnsiSegments(input: string): Generator<AnsiSegment, void> {
   let position = 0;
   let index = 0;
 
@@ -311,14 +325,13 @@ export function splitAnsiSegments(input: string): AnsiSegment[] {
       continue;
     }
     if (index > position) {
-      segments.push({ kind: "text", value: input.slice(position, index) });
+      yield { kind: "text", value: input.slice(position, index) };
     }
-    segments.push({ controls: csi?.controls ?? [], kind: "ansi", value });
+    yield { controls: csi?.controls ?? [], kind: "ansi", value };
     index += value.length;
     position = index;
   }
   if (position < input.length) {
-    segments.push({ kind: "text", value: input.slice(position) });
+    yield { kind: "text", value: input.slice(position) };
   }
-  return segments;
 }

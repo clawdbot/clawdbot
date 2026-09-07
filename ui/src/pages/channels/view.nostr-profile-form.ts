@@ -128,9 +128,11 @@ export function renderNostrProfileForm(params: {
         <div class="settings-row__text">
           <label class="settings-row__title" for="${inputId}">${label}</label>
           ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
-          ${error
-            ? html`<span class="settings-row__desc" style="color: var(--danger);">${error}</span>`
-            : nothing}
+          ${
+            error
+              ? html`<span class="settings-row__desc" style="color: var(--danger);">${error}</span>`
+              : nothing
+          }
         </div>
         <div class="settings-row__control">${control}</div>
       </div>
@@ -175,27 +177,31 @@ export function renderNostrProfileForm(params: {
       </div>
     </div>
 
-    ${state.error
-      ? html`
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="settings-row__title"
-                >${renderSettingsStatus({ kind: "danger", label: t("channels.lastError") })}</span
-              >
-              <span class="settings-row__desc">${state.error}</span>
+    ${
+      state.error
+        ? html`
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <span class="settings-row__title"
+                  >${renderSettingsStatus({ kind: "danger", label: t("channels.lastError") })}</span
+                >
+                <span class="settings-row__desc">${state.error}</span>
+              </div>
             </div>
-          </div>
-        `
-      : nothing}
-    ${state.success
-      ? html`
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="settings-row__desc">${state.success}</span>
+          `
+        : nothing
+    }
+    ${
+      state.success
+        ? html`
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <span class="settings-row__desc">${state.success}</span>
+              </div>
             </div>
-          </div>
-        `
-      : nothing}
+          `
+        : nothing
+    }
     ${renderPicturePreview()}
     ${renderField("name", t("channels.nostr.username"), {
       placeholder: t("channels.nostr.placeholders.username"),
@@ -218,40 +224,44 @@ export function renderNostrProfileForm(params: {
       placeholder: t("channels.nostr.placeholders.avatarUrl"),
       help: t("channels.nostr.avatarHelp"),
     })}
-    ${state.showAdvanced
-      ? html`
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="settings-row__title">${t("channels.nostr.advanced")}</span>
+    ${
+      state.showAdvanced
+        ? html`
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <span class="settings-row__title">${t("channels.nostr.advanced")}</span>
+              </div>
             </div>
-          </div>
 
-          ${renderField("banner", t("channels.nostr.bannerUrl"), {
-            type: "url",
-            placeholder: t("channels.nostr.placeholders.bannerUrl"),
-            help: t("channels.nostr.bannerHelp"),
-          })}
-          ${renderField("website", t("channels.nostr.website"), {
-            type: "url",
-            placeholder: t("channels.nostr.placeholders.website"),
-            help: t("channels.nostr.websiteHelp"),
-          })}
-          ${renderField("nip05", t("channels.nostr.nip05Identifier"), {
-            placeholder: t("channels.nostr.placeholders.nip05"),
-            help: t("channels.nostr.nip05Help"),
-          })}
-          ${renderField("lud16", t("channels.nostr.lightningAddress"), {
-            placeholder: t("channels.nostr.placeholders.lightningAddress"),
-            help: t("channels.nostr.lightningHelp"),
-          })}
-        `
-      : nothing}
+            ${renderField("banner", t("channels.nostr.bannerUrl"), {
+              type: "url",
+              placeholder: t("channels.nostr.placeholders.bannerUrl"),
+              help: t("channels.nostr.bannerHelp"),
+            })}
+            ${renderField("website", t("channels.nostr.website"), {
+              type: "url",
+              placeholder: t("channels.nostr.placeholders.website"),
+              help: t("channels.nostr.websiteHelp"),
+            })}
+            ${renderField("nip05", t("channels.nostr.nip05Identifier"), {
+              placeholder: t("channels.nostr.placeholders.nip05"),
+              help: t("channels.nostr.nip05Help"),
+            })}
+            ${renderField("lud16", t("channels.nostr.lightningAddress"), {
+              placeholder: t("channels.nostr.placeholders.lightningAddress"),
+              help: t("channels.nostr.lightningHelp"),
+            })}
+          `
+        : nothing
+    }
 
     <div class="settings-row">
       <div class="settings-row__text">
-        ${isDirty
-          ? html`<span class="settings-row__desc">${t("common.unsavedChanges")}</span>`
-          : nothing}
+        ${
+          isDirty
+            ? html`<span class="settings-row__desc">${t("common.unsavedChanges")}</span>`
+            : nothing
+        }
       </div>
       <div class="settings-row__control">
         <button

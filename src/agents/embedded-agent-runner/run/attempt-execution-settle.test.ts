@@ -46,7 +46,6 @@ vi.mock("./attempt-stream-settle.js", () => ({
   settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
-import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
@@ -78,6 +77,7 @@ function createFixture() {
     getMessagingToolSentTargets: vi.fn(() => []),
     getMessagingToolSentTexts: vi.fn(() => []),
     getMessagingToolSourceReplyPayloads: vi.fn(() => []),
+    getSourceReplyDelivered: vi.fn(() => undefined),
     getPendingToolMediaReply: vi.fn(() => undefined),
     getToolAutoDeliveryMediaUrls: vi.fn(() => []),
     getReplayState: vi.fn(() => ({ replayInvalid: false, hadPotentialSideEffects: false })),
@@ -149,10 +149,7 @@ function createFixture() {
   const result = { messages: [{ role: "assistant", content: "done" }] };
   const preparedStreamRuntime = {
     abortable: (promise: Promise<unknown>) => promise,
-    cache: {
-      observabilityEnabled: true,
-      promptTools: [{ name: "read" }],
-    },
+    cache: {},
     history: {
       contextEnginePromptAuthority: "assembled",
       contextEngineAssemblySucceeded: true,
@@ -177,11 +174,8 @@ function createFixture() {
     agentSession: {
       activeSession,
       clientToolCallSlots: [],
-      coreReadAuthorized: true,
-      getCodeModeRecoveryCandidate: vi.fn(() => undefined),
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
-      setCodeModeReconciliationReadAuthorized: vi.fn(),
       setActiveSessionSystemPrompt: vi.fn(),
       settingsManager: { getCompactionReserveTokens: vi.fn(() => 1_000) },
     },
@@ -208,6 +202,7 @@ function createFixture() {
     state: sessionRuntimeState,
     toolResultPromptProjectionState,
     trajectoryRecorder,
+    transcriptPolicy: { appendOnlyRuntimeContext: true },
     transport: {
       effectiveAgentTransport: "sse",
       effectiveExtraParams: {},
@@ -279,19 +274,16 @@ function createFixture() {
     preparedStreamRuntime,
   } as unknown as SettledInput;
 
-  mocks.runPrompt.mockImplementation(async (promptInput) => {
+  mocks.runPrompt.mockImplementation(async (promptInput, promptState) => {
     order.push("prompt");
-    promptInput.lifecycle.writeState({
+    Object.assign(promptState, {
       contextBudgetStatus: { status: "ok" },
       preflightRecovery: { attempted: false },
-      promptError: null,
-      promptErrorSource: null,
+      finalPromptText: "final prompt",
     });
-    promptInput.lifecycle.setPrePromptMessageCount(4);
-    promptInput.lifecycle.setPromptCacheChangesForTurn([{ type: "cache" }]);
-    promptInput.lifecycle.setFinalPromptText("final prompt");
-    promptInput.lifecycle.markBeforeAgentRunBlocked({ blockedBy: "before_agent" });
-    return { promptStartedAt: 100 };
+    promptInput.prepared.sessionRuntime.state.prePromptMessageCount = 4;
+    promptInput.state.beforeAgentRunBlockedBy = "before_agent";
+    return { promptStartedAt: 100, transcriptLeafId: "before-prompt" };
   });
   mocks.settleStream.mockImplementation(async () => {
     order.push("finalize");
@@ -305,15 +297,12 @@ function createFixture() {
       currentAttemptAssistant: { role: "assistant", content: "done" },
       currentAttemptCompletedAssistant: undefined,
       attemptUsage: { input: 1, output: 2, total: 3 },
-      cacheBreak: null,
       promptCache: { cacheRead: 1 },
       lastCallUsage: undefined,
       compactionOccurredThisAttempt: false,
     };
   });
-  mocks.completeAfterTurn.mockImplementation(async () => {
-    return { sessionIdUsed: "final-session", sessionFileUsed: "/tmp/final.jsonl" };
-  });
+  mocks.completeAfterTurn.mockResolvedValue(undefined);
   mocks.completeResult.mockImplementation(() => {
     order.push("result");
     return result;
@@ -371,29 +360,18 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         promptCache: { cacheRead: 1 },
       }),
     );
-    expect(mocks.runPrompt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          preparedUserTurnMessage: expect.objectContaining({
-            content: "hello",
-            timestamp: 100,
-            __openclaw: { senderName: "Alice" },
-          }),
-        }),
-        toolPolicy: fixture.input.prepared.promptToolPolicy,
-      }),
+    expect(mocks.completeAfterTurn).toHaveBeenCalledWith(
+      fixture.input,
+      expect.objectContaining({ sessionIdUsed: "settled-session" }),
+      expect.objectContaining({ transcriptLeafId: "before-prompt" }),
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(
+      fixture.input,
+      expect.objectContaining({ sessionIdUsed: "settled-session" }),
       expect.objectContaining({
-        cache: expect.objectContaining({ trace: fixture.cacheTrace }),
-        state: expect.objectContaining({
-          beforeAgentFinalizeRevisionReason: "revision",
-          sessionIdUsed: "final-session",
-          sessionFileUsed: "/tmp/final.jsonl",
-          yieldDetected: true,
-        }),
-        subscription: fixture.subscription,
-        trajectoryRecorder: fixture.trajectoryRecorder,
+        beforeAgentFinalizeRevisionReason: "revision",
+        sessionIdUsed: "settled-session",
+        sessionFileUsed: "/tmp/session.jsonl",
       }),
     );
     expect(fixture.detachBackend).toHaveBeenCalledWith(fixture.queueHandle);
@@ -421,12 +399,12 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       "excludeFromContext",
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(
+      fixture.input,
+      expect.any(Object),
       expect.objectContaining({
-        state: expect.objectContaining({
-          messagesSnapshot: expect.arrayContaining([
-            expect.objectContaining({ customType: "openclaw.system-note", display: true }),
-          ]),
-        }),
+        messagesSnapshot: expect.arrayContaining([
+          expect.objectContaining({ customType: "openclaw.system-note", display: true }),
+        ]),
       }),
     );
   });
@@ -620,38 +598,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     );
   });
 
-  it("keeps a real timeout when yield cleanup observes the same unwind", async () => {
-    const fixture = createFixture();
-    fixture.input.runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
-    fixture.state.terminal = { kind: "timeout", phase: "prompt", source: "external" };
-    mocks.runPrompt.mockImplementationOnce(async (promptInput) => {
-      promptInput.lifecycle.markYieldAborted();
-      return { promptStartedAt: 100 };
-    });
-
-    await runEmbeddedAttemptSettledPhase(fixture.input);
-
-    expect(fixture.state.terminal).toEqual({
-      kind: "timeout",
-      phase: "prompt",
-      source: "external",
-    });
-  });
-
-  it("keeps an external abort when yield cleanup observes the same unwind", async () => {
-    const fixture = createFixture();
-    fixture.input.runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
-    fixture.state.terminal = { kind: "aborted", source: "external" };
-    mocks.runPrompt.mockImplementationOnce(async (promptInput) => {
-      promptInput.lifecycle.markYieldAborted();
-      return { promptStartedAt: 100 };
-    });
-
-    await runEmbeddedAttemptSettledPhase(fixture.input);
-
-    expect(fixture.state.terminal).toEqual({ kind: "aborted", source: "external" });
-  });
-
   it("defaults a source-less settlement failure without dropping it", async () => {
     const fixture = createFixture();
     const failure = new Error("settlement failed");
@@ -665,7 +611,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         lastAssistant: undefined,
         currentAttemptAssistant: undefined,
         attemptUsage: undefined,
-        cacheBreak: null,
         promptCache: undefined,
         lastCallUsage: undefined,
         compactionOccurredThisAttempt: false,

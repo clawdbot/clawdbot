@@ -238,30 +238,42 @@ export function renderFieldRow(params: {
   const className = stacked ? "settings-row settings-row--stacked" : "settings-row";
   return html`
     <div class=${className}>
-      ${hasText
-        ? html`
-            <div class="settings-row__text">
-              ${params.showLabel
-                ? html`<span class="settings-row__title">${params.label}</span>`
-                : nothing}
-              ${help
-                ? html`<span class="settings-row__desc" id=${params.helpId ?? nothing}
-                    >${help}</span
-                  >`
-                : nothing}
-              ${defaultDescription
-                ? html`<span class="settings-row__desc">${defaultDescription}</span>`
-                : nothing}
-              ${renderTags(params.tags)}
-              ${params.error
-                ? html`<span class="cfg-field__error" role="alert">${params.error}</span>`
-                : nothing}
-            </div>
-          `
-        : nothing}
-      ${params.control !== nothing
-        ? html`<div class="settings-row__control">${params.control}</div>`
-        : nothing}
+      ${
+        hasText
+          ? html`
+              <div class="settings-row__text">
+                ${
+                  params.showLabel
+                    ? html`<span class="settings-row__title">${params.label}</span>`
+                    : nothing
+                }
+                ${
+                  help
+                    ? html`<span class="settings-row__desc" id=${params.helpId ?? nothing}
+                        >${help}</span
+                      >`
+                    : nothing
+                }
+                ${
+                  defaultDescription
+                    ? html`<span class="settings-row__desc">${defaultDescription}</span>`
+                    : nothing
+                }
+                ${renderTags(params.tags)}
+                ${
+                  params.error
+                    ? html`<span class="cfg-field__error" role="alert">${params.error}</span>`
+                    : nothing
+                }
+              </div>
+            `
+          : nothing
+      }
+      ${
+        params.control !== nothing
+          ? html`<div class="settings-row__control">${params.control}</div>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -312,7 +324,7 @@ export function renderSegmentedControl(params: {
   resolvedValue: unknown;
   disabled: boolean;
   ariaLabel: string;
-  onSelect: (value: unknown) => void;
+  onSelect: (value: unknown) => boolean | void;
 }): TemplateResult {
   const selectedIndex = params.options.findIndex((option) =>
     matchesComparablePrimitiveValue(option, params.resolvedValue),
@@ -328,7 +340,7 @@ export function renderSegmentedControl(params: {
     onChange: (index) => {
       const option = params.options[Number(index)];
       if (option !== undefined) {
-        params.onSelect(option);
+        return params.onSelect(option);
       }
     },
   });

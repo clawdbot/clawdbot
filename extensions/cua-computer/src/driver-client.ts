@@ -28,7 +28,7 @@ export const EscalationReason = {
 } as const;
 export type EscalationReason = (typeof EscalationReason)[keyof typeof EscalationReason];
 
-// These numeric values are part of the pinned 0.21.0 SDK contract. Keeping
+// These numeric values are part of the pinned SDK contract. Keeping
 // them local avoids loading the native library while OpenClaw is only
 // registering the bundled plugin.
 export const ClickButton = {

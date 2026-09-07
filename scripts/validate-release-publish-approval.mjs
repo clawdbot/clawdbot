@@ -2,6 +2,7 @@
 // Validates that a referenced release-publish workflow run is usable for approval.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { verifyAndroidNativeCi } from "./android-native-ci.mjs";
 import {
   runReleaseToolingGh,
   validateReleasePublishParentRun,
@@ -58,7 +59,7 @@ if (approvalPath) {
   let mismatchMessage;
   if (approvalKind === "android") {
     expectedApproval = {
-      version: 2,
+      version: approval.version === 3 ? 3 : 2,
       repository: process.env.GITHUB_REPOSITORY,
       workflow: "OpenClaw Release Publish",
       parentRunId: releasePublishRunId,
@@ -68,6 +69,7 @@ if (approvalPath) {
       parentWorkflowSha: expectedWorkflowSha,
       releaseTag: process.env.RELEASE_TAG,
       targetSha: process.env.RELEASE_TARGET_SHA,
+      ...(approval.version === 3 ? { nativeCi: approval.nativeCi } : {}),
     };
     mismatchMessage = "Attested Android release approval does not match this run request.";
   } else if (approvalKind === "clawhub-bootstrap") {
@@ -143,8 +145,9 @@ if (approvalPath) {
       workflowRef: expectedBranch,
       workflowSha: expectedWorkflowSha,
     });
-    // Fetch parent authority last so target/tooling reads cannot retain an
-    // admission snapshot across a parent failure, cancellation, or rerun.
+    // Native qualification and parent authority must survive child queue/build
+    // time and every preceding target, tooling, and release-asset lookup.
+    verifyAndroidNativeCi(approval);
     const currentRun = JSON.parse(
       runReleaseToolingGh([
         "api",
@@ -153,6 +156,8 @@ if (approvalPath) {
         "GET",
       ]),
     );
+    // Apps may attach after npm and GitHub publication complete. Keep the exact
+    // approval binding valid for a successful parent without requiring it to wait.
     validateReleasePublishParentRun({
       identity,
       releasePublishFullRef: expectedWorkflowFullRef,

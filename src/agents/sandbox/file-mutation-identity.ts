@@ -17,9 +17,8 @@ function hasSandboxFileIdentity(bridge: SandboxFsBridge): bridge is SandboxFileI
   return SANDBOX_FILE_IDENTITY in bridge;
 }
 
-export async function resolveSandboxFileMutationQueueKey(params: {
+export async function resolveSandboxFileIdentity(params: {
   bridge: SandboxFsBridge;
-  root: string;
   filePath: string;
   cwd?: string;
   signal?: AbortSignal;
@@ -39,5 +38,15 @@ export async function resolveSandboxFileMutationQueueKey(params: {
       ? resolveIdentityPathViaExistingAncestorSync(resolved.hostPath)
       : resolved.containerPath;
   }
-  return `${params.root}\0${identity}`;
+  return identity;
+}
+
+export async function resolveSandboxFileMutationQueueKey(params: {
+  bridge: SandboxFsBridge;
+  root: string;
+  filePath: string;
+  cwd?: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  return `${params.root}\0${await resolveSandboxFileIdentity(params)}`;
 }

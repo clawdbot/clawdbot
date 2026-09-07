@@ -69,9 +69,12 @@ function normalizeMockProviderId(providerId?: string): string {
 
 type SessionManagerMocks = {
   getSessionTarget: Mock<() => undefined>;
+  getAppendParentId: Mock<() => string | null>;
+  getHeader: UnknownMock;
   getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
+  getEntries: UnknownMock;
   getBoundaryCount: UnknownMock;
   branch: UnknownMock;
   resetLeaf: UnknownMock;
@@ -79,6 +82,7 @@ type SessionManagerMocks = {
   appendThinkingLevelChange: UnknownMock;
   appendModelChange: UnknownMock;
   appendCustomEntry: UnknownMock;
+  appendMessage: UnknownMock;
   appendSessionInfo: UnknownMock;
   appendLabelChange: UnknownMock;
   flushPendingPersistence: UnknownMock;
@@ -184,6 +188,7 @@ function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentMediaUrls: () => [] as string[],
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
+    getSourceReplyDelivered: () => undefined,
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
     getToolAutoDeliveryMediaUrls: () => [] as string[],
@@ -276,9 +281,12 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const trajectoryEvents: CapturedTrajectoryEvent[] = [];
   const sessionManager = {
     getSessionTarget: vi.fn(() => undefined),
+    getAppendParentId: vi.fn<() => string | null>(() => null),
+    getHeader: vi.fn(() => ({ version: 3 })),
     getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
+    getEntries: vi.fn(() => []),
     getBoundaryCount: vi.fn(() => 0),
     branch: vi.fn(),
     resetLeaf: vi.fn(),
@@ -286,6 +294,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     appendThinkingLevelChange: vi.fn(),
     appendModelChange: vi.fn(),
     appendCustomEntry: vi.fn(),
+    appendMessage: vi.fn(),
     appendSessionInfo: vi.fn(),
     appendLabelChange: vi.fn(),
     flushPendingPersistence: vi.fn(),
@@ -721,7 +730,7 @@ vi.mock("../../agent-tools.js", () => ({
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => undefined,
-  getOrCreateSessionMcpRuntime: async () => undefined,
+  acquireSessionMcpRuntime: async () => undefined,
   materializeBundleMcpToolsForRun: async () => undefined,
   retireSessionMcpRuntime: async () => true,
 }));
@@ -791,19 +800,11 @@ vi.mock("../../sandbox/runtime-status.js", () => ({
   }),
 }));
 
-vi.mock("../../tool-call-id.js", async (importOriginal) => {
-  return await importOriginal<typeof import("../../tool-call-id.js")>();
-});
-
 vi.mock("../../tool-fs-policy.js", () => ({
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
     ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
   resolveEffectiveToolFsWorkspaceOnly: () => false,
 }));
-
-vi.mock("../../tool-policy.js", async (importOriginal) => {
-  return await importOriginal<typeof import("../../tool-policy.js")>();
-});
 
 vi.mock("../../transcript-policy.js", () => ({
   resolveTranscriptPolicy: () => ({
@@ -814,6 +815,7 @@ vi.mock("../../transcript-policy.js", () => ({
 }));
 
 vi.mock("../cache-ttl.js", () => ({
+  readCacheTtlEntries: () => [],
   appendCacheTtlTimestamp: (
     sessionManager: { appendCustomEntry?: (customType: string, data: unknown) => void },
     data: unknown,
@@ -922,13 +924,6 @@ vi.mock("../thinking.js", async (importOriginal) => {
     ...actual,
     dropReasoningFromHistory: <T>(messages: T) => messages,
     dropThinkingBlocks: <T>(messages: T) => messages,
-  };
-});
-
-vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
-  return {
-    ...actual,
   };
 });
 
@@ -1150,9 +1145,12 @@ export function resetEmbeddedAttemptHarness(
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getAppendParentId.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.getHeader.mockReset().mockReturnValue({ version: 3 });
   hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getEntries.mockReset().mockReturnValue([]);
   hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
@@ -1163,6 +1161,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.appendThinkingLevelChange.mockReset();
   hoisted.sessionManager.appendModelChange.mockReset();
   hoisted.sessionManager.appendCustomEntry.mockReset();
+  hoisted.sessionManager.appendMessage.mockReset();
   hoisted.sessionManager.appendSessionInfo.mockReset();
   hoisted.sessionManager.appendLabelChange.mockReset();
   hoisted.sessionManager.flushPendingPersistence.mockReset();

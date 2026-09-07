@@ -170,6 +170,20 @@ export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandl
   return attachedBackendByOperation.get(operation);
 }
 
+export function expireStaleReplyOperation(
+  operation: ReplyOperation,
+  reason: ReplyOperationStaleReason,
+  options?: ReplyOperationStaleExpiryOptions,
+): boolean {
+  return expireReplyOperationByOperation.get(operation)?.(reason, options) ?? false;
+}
+
+// Committed output belongs to the bounded finalization owner. Stale recovery
+// must not cancel delivery after the backend has already produced its answer.
+export function hasCommittedReplyOperationOutcome(operation: ReplyOperation): boolean {
+  return !operation.result && abortFrozenOperations.has(operation);
+}
+
 export function isReplyOperationAbortable(operation: ReplyOperation): boolean {
   if (operation.result || abortFrozenOperations.has(operation)) {
     return false;
@@ -469,17 +483,18 @@ export function markReplyRunDiagnosticProgress(params: {
   });
 }
 
-export function isReplyRunWaitingForHumanInput(operation: ReplyOperation): boolean {
+export function isReplyRunRecoveryBlocked(operation: ReplyOperation): boolean {
   const backend = getAttachedBackend(operation);
-  return (
-    Boolean(backend) &&
-    resolveActiveEmbeddedRunRecoveryBlocker(operation.sessionId, backend) === "human_input_wait"
-  );
+  const blocker =
+    !operation.result && backend
+      ? resolveActiveEmbeddedRunRecoveryBlocker(operation.sessionId, backend)
+      : undefined;
+  return blocker === "human_input_wait" || blocker === "runtime_owned_wait";
 }
 
 export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
   // Reading the wait may expire it and record the owner's resumed activity.
-  const waitingForHumanInput = isReplyRunWaitingForHumanInput(operation);
+  const recoveryBlocked = isReplyRunRecoveryBlocked(operation);
   const activity = getDiagnosticSessionActivitySnapshot({
     sessionId: operation.sessionId,
     sessionKey: operation.key,
@@ -489,6 +504,6 @@ export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
     operation.phase !== "waiting_for_global_lane" &&
     Date.now() - operation.lastActivityAtMs >
       resolveRunStaleThresholdMs(activity, Date.now() - operation.lastActivityAtMs) &&
-    !waitingForHumanInput
+    !recoveryBlocked
   );
 }

@@ -94,7 +94,8 @@ vi.mock("../../infra/wsl.js", () => ({
   isWSLEnv: isWSLEnvMock,
 }));
 
-vi.mock("./shared.js", () => ({
+vi.mock("./shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared.js")>()),
   createCliStatusTextStyles: () => ({
     rich: false,
     label: (text: string) => text,
@@ -104,10 +105,8 @@ vi.mock("./shared.js", () => ({
     warnText: (text: string) => text,
     errorText: (text: string) => text,
   }),
-  filterDaemonEnv: () => ({}),
   formatRuntimeStatus: () => "running (pid 8000)",
   resolveRuntimeStatusColor: () => "",
-  renderRuntimeHints: () => [],
   safeDaemonEnv: () => [],
 }));
 
@@ -181,6 +180,10 @@ describe("printDaemonStatus", () => {
       expect(payload).toHaveProperty("service.command.reloadPending", true);
       expect(JSON.stringify(payload)).not.toContain("gateway-token");
     }
+    expect(command.definitionPaths).toEqual(["/etc/systemd/user/private-definition.conf"]);
+    expect(command.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("effective-gateway-token");
+    expect(command.managedDefinition).toBeDefined();
+    expect(command.managedOverrides).toBeDefined();
   });
 
   it("prints user-manager pending reload guidance after the service file", () => {
@@ -616,7 +619,7 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("Gateway port 18789 is not listening");
   });
 
-  it("prints GUI-session wording before generic missing-supervision wording", () => {
+  it("prints GUI-session recovery guidance for the service profile", () => {
     printDaemonStatus(
       {
         service: {
@@ -626,10 +629,10 @@ describe("printDaemonStatus", () => {
           notLoadedText: "not loaded",
           runtime: {
             status: "unknown",
-            missingSupervision: true,
             missingGuiSession: true,
             detail: "Bootstrap failed: 125: Domain does not support specified action",
           },
+          command: { programArguments: [], environment: { OPENCLAW_PROFILE: "work" } },
         },
         extraServices: [],
       },
@@ -637,8 +640,8 @@ describe("printDaemonStatus", () => {
     );
 
     expectMockLineContains(runtime.error, "macOS has no usable GUI session");
-    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
-    expect(errors).not.toContain("launchd has no loaded job");
+    expectMockLineContains(runtime.error, "logged-in macOS GUI session");
+    expectMockLineContains(runtime.error, "openclaw --profile work gateway restart");
   });
 
   it("prints probe kind and capability separately", () => {

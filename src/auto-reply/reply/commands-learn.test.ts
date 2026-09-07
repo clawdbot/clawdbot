@@ -1,5 +1,6 @@
 // Tests /learn prompt rewriting, defaults, standards, and availability gating.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
@@ -73,6 +74,8 @@ function buildLearnParams(
   } as unknown as HandleCommandsParams;
 }
 
+afterEach(() => cliBackendsTesting.resetDepsForTest());
+
 describe("learn command", () => {
   it.each([
     { agentId: "direct", shouldContinue: true },
@@ -135,6 +138,54 @@ describe("learn command", () => {
     },
   );
 
+  it.each(["personal", "paired-node"] as const)(
+    "keeps %s authoring from publishing a pending-only request",
+    async (surface) => {
+      const params = buildLearnParams("/learn what we just did");
+      const invoke = vi.fn(async () => {
+        throw new Error("No authoring operation is allowed");
+      });
+      params.opts = {
+        skillLibraryAuthoring: {
+          target: "personal",
+          defaultTarget: surface === "personal" ? "personal" : "workspace",
+          multipleProfiles: surface === "personal",
+          bind: () => {},
+          invoke,
+        },
+      };
+      if (surface === "paired-node") {
+        // Supply runtime backend metadata for the placement and authoring policy checks.
+        cliBackendsTesting.setDepsForTest({
+          resolveRuntimeCliBackends: () => [
+            {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              pluginId: "anthropic",
+              config: { command: "claude" },
+              bundleMcp: true,
+            },
+          ],
+        });
+        params.provider = "anthropic";
+        params.model = "claude-sonnet-5";
+        params.sessionEntry = {
+          sessionId: "node-session",
+          updatedAt: 1,
+          execHost: "node",
+          execNode: "paired-node",
+          agentRuntimeOverride: "claude-cli",
+        };
+      }
+      const result = await handleLearnCommand(params, true);
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("pending workspace proposal");
+      expect(result?.reply?.text).toContain("publishes a revision");
+      expect(params.ctx.BodyForAgent).toBe("/learn what we just did");
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
+
   it("rewrites the agent and normalized command bodies and continues", async () => {
     const params = buildLearnParams("/learn docs/runbook.md and https://example.com/guide");
 
@@ -163,7 +214,7 @@ describe("learn command", () => {
     const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent ?? "";
 
     expect(instruction).toContain(
-      "Revise the best pending proposal or update the best Workshop-owned skill before creating anything new.",
+      "Revise the best pending proposal or update the best Workshop-generated skill before creating anything new.",
     );
     expect(instruction).toContain("Make at most one proposal mutation.");
     expect(instruction).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);

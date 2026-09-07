@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { buildAggregatesFromSessions } from "./metrics.ts";
+import { buildUsageFilterOptions } from "./query.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
@@ -100,18 +101,18 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       context: {
         weight: undefined,
         loading: false,
-        status: { error: null, hasLoaded: false, stale: false },
+        status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       },
       timeSeriesMode: "cumulative",
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
       timeSeriesLoading: false,
-      timeSeriesStatus: { error: null, hasLoaded: false, stale: false },
+      timeSeriesStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
       sessionLogsLoading: false,
-      sessionLogsStatus: { error: null, hasLoaded: false, stale: false },
+      sessionLogsStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       sessionLogsExpanded: false,
       logFilters: {
         roles: [],
@@ -160,14 +161,109 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onTimeSeriesModeChange: noop,
         onTimeSeriesBreakdownChange: noop,
         onTimeSeriesCursorRangeChange: noop,
-        onRetryTimeSeries: noop,
-        onRetrySessionLogs: noop,
-        onRetryContextWeight: noop,
       },
     },
     ...overrides,
   };
 }
+
+it.each([
+  { query: "provider:openai" },
+  { agentId: "main" },
+  { selectedSessions: ["agent:main:matched"] },
+  { selectedSessions: ["agent:main:matched", "agent:main:earlier"] },
+  { query: "provider:openai", selectedHours: [12] },
+])("intersects selected days with the session scope %j", (scope) => {
+  const base = createUsageProps();
+  const matched = usageSession("agent:main:matched", "main", "openai", {
+    totalTokens: 800,
+    totalCost: 80,
+  });
+  const other = usageSession("agent:other:other", "other", "anthropic", {
+    totalTokens: 900,
+    totalCost: 90,
+  });
+  const selectedDay = {
+    date: "2026-05-14",
+    tokens: 99,
+    cost: 10,
+    input: 1,
+    output: 2,
+    cacheRead: 3,
+    cacheWrite: 4,
+    totalTokens: 99,
+    totalCost: 10,
+    inputCost: 1,
+    outputCost: 2,
+    cacheReadCost: 3,
+    cacheWriteCost: 4,
+    missingCostEntries: 1,
+    missingCostByModel: { "openai/unpriced": 1 },
+  };
+  matched.usage!.activityDates = ["2026-05-13", "2026-05-14"];
+  matched.usage!.firstActivity = Date.UTC(2026, 4, 14, 12);
+  matched.usage!.lastActivity = matched.usage!.firstActivity;
+  matched.usage!.dailyBreakdown = [
+    { ...selectedDay, date: "2026-05-13", tokens: 701, cost: 70, totalTokens: 701, totalCost: 70 },
+    selectedDay,
+  ];
+  other.usage!.activityDates = ["2026-05-14"];
+  other.usage!.dailyBreakdown = [
+    { ...selectedDay, tokens: 900, cost: 90, totalTokens: 900, totalCost: 90 },
+  ];
+  const earlier = usageSession("agent:main:earlier", "main", "openai", { totalCost: 5 });
+  earlier.usage!.activityDates = ["2026-05-13"];
+  earlier.usage!.firstActivity = Date.UTC(2026, 4, 13, 12);
+  earlier.usage!.lastActivity = earlier.usage!.firstActivity;
+  earlier.usage!.dailyBreakdown = [
+    {
+      ...selectedDay,
+      date: "2026-05-13",
+      tokens: 50,
+      cost: 5,
+      totalTokens: 50,
+      totalCost: 5,
+    },
+  ];
+  const onExportJson = vi.fn();
+  const container = document.createElement("div");
+  render(
+    renderUsage(
+      createUsageProps({
+        data: {
+          ...base.data,
+          sessions: [matched, other, earlier],
+          totals: { ...selectedDay, totalCost: 170 },
+          costDaily: [{ ...selectedDay, totalTokens: 999, totalCost: 100 }],
+        },
+        filters: { ...base.filters, ...scope, timeZone: "utc", selectedDays: [selectedDay.date] },
+        callbacks: {
+          ...base.callbacks,
+          display: { ...base.callbacks.display, onExportJson },
+        },
+      }),
+    ),
+    container,
+  );
+  expect(
+    [...container.querySelectorAll(".usage-metric-badge strong")].map((el) => el.textContent),
+  ).toEqual(["99", "$10.00", "1"]);
+  container.querySelector(".usage-export-menu")!.dispatchEvent(
+    new CustomEvent("wa-select", {
+      detail: { item: { value: "json" } },
+    }),
+  );
+  const { date, tokens: _tokens, cost: _cost, ...expectedTotals } = selectedDay;
+  expect(onExportJson.mock.calls[0]?.[0].totals).toEqual(expectedTotals);
+  expect(
+    onExportJson.mock.calls[0]?.[0].daily.find(
+      (day: { date: string }) => day.date === "2026-05-13",
+    ),
+  ).toMatchObject({ totalCost: scope.selectedSessions?.length === 1 ? 70 : 75 });
+  expect(onExportJson.mock.calls[0]?.[0].daily).toEqual(
+    expect.arrayContaining([{ date, ...expectedTotals }]),
+  );
+});
 
 it("renders shared skeletons while initial usage is loading", () => {
   const container = document.createElement("div");
@@ -441,14 +537,94 @@ describe("renderUsage", () => {
     props.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
 
     render(renderUsage(props), container);
-    const option = [...container.querySelectorAll<HTMLElement>(".usage-filter-option")].find(
+    const option = [...container.querySelectorAll("wa-dropdown-item")].find(
       (item) => item.textContent?.trim() === "clear",
-    );
+    )!;
+    option.checked = true;
     option
       ?.closest("wa-dropdown")
       ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: option }, bubbles: true }));
 
     expect(onQueryDraftChange).toHaveBeenCalledWith(expect.stringContaining("provider:clear"));
+  });
+
+  it("keeps bounded filter inventories in source order across observed and aggregate values", () => {
+    const sessions = ["observed-a", "observed-b", "observed-a"].map((provider, index) =>
+      Object.assign(usageSession(`session-${index}`, "main", provider), {
+        providerOverride: `override-${index}`,
+        modelOverride: "override-only-model",
+        channel: index === 0 ? "" : "Chat",
+      }),
+    );
+    const aggregates = buildAggregatesFromSessions(
+      Array.from({ length: 14 }, (_, index) =>
+        usageSession(`aggregate-${index}`, "other", `aggregate-${index}`),
+      ),
+    );
+    aggregates.tools.tools = Array.from({ length: 14 }, (_, index) => ({
+      name: `tool-${index}`,
+      count: 1,
+    }));
+    const options = buildUsageFilterOptions(sessions, aggregates);
+    expect(options.channel).toEqual(["Chat"]);
+    expect(options.provider).toEqual([
+      "observed-a",
+      "observed-b",
+      "override-0",
+      "override-1",
+      "override-2",
+      ...Array.from({ length: 7 }, (_, index) => `aggregate-${index}`),
+    ]);
+    expect(options.model).toEqual([
+      "observed-a-model",
+      "observed-b-model",
+      ...Array.from({ length: 10 }, (_, index) => `aggregate-${index}-model`),
+    ]);
+    expect(options.tool).toEqual(Array.from({ length: 12 }, (_, index) => `tool-${index}`));
+  });
+
+  it("refreshes filter order and draft selections when chart mode, agent, or source changes", () => {
+    const container = document.createElement("div");
+    const props = createUsageProps();
+    props.data.sessions = [
+      usageSession("first", "main", "first", { totalTokens: 200, totalCost: 1 }),
+      usageSession("second", "other", "second", { totalTokens: 100, totalCost: 2 }),
+    ];
+    props.filters.query = "provider:absent";
+    props.filters.queryDraft = 'label:"Team  Planning" provider:second';
+    props.callbacks.filters.onQueryDraftChange = vi.fn();
+    const providerOptions = () =>
+      [...container.querySelectorAll<HTMLElement>(".usage-filter-select")]
+        .find(
+          (menu) => menu.querySelector(".usage-filter-trigger span")?.textContent === "Provider",
+        )!
+        .querySelectorAll<HTMLElement & { checked: boolean }>(".usage-filter-option");
+    const values = () => [...providerOptions()].map((option) => option.textContent?.trim());
+
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["first", "second"]);
+    expect([...providerOptions()].find((option) => option.checked)?.textContent?.trim()).toBe(
+      "second",
+    );
+    expect(container.querySelector(".usage-query-suggestion")?.textContent?.trim()).toBe(
+      "provider:second",
+    );
+
+    props.display.chartMode = "cost";
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["second", "first"]);
+    props.filters.agentId = "main";
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["first"]);
+    expect(container.querySelector(".usage-query-suggestion")).toBeNull();
+
+    props.data.sessions = [usageSession("replacement", "main", "second-new")];
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["second-new"]);
+    container.querySelector<HTMLButtonElement>(".usage-query-suggestion")?.click();
+    expect(props.callbacks.filters.onQueryDraftChange).toHaveBeenCalledWith(
+      'label:"Team  Planning" provider:second-new ',
+    );
   });
 
   it("reports a stalled provider refresh instead of hiding the section", () => {

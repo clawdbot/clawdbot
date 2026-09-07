@@ -189,8 +189,14 @@ internal class RealtimeAgentCoordinator(
           resultScope.launch { submitError(session, callId, "too many concurrent realtime Talk tool calls") }
         }
       }
-      AGENT_CONTROL_TOOL -> resultScope.launch { runControl(session, callId, args) }
-      else -> resultScope.launch { submitError(session, callId, "unsupported realtime Talk tool: $name") }
+
+      AGENT_CONTROL_TOOL -> {
+        resultScope.launch { runControl(session, callId, args) }
+      }
+
+      else -> {
+        resultScope.launch { submitError(session, callId, "unsupported realtime Talk tool: $name") }
+      }
     }
     return true
   }
@@ -292,11 +298,15 @@ internal class RealtimeAgentCoordinator(
           pendingCalls.remove(pendingCall)
           val errorMessage =
             when {
-              activeSession == session && duplicate -> "tool call returned a duplicate run id"
+              activeSession == session && duplicate -> {
+                "tool call returned a duplicate run id"
+              }
+
               activeSession != session || cached != null -> {
                 retireRunLocked(runId)
                 null
               }
+
               else -> {
                 runs[runId] = run
                 null
@@ -390,7 +400,10 @@ internal class RealtimeAgentCoordinator(
             buildJsonObject { put("text", JsonPrimitive(text)) },
           )
         }
-        "aborted", "error" -> submitError(run.session, run.callId, completion.state)
+
+        "aborted", "error" -> {
+          submitError(run.session, run.callId, completion.state)
+        }
       }
     }
   }

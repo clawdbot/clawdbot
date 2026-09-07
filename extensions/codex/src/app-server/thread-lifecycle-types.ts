@@ -28,6 +28,8 @@ type CodexAppServerThreadLifecycle = {
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
   liveThreadConfigFingerprint?: string;
+  /** Creation-time policy for a live ephemeral thread; never persisted in the binding. */
+  liveThreadEphemeralPolicy?: string;
   /** Process-local claim proof; never write this callback into durable binding state. */
   liveThreadOwnership?: CodexAppServerLiveThreadOwnership;
   clearInheritedServiceTier?: true;
@@ -59,6 +61,8 @@ export type CodexStartOrResumeThreadParams = {
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
   params: EmbeddedRunAttemptParams;
+  /** Retained host-generation proof; the opaque host capability remains unchanged. */
+  assertCurrent?: () => void;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;
   agentId?: string;
@@ -125,6 +129,12 @@ export type CodexThreadRequestContext = {
   throwIfAborted: () => void;
 };
 
+export type CodexThreadResumePreparation = {
+  assertConfigured: () => void;
+  assertCurrent: () => void;
+  dispose: () => void;
+};
+
 export type CodexResumeThreadContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
   clearCurrentBinding: (operation: string) => Promise<void>;
@@ -133,8 +143,8 @@ export type CodexResumeThreadContext = CodexThreadRequestContext & {
     binding: CodexAppServerThreadBinding,
   ) => Promise<CodexPluginThreadConfig | undefined>;
   prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult;
-  assertResumeConfiguration?: () => void;
-  assertResumeOwnership?: () => void;
+  prepareResume: () => Promise<CodexThreadResumePreparation>;
+  releaseRetainedThread: (assertCurrent: () => void) => Promise<void>;
 };
 
 export type CodexStartThreadContext = CodexThreadRequestContext & {

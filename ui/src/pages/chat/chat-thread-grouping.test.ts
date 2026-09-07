@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { groupMessages } from "./chat-thread-grouping.ts";
+import {
+  assistantGroupCanOwnActiveRunStatus,
+  collapseCompletedTurnWork,
+  groupMessages,
+} from "./chat-thread-grouping.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 function forwardedMessage(sessionKey: string, content = "Forwarded report") {
@@ -26,6 +30,56 @@ function cachedGroups(messages: unknown[]) {
     showToolCalls: true,
   }).filter((item) => item.kind === "group");
 }
+
+describe("reasoning activity boundaries", () => {
+  it.each([
+    { type: "text", text: "Visible answer" },
+    { type: "image", source: { type: "url", url: "https://example.com/result.png" } },
+    {
+      type: "attachment",
+      attachment: { kind: "document", url: "https://example.com/result.pdf", label: "Result" },
+    },
+    {
+      type: "canvas",
+      preview: {
+        kind: "canvas",
+        surface: "assistant_message",
+        render: "url",
+        url: "https://example.com/result",
+      },
+    },
+    { type: "future-visible-block" },
+  ])("preserves mixed reasoning and $type as the visible outcome", (outcome) => {
+    const thinking = { type: "thinking", thinking: "Checking the evidence." };
+    const messages = [
+      { role: "user", content: "Check it.", timestamp: 1_000 },
+      { role: "assistant", content: [thinking], timestamp: 2_000 },
+      { role: "assistant", content: [thinking, outcome], timestamp: 3_000 },
+    ];
+    const groups = groupMessages(
+      messages.map((message, index) => ({
+        kind: "message",
+        key: `message:${index}`,
+        message,
+      })),
+    );
+    expect(
+      collapseCompletedTurnWork(groups, {
+        sessionKey: "agent:main:dashboard:reasoning",
+        runWorking: false,
+      }),
+    ).toMatchObject([
+      { kind: "group", role: "user" },
+      { kind: "work-group", groups: [{ messages: [{ message: messages[1] }] }] },
+      { kind: "group", messages: [{ message: messages[2] }] },
+    ]);
+    const reasoningGroup = groups[1];
+    expect(reasoningGroup?.kind).toBe("group");
+    if (reasoningGroup?.kind === "group") {
+      expect(assistantGroupCanOwnActiveRunStatus(reasoningGroup)).toBe(false);
+    }
+  });
+});
 
 describe("forwarded source-session grouping", () => {
   beforeEach(() => resetChatThreadState());
@@ -116,5 +170,67 @@ describe("forwarded source-session grouping", () => {
 
     expect(refreshed[0]?.senderSession).toEqual(senderSession);
     expect(refreshed[0]).not.toBe(initial[0]);
+  });
+});
+
+describe("cached group content classification", () => {
+  beforeEach(() => resetChatThreadState());
+
+  it.each(["user", "assistant", "toolResult"])(
+    "preserves %s messages when normalization skips malformed content blocks",
+    (role) => {
+      for (const content of [[null], [null, { type: "text", text: "Still visible" }]]) {
+        const message = { role, content };
+        expect(groupMessages([{ kind: "message", key: "malformed", message }])).toMatchObject([
+          { kind: "group", messages: [{ key: "malformed", message }] },
+        ]);
+      }
+    },
+  );
+
+  it("keeps media visible and folds commentary after the same message changes in place", () => {
+    const content: Record<string, unknown>[] = [
+      { type: "image", url: "https://example.com/diagram.png" },
+    ];
+    const preview = {
+      role: "assistant",
+      content,
+      timestamp: 2,
+    };
+    const messages = [
+      { role: "user", content: "Build a diagram", timestamp: 1 },
+      preview,
+      {
+        role: "toolResult",
+        toolCallId: "render-diagram",
+        toolName: "render",
+        content: "Ready",
+        timestamp: 3,
+      },
+      { role: "assistant", content: "Done", timestamp: 4 },
+    ];
+    const project = () =>
+      collapseCompletedTurnWork(cachedGroups([...messages]), {
+        sessionKey: "agent:target:dashboard:history",
+        runWorking: false,
+      });
+
+    expect(project()).toMatchObject([
+      { kind: "group", role: "user" },
+      { kind: "group", role: "assistant", messages: [{ message: preview }] },
+      { kind: "work-group", groups: [{ role: "tool" }] },
+      { kind: "group", role: "assistant" },
+    ]);
+
+    preview.content.splice(0, 1, { type: "text", text: "Preparing a diagram" });
+
+    expect(project()).toMatchObject([
+      { kind: "group", role: "user" },
+      {
+        kind: "work-group",
+        groups: [{ role: "assistant", messages: [{ message: preview }] }, { role: "tool" }],
+      },
+      { kind: "group", role: "assistant" },
+    ]);
   });
 });

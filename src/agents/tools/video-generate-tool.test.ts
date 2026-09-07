@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
+import { SaveMediaSourceError } from "../../media/store.shared.js";
 import * as webMedia from "../../media/web-media.js";
 import * as pluginConfig from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -993,7 +994,12 @@ describe("createVideoGenerateTool", () => {
       ignoredOverrides: [],
       videos: [
         { buffer: Buffer.from("saved"), mimeType: "video/mp4", fileName: "saved.mp4" },
-        { buffer: Buffer.from("failed"), mimeType: "video/mp4", fileName: "failed.mp4" },
+        {
+          buffer: Buffer.from("failed"),
+          url: "https://media.example/failed.mp4",
+          mimeType: "video/mp4",
+          fileName: "failed.mp4",
+        },
       ],
     });
     const terminalError = new Error("video persistence failed");
@@ -1052,7 +1058,7 @@ describe("createVideoGenerateTool", () => {
       ],
     });
     vi.spyOn(mediaStore, "saveMediaBuffer")
-      .mockRejectedValueOnce(new Error("Media exceeds 16MB limit"))
+      .mockRejectedValueOnce(SaveMediaSourceError.tooLarge(16 * 1024 * 1024))
       .mockResolvedValueOnce({
         path: "/tmp/second.mp4",
         id: "second.mp4",

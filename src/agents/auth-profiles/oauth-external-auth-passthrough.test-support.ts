@@ -5,10 +5,13 @@
  */
 import { afterAll, vi } from "vitest";
 
-vi.mock("./external-auth.js", () => ({
-  listRuntimeExternalAuthProfiles: () => [],
-  overlayExternalAuthProfiles: <T>(store: T) => store,
+vi.mock("./external-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./external-auth.js")>()),
   syncPersistedExternalCliAuthProfiles: <T>(store: T) => store,
+  createExternalAuthRuntime: () => ({
+    listRuntimeExternalAuthProfiles: () => [],
+    overlayExternalAuthProfiles: <T>(store: T) => store,
+  }),
 }));
 
 afterAll(() => {

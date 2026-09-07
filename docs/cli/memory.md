@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/search/forget/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
+summary: "CLI reference for `openclaw memory` (status/index/reset/search/forget/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
 read_when:
   - You want to index or search semantic memory
   - You're debugging memory availability or indexing
@@ -20,6 +20,20 @@ plugins expose their own CLI namespaces.
 Related: [Memory](/concepts/memory) concept, [Dreaming](/concepts/dreaming),
 [Memory config reference](/reference/memory-config), [Memory Wiki](/plugins/memory-wiki),
 [wiki](/cli/wiki), [Plugins](/tools/plugin).
+
+## JSON availability
+
+With `--json`, `search`, `promote`, `promote-explain`, `rem-harness`,
+`rem-backfill`, and `session-backfill` report when the memory backend is
+unavailable before any work runs:
+
+- Disabled memory returns `{"agentId":"main","status":"disabled"}` with a successful exit.
+- Backend acquisition failures return the standard `{"ok":false,"error":{"type":"cli_error","message":"..."}}` envelope, plus `agentId`, and exit with code 1.
+
+Handle these outcomes before reading the command's normal result fields. An
+enabled search with no matches still returns `{"results":[]}`. `status --json`
+keeps its aggregate array of available agents, including `[]` when all are
+disabled; acquisition failures still set a nonzero exit code.
 
 ## `memory status`
 
@@ -44,6 +58,14 @@ default agent's heartbeat firing to trigger reconciliation. See
 [Dreaming](/concepts/dreaming) for scheduling details.
 
 Status also lists any extra search paths from `memory.search.extraPaths`.
+Storage diagnostics show the shared agent database file, WAL, reusable free pages,
+and retained embedding-cache payload bytes and entry count, including when the cache
+is disabled. Per-source text-plus-embedding totals describe indexed chunks only.
+These figures overlap: do not add payload or reusable bytes to the file sizes.
+The database also holds sessions and other agent state; the WAL can contain newer
+pages not yet checkpointed into the main file. JSON exposes these facts under
+`status.storage`. Byte inspection runs only for explicit diagnostics, not normal
+memory searches.
 For providers that discover their default model at initialization, plain status
 defers model identity checks until that model is known. Use `--deep` to initialize
 the provider and verify the model and provider settings against the existing index.
@@ -68,6 +90,62 @@ both groups without reindexing their retained transcripts. Ordinary retained,
 reset, and deleted user-session archives remain eligible until explicitly
 targeted.
 
+If status reports an index identity warning after changing embedding settings,
+check the affected agent's provider, model, sources, and extra paths, then rebuild:
+
+```bash
+openclaw memory status --deep --agent <id>
+openclaw memory index --force --agent <id>
+openclaw memory status --agent <id>
+```
+
+`openclaw memory status --index --agent <id>` also rebuilds an incompatible index.
+Both repair commands replace the derived memory index while preserving other agent
+state. Use `--agent` to limit the repair to the affected agent.
+
+<Warning>
+The default `openclaw-agent.sqlite` database also contains canonical sessions,
+transcripts, and other durable agent state. Never delete it or its `-wal`,
+`-shm`, or `-journal` sidecars to reset a memory index. Use `memory index --force`
+to rebuild, or [`memory reset`](/cli/memory#memory-reset) to clear the derived index and
+embedding cache; see
+[Safe index recovery](/concepts/memory-builtin#safe-index-recovery).
+</Warning>
+
+## `memory reset`
+
+Clear the builtin memory index and embedding cache without deleting sessions,
+transcripts, or memory files.
+
+```bash
+openclaw memory reset [--agent <id>] [--yes]
+```
+
+Same per-agent scoping as `status` and `index`: without `--agent`, reset runs for
+every configured agent, falling back to the default agent when no list is
+configured. The command asks for confirmation. `--yes` skips the prompt and is
+required in a non-interactive terminal.
+
+Reset atomically drops and recreates only memory-owned derived tables in
+`agents/<agentId>/agent/openclaw-agent.sqlite`, clearing indexed content and
+cached embeddings while retaining required revision bookkeeping. Non-memory
+database tables and memory source files remain untouched. An agent with no index
+is a successful no-op. Reset coordinates with existing memory maintenance and
+does not restart the Gateway; a running Gateway can reindex retained sources
+afterward. If indexing is busy, let it finish and retry reset.
+
+Rebuild from retained sources afterward:
+
+```bash
+openclaw memory reset --agent main --yes
+openclaw memory index --agent main
+```
+
+Reset does not shrink the database file or restore data already lost by deleting
+it. To reclaim disk space, follow [disk-space recovery](/concepts/memory-builtin#reclaim-disk-space)
+before rebuilding. It is not a privacy purge: use [`memory forget`](/cli/memory#memory-forget) to remove
+tracked memory derived from selected sessions and prevent re-ingestion.
+
 ## `memory search`
 
 ```bash
@@ -85,6 +163,9 @@ If automatic indexing failed, or the index identity is incompatible, human
 output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`
 array as authoritative only when `stale` is absent.
+
+The Control UI's Memories tab shows the same warning and recovery guidance
+alongside stale search results, and clears them after a fresh search.
 
 ## `memory forget`
 
@@ -284,6 +365,10 @@ openclaw memory promote [--agent <id>] [--limit <n>] [--min-score <n>] \
 
 The CLI and scheduled dreaming sweep share the deep-phase defaults below.
 Explicit CLI flags override them for a one-off manual run.
+
+Entries with `untrusted` or `system` provenance are excluded before ranking, so
+they do not occupy preview limits or appear in `promote-explain`. Promotion still
+rechecks current provenance before writing.
 
 Ranking signals: recall frequency, retrieval relevance, query diversity,
 temporal recency, cross-day consolidation, and derived concept richness, drawn

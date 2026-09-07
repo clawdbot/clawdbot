@@ -76,7 +76,6 @@ export const OpenClawSchemaShape = {
       lastRunCommit: z.string().optional(),
       lastRunCommand: z.string().optional(),
       lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
-      localModelLeanAutoModel: z.string().optional(),
       securityAcknowledgedAt: z.string().optional(),
     })
     .optional(),
@@ -338,6 +337,7 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
+      skipMissedJobs: z.boolean().optional(),
       triggers: z
         .strictObject({
           enabled: z.boolean().optional(),
@@ -382,6 +382,7 @@ export const OpenClawSchemaShape = {
         .array(
           z.strictObject({
             providerId: z.string().min(1),
+            whenOccupied: z.boolean().optional(),
             sessionId: z.string().min(1).optional(),
             title: z.string().min(1).optional(),
             accountId: z.string().min(1).optional(),
@@ -488,7 +489,6 @@ export const OpenClawSchemaShape = {
             })
             .optional(),
           approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
-          allowSymlinkTargetWrites: z.boolean().optional(),
           maxPending: z.number().int().min(1).optional(),
           maxSkillBytes: z.number().int().min(1).optional(),
         })

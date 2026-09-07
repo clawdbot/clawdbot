@@ -12,6 +12,7 @@ import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./sandbox/shared.js";
 import { listAgentWorkspaceDirs } from "./workspace-dirs.js";
 import { assertWorkspaceStateMigrationReady } from "./workspace-legacy-state.js";
+import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
 
 /** Select configured workspaces and active sandbox copies for migration and readiness. */
 export function listWorkspaceStateDirs(params: {
@@ -86,6 +87,7 @@ export function listWorkspaceStateDirs(params: {
 export function assertConfiguredWorkspaceStateReady(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  operation?: "doctor";
 }): void {
   const env = params.env ?? process.env;
   const homedir = os.homedir;
@@ -95,5 +97,10 @@ export function assertConfiguredWorkspaceStateReady(params: {
     homedir,
     stateDir: resolveStateDir(env, homedir),
   });
-  assertWorkspaceStateMigrationReady({ workspaceDirs, env, homedir });
+  if (params.operation === "doctor") {
+    for (const workspaceDir of workspaceDirs) {
+      readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
+    }
+  }
+  assertWorkspaceStateMigrationReady({ ...params, workspaceDirs, env, homedir });
 }
