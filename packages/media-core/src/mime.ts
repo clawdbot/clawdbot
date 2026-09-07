@@ -1,4 +1,3 @@
-// Media Core module implements mime behavior.
 import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 import { extnameFromAnyPath } from "./file-name.js";

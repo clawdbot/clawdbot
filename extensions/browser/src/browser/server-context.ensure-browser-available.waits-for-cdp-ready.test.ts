@@ -600,6 +600,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
       state.resolved.remoteCdpTimeoutMs,
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,
+      { onDiagnostic: expect.any(Function) },
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
@@ -638,9 +639,54 @@ describe("browser server-context ensureBrowserAvailable", () => {
       state.resolved.remoteCdpTimeoutMs,
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,
+      { onDiagnostic: expect.any(Function) },
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("caches external browser mode per observed browser instance", async () => {
+    setupEnsureBrowserAvailableHarness();
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+    const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
+    const inspectLocalChromeHeadlessMode = vi.mocked(chromeModule.inspectLocalChromeHeadlessMode);
+    const { profile, state } = createAttachOnlyLoopbackProfile("http://127.0.0.1:9222");
+    const emitDiagnostic =
+      (wsUrl: string) =>
+      async (...args: Parameters<typeof chromeModule.isChromeCdpReady>): Promise<boolean> => {
+        await args[4]?.onDiagnostic?.({
+          ok: true,
+          cdpUrl: "http://127.0.0.1:9222",
+          wsUrl,
+          browser: "Chrome/151.0.0.0",
+          elapsedMs: 1,
+        });
+        return true;
+      };
+
+    isChromeReachable.mockResolvedValue(true);
+    isChromeCdpReady
+      .mockImplementationOnce(emitDiagnostic("ws://127.0.0.1:9222/devtools/browser/A"))
+      .mockImplementationOnce(emitDiagnostic("ws://127.0.0.1:9222/devtools/browser/A"))
+      .mockImplementationOnce(emitDiagnostic("ws://127.0.0.1:9222/devtools/browser/B"));
+    inspectLocalChromeHeadlessMode.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await profile.ensureBrowserAvailable();
+    const runtime = state.profiles.get("manual-cdp");
+    await expect(runtime?.externalBrowserMode?.headless).resolves.toBe(false);
+
+    await profile.ensureBrowserAvailable();
+    expect(inspectLocalChromeHeadlessMode).toHaveBeenCalledTimes(1);
+
+    await profile.ensureBrowserAvailable();
+    await expect(runtime?.externalBrowserMode?.headless).resolves.toBe(true);
+    expect(inspectLocalChromeHeadlessMode).toHaveBeenCalledTimes(2);
+
+    if (!runtime) {
+      throw new Error("expected manual-cdp runtime");
+    }
+    await beginProfileTransition({ state, runtime, reason: "test browser mode cache reset" });
+    expect(runtime.externalBrowserMode).toBeUndefined();
   });
 
   it("redacts credentials in remote CDP availability errors", async () => {

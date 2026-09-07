@@ -137,6 +137,10 @@ function providerWithRawRunner(
     ...provider,
     provision: (profile, operationId, options) =>
       provider.provision(profile, operationId, {
+        nodeRuntimeIdentity: {
+          nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
+          executionMode: options?.executionMode ?? "worker-turn",
+        },
         ...options,
         beginNodeEnrollment:
           options?.beginNodeEnrollment ??
@@ -1530,188 +1534,22 @@ describe("Crabbox worker provider", () => {
   });
 
   it.each(["aws", "AWS"])(
-    "rejects an effective %s instance profile only after stop confirms cleanup",
+    "rejects an effective %s instance profile during allocation-free preparation",
     async (backend) => {
       const calls: string[][] = [];
       const provider = providerWithRawRunner(async (argv) => {
         calls.push(argv);
-        if (argv[1] === "config") {
-          return commandResult({
-            stdout: JSON.stringify({ aws: { instanceProfile: "worker-role" } }),
-          });
-        }
-        if (argv[1] === "inspect") {
-          return commandResult({ code: 4, stderr: `lease/server not found: ${LEASE_ID}` });
-        }
-        if (argv[1] === "stop") {
-          return commandResult();
-        }
-        throw new Error(`unexpected Crabbox command: ${argv[1]}`);
-      });
-
-      await expect(
-        provider.provision({ ...PROFILE, provider: backend }, OPERATION_ID),
-      ).rejects.toMatchObject({
-        code: "invalid_profile",
-        message: "Crabbox AWS instance profile must be empty for cloud workers",
-      });
-      expect(calls.map((argv) => argv[1])).toEqual(["config", "inspect", "stop"]);
-    },
-  );
-
-  it.each(["recognized", "unrecognized"])(
-    "cleans a committed %s fixed lease before making an AWS profile rejection permanent",
-    async (recognition) => {
-      const calls: string[][] = [];
-      let creates = 0;
-      let inspectTimeout = true;
-      let profileRejected = false;
-      let live = false;
-      const runCommand: CrabboxCommandRunner = async (argv) => {
-        calls.push(argv);
-        if (argv[1] === "config") {
-          return commandResult({
-            stdout: JSON.stringify({
-              aws: { instanceProfile: profileRejected ? "worker-role" : "" },
-            }),
-          });
-        }
-        if (argv[1] === "warmup") {
-          if (!live) {
-            creates += 1;
-            live = true;
-          }
-          return commandResult();
-        }
-        if (argv[1] === "inspect") {
-          if (inspectTimeout) {
-            inspectTimeout = false;
-            return commandResult({ code: null, killed: true, termination: "timeout" });
-          }
-          return recognition === "unrecognized"
-            ? commandResult({ code: 4, stderr: `lease/server not found: ${LEASE_ID}` })
-            : commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
-        }
-        if (argv[1] === "stop") {
-          live = false;
-          return commandResult();
-        }
-        throw new Error(`unexpected Crabbox command: ${argv[1]}`);
-      };
-
-      await expect(
-        providerWithRawRunner(runCommand).provision(PROFILE, OPERATION_ID),
-      ).rejects.toThrow("inspect did not exit normally (timeout)");
-      expect(live).toBe(true);
-      profileRejected = true;
-
-      await expect(
-        providerWithRawRunner(runCommand).provision(PROFILE, OPERATION_ID),
-      ).rejects.toMatchObject({
-        code: "invalid_profile",
-        message: "Crabbox AWS instance profile must be empty for cloud workers",
-      });
-      expect(creates).toBe(1);
-      expect(live).toBe(false);
-      expect(calls.map((argv) => argv[1])).toEqual([
-        "config",
-        "warmup",
-        "inspect",
-        "config",
-        "inspect",
-        "stop",
-      ]);
-      expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
-    },
-  );
-
-  it("cleans the exact fixed ID after malformed reconciliation inspection", async () => {
-    const calls: string[][] = [];
-    let live = true;
-    const provider = providerWithRawRunner(async (argv) => {
-      calls.push(argv);
-      if (argv[1] === "config") {
         return commandResult({
           stdout: JSON.stringify({ aws: { instanceProfile: "worker-role" } }),
         });
-      }
-      if (argv[1] === "inspect") {
-        return commandResult({ stdout: "{" });
-      }
-      if (argv[1] === "stop") {
-        live = false;
-        return commandResult();
-      }
-      throw new Error(`unexpected Crabbox command: ${argv[1]}`);
-    });
-
-    await expect(provider.provision(PROFILE, OPERATION_ID)).rejects.toMatchObject({
-      code: "invalid_profile",
-      message: "Crabbox AWS instance profile must be empty for cloud workers",
-    });
-    expect(live).toBe(false);
-    expect(calls.map((argv) => argv[1])).toEqual(["config", "inspect", "stop"]);
-    expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
-  });
-
-  it.each(["inspect", "stop", "unrecognized stop"] as const)(
-    "keeps AWS profile rejection transient while exact-ID %s is indeterminate",
-    async (failurePoint) => {
-      const calls: string[][] = [];
-      let live = true;
-      const provider = providerWithRawRunner(async (argv) => {
-        calls.push(argv);
-        if (argv[1] === "config") {
-          return commandResult({
-            stdout: JSON.stringify({ aws: { instanceProfile: "worker-role" } }),
-          });
-        }
-        if (argv[1] === "inspect") {
-          return failurePoint === "inspect"
-            ? commandResult({ code: null, killed: true, termination: "timeout" })
-            : failurePoint === "unrecognized stop"
-              ? commandResult({ code: 4, stderr: `lease/server not found: ${LEASE_ID}` })
-              : commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
-        }
-        if (argv[1] === "stop") {
-          if (failurePoint !== "inspect") {
-            return commandResult({ code: null, killed: true, termination: "timeout" });
-          }
-          live = false;
-          return commandResult();
-        }
-        throw new Error(`unexpected Crabbox command: ${argv[1]}`);
       });
-
-      const error = await provider
-        .provision(PROFILE, OPERATION_ID)
-        .catch((cause: unknown) => cause);
-      expect(error).toBeInstanceOf(Error);
-      expect(error).not.toMatchObject({ code: "invalid_profile" });
-      if (failurePoint === "stop") {
-        expect(WorkerProviderError.isCleanupIndeterminate(error)).toBe(true);
-        if (!WorkerProviderError.isCleanupIndeterminate(error)) {
-          throw new Error("expected indeterminate worker cleanup error");
-        }
-        expect(error).toMatchObject({
-          leaseId: LEASE_ID,
-          provisionError: {
-            message: "Crabbox AWS instance profile must be empty for cloud workers",
-          },
-          cleanupError: { message: expect.stringContaining("stop did not exit normally") },
-        });
-      } else {
-        const message = error instanceof Error ? error.message : "";
-        expect(message).toContain(
-          `cleanup is indeterminate during ${failurePoint === "inspect" ? "inspect" : "stop"}`,
-        );
-        expect(message).toContain("Crabbox AWS instance profile must be empty for cloud workers");
-        expect(message.length).toBeLessThanOrEqual(512);
-      }
-      expect(live).toBe(true);
-      expect(calls.map((argv) => argv[1])).toEqual(
-        failurePoint === "inspect" ? ["config", "inspect"] : ["config", "inspect", "stop"],
-      );
+      await expect(
+        provider.prepareProvision!({ ...PROFILE, provider: backend }, OPERATION_ID),
+      ).rejects.toMatchObject({
+        code: "invalid_profile",
+        message: "Crabbox AWS instance profile must be empty for cloud workers",
+      });
+      expect(calls.map((argv) => argv[1])).toEqual(["config"]);
     },
   );
 

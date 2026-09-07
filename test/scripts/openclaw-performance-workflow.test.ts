@@ -240,9 +240,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "81919463ef9620722373c813192c688573f2b533";
-    const legacyKovaRef = "81919463ef9620722373c813192c688573f2b533";
-    const trustedLiveKovaRef = "81919463ef9620722373c813192c688573f2b533";
+    const canonicalKovaRef = "e4d865f55f655a77df169a7be01877608c3260b9";
+    const legacyKovaRef = "e4d865f55f655a77df169a7be01877608c3260b9";
+    const trustedLiveKovaRef = "e4d865f55f655a77df169a7be01877608c3260b9";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");

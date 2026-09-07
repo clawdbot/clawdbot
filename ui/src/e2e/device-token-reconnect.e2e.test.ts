@@ -152,7 +152,11 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       gatewayUrl: ROSITA_GATEWAY_URL,
       sharedToken: "shared-rosita",
     });
-    expect(requireConnectAuth(rositaSource.connect)).toEqual({ token: "shared-rosita" });
+    expect(requireConnectAuth(rositaSource.connect)).toEqual({
+      // The single secret field sends the shared secret in both connect fields.
+      password: "shared-rosita",
+      token: "shared-rosita",
+    });
 
     const wilfredSource = await openGatewayPage({
       appBaseUrl: server.baseUrl,
@@ -161,7 +165,11 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       gatewayUrl: WILFRED_GATEWAY_URL,
       sharedToken: "shared-wilfred",
     });
-    expect(requireConnectAuth(wilfredSource.connect)).toEqual({ token: "shared-wilfred" });
+    expect(requireConnectAuth(wilfredSource.connect)).toEqual({
+      // The single secret field sends the shared secret in both connect fields.
+      password: "shared-wilfred",
+      token: "shared-wilfred",
+    });
 
     const rositaReconnect = await openGatewayPage({
       appBaseUrl: server.baseUrl,

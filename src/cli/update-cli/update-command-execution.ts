@@ -1,9 +1,12 @@
+import path from "node:path";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { tryReadJson } from "../../infra/json-files.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import type { UpdateCandidateRehearsal } from "../../infra/update-candidate-rehearsal.js";
@@ -20,7 +23,10 @@ import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-ru
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import {
+  parsePackageOpenClawSchemaVersions,
+  type OpenClawSchemaVersions,
+} from "../../state/openclaw-schema-versions.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -40,6 +46,7 @@ import {
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
+import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
 import {
@@ -52,6 +59,10 @@ import {
   withOwnedManagedUpdateEnv,
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
+import {
+  runPackageInstallUpdate,
+  type PackageInstallUpdateParams,
+} from "./update-command-package.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
 import {
   GatewayServiceUpdateOwnershipError,
@@ -67,11 +78,11 @@ import {
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
-import { selectPackageExecutor, type PreparedPackageUpdate } from "./update-package-executor.js";
 
 const CLI_NAME = resolveCliName();
 
 type MutableUpdateExecutionResult = {
+  mutationStarted: boolean;
   result: UpdateRunResult;
   failure?: { cause: unknown; detail: string };
   preManagedServiceStop: PreManagedServiceStop | undefined;
@@ -80,7 +91,9 @@ type MutableUpdateExecutionResult = {
   packageTransaction?: PackageUpdateTransaction;
   schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
   candidateSchemaVersions?: OpenClawSchemaVersions;
+  previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
+  activationConfig?: UpdateConfigSnapshot;
 };
 
 export async function executeMutableUpdate(params: {
@@ -101,6 +114,7 @@ export async function executeMutableUpdate(params: {
   packageInstallSpec: string | null;
   packageInstallEnv?: NodeJS.ProcessEnv;
   packageInstallTarget?: ResolvedGlobalInstallTarget;
+  packageTargetVersion?: string;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
   packageUpdateNodeRunner?: string;
   managedServiceNodeRunner?: string;
@@ -146,7 +160,12 @@ export async function executeMutableUpdate(params: {
   let packageTransaction: PackageUpdateTransaction | undefined;
   let schemaVersions: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>> | undefined;
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
+  let previousSchemaVersions: OpenClawSchemaVersions | undefined;
   let previousVerified = false;
+  let activationConfig: MutableUpdateExecutionResult["activationConfig"];
+  const onConfigSnapshot: PackageInstallUpdateParams["onConfigSnapshot"] = (snapshot) => {
+    activationConfig = snapshot;
+  };
   let candidateFailureReason: string | undefined;
   let validatedConfigSnapshot: { config: OpenClawConfig; hash?: string | null } | undefined;
   const originalRecovery = () =>
@@ -187,6 +206,9 @@ export async function executeMutableUpdate(params: {
           phase,
           expectedService: admission?.services.get(mutationRoot),
           updateRun: params.opts.run,
+          onStopped: (state) => {
+            preManagedServiceStop = state;
+          },
           handoffFromGateway: (state) =>
             handoffUpdateFromGateway({
               state,
@@ -238,9 +260,11 @@ export async function executeMutableUpdate(params: {
         throw new UpdatePreMutationError("managed-service-preflight", err.message);
       }
       params.stop();
-      throw new Error(`Failed to stop managed gateway service before update: ${String(err)}`, {
-        cause: err,
-      });
+      throw new UpdatePreMutationError(
+        "managed-service-stop-failed",
+        `Failed to stop managed gateway service before update: ${String(err)}`,
+        { cause: err },
+      );
     }
 
     if (phase === "inspect" && preManagedServiceStop?.serviceUpdateVerdict?.kind === "foreign") {
@@ -288,10 +312,7 @@ export async function executeMutableUpdate(params: {
 
   let result: UpdateRunResult;
   let failure: MutableUpdateExecutionResult["failure"];
-  const packageExecutor =
-    params.updateInstallKind === "package" ? selectPackageExecutor() : undefined;
-  let preparedPackageUpdate: PreparedPackageUpdate | undefined;
-  let packageActivationStarted = false;
+  let mutationStarted = false;
   const validateCandidate = async (root: string) => {
     const env = ownedManagedUpdateContext?.env ?? params.opts.run?.env ?? process.env;
     if (params.opts.run) {
@@ -400,6 +421,9 @@ export async function executeMutableUpdate(params: {
     }
     const config = snapshot.config;
     await recheckSchemas(admittedTargetSchemaVersions);
+    previousSchemaVersions = parsePackageOpenClawSchemaVersions(
+      await tryReadJson<unknown>(path.join(params.root, "package.json")),
+    );
     schemaVersions = candidateSchemaVersions
       ? await readUpdateStateSchemaVersions({
           stateDir: resolveStateDir(env),
@@ -480,6 +504,7 @@ export async function executeMutableUpdate(params: {
     if (params.updateInstallKind === "package") {
       preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     }
+    mutationStarted = true;
     params.onActivation?.();
   };
   try {
@@ -496,40 +521,46 @@ export async function executeMutableUpdate(params: {
     }
     if (params.updateInstallKind === "package") {
       await recheckSchemas(params.packageTargetSchemaVersions);
+      const { preflightConfiguredNpmPluginTargets } =
+        await import("./update-command-plugin-preflight.js");
+      const context = admission!.contexts.at(-1)!;
+      await preflightConfiguredNpmPluginTargets({
+        config: context.configSnapshot.sourceConfig,
+        env: context.env,
+        targetVersion: params.packageTargetVersion ?? null,
+        channel: params.channel,
+        timeoutMs: params.updateStepTimeoutMs,
+      });
+      await recheckSchemas(params.packageTargetSchemaVersions);
       await params.prepareMutableUpdate(admission?.managedEnv);
       await stopManagedServiceBeforeMutableUpdate(undefined, "inspect");
-    }
-    preparedPackageUpdate = await packageExecutor?.prepare({
-      root: params.root,
-      installKind: params.installKind,
-      tag: params.tag,
-      installSpec: params.packageInstallSpec ?? undefined,
-      timeoutMs: params.updateStepTimeoutMs,
-      startedAt: params.startedAt,
-      progress: params.progress,
-      jsonMode: Boolean(params.opts.json),
-      invocationCwd: params.invocationCwd,
-      honorPackageRoot:
-        params.managedServiceRootRedirect !== null || params.managedServiceNodeRunner !== undefined,
-      nodeRunner: params.packageUpdateNodeRunner,
-      installEnv: params.packageInstallEnv,
-      installTarget: params.packageInstallTarget,
-      validateCandidate,
-      beforeActivate,
-      onTransaction: (transaction) => {
-        packageTransaction = transaction;
-      },
-    });
-    if (params.updateInstallKind === "package") {
-      await recheckSchemas(params.packageTargetSchemaVersions);
-    }
-    if (packageExecutor && preparedPackageUpdate) {
-      packageActivationStarted = true;
-      result = await packageExecutor.activate({
-        prepared: preparedPackageUpdate,
-        activation: {
-          managedServiceEnv: preManagedServiceStop?.serviceEnv,
+      const packageUpdate: PackageInstallUpdateParams = {
+        root: params.root,
+        installKind: params.installKind,
+        tag: params.tag,
+        installSpec: params.packageInstallSpec ?? undefined,
+        timeoutMs: params.updateStepTimeoutMs,
+        startedAt: params.startedAt,
+        progress: params.progress,
+        jsonMode: Boolean(params.opts.json),
+        invocationCwd: params.invocationCwd,
+        honorPackageRoot:
+          params.managedServiceRootRedirect !== null ||
+          params.managedServiceNodeRunner !== undefined,
+        nodeRunner: params.packageUpdateNodeRunner,
+        installEnv: params.packageInstallEnv,
+        installTarget: params.packageInstallTarget,
+        validateCandidate,
+        beforeActivate,
+        onTransaction: (transaction) => {
+          packageTransaction = transaction;
         },
+        onConfigSnapshot,
+      };
+      await recheckSchemas(params.packageTargetSchemaVersions);
+      result = await runPackageInstallUpdate({
+        ...packageUpdate,
+        managedServiceEnv: preManagedServiceStop?.serviceEnv,
       });
     } else {
       result = await updateGitInstall({
@@ -561,6 +592,7 @@ export async function executeMutableUpdate(params: {
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
+        onConfigSnapshot,
         // Foreign inspection metadata cannot authorize backup or Doctor writes.
         getManagedServiceEnv: () => ownedManagedUpdateContext?.env,
         invocationCwd: params.invocationCwd,
@@ -596,12 +628,6 @@ export async function executeMutableUpdate(params: {
       });
     }
   } catch (err) {
-    if (packageExecutor && preparedPackageUpdate && !packageActivationStarted) {
-      await packageExecutor.discard(
-        preparedPackageUpdate,
-        err instanceof UpdateCommandAbort ? "update-aborted" : "pre-activation-failed",
-      );
-    }
     params.stop();
     if (err instanceof UpdateCommandAbort) {
       return null;
@@ -632,6 +658,7 @@ export async function executeMutableUpdate(params: {
           cwd: params.root,
           durationMs,
           exitCode: 1,
+          ...(isAbortError(err) ? { termination: "signal" as const } : {}),
           stderrTail: message,
         },
       ],
@@ -645,12 +672,15 @@ export async function executeMutableUpdate(params: {
   return {
     result,
     failure,
+    mutationStarted,
     preManagedServiceStop,
     ownedManagedUpdateContext,
     recoveryEnv,
     packageTransaction,
     schemaVersions,
     candidateSchemaVersions,
+    previousSchemaVersions,
     previousVerified,
+    activationConfig,
   };
 }

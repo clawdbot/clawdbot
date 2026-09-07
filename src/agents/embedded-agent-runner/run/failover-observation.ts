@@ -1,7 +1,7 @@
 /**
  * Logs redacted failover decisions for embedded-agent attempts.
  */
-import { redactIdentifier } from "../../../logging/redact-identifier.js";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { sanitizeForConsole } from "../../console-sanitize.js";
 import {

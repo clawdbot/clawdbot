@@ -321,6 +321,50 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       }).status,
     ).toBe("fail");
   });
+  it.each([null, 0, 2, 3, 4])(
+    "requires exactly three reviewed one-shot fixture spawns when packed: %s",
+    async (count) => {
+      const packageName = "@openclaw/codex";
+      const fixturePath = "src/app-server/run-attempt-one-shot-cleanup.test.ts";
+      const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
+      const spawnProbe =
+        'import { spawn } from "node:child_process";\nspawn(process.execPath, []);\n';
+      const artifact = writePluginArtifact({
+        extensionId: "codex",
+        packageName,
+        files: {
+          "src/app-server/transport-stdio.ts": spawnProbe,
+          "src/doctor.ts": spawnProbe,
+          "src/app-server/sandbox-exec-server/sandbox-child.ts": spawnProbe,
+          "src/app-server/transport-process-snapshot.ts": spawnProbe,
+          ...(count === null
+            ? {}
+            : {
+                [fixturePath]:
+                  'import { spawn } from "node:child_process";\n' +
+                  "spawn(process.execPath, []);\n".repeat(count),
+              }),
+        },
+      });
+      const scanned = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.3");
+      expect(scanned.scanErrors).toEqual([]);
+      expect(scanned.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
+      expect(scanned.packageResults[0]?.expectedReviewedCriticalFindings).toEqual(
+        count === null ? [] : Array.from({ length: 3 }, () => fixtureKey),
+      );
+      const report = buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: scanned.packageResults,
+        targetContextRef: "release/2026.9.3",
+        toolingSha: TOOLING_SHA,
+      });
+      expect(report.errors.filter((error) => error.startsWith(`${packageName}:`))).toEqual(
+        count === null || count === 3
+          ? []
+          : [expect.stringContaining("reviewed critical inventory mismatch")],
+      );
+    },
+  );
 
   it.each([1, 2])(
     "reviews exactly one current hardware probe, preserving frozen policy: %s",

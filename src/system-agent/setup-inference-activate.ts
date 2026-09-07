@@ -110,8 +110,7 @@ export async function activateSetupInference(
       error: await redactSetupInferenceError(result.error, params.apiKey, codexCliApiKey?.key),
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const redacted = await redactSetupInferenceError(message, params.apiKey, codexCliApiKey?.key);
+    const redacted = await redactSetupInferenceError(error, params.apiKey, codexCliApiKey?.key);
     if (error instanceof WizardCancelledError) {
       throw new WizardCancelledError(redacted);
     }

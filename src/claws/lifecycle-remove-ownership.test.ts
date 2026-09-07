@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readSourceConfigBestEffort, resetConfigRuntimeState } from "../config/config.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -30,10 +30,7 @@ afterEach(async () => {
 async function fixture(withFile = false) {
   const state = await createOpenClawTestState({ prefix: "claw-removal-owner-" });
   cleanups.push(() => state.cleanup());
-  let config: OpenClawConfig = {};
-  const commitConfig = async (transform: (current: OpenClawConfig) => OpenClawConfig) => {
-    config = transform(config);
-  };
+  await state.writeConfig({});
   const install = async (name: string) => {
     const root = state.path(name);
     await fs.mkdir(root);
@@ -41,7 +38,10 @@ async function fixture(withFile = false) {
     expect(
       await applyClawAddPlan(added.plan, {
         consentPlanIntegrity: added.plan.planIntegrity,
-        commitConfig,
+        commitConfig: async (transform) => {
+          await state.writeConfig(transform(await readSourceConfigBestEffort()));
+          resetConfigRuntimeState();
+        },
       }),
     ).toMatchObject({ status: "complete" });
     return added.plan.agent.workspace;
@@ -52,11 +52,11 @@ async function fixture(withFile = false) {
     return true;
   };
   const remove = async (overrides: Partial<ClawRemoveApplyOptions> = {}) => {
+    const config = await readSourceConfigBestEffort();
     const plan = await buildClawRemovePlan("worker", { config });
     expect(plan.blockers).toEqual([]);
     return await applyClawRemovePlan(plan, {
       config,
-      commitConfig,
       monitorGateway: quiescentClawMonitorGateway,
       consentPlanIntegrity: plan.planIntegrity,
       trashPath,

@@ -787,7 +787,9 @@ describe("agentCommand", () => {
         );
 
         expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-        expect(result?.payloads).toEqual([{ text, mediaUrl: null }]);
+        expect(result?.payloads).toEqual([
+          { text, mediaUrl: null, ...(meta.error ? { isError: true } : {}) },
+        ]);
         expect(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]).toBe(JSON.stringify(result, null, 2));
         expect(readAgentRunTerminalOutcome(rawResult)).toBeUndefined();
         expect(readAgentRunTerminalError(rawResult)).toBeUndefined();

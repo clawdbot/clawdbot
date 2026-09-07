@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
 
 const mocks = vi.hoisted(() => ({
   cfg: {} as OpenClawConfig,
@@ -84,16 +85,9 @@ describe("persistStickyModelSelection", () => {
     {
       name: "shared default for an inheriting agent",
       agentId: "main",
-      cfg: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["openai/gpt-5.6-luna"],
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
+      cfg: createModelFallbackConfig("anthropic/claude-opus-4-6", [
+        "openai/gpt-5.6-luna",
+      ]) satisfies OpenClawConfig,
       target: "defaults" as const,
     },
     {

@@ -1,5 +1,5 @@
 ---
-summary: "OpenClaw is a multi-channel gateway for AI agents that runs on any OS."
+summary: "OpenClaw is an open-source AI assistant that runs on your own hardware and meets you in every chat app you already use."
 read_when:
   - Introducing OpenClaw to newcomers
 title: "OpenClaw"
@@ -25,9 +25,9 @@ title: "OpenClaw"
 > _"EXFOLIATE! EXFOLIATE!"_ — A space lobster, probably
 
 <p align="center">
-  <strong>Any OS gateway for AI agents across Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more.</strong><br />
-  Send a message, get an agent response from your pocket. Run one Gateway across channel plugins, WebChat, and mobile nodes.<br />
-  Developed in the open by the <a href="https://openclaw.org">OpenClaw Foundation</a>, a non-profit.
+  <strong>Your AI assistant, on your own hardware, in every chat app you already use.</strong><br />
+  One Gateway. Any model. Any device. No hosted service in the middle.<br />
+  Developed in the open by the <a href="https://openclaw.org">OpenClaw Foundation</a>, an independent 501(c)(3). No paid tier, no telemetry by default beyond a <a href="/gateway/telemetry">version check</a> you can turn off, no lab owns it.
 </p>
 
 <Columns>
@@ -101,7 +101,7 @@ OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — 
 
 The full architecture case — a trusted gateway, untrusted execution, deterministic policy, and how one product spans personal and team use — is in [Why OpenClaw](/start/why-openclaw).
 
-**What do you need?** Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+. You also need an API key from your chosen provider and 5 minutes. For best quality and security, use the strongest latest-generation model available.
+**What do you need?** Node 26 (recommended), or another supported release: Node 24.16+ or Node 26.1+. You also need an API key from your chosen provider and 5 minutes. For best quality and security, use the strongest latest-generation model available.
 
 ## How it works
 

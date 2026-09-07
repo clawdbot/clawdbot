@@ -5,7 +5,6 @@ import {
   type PlainTextToolCallParseOptions,
   type PlainTextToolCallProtectedRangeResolver,
 } from "./contracts.js";
-// Tool Call Repair module implements payload behavior.
 import {
   consumeLineBreak,
   consumeStructuralLineBreakAfterHorizontalWhitespace,

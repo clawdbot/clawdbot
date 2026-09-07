@@ -171,7 +171,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         throw new Error("Unexpected fixture runtime process");
       }
       return {
-        stdout: JSON.stringify({ nodeVersion: "24.15.0", sqliteVersion: "3.51.3" }),
+        stdout: JSON.stringify({ nodeVersion: "24.16.0", sqliteVersion: "3.51.3" }),
         stderr: "",
       };
     });

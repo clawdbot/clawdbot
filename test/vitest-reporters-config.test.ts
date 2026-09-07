@@ -26,8 +26,7 @@ describe("Vitest reporter contracts", () => {
     "reports completed agent tests and preserves overrides with GITHUB_ACTIONS=%s",
     (githubActions) => {
       // Resolve imported configs in a fresh process: shared config and std-env
-      // capture their environment on import. Native resolution needs no proxy
-      // config files or repeated bundling of the same dependency graph.
+      // capture their environment on import.
       const result = spawnNodeEvalSync(
         `
           import path from "node:path";
@@ -42,7 +41,14 @@ describe("Vitest reporter contracts", () => {
             const options = { root, config: false };
             const normal = await resolveConfig(options, imported);
             const cli = parseCLI(["vitest", "--reporter=json"]).options;
-            const override = await resolveConfig({ ...cli, ...options }, imported);
+            let cliConfig = imported;
+            if (config === "vitest.config.ts") {
+              // The default resolution validates the full matrix in both environments.
+              // Reporter CLI overrides do not propagate to child projects.
+              cliConfig = { ...imported, test: { ...imported.test } };
+              delete cliConfig.test.projects;
+            }
+            const override = await resolveConfig({ ...cli, ...options }, cliConfig);
             defaults.push({ config, reporters: normal.test.reporters, cli: override.test.reporters });
           }
           const customConfig = {

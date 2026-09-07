@@ -16,6 +16,7 @@ vi.mock("../logging/subsystem.js", async () => {
     },
   };
 });
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -26,9 +27,15 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const resolveTargetsReadOnlySpy = vi.spyOn(
@@ -39,6 +46,7 @@ const readIdentityEvidenceBatchSpy = vi.spyOn(sessionAccessor, "readSessionIdent
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   resetConfigRuntimeState();
   resolveTargetsReadOnlySpy.mockClear();
   readIdentityEvidenceBatchSpy.mockClear();
@@ -80,6 +88,114 @@ async function resolvePlacementEvidence(placement: WorkerSessionPlacementRecord)
 }
 
 describe("worker placement session evidence", () => {
+  it.each([
+    { count: 12, prompt: "saved prompt ".repeat(16_384) },
+    { count: 401, prompt: "" },
+  ])(
+    "does not duplicate exact-current payloads for $count placements",
+    async ({ count, prompt }) => {
+      const stateDir = tempDirs.make("openclaw-placement-exact-first-");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const placements = Array.from({ length: count }, (_, index) =>
+          localPlacement(`exact-current-${index}`, `agent:main:exact-current-${index}`),
+        );
+        for (const placement of placements) {
+          await sessionAccessor.upsertSessionEntryCore(
+            { agentId: placement.agentId, sessionKey: placement.sessionKey },
+            {
+              sessionId: placement.sessionId,
+              updatedAt: 1,
+              skillsSnapshot: { prompt, skills: [] },
+            },
+          );
+        }
+        const warm = await createWorkerPlacementSessionEvidenceResolver(placements);
+        await expect(Promise.all(placements.map(warm))).resolves.toEqual(
+          placements.map(() => "current"),
+        );
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        const statements = trackSqliteStatementExecutions(database.db, ["fallback"], (sql) => {
+          const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ");
+          return normalized.includes('from "session_nodes"') &&
+            normalized.includes('where "current_session_id" in')
+            ? "fallback"
+            : null;
+        });
+        try {
+          const resolve = await createWorkerPlacementSessionEvidenceResolver(placements);
+          await expect(Promise.all(placements.map(resolve))).resolves.toEqual(
+            placements.map(() => "current"),
+          );
+          expect(
+            statements.textBytes.fallback,
+            JSON.stringify({
+              queries: statements.counts.fallback,
+              rows: statements.rowCounts.fallback,
+              bytes: statements.textBytes.fallback,
+            }),
+          ).toBeLessThan(16_384);
+        } finally {
+          statements.restore();
+        }
+      });
+    },
+  );
+
+  it("retires absent ownerless placements while retaining valid, unreadable, and claimed sessions", async () => {
+    const stateDir = tempDirs.make("openclaw-placement-evidence-retirement-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const placements = createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase(),
+        now: () => 1_000,
+      });
+      const identities = ["current", "unreadable", "absent", "claimed"].map((kind) => ({
+        agentId: "main",
+        sessionId: `session-${kind}`,
+        sessionKey: `agent:main:${kind}`,
+      }));
+      const claim = placements.claimTurn({
+        ...identities[3]!,
+        owner: { kind: "local" },
+        claimId: "live-claim",
+        runId: "live-run",
+      });
+      const requested = identities.map((identity) => placements.startDispatch(identity));
+      for (const identity of identities.slice(0, 2)) {
+        await sessionAccessor.upsertSessionEntryCore(identity, {
+          sessionId: identity.sessionId,
+          updatedAt: 1,
+        });
+      }
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run("{", identities[1]!.sessionKey);
+      database.db
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run(identities[1]!.sessionKey);
+      const forceDestroyEnvironment = vi.fn();
+      const retirement = createPlacementSessionRetirement({
+        placements,
+        environments: { get: () => undefined },
+        forceDestroyEnvironment,
+        createSessionEvidenceResolver: createWorkerPlacementSessionEvidenceResolver,
+        warn: vi.fn(),
+      });
+
+      await retirement.reconcile();
+
+      expect(placements.get(identities[0]!.sessionId)).toEqual(requested[0]);
+      expect(placements.get(identities[1]!.sessionId)).toEqual(requested[1]);
+      expect(placements.get(identities[2]!.sessionId)).toBeUndefined();
+      expect(placements.get(identities[3]!.sessionId)).toMatchObject({
+        state: "requested",
+        generation: requested[3]!.generation,
+        turnClaim: { owner: "local", claimId: claim.claimId, runId: claim.runId },
+      });
+      expect(forceDestroyEnvironment).not.toHaveBeenCalled();
+    });
+  });
+
   it("keeps ordinary discovery failures independent from incognito evidence", async () => {
     const stateDir = tempDirs.make("openclaw-placement-session-read-failed-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {

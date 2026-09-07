@@ -19,6 +19,7 @@ export type TestUsagePage = HTMLElement & {
   providerUsageSummary: { updatedAt: number; providers: unknown[] } | null;
   providerUsageUnavailable: boolean;
   loadUsage: () => Promise<void>;
+  requestUpdate: () => void;
   render: () => unknown;
   readonly updateComplete: Promise<boolean>;
 };
@@ -33,9 +34,11 @@ export function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-export function contextWithClient(client: GatewayBrowserClient): ApplicationContext {
+export function contextWithClient(client: GatewayBrowserClient): ApplicationContext & {
+  setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
+} {
   const subscribe = () => () => undefined;
-  const snapshot = {
+  let snapshot = {
     client,
     phase: "connected",
     hello: null,
@@ -44,11 +47,23 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     lastError: null,
     lastErrorCode: null,
   } as ApplicationGatewaySnapshot;
+  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   return {
+    setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => {
+      snapshot = { ...snapshot, ...patch };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
     basePath: "",
     gateway: {
-      snapshot,
-      subscribe,
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
     },
     agents: {
       state: { agentsList: null, agentsLoading: false, agentsError: null },
@@ -63,13 +78,13 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
-  } as unknown as ApplicationContext;
+  } as unknown as ReturnType<typeof contextWithClient>;
 }
 
 export async function createPage(
   client: GatewayBrowserClient,
   renderView = false,
-  context = contextWithClient(client),
+  context: ApplicationContext = contextWithClient(client),
 ): Promise<TestUsagePage> {
   const page = document.createElement("openclaw-usage-page") as TestUsagePage;
   page.context = context;

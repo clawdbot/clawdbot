@@ -205,7 +205,7 @@ home if it disappears. Commands accept only cwd, an optional prompt, and termina
 dimensions, not caller-supplied executables, argv, environment, or credentials.
 Closing the terminal cancels its node invocation; disconnects and stale pairing
 or connection generations are handled by the same terminal relay as resume.
-See [native CLI creation](/web/control-ui#start-a-native-coding-cli) for UI controls
+See [native CLI creation](/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli) for UI controls
 and prerequisites. Existing catalog viewing, resume, and Chat continuation keep
 their separate ownership contracts.
 

@@ -151,7 +151,8 @@ export async function runClaudeCliNodeCommand(params: {
         mode: "child",
         argv,
         cwd: params.cwd,
-        env: params.env,
+        // Apply the cache-stable Git policy locally without extending the node wire contract.
+        env: { ...(params.env ?? process.env), CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1" },
         exactEnv: true,
         input:
           skillSession?.rewriteReferences(params.request.stdin ?? "") ?? params.request.stdin ?? "",

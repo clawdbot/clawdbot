@@ -35,10 +35,10 @@ export function formatTaskTerminalMessage(
 ): string {
   const title = resolveTaskDisplayTitle(task);
   const runLabel = resolveTaskRunLabel(task);
-  const summary = sanitizeTaskStatusText(task.terminalSummary, {
-    errorContext: task.status !== "succeeded" || task.terminalOutcome === "blocked",
-  });
   if (task.status === "succeeded") {
+    const summary = sanitizeTaskStatusText(task.terminalSummary, {
+      errorContext: task.terminalOutcome === "blocked",
+    });
     if (task.terminalOutcome === "blocked") {
       return summary
         ? `Background task blocked: ${title}${runLabel}. ${summary}`
@@ -57,11 +57,6 @@ export function formatTaskTerminalMessage(
   if (task.status === "timed_out") {
     return `Background task timed out: ${title}${runLabel}.`;
   }
-  if (task.status === "lost") {
-    const error = sanitizeTaskStatusText(task.error, { errorContext: true });
-    const fallbackSummary = sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
-    return `Background task lost: ${title}${runLabel}. ${error || fallbackSummary || "Backing session disappeared."}`;
-  }
   if (task.status === "cancelled") {
     if (task.runtime === "subagent") {
       // A final reply can win the kill race and reconcile this row to success.
@@ -70,13 +65,15 @@ export function formatTaskTerminalMessage(
     }
     return `Background task cancelled: ${title}${runLabel}.`;
   }
-  const error = sanitizeTaskStatusText(task.error, { errorContext: true });
-  const fallbackSummary = sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
-  return error
-    ? `Background task failed: ${title}${runLabel}. ${error}`
-    : fallbackSummary
-      ? `Background task failed: ${title}${runLabel}. ${fallbackSummary}`
-      : `Background task failed: ${title}${runLabel}.`;
+  const detail =
+    sanitizeTaskStatusText(task.error, { errorContext: true }) ||
+    sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
+  if (task.status === "lost") {
+    return `Background task lost: ${title}${runLabel}. ${detail || "Backing session disappeared."}`;
+  }
+  return detail
+    ? `Background task failed: ${title}${runLabel}. ${detail}`
+    : `Background task failed: ${title}${runLabel}.`;
 }
 
 export function shouldUseParentReviewTaskTerminalMessage(task: TaskRecord): boolean {

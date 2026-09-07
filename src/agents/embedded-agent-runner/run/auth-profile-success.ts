@@ -1,8 +1,8 @@
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { MODEL_APIS, type ModelApi } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../../plugins/provider-model-routes.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../../secrets/sentinel.js";

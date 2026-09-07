@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+openclaw_resolve_frozen_core_harness_capabilities "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-onboard-e2e" OPENCLAW_ONBOARD_E2E_IMAGE)"
 OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_ONBOARD_MAX_MEMORY_MIB 2048)"
@@ -13,6 +15,9 @@ COMMAND_TIMEOUT="${OPENCLAW_ONBOARD_COMMAND_TIMEOUT:-${OPENCLAW_E2E_COMMAND_TIME
 GATEWAY_WAIT_ATTEMPTS="$(openclaw_e2e_read_positive_int_env OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS 20)"
 GATEWAY_WAIT_INTERVAL_S="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_ONBOARD_GATEWAY_WAIT_INTERVAL_S 1)"
 ONBOARD_CASES="${OPENCLAW_ONBOARD_E2E_CASES:-}"
+if [ -z "$ONBOARD_CASES" ]; then
+  ONBOARD_CASES="$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES"
+fi
 CONTAINER_NAME="openclaw-onboard-e2e-$$"
 RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-onboard.XXXXXX")"
 STATS_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-onboard-stats.XXXXXX")"

@@ -143,6 +143,7 @@ const CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>(
   ["@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/attempt-startup-retry.test.ts", 6],
+  ["@openclaw/codex:dangerous-exec:src/app-server/run-attempt-one-shot-cleanup.test.ts", 3],
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.http.test.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-orphan.test-helper.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-orphan.test.ts", 3],

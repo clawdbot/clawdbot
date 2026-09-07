@@ -17,6 +17,7 @@ import { createFindTool } from "./sessions/tools/find.js";
 import { createGrepTool } from "./sessions/tools/grep.js";
 import { createLsTool } from "./sessions/tools/ls.js";
 import { DEFAULT_MAX_BYTES } from "./sessions/tools/truncate.js";
+import { resolveToolResultBudget, toolResultFitsBudget } from "./tool-result-limits.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 
 const ONE_PIXEL_PNG_BASE64 =
@@ -243,6 +244,114 @@ describe("filesystem tool output contracts", () => {
       '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; continuation: { kind: "line"; offset: number; limit?: number } | { cursor: number; kind: "cursor"; offset: number; limit?: number }; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; totalBytes: number; totalLines: number; truncated: true; truncatedBy: "lines" | "bytes" } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
     );
   });
+
+  it.each([
+    { mode: "native lines", wrapped: false, indent: 2, limit: undefined },
+    { mode: "native cursor", wrapped: false, indent: 0, limit: undefined },
+    { mode: "adaptive lines", wrapped: true, indent: 2, limit: undefined },
+    { mode: "adaptive cursor", wrapped: true, indent: 0, limit: undefined },
+    { mode: "native explicit line pages", wrapped: false, indent: 2, limit: 500 },
+    { mode: "adaptive explicit line pages", wrapped: true, indent: 2, limit: 500 },
+    {
+      mode: "adaptive blank line pages",
+      wrapped: true,
+      indent: 2,
+      limit: 500,
+      leadingBlankLines: 500,
+    },
+  ])(
+    "reassembles JSON from $mode without parsing display notices",
+    async ({ wrapped, indent, limit, leadingBlankLines = 0 }) => {
+      const records = Array.from({ length: 1_500 }, (_, index) => ({
+        index,
+        value: "é🦞".repeat(8),
+      }));
+      const original =
+        "\n".repeat(leadingBlankLines) + JSON.stringify(records, null, indent) + "\n";
+      await fs.writeFile(path.join(tmpDir, "records.json"), original);
+      const base = createReadTool(tmpDir, { maxBytes: 16 * 1024 }) as unknown as AnyAgentTool;
+      const tool = wrapped ? createOpenClawReadTool(base) : base;
+      const first = await tool.execute("first-page", { path: "records.json" });
+      expectContract(tool, first.details);
+      expect(JSON.stringify(first.content)).toContain("to continue.");
+      const harness = createCodeModeHarness();
+      applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, tool] });
+      const result = await runUntilCompleted({
+        execTool: harness.tools[0]!,
+        waitTool: harness.tools[1]!,
+        code: `
+        let content = "";
+        let next = { path: "records.json", limit: ${limit ?? "undefined"} };
+        let delimiter = "";
+        for (let page = 0; page < 32; page++) {
+          const part = await read(next);
+          content += delimiter + part.content;
+          if (part.kind === "text") {
+            const records = JSON.parse(content);
+            return { count: records.length, last: records.at(-1), length: content.length };
+          }
+          if (part.kind !== "truncated") throw new Error("unexpected read result");
+          const { kind, ...continuation } = part.continuation;
+          next = { path: "records.json", ...continuation };
+          delimiter = kind === "line" ? "\\n" : "";
+        }
+        throw new Error("pagination did not reach EOF");
+      `,
+      });
+      expect(result.status, JSON.stringify(result)).toBe("completed");
+      expect(result.value).toEqual({
+        count: records.length,
+        last: records.at(-1),
+        length: original.length,
+      });
+    },
+  );
+
+  it("bounds structured blank pages independently of their short display summary", async () => {
+    await fs.writeFile(path.join(tmpDir, "blank.txt"), "\n".repeat(10_000));
+    const tool = createOpenClawReadTool(createReadTool(tmpDir) as unknown as AnyAgentTool, {
+      modelContextWindowTokens: 1_024,
+    });
+    const result = await tool.execute("blank-budget", { path: "blank.txt" });
+    expectContract(tool, result.details);
+    const details = result.details;
+    if (
+      !details ||
+      typeof details !== "object" ||
+      !("content" in details) ||
+      typeof details.content !== "string"
+    ) {
+      throw new Error("Expected structured file text");
+    }
+    expect(toolResultFitsBudget(details.content, resolveToolResultBudget(1_024))).toBe(true);
+  });
+
+  it("retains source continuation when only its notice exceeds the rebound budget", async () => {
+    await fs.writeFile(path.join(tmpDir, "continued.txt"), "x".repeat(2_000));
+    const base = createReadTool(tmpDir, { maxBytes: 200 }) as unknown as AnyAgentTool;
+    const tool = createOpenClawReadTool(base, { modelContextWindowTokens: 100 });
+    const result = await tool.execute("continued-rebound", { path: "continued.txt" });
+    expectContract(tool, result.details);
+    expect(result.details).toMatchObject({
+      kind: "truncated",
+      continuation: { kind: "cursor", offset: 1, cursor: expect.any(Number) },
+    });
+  });
+
+  it.each([0, -1, 0.5])(
+    "honors normalized explicit limit %s without automatic paging",
+    async (limit) => {
+      await fs.writeFile(path.join(tmpDir, "limited.txt"), "alpha\nbeta\ngamma");
+      const tool = createOpenClawReadTool(createReadTool(tmpDir) as unknown as AnyAgentTool);
+      const result = await tool.execute("normalized-limit", { path: "limited.txt", limit });
+      expectContract(tool, result.details);
+      expect(result.details).toMatchObject({
+        kind: "truncated",
+        content: "alpha",
+        continuation: { kind: "line", offset: 2, limit: 1 },
+      });
+    },
+  );
 
   it("validates edit changed and no-op results", async () => {
     const filePath = path.join(tmpDir, "edit.txt");

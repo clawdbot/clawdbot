@@ -573,9 +573,11 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const activation = setup.beginActivation({ kind: "provider-auth" });
       expect(activation).not.toBeNull();
       vi.spyOn(Date, "now").mockReturnValue(activation!.deadlineMs + 1);
-      expect(() =>
-        setup.recordActivation(activation, { ok: true, modelRef: "synthetic/model" }),
-      ).not.toThrow();
+      setup.recordActivation(activation, {
+        done: true,
+        status: "done",
+        modelActivation: { modelRef: "synthetic/model" },
+      });
       expect(notify).toHaveBeenCalledOnce();
       expect(setup.unresolved).toBe(false);
       expect(setup.ownsActivation(activation)).toBe(false);

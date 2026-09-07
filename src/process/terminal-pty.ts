@@ -19,7 +19,7 @@ import {
 } from "./windows-command.js";
 
 /** Live PTY handle shared by gateway terminals and node-host commands. */
-type TerminalPtyHandle = {
+export type TerminalPtyHandle = {
   pid: number;
   write(data: string): void;
   resize(cols: number, rows: number): void;
@@ -80,14 +80,21 @@ function resolveTerminalPtyInvocation(params: {
   };
 }
 
-export async function spawnTerminalPty(params: {
+export type TerminalPtySpawnParams = {
   file: string;
   args: string[];
   cwd?: string;
   env: Record<string, string>;
   cols: number;
   rows: number;
-}): Promise<TerminalPtyHandle> {
+};
+
+export async function spawnTerminalPty(params: TerminalPtySpawnParams): Promise<TerminalPtyHandle> {
+  if (process.versions.bun && process.platform !== "win32") {
+    // Bun closes node-pty's nonblocking tty.ReadStream on EAGAIN, hanging up the child.
+    const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
+    return await spawnNodeTerminalPty(params);
+  }
   const { spawn } = await import("@lydell/node-pty");
   const env = { ...params.env };
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.

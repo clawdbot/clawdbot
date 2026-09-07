@@ -7,9 +7,12 @@ import { Bot } from "grammy";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
+import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies } from "./bot/delivery.js";
-import { sendMessageTelegram } from "./send.js";
+import { resetTelegramClientOptionsCacheForTests, sendMessageTelegram } from "./send.js";
 
 describe("Telegram physical send acceptance over HTTP", () => {
   let server: Server;
@@ -20,6 +23,12 @@ describe("Telegram physical send acceptance over HTTP", () => {
   const requests: Array<{ method: string; fields: Record<string, unknown> }> = [];
   const events: string[] = [];
   const rejections: string[] = [];
+  let requestHold:
+    | {
+        arrived: ReturnType<typeof createDeferred<void>>;
+        release: ReturnType<typeof createDeferred<void>>;
+      }
+    | undefined;
   const cfg = { channels: { telegram: { botToken: "123456:telegram-send-http-fixture" } } };
   const buttons = [[{ text: "Continue", callback_data: "continue" }]];
 
@@ -49,6 +58,12 @@ describe("Telegram physical send acceptance over HTTP", () => {
         const method = request.url?.split("/").at(-1) ?? "";
         requests.push({ method, fields });
         events.push("http");
+        const held = requestHold;
+        requestHold = undefined;
+        if (held) {
+          held.arrived.resolve();
+          await held.release.promise;
+        }
         response.setHeader("content-type", "application/json");
         const rejection = rejections.shift();
         if (rejection) {
@@ -97,6 +112,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
   });
 
   afterAll(async () => {
+    resetTelegramClientOptionsCacheForTests();
     for (const socket of sockets) {
       socket.destroy();
     }
@@ -167,6 +183,70 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
     expect(requests.at(-1)?.fields.text).toBe("Manual");
   });
+
+  it.each(["active", "closed", "aborted"])(
+    "checks %s send authority after the real account queue drains",
+    async (state) => {
+      const token = `123456:telegram-queue-${state}`;
+      getOrCreateAccountThrottler(token, () =>
+        apiThrottler({ global: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } }),
+      );
+      const queuedCfg = {
+        channels: {
+          telegram: {
+            botToken: token,
+            apiRoot: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+          },
+        },
+      };
+      const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };
+      requestHold = held;
+      const blocker = sendMessageTelegram("123", "queue blocker", { cfg: queuedCfg });
+      await held.arrived.promise;
+      const checkedBeforeQueue = createDeferred<void>();
+      const controller = new AbortController();
+      const revoked = new Error("Send authority closed while queued");
+      let authorityActive = true;
+      const outcome = sendMessageTelegram("123", "queued message", {
+        cfg: queuedCfg,
+        signal: controller.signal,
+        assertPlatformSendAuthorized: () => {
+          if (!authorityActive) {
+            throw revoked;
+          }
+          checkedBeforeQueue.resolve();
+        },
+      }).then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await checkedBeforeQueue.promise;
+        expect(requests.map(({ fields }) => fields.text)).toEqual(["queue blocker"]);
+        authorityActive = state !== "closed";
+        if (state === "aborted") {
+          controller.abort();
+        }
+        held.release.resolve();
+        await blocker;
+        if (state === "active") {
+          await expect(outcome).resolves.toMatchObject({ result: { messageId: "2" } });
+          expect(requests.map(({ fields }) => fields.text)).toEqual([
+            "queue blocker",
+            "queued message",
+          ]);
+        } else {
+          await expect(outcome).resolves.toMatchObject({
+            error: state === "closed" ? revoked : { name: "AbortError" },
+          });
+          expect(requests.map(({ fields }) => fields.text)).toEqual(["queue blocker"]);
+        }
+      } finally {
+        held.release.resolve();
+        await Promise.allSettled([blocker, outcome]);
+      }
+    },
+  );
 
   it("fences provider-owned delivery after async dispatch refresh and before HTTP", async () => {
     const authorityRevoked = new Error("delivery authority revoked after dispatch refresh");
@@ -253,6 +333,28 @@ describe("Telegram physical send acceptance over HTTP", () => {
       ]);
       expect(requests.flatMap(({ fields }, index) => (fields.reply_markup ? [index] : []))).toEqual(
         [entry === "direct" ? 1 : 3],
+      );
+    },
+  );
+
+  it.each([
+    ["direct", true],
+    ["direct", false],
+    ["public", true],
+    ["public", false],
+  ] as const)(
+    "keeps %s delivery when a rendered-empty chunk comes first=%s",
+    async (entry, first) => {
+      const empty = "Bad Request: text must be non-empty";
+      rejections.push(...(first ? [empty, empty, ""] : ["", empty, empty]));
+
+      await sendThrough(entry, `${"A".repeat(4000)}${"B".repeat(4000)}`, async () => {});
+
+      expect(requests.map(({ fields }) => fields.text)).toEqual(
+        (first ? ["A", "A", "B"] : ["A", "B", "B"]).map((text) => text.repeat(4000)),
+      );
+      expect(requests.map(({ fields }) => fields.parse_mode)).toEqual(
+        first ? ["HTML", undefined, "HTML"] : ["HTML", "HTML", undefined],
       );
     },
   );

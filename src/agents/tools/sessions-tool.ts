@@ -156,7 +156,11 @@ const SessionsToolSchema = Type.Object(
         description: "Status/attention lifetime in minutes. Default 30; maximum 120.",
       }),
     ),
-    pinned: Type.Optional(Type.Boolean({ description: "Pin session" })),
+    pinned: Type.Optional(
+      Type.Boolean({
+        description: "Pin session (root sessions only; child/subagent sessions cannot be pinned)",
+      }),
+    ),
     archived: Type.Optional(
       Type.Boolean({ description: "True archives without deleting; false restores the session." }),
     ),

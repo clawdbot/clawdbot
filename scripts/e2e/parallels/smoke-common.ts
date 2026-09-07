@@ -289,7 +289,6 @@ export async function startSmokeArtifactServer(input: {
   port: number;
 }): Promise<HostServer> {
   const server = await startHostServer({
-    artifactPath: input.artifact.path,
     dir: input.dir,
     hostIp: input.hostIp,
     label: input.label,

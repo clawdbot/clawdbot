@@ -1,4 +1,3 @@
-// Agent Core module implements truncate behavior.
 export const DEFAULT_MAX_LINES = 2000;
 export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
 export const GREP_MAX_LINE_LENGTH = 500; // Max chars per grep match line
@@ -46,9 +45,15 @@ interface ResolvedTruncationInput {
 
 interface RuntimeBuffer {
   byteLength(content: string, encoding: "utf8"): number;
+  from(content: string, encoding: "utf16le"): { toString(encoding: "utf16le"): string };
 }
 
 const runtimeBuffer = (globalThis as { Buffer?: RuntimeBuffer }).Buffer;
+
+function copyString(content: string): string {
+  // Copy selected code units without normalizing lone surrogates or retaining the source backing.
+  return runtimeBuffer ? runtimeBuffer.from(content, "utf16le").toString("utf16le") : content;
+}
 
 function findFirstNonAscii(content: string): number {
   for (let index = 0; index < content.length; index++) {
@@ -89,29 +94,6 @@ function utf8ByteLength(content: string): number {
     }
   }
   return bytes;
-}
-
-function replaceUnpairedSurrogates(content: string): string {
-  let output = "";
-  for (let i = 0; i < content.length; i++) {
-    const code = content.charCodeAt(i);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      if (i + 1 < content.length) {
-        const next = content.charCodeAt(i + 1);
-        if (next >= 0xdc00 && next <= 0xdfff) {
-          output += content.charAt(i) + content.charAt(i + 1);
-          i++;
-          continue;
-        }
-      }
-      output += "�";
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      output += "�";
-    } else {
-      output += content.charAt(i);
-    }
-  }
-  return output;
 }
 
 /**
@@ -155,7 +137,9 @@ function buildTruncationResult(
   },
 ): TruncationResult {
   return {
-    content: params.content,
+    // One-element joins can retain a source slice; multiline joins build their own text.
+    content:
+      params.truncated && params.outputLines === 1 ? copyString(params.content) : params.content,
     truncated: params.truncated,
     truncatedBy: params.truncatedBy,
     totalLines: input.totalLines,
@@ -320,7 +304,8 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 
   let outputBytes = 0;
   let start = str.length;
-  let needsReplacement = false;
+  let unchangedEnd = str.length;
+  let repairedTail = "";
   for (let i = str.length; i > 0;) {
     let characterStart = i - 1;
     const code = str.charCodeAt(characterStart);
@@ -346,12 +331,15 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
     }
     outputBytes += characterBytes;
     start = characterStart;
-    needsReplacement ||= unpairedSurrogate;
+    if (unpairedSurrogate) {
+      // Selection already identified the lone surrogate; retain the valid span to its right.
+      repairedTail = "\uFFFD" + str.slice(i, unchangedEnd) + repairedTail;
+      unchangedEnd = characterStart;
+    }
     i = characterStart;
   }
 
-  const output = str.slice(start);
-  return needsReplacement ? replaceUnpairedSurrogates(output) : output;
+  return str.slice(start, unchangedEnd) + repairedTail;
 }
 
 /**
@@ -379,5 +367,5 @@ export function truncateLine(
       }
     }
   }
-  return { text: `${line.slice(0, cut)}... [truncated]`, wasTruncated: true };
+  return { text: `${copyString(line.slice(0, cut))}... [truncated]`, wasTruncated: true };
 }

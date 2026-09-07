@@ -55,7 +55,7 @@ of being treated as a missing service; check the LaunchAgent and retry.
 ## Manual recovery
 
 For a manual install, use Node 26 (recommended) or another supported release:
-Node 22.22.3+, Node 24.15+, or Node 25.9+. Install `openclaw` globally:
+Node 24.16+ or Node 26.1+. Install `openclaw` globally:
 
 The command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
 omit `--allow-scripts=openclaw`.
@@ -150,8 +150,22 @@ moving back to local storage. See
 
 ## Debug app connectivity
 
-Use the macOS debug CLI from a source checkout to exercise the same Gateway
-WebSocket handshake and discovery logic the app uses:
+Inspect the running app with the bundled macOS CLI:
+
+```bash
+openclaw-mac status --json
+openclaw-mac primary show --json
+openclaw-mac gateway list --json
+```
+
+The app's CLI installer links `openclaw-mac` beside its profile-managed
+`openclaw` command. You can also run
+`/Applications/OpenClaw.app/Contents/MacOS/openclaw-mac` directly. See
+[remote control](/platforms/mac/remote#macos-app-setup) for `primary set`,
+saved-Gateway commands, profiles, and credential input.
+
+For standalone Gateway WebSocket handshake and discovery probes from a source
+checkout, the existing debug commands remain available:
 
 ```bash
 cd apps/macos

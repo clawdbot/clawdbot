@@ -19,9 +19,9 @@ import {
 
 installGatewayTestHooks();
 
-afterEach(() => {
+afterEach(async () => {
   resetContextWindowCacheForTest();
-  resetPreparedModelRuntimeSnapshotsForTest();
+  await resetPreparedModelRuntimeSnapshotsForTest();
 });
 
 describe("Gateway context cache remote proof", () => {

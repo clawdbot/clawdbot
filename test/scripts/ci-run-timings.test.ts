@@ -216,7 +216,7 @@ describe("scripts/ci-run-timings.mjs", () => {
           {
             completedAt: "2026-05-28T23:05:30Z",
             conclusion: "success",
-            name: "checks-node-compat-node22",
+            name: "checks-node-compat-node24",
             startedAt: "2026-05-28T23:04:30Z",
             status: "completed",
           },

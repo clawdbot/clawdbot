@@ -753,17 +753,27 @@ describe("control UI session PR subscriptions", () => {
 
   it("propagates rate-limit and failure states per key", async () => {
     vi.useFakeTimers();
-    const load = vi.fn(async ({ sessionKey }: { sessionKey: string }) => {
-      if (sessionKey === "limited") {
-        return { pullRequests: [], rateLimited: true };
-      }
-      throw new Error("GitHub unavailable");
-    });
+    const load = vi.fn(
+      async ({ sessionKey }: { sessionKey: string }): Promise<ControlUiSessionPullRequests> => {
+        if (sessionKey === "limited") {
+          return { pullRequests: [], rateLimited: true };
+        }
+        if (sessionKey === "repository-only") {
+          return {
+            pullRequests: [],
+            repository: { owner: "openclaw", repo: "openclaw" },
+            rateLimited: false,
+            status: "unavailable",
+          };
+        }
+        throw new Error("GitHub unavailable");
+      },
+    );
     const broadcastToConnIds = vi.fn();
     active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
 
-    await active.replace("conn-a", ["limited", "failed"]);
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+    await active.replace("conn-a", ["limited", "failed", "repository-only"]);
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(3);
     const sessions = Object.assign(
       {},
       ...broadcastToConnIds.mock.calls.map((call) => call[1].sessions),
@@ -771,6 +781,12 @@ describe("control UI session PR subscriptions", () => {
     expect(sessions).toEqual({
       limited: { pullRequests: [], rateLimited: true, status: "rate-limited" },
       failed: { pullRequests: [], rateLimited: false, status: "unavailable" },
+      "repository-only": {
+        pullRequests: [],
+        repository: { owner: "openclaw", repo: "openclaw" },
+        rateLimited: false,
+        status: "unavailable",
+      },
     });
   });
 });

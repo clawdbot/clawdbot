@@ -105,7 +105,7 @@ The `deviceAutoApprove` examples below target beta/current-main builds. Stable `
 
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
-Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
+Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
 </Warning>
 
 ### Configuration reference
@@ -219,7 +219,7 @@ Browsers attach a device identity on every origin, including plain HTTP, so firs
 Scope implications:
 
 - Device-less Control UI WebSocket sessions cannot self-declare permissions. OpenClaw clears their requested scope list to `[]`, then applies any matching server-side `identityScopes` grant after proxy identity verification.
-- If methods fail with `missing scope` after a successful WebSocket connect, reload so the browser pairs its device identity, or approve the pending device request. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
+- If methods fail with `missing scope` after a successful WebSocket connect, reload so the browser pairs its device identity, or approve the pending device request. See [Control UI insecure HTTP](/web/control-ui/connect-and-pair#insecure-http).
 
 Reverse-proxy scope capping: if your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps device enrollment or upgrade requests and the final union of device-authorized and identity-granted session scopes. This header does not grant scopes; it only narrows authority. When `deviceAutoApprove.enabled` is true, the cap also limits the persistent device grant written by [automatic device approval](#automatic-device-approval).
 

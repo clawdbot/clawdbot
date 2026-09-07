@@ -642,7 +642,11 @@ describe("AppSidebar catalog session rows", () => {
       };
       await menu.updateComplete;
       const items = menu.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-dropdown-item");
-      expect(items).toHaveLength(2);
+      expect([...items].map((item) => item.getAttribute("value"))).toEqual([
+        "viewer",
+        "terminal",
+        "delete",
+      ]);
       expect(items[1]?.disabled).toBe(true);
       const menuButton = row.querySelector<HTMLElement>("[data-catalog-session-menu]");
       expect(menuButton).not.toBeNull();
@@ -697,7 +701,7 @@ describe("AppSidebar catalog session rows", () => {
     }
   });
 
-  it("associates catalog running state with the session link description", async () => {
+  it("announces catalog running state through the leading ring", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -706,12 +710,14 @@ describe("AppSidebar catalog session rows", () => {
       );
       const row = sidebar.querySelector('[data-session-key*="thread-running"]');
       const link = row?.querySelector("a");
-      const state = row?.querySelector(".session-row-state");
+      const ring = row?.querySelector(".sidebar-session-indicator .session-glyph__ring");
 
-      expect(link?.getAttribute("aria-describedby")).toBe(state?.id);
+      expect(link?.hasAttribute("aria-describedby")).toBe(false);
       expect(link?.hasAttribute("title")).toBe(false);
-      expect(state?.querySelector('.session-run-spinner[aria-label="Active run"]')).not.toBeNull();
-      expect(state?.querySelector(".session-run-spinner")?.hasAttribute("title")).toBe(false);
+      expect(ring?.getAttribute("aria-label")).toBe("Active run");
+      expect(
+        row?.querySelector(".sidebar-recent-session__details-endcap .session-run-spinner"),
+      ).toBeNull();
     } finally {
       vi.useRealTimers();
     }

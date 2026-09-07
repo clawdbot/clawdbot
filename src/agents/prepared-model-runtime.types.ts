@@ -185,6 +185,8 @@ export type PreparedModelRuntimeOwner = {
   catalogStale: boolean;
   /** Completed discovery facts; runtime capability projection belongs to each generation. */
   catalogInventory?: PreparedModelCatalogInventory;
+  /** Last failed catalog attempt; it does not withdraw the published turn runtime. */
+  catalogAttemptError?: Error;
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;

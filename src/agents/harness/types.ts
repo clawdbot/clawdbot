@@ -281,6 +281,8 @@ export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & 
 };
 export type AgentHarnessSideQuestionResult = {
   text: string;
+  /** Aggregate billed usage for the side question, including native tool-loop calls. */
+  usage?: import("../usage.js").NormalizedUsage;
 };
 export type AgentHarnessCompactParams =
   import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;

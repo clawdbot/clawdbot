@@ -311,6 +311,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/gateway-config-runtime` | Private-local bundled runtime facade for dependency-light Gateway port resolution (`resolveGatewayPort`); not for third-party plugins |
     | `plugin-sdk/gateway-method-runtime` | Reserved Gateway method dispatch helper for plugin HTTP routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]` |
     | `plugin-sdk/gateway-runtime` | Gateway client, event-loop-ready client start helper, gateway CLI RPC, gateway protocol errors, advertised LAN host resolution, and channel-status patch helpers |
+    | `plugin-sdk/websocket-runtime` | Private-local bundled helpers for one-time observer tickets (`createOneTimeTicketStore`, `OneTimeTicketStore`), `startWebSocketKeepalive`, `rejectWebSocketUpgrade`, and their structural types; JavaScript-only host runtime export, not part of the typed public SDK |
     | `plugin-sdk/config-contracts` | Focused config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types, plus the dependency-light runtime helper `resolveGatewayPublicOrigin(cfg)` which returns the normalized `gateway.publicOrigin` (bare http(s) origin, optional reverse-proxy path, no query/hash) or `undefined` when unset, for building links back to the Gateway |
     | `plugin-sdk/config-runtime` | Retained broad config compatibility facade; prefer passed config, `api.pluginConfig`, `config-contracts`, `config-mutation`, and `runtime-config-snapshot` where they cover the needed contract. Named types and private-runtime helpers are not blanket replacements; see [migration guidance](/plugins/sdk-migration#how-to-migrate). |
     | `plugin-sdk/plugin-config-runtime` | Deprecated compatibility facade for runtime plugin-config helpers; new plugins use `api.pluginConfig` plus focused config contracts, snapshots, and mutation helpers |
@@ -367,7 +368,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, runtime-plan tool policy helpers, terminal outcome classification, tool progress formatting/detail helpers, and attempt result utilities |
     | `plugin-sdk/async-lock-runtime` | Private-local after July 2026; Process-local async lock helper for small runtime state files |
     | `plugin-sdk/channel-activity-runtime` | Private-local after July 2026; Channel activity telemetry helper |
-    | `plugin-sdk/concurrency-runtime` | Private-local after July 2026; Bounded async task concurrency helper |
+    | `plugin-sdk/concurrency-runtime` | Private-local after July 2026; Bounded async task concurrency (`runTasksWithConcurrency`) and cancellable permit admission (`createPermitPool`) with caller-owned release |
     | `plugin-sdk/dedupe-runtime` | In-memory and persistent-backed dedupe cache helpers |
     | `plugin-sdk/delivery-queue-runtime` | Private-local after July 2026; Outbound pending-delivery drain helper |
     | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file, path-containment, temp-root, media-source path, and directory-durability helpers |
@@ -469,6 +470,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/memory-core-host-engine-embeddings` | Private-local after July 2026; Memory host embedding contracts and batch/remote helpers. Providers register through the generic embedding provider API. |
     | `plugin-sdk/memory-core-host-engine-sessions` | Private-local after July 2026; Memory session transcript and query helpers |
     | `plugin-sdk/memory-core-host-engine-schema` | Private-local focused memory index schema and sqlite-vec helpers for doctor migrations |
+    | `plugin-sdk/memory-core-host-engine-knn` | Private-local SQLite, sqlite-vec, and text primitives for isolated vector search children |
     | `plugin-sdk/memory-core-host-engine-storage` | Private-local after July 2026; Memory host storage engine exports |
     | `plugin-sdk/memory-core-host-secret` | Private-local after July 2026; Memory host secret helpers |
     | `plugin-sdk/memory-core-host-status` | Private-local after July 2026; Memory host status helpers |

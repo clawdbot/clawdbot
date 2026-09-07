@@ -521,7 +521,8 @@ require("node:module").syncBuiltinESMExports();
             timeout: 10_000,
           });
           expect(control.error).toBeUndefined();
-          expect(fs.readFileSync(accessLog, "utf8")).toContain("readdirSync");
+          // Prove the guard detects raw tsx cache access without coupling to its disk I/O strategy.
+          expect(fs.readFileSync(accessLog, "utf8").trim()).not.toBe("");
           fs.unlinkSync(accessLog);
         }
         const result = spawnSync(
