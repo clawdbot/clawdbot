@@ -46,11 +46,12 @@ export function createRecoveryDestinationVerifier(stateDir: string) {
       }
       // Even a read-only SQLite connection can create or update WAL/SHM files. Establish the
       // baseline after owner inspection closes it; later checks only stat, never reopen or hash
-      // the DB.  Read-only queries update the SHM file (read marks) and may create WAL/SHM/journal
-      // sidecars, so their ctime/mtime are excluded from the fence to avoid false positives.
-      // The WAL file (index 1) is still fully fenced because read-only transactions do not write
-      // to the WAL — a substantive same-size or growing WAL commit is detected via ctime/mtime/
-      // size, and the main database file (index 0) is fully fenced for in-place writes. (#140467)
+      // the DB.  Read-only queries update the SHM file (read marks) — the only sidecar whose
+      // ctime/mtime is excluded from the fence. The WAL file (index 1) is fully fenced because
+      // read-only transactions do not write to the WAL, so a substantive same-size or growing
+      // WAL commit is detected via ctime/mtime/size. The rollback journal (index 3) is fully
+      // fenced because it carries database pages and recovery metadata, not reader marks.
+      // The main database file (index 0) is fully fenced for in-place writes. (#140467)
       const files = paths.map((file) =>
         fs.lstatSync(file, { bigint: true, throwIfNoEntry: false }),
       );
@@ -60,9 +61,9 @@ export function createRecoveryDestinationVerifier(stateDir: string) {
         (expected &&
           (expected.agentId !== target.agentId ||
             files.some((file, index) =>
-              (index <= 1
-                ? (["dev", "ino", "ctimeNs", "mtimeNs", "size"] as const)
-                : (["dev", "ino", "size"] as const)
+              (index === 2
+                ? (["dev", "ino", "size"] as const)
+                : (["dev", "ino", "ctimeNs", "mtimeNs", "size"] as const)
               ).some((key) => file?.[key] !== expected.files[index]?.[key]),
             )))
       ) {

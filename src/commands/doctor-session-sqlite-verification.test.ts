@@ -71,19 +71,17 @@ describe("createRecoveryDestinationVerifier", () => {
     // Establish baseline.
     verify([{ target }]);
 
-    // Simulate a read-only query touching SHM/journal state by advancing their
-    // mtime/ctime well past the baseline.  Only SHM/journal sidecars (index >= 2) are
-    // exempt from ctime/mtime fencing; the WAL file is still fully fenced because
-    // read-only transactions do not write to the WAL. (#140467)
-    const sidecarPaths = resolveSqliteDatabaseFilePaths(sqlitePath).slice(2);
+    // Simulate a read-only query touching SHM state by advancing the SHM file's
+    // mtime/ctime well past the baseline.  Only the SHM file (index 2) is exempt from
+    // ctime/mtime fencing — read-only queries update SHM read marks. The WAL (index 1)
+    // and rollback journal (index 3) are still fully fenced. (#140467)
+    const shmPath = resolveSqliteDatabaseFilePaths(sqlitePath)[2];
     const future = new Date((Date.now() / 1000) * 1000 + 60_000);
-    for (const sidecar of sidecarPaths) {
-      if (fs.existsSync(sidecar)) {
-        fs.utimesSync(sidecar, future, future);
-      }
+    if (fs.existsSync(shmPath)) {
+      fs.utimesSync(shmPath, future, future);
     }
 
-    // Should NOT throw — SHM/journal dev/ino/size are unchanged, only ctime/mtime churned.
+    // Should NOT throw — SHM dev/ino/size are unchanged, only ctime/mtime churned.
     expect(() => verify([{ target }])).not.toThrow();
   });
 
