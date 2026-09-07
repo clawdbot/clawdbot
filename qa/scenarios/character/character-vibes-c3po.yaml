@@ -92,7 +92,7 @@ flow:
             actions:
               - set: beforeOutboundCount
                 value:
-                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId).length"
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
               - sendInbound:
                   conversation:
                     id:

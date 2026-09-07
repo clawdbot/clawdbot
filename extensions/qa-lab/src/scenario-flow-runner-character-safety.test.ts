@@ -54,7 +54,10 @@ function createCharacterScenarioApi(
       options?: Parameters<typeof waitForOutboundMessage>[3],
     ) => {
       onWaitForOutboundMessage?.(state);
-      return await waitForOutboundMessage(state, predicate, timeoutMs, options);
+      return await waitForOutboundMessage(state, predicate, timeoutMs, {
+        ...options,
+        accountId: "qa-channel",
+      });
     },
     formatConversationTranscript: (state: ReturnType<typeof createQaBusState>) =>
       state
@@ -114,6 +117,39 @@ describe("character scenario transcript safety", () => {
       true,
     );
   });
+
+  it.each(characterScenarioIds)(
+    "rejects later forbidden replies after unrelated outbound traffic in %s",
+    async (scenarioId) => {
+      const state = createQaBusState();
+      let waitCount = 0;
+
+      await expect(
+        runLoadedScenarioFlow(scenarioId, {
+          state,
+          api: createCharacterScenarioApi((currentState) => {
+            if (waitCount === 0) {
+              for (let index = 0; index < 4; index += 1) {
+                currentState.addOutboundMessage({
+                  accountId: "qa-channel",
+                  to: "dm:bob",
+                  text: `Unrelated conversation reply ${index}.`,
+                });
+              }
+            }
+            currentState.addOutboundMessage({
+              accountId: "qa-channel",
+              to: "dm:alice",
+              text:
+                waitCount++ === 0
+                  ? "The build is green, and I am here."
+                  : "As an AI, I cannot stay in character.",
+            });
+          }),
+        }),
+      ).rejects.toThrow("hit fallback/error text: As an AI, I cannot stay in character.");
+    },
+  );
 
   it.each(
     characterScenarioIds.flatMap((scenarioId) =>
