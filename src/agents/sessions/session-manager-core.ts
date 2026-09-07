@@ -172,37 +172,51 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** Reloads the exact committed append without applying the current turn's read fence. */
-  protected reloadPersistedTranscriptAfterAppend(expectedMutationAt: number | null): void {
+  /** Reloads a committed append without applying the current turn's read fence. */
+  protected reloadPersistedTranscriptAfterAppend(
+    expectedMutationAt: number | null,
+    expectedEntryId: string,
+  ): void {
     if (!this.persistenceTarget) {
       return;
     }
     const runtimeCwd = this.cwd;
     const target = this.persistenceTarget;
-    if (this.boundedContextLimits) {
-      const bounded = readSessionTranscriptBoundedActiveContextCore(target, {
-        ...this.boundedContextLimits,
-        ignoreReadFence: true,
-      });
-      if (bounded.transcriptMutationAt !== expectedMutationAt) {
-        throw new Error("SQLite transcript changed before adopting the committed append");
+    try {
+      if (this.boundedContextLimits) {
+        const bounded = readSessionTranscriptBoundedActiveContextCore(target, {
+          ...this.boundedContextLimits,
+          ignoreReadFence: true,
+        });
+        // SAFETY: SQLite transcript readers return the same persisted entry union used by SessionManager.
+        const entries = bounded.events as FileEntry[];
+        if (
+          bounded.transcriptMutationAt !== expectedMutationAt &&
+          !entries.some((entry) => isIndexedSessionEntry(entry) && entry.id === expectedEntryId)
+        ) {
+          throw new Error("SQLite transcript changed before adopting the committed append");
+        }
+        this.boundedContextIncomplete = true;
+        this.persistedBoundaryCount = bounded.boundaryCount;
+        this.persistedSuffixStartSeq = bounded.persistedSuffixStartSeq;
+        this.transcriptMutationAt = bounded.transcriptMutationAt;
+        this.setLoadedSessionTarget(target, entries, bounded);
+      } else {
+        const inspected = inspectTranscriptEventsSync(target);
+        // SAFETY: SQLite transcript readers return the same persisted entry union used by SessionManager.
+        const entries = inspected.events as FileEntry[];
+        if (
+          inspected.snapshot.transcriptUpdatedAt !== expectedMutationAt &&
+          !entries.some((entry) => isIndexedSessionEntry(entry) && entry.id === expectedEntryId)
+        ) {
+          throw new Error("SQLite transcript changed before adopting the committed append");
+        }
+        this.transcriptMutationAt = inspected.snapshot.transcriptUpdatedAt;
+        this.setLoadedSessionTarget(target, entries);
       }
-      this.boundedContextIncomplete = true;
-      this.persistedBoundaryCount = bounded.boundaryCount;
-      this.persistedSuffixStartSeq = bounded.persistedSuffixStartSeq;
-      this.transcriptMutationAt = bounded.transcriptMutationAt;
-      // SAFETY: SQLite transcript readers return the same persisted entry union used by SessionManager.
-      this.setLoadedSessionTarget(target, bounded.events as FileEntry[], bounded);
-    } else {
-      const inspected = inspectTranscriptEventsSync(target);
-      if (inspected.snapshot.transcriptUpdatedAt !== expectedMutationAt) {
-        throw new Error("SQLite transcript changed before adopting the committed append");
-      }
-      this.transcriptMutationAt = inspected.snapshot.transcriptUpdatedAt;
-      // SAFETY: SQLite transcript readers return the same persisted entry union used by SessionManager.
-      this.setLoadedSessionTarget(target, inspected.events as FileEntry[]);
+    } finally {
+      this.cwd = runtimeCwd;
     }
-    this.cwd = runtimeCwd;
   }
 
   newSession(options?: NewSessionOptions): string | undefined {

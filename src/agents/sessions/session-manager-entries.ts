@@ -158,7 +158,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
         if (this.transcriptMutationAt === undefined) {
           throw new Error("Session transcript append mutation fence was not returned");
         }
-        this.reloadPersistedTranscriptAfterAppend(this.transcriptMutationAt);
+        this.reloadPersistedTranscriptAfterAppend(this.transcriptMutationAt, canonicalEntry.id);
       } else {
         this.reloadPersistedTranscript();
       }

@@ -2141,7 +2141,6 @@ src/auto-reply/reply/reply-payload-sending-hook.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
 src/auto-reply/reply/reply-threading.ts	2
 src/auto-reply/reply/reply-timing-tracker.ts	2
-src/auto-reply/reply/reply-turn-admission.ts	1
 src/auto-reply/reply/restart-recovery-claim.ts	3
 src/auto-reply/reply/session-delivery.ts	1
 src/auto-reply/reply/session.ts	3
@@ -3007,7 +3006,6 @@ src/infra/git-commit.ts	1
 src/infra/heartbeat-outcome-store.ts	1
 src/infra/heartbeat-runner-config.ts	1
 src/infra/heartbeat-visibility.ts	1
-src/infra/heartbeat-wake.ts	1
 src/infra/install-package-dir.ts	2
 src/infra/install-source-utils.ts	2
 src/infra/json-file.ts	1

@@ -234,6 +234,59 @@ it("keeps a fenced assistant after rebasing over a concurrent assistant", async 
   );
 });
 
+it("adopts a fenced assistant when another append commits before its reload", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-post-commit-append-");
+  const scope = {
+    agentId: "main",
+    sessionId: "post-commit-append",
+    sessionKey: "agent:main:post-commit-append",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const seed = SessionManager.open(scope, dir);
+  const admission = seed.appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "current",
+    timestamp: 1,
+  });
+  if (!admission.anchor) {
+    throw new Error("missing admission anchor");
+  }
+
+  runWithSessionTranscriptReadFence(
+    { ...admission.anchor, logicalTurnId: "current", role: "user" },
+    () => {
+      const fenced = SessionManager.open(scope, dir);
+      const corePrototype = Object.getPrototypeOf(
+        Object.getPrototypeOf(Object.getPrototypeOf(fenced)),
+      ) as { reloadPersistedTranscriptAfterAppend: () => void };
+      const originalReload = corePrototype.reloadPersistedTranscriptAfterAppend;
+      vi.spyOn(corePrototype, "reloadPersistedTranscriptAfterAppend").mockImplementation(function (
+        this: SessionManager,
+        ...args: unknown[]
+      ) {
+        expect(
+          appendTranscriptMessageSync(scope, {
+            eventId: "post-commit-assistant",
+            message: buildAssistantMessage("later"),
+            now: 3,
+          }).ok,
+        ).toBe(true);
+        return originalReload.apply(this, args as []);
+      });
+
+      const replyId = fenced.appendMessage(buildAssistantMessage("reply"));
+
+      expect(fenced.getBranch().map((entry) => entry.id)).toEqual([
+        admission.entryId,
+        replyId,
+        "post-commit-assistant",
+      ]);
+      expect(fenced.getEntry(replyId)).toBeDefined();
+    },
+  );
+});
+
 it("appends an assistant without parsing transcript rows outside the bounded context", async () => {
   const dir = tempDirs.make("openclaw-session-manager-bounded-assistant-");
   const scope = {

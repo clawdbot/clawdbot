@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { symlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop, setTimeout as delay } from "node:timers/promises";
@@ -9,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
@@ -55,7 +57,7 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
-function createFixture() {
+function createFixture(alias = false) {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-reclamation-writers-") };
   const options = { agentId: "main", env };
   const scopes = ["parent", "child"].map((sessionId) => ({
@@ -69,6 +71,13 @@ function createFixture() {
   }
   const database = openOpenClawAgentDatabase(options);
   const databaseOptions = { ...options, path: database.path };
+  const aliasPath = alias
+    ? path.join(path.dirname(database.path), "writer-alias.sqlite")
+    : undefined;
+  if (aliasPath) {
+    symlinkSync(database.path, aliasPath);
+    openOpenClawAgentDatabase({ ...options, path: aliasPath });
+  }
   const plan = createHistoryEvictionReclamationPlan({
     databaseOptions,
     diskBudget: {},
@@ -76,36 +85,53 @@ function createFixture() {
     protectedSessionIds: new Set(scopes.map((scope) => scope.sessionId)),
     sessionId: "already-removed-history",
   });
-  return { database, databaseOptions, plan, scopes };
+  return {
+    database,
+    databaseOptions,
+    plan,
+    scopes: scopes.map((scope) => Object.assign(scope, { storePath: aliasPath })),
+  };
 }
 
-test.each([
-  { operation: "append", rejected: false },
-  { operation: "append", rejected: true },
-  { operation: "replace", rejected: false },
-  { operation: "replace", rejected: true },
-  { operation: "entry", rejected: false },
-  { operation: "entry", rejected: true },
-  { operation: "board", rejected: false },
-  { operation: "board", rejected: true },
-])(
-  "two synchronous writers progress at reclamation ($operation, rejected: $rejected)",
-  async ({ operation, rejected }) => {
-    const { databaseOptions, plan, scopes } = createFixture();
+test.each(
+  [
+    { operation: "append", rejected: false },
+    { operation: "append", rejected: true },
+    { operation: "replace", rejected: false },
+    { operation: "replace", rejected: true },
+    { operation: "entry", rejected: false },
+    { operation: "entry", rejected: true },
+    { operation: "board", rejected: false },
+    { operation: "board", rejected: true },
+  ].flatMap((scenario) =>
+    (process.platform === "win32" ? [false] : [false, true]).map((alias) =>
+      Object.assign({ alias }, scenario),
+    ),
+  ),
+)(
+  "two synchronous writers progress at reclamation ($operation, rejected: $rejected, alias: $alias)",
+  async ({ operation, rejected, alias }) => {
+    const { databaseOptions, plan, scopes } = createFixture(alias);
     const workers: Array<{ worker: Worker; id: number }> = [];
     const observeWorker = (worker: Worker) => workers.push({ worker, id: worker.threadId });
     process.on("worker", observeWorker);
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     const board = new SqliteBoardStore({
       env: databaseOptions.env,
-      resolveSession: ({ sessionKey }) => ({ ...databaseOptions, sessionKey }),
+      resolveSession: ({ sessionKey }) => ({
+        ...databaseOptions,
+        path: scopes[0]!.storePath ?? databaseOptions.path,
+        sessionKey,
+      }),
     });
     const appends: unknown[] = [];
     const appendErrors: unknown[] = [];
     let commitChecks = 0;
+    let retired = false;
     const owner = new AsyncLocalStorage<string>();
     hooks.beforeAuthorization = () =>
       owner.run("transcript-writer", () => {
+        retired = rejected;
         // The worker owns BEGIN IMMEDIATE and is waiting for the parent. Both sync
         // runtimes must service that request before its queued handler can return.
         for (const scope of scopes) {
@@ -148,7 +174,7 @@ test.each([
             assertCommitAllowed: () => {
               commitChecks += 1;
               expect(owner.getStore()).toBe("reclamation-owner");
-              if (rejected) {
+              if (retired) {
                 throw new Error("reclamation owner retired");
               }
             },
@@ -172,7 +198,7 @@ test.each([
     expect(workers[0]?.id).toBeGreaterThan(0);
     expect(diagnostics).toEqual({ kind: "history-eviction", workerThreadId: workers[0]?.id });
     expect(workers[0]?.worker.threadId).toBe(-1);
-    expect(commitChecks).toBe(1);
+    expect(commitChecks).toBe(2);
     expect(appendErrors).toEqual([]);
     expect(appends).toEqual(
       operation === "entry"
@@ -205,6 +231,50 @@ test.each([
   20_000,
 );
 
+test("captures removal identity when a synchronous writer authorizes reclamation", async () => {
+  const { databaseOptions, scopes } = createFixture();
+  const removed = scopes[0]!;
+  const writer = scopes[1]!;
+  const expectedEntry = loadSessionEntry(removed);
+  if (!expectedEntry) {
+    throw new Error("expected the removal fixture entry");
+  }
+  const plan = createLifecycleArtifactReclamationPlan({
+    agentId: databaseOptions.agentId,
+    databaseOptions,
+    entries: [{ sessionKey: removed.sessionKey, expectedEntry }],
+    materializedPlans: [],
+  });
+  const removedSessionIds: Array<string | undefined> = [];
+  const unsubscribe = onSessionIdentityMutation((mutation) => {
+    if (mutation.kind === "delete" && mutation.previous.sessionKeys.includes(removed.sessionKey)) {
+      removedSessionIds.push(mutation.previous.sessionId);
+    }
+  });
+  hooks.beforeAuthorization = () => {
+    expect(appendTranscriptEventSync(writer, { type: "session", id: writer.sessionId })).toEqual({
+      ok: true,
+      value: true,
+    });
+    expect(loadSessionEntry({ ...removed, readConsistency: "latest" })).toBeUndefined();
+    // The helper has joined COMMIT, but the queued Worker callback has not run yet.
+    expectedEntry.sessionId = "changed-after-grant";
+  };
+  try {
+    await expect(
+      runExclusiveSqliteSessionWrite(databaseOptions, () =>
+        runSqliteSessionReclamation({ forceInProcess: false, plan }),
+      ),
+    ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
+    expect(removedSessionIds).toEqual([removed.sessionId]);
+    await expect(loadTranscriptEvents(writer)).resolves.toEqual([
+      { type: "session", id: writer.sessionId },
+    ]);
+  } finally {
+    unsubscribe();
+  }
+});
+
 test.each([false, true])(
   "periodic vacuum services reclamation approval (rejected: %s)",
   async (rejected) => {
@@ -218,6 +288,7 @@ test.each([false, true])(
     const before = freePages();
     expect(before).toBeGreaterThan(512);
     const plan = createLifecycleArtifactReclamationPlan({
+      agentId: databaseOptions.agentId,
       databaseOptions,
       entries: [],
       materializedPlans: [],
@@ -225,6 +296,7 @@ test.each([false, true])(
     const maintenanceErrors: unknown[] = [];
     let commitChecks = 0;
     let checksDuringMaintenance = 0;
+    let retired = false;
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const maintenance = configureSqliteWalMaintenance(database.db, {
       busyTimeoutMs: 1_000,
@@ -233,6 +305,7 @@ test.each([false, true])(
     });
     hooks.beforeAuthorization = () => {
       // The worker holds the writer lock and cannot commit until this thread approves it.
+      retired = rejected;
       vi.advanceTimersByTime(1);
       checksDuringMaintenance = commitChecks;
     };
@@ -242,7 +315,7 @@ test.each([false, true])(
         plan,
         assertCommitAllowed: () => {
           commitChecks += 1;
-          if (rejected) {
+          if (retired) {
             throw new Error("reclamation owner retired");
           }
         },
@@ -256,8 +329,8 @@ test.each([false, true])(
         });
       }
       expect(maintenanceErrors).toEqual([]);
-      expect(checksDuringMaintenance).toBe(1);
-      expect(commitChecks).toBe(1);
+      expect(checksDuringMaintenance).toBe(2);
+      expect(commitChecks).toBe(2);
       const reclaimed = before - freePages();
       expect(reclaimed).toBeGreaterThan(0);
       expect(reclaimed).toBeLessThanOrEqual(512);
