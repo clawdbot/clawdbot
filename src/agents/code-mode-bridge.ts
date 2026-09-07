@@ -263,7 +263,7 @@ export async function runBridgeRequest(params: {
         const { id: _id, sourceName: _sourceName, mcp: _mcp, ...guestDescription } = described;
         value =
           values[1] === "declaration"
-            ? createCodeModeToolApiFile(binding.callableName, guestDescription)
+            ? await createCodeModeToolApiFile(binding.callableName, guestDescription)
             : { ...guestDescription, callableName: binding.callableName };
         break;
       }

@@ -44,16 +44,16 @@ export async function createPreflightDeclarations(
   add(GLOBALS);
   for (const binding of projection.bindings) {
     add(
-      createCodeModeToolApiFile(
-        binding.callableName,
-        await runtime.describe(binding.id, { includeMcp: false }),
+      (
+        await createCodeModeToolApiFile(
+          binding.callableName,
+          await runtime.describe(binding.id, { includeMcp: false }),
+        )
       ).content,
     );
   }
   for (const file of apiFiles) {
-    if (!file.path.endsWith("/index.d.ts")) {
-      add(file.content);
-    }
+    add(file.content);
   }
   for (const descriptor of namespaces.descriptors) {
     if (descriptor.globalName !== "MCP") {

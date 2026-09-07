@@ -1,9 +1,13 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { availableParallelism } from "node:os";
 import { parentPort, Worker, type Transferable, type WorkerOptions } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+
+// Reusable workers must not retain the first submitting caller's async scope.
+const runInWorkerPoolContext = AsyncLocalStorage.snapshot();
 
 type WorkerTaskInput<Input> = Input | (() => Input | Promise<Input>);
 export type WorkerTaskResponse = {
@@ -44,6 +48,7 @@ type WorkerConversation = {
 };
 type Task<Input, Output> = Deferred<Output> & {
   id: number;
+  runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   controller: AbortController;
   exchange?: WorkerHostExchange;
   inputConsumed: boolean;
@@ -107,6 +112,7 @@ export class WorkerTaskPool<Input, Output> {
     const task: Task<Input, Output> = {
       ...createDeferredCore<Output>(),
       id: ++this.nextTaskId,
+      runInContext: AsyncLocalStorage.snapshot(),
       controller: new AbortController(),
       inputConsumed: false,
       exchangeSequence: 0,
@@ -171,19 +177,29 @@ export class WorkerTaskPool<Input, Output> {
       slot.task = task;
       task.slot = slot;
       slot.worker?.ref();
-      void this.start(slot, task);
+      void task.runInContext(() => this.start(slot, task));
     }
   }
 
   // Worker listeners outlive tasks; their creation scope must not retain an async task frame.
   private createWorker(slot: Slot<Input, Output>): Worker {
-    const worker = new Worker(this.options.workerUrl, {
-      // Preserve native require(ESM) and its transitive import-only exports.
-      execArgv: this.options.workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx/esm"] : [],
-      ...this.options.workerOptions,
-    });
+    const worker = runInWorkerPoolContext(
+      () =>
+        new Worker(this.options.workerUrl, {
+          // Preserve native require(ESM) and its transitive import-only exports.
+          execArgv: this.options.workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx/esm"] : [],
+          ...this.options.workerOptions,
+        }),
+    );
     slot.worker = worker;
-    worker.on("message", (message: unknown) => this.receive(slot, message));
+    worker.on("message", (message: unknown) => {
+      const task = slot.task;
+      if (task) {
+        task.runInContext(() => this.receive(slot, message));
+      } else {
+        this.receive(slot, message);
+      }
+    });
     worker.on("error", (error) =>
       this.fail(slot, new WorkerTaskError(String(error), "unavailable")),
     );
@@ -403,32 +419,33 @@ export class WorkerTaskPool<Input, Output> {
       return;
     }
     task.done = true;
-    task.controller.abort();
+    task.runInContext(() => task.controller.abort());
     clearTimeout(task.timer);
     task.options.signal?.removeEventListener("abort", task.abort);
     // SAFETY: Only a validated successful reply reaches finish without an error and supplies Output.
-    const complete = () => {
-      let completionError = error;
-      try {
-        // Retiring completion runs only after terminate() resolves. Queued inputs
-        // were never delivered; both paths release without claiming consumption.
-        if (!task.inputConsumed) {
-          task.inputConsumed = true;
-          task.options.onInputConsumed?.();
+    const complete = () =>
+      task.runInContext(() => {
+        let completionError = error;
+        try {
+          // Retiring completion runs only after terminate() resolves. Queued inputs
+          // were never delivered; both paths release without claiming consumption.
+          if (!task.inputConsumed) {
+            task.inputConsumed = true;
+            task.options.onInputConsumed?.();
+          }
+          const release = task.exchange?.onConsumed;
+          task.exchange = undefined;
+          release?.();
+        } catch (releaseError) {
+          completionError ??= toErrorObject(releaseError, "worker input release failed");
         }
-        const release = task.exchange?.onConsumed;
-        task.exchange = undefined;
-        release?.();
-      } catch (releaseError) {
-        completionError ??= toErrorObject(releaseError, "worker input release failed");
-      }
-      if (completionError) {
-        task.reject(completionError);
-      } else {
-        // SAFETY: A successful validated worker reply supplies Output to finish.
-        task.resolve(value as Output);
-      }
-    };
+        if (completionError) {
+          task.reject(completionError);
+        } else {
+          // SAFETY: A successful validated worker reply supplies Output to finish.
+          task.resolve(value as Output);
+        }
+      });
     const slot = task.slot;
     if (slot) {
       slot.task = undefined;

@@ -299,7 +299,7 @@ describe("Code Mode MCP namespace", () => {
             "McpPromptsGetResult",
           ].map((name) => ({
             name,
-            declared: api.header.includes("type " + name + " ="),
+            declared: api.header.includes("interface " + name + " {"),
             returned: api.header.includes("Promise<" + name + ">"),
           })),
         };

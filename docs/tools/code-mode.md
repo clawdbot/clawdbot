@@ -990,7 +990,9 @@ Native listing entries contain paths; `bytes` is available after `API.read`
 generates the file. Files are not eagerly injected into every guest VM.
 Unknown outputs and unsupported schema leaves remain `unknown`; client schemas
 are not promoted into trusted declarations. Runtime validation remains the
-source of truth for constraints TypeScript cannot express.
+source of truth for constraints TypeScript cannot express. Native declarations allow
+omitting the input argument only when the effective schema accepts the empty
+object used by runtime normalization; genuinely required inputs remain required.
 
 Known output declarations describe intact normalized tool values. Program-data
 admission rejects an oversized reply rather than substituting a successful
@@ -1048,16 +1050,27 @@ const prompt = await MCP.docs.prompts.get({
 tool metadata:
 
 ```typescript
-type McpToolResult = {
+interface McpToolResult {
   content: unknown[];
   structuredContent?: unknown;
   isError?: boolean;
-};
+}
 
-type McpResourcesListResult = { resources: unknown[]; nextCursor?: string };
-type McpResourcesReadResult = { contents: unknown[] };
-type McpPromptsListResult = { prompts: unknown[]; nextCursor?: string };
-type McpPromptsGetResult = { messages: unknown[]; description?: string };
+interface McpResourcesListResult {
+  resources: unknown[];
+  nextCursor?: string;
+}
+interface McpResourcesReadResult {
+  contents: unknown[];
+}
+interface McpPromptsListResult {
+  prompts: unknown[];
+  nextCursor?: string;
+}
+interface McpPromptsGetResult {
+  messages: unknown[];
+  description?: string;
+}
 
 declare namespace MCP.github {
   /** Return this TypeScript-style API header. */
