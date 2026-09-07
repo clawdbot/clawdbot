@@ -80,8 +80,8 @@ describe("IMessageRpcClient LF framing", () => {
     stderr: PassThrough;
   };
   let client: InstanceType<typeof IMessageRpcClient>;
-  let runtimeError: ReturnType<typeof vi.fn>;
-  let onNotification: ReturnType<typeof vi.fn>;
+  const runtimeError = vi.fn();
+  const onNotification = vi.fn();
 
   beforeEach(async () => {
     vi.stubEnv("NODE_ENV", "development");
@@ -92,8 +92,8 @@ describe("IMessageRpcClient LF framing", () => {
       stderr: new PassThrough(),
     });
     spawnMock.mockReset().mockReturnValue(child);
-    runtimeError = vi.fn();
-    onNotification = vi.fn();
+    runtimeError.mockReset();
+    onNotification.mockReset();
     client = new IMessageRpcClient({
       runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
       onNotification,
@@ -200,7 +200,7 @@ describe("IMessageRpcClient LF framing", () => {
 
   it("flushes incomplete UTF-8 and preserves internal CRs in unterminated stderr", async () => {
     const bytes = Buffer.from("first\rsecond \u20ac");
-    child.stderr.write(bytes.subarray(0, bytes.length - 1));
+    child.stderr.write(bytes.subarray(0, -1));
     expect(runtimeError).not.toHaveBeenCalled();
 
     child.emit("close", 1, null);
