@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
