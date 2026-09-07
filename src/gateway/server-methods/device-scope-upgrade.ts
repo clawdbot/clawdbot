@@ -180,7 +180,8 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       respondDeviceRequired(respond);
       return;
     }
-    const requestId = (params as { requestId: string }).requestId;
+    // Match gateway.suspend.prepare: clipboard padding must not miss a live waiter.
+    const requestId = (params as { requestId: string }).requestId.trim();
     const result = await context.scopeUpgradeCoordinator?.wait(requestId, owner);
     if (!result) {
       respond(

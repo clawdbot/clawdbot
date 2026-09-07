@@ -239,6 +239,29 @@ describe("device scope upgrade role ceiling", () => {
     expect(respond).toHaveBeenCalledWith(true, result, undefined);
   });
 
+  it("trims padded waitUpgrade requestId before looking up the pending waiter", async () => {
+    const context = createUpgradeContext();
+    const result: ScopeUpgradeResult = {
+      status: "approved",
+      requestId: "request-1",
+      deviceToken: "upgraded-token",
+      scopes: ["operator.read", "operator.write"],
+    };
+    context.scopeUpgradeCoordinator.wait.mockResolvedValue(result);
+
+    const { respond } = await runUpgradeHandler(
+      "device.scopes.waitUpgrade",
+      { requestId: "  request-1  " },
+      context,
+    );
+
+    expect(context.scopeUpgradeCoordinator.wait).toHaveBeenCalledWith("request-1", {
+      deviceId: "device-1",
+      publicKey: "public-key-1",
+    });
+    expect(respond).toHaveBeenCalledWith(true, result, undefined);
+  });
+
   it.each([
     { scopes: ["operator.read", "operator.unknown"], message: "unknown operator scope" },
     { scopes: ["operator.approvals"], message: "current scopes" },

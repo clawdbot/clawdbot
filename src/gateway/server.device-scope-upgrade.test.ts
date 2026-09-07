@@ -181,6 +181,46 @@ describe("live device scope upgrade", () => {
     }
   });
 
+  test("resolves waitUpgrade when the live requestId has clipboard padding", async () => {
+    const limited = await openLimitedDevice("live-scope-upgrade-padded-wait");
+    try {
+      const registration = await rpcReq<{ requestId: string }>(
+        limited.ws,
+        "device.scopes.requestUpgrade",
+        { scopes: FULL_SCOPES },
+      );
+      expect(registration.ok, JSON.stringify(registration.error)).toBe(true);
+      const requestId = registration.payload?.requestId;
+      expect(requestId).toBeTypeOf("string");
+
+      const wait = rpcReq<{
+        status: string;
+        requestId: string;
+        deviceToken: string;
+        scopes: string[];
+      }>(limited.ws, "device.scopes.waitUpgrade", { requestId: `  ${requestId}  ` }, 10_000);
+      const pairingList = await rpcReq<{
+        pending: Array<{ requestId: string; deviceId: string }>;
+      }>(started.ws, "device.pair.list", {});
+      expect(pairingList.payload?.pending.some((entry) => entry.requestId === requestId)).toBe(
+        true,
+      );
+
+      const approval = await rpcReq(started.ws, "device.pair.approve", { requestId });
+      expect(approval.ok, JSON.stringify(approval.error)).toBe(true);
+      const resolved = await wait;
+      expect(resolved.ok, JSON.stringify(resolved.error)).toBe(true);
+      expect(resolved.payload).toMatchObject({
+        status: "approved",
+        requestId,
+        scopes: expect.arrayContaining(["operator.admin"]),
+      });
+      expect(resolved.payload?.deviceToken).toBeTypeOf("string");
+    } finally {
+      limited.ws.close();
+    }
+  });
+
   test("preserves a browser origin through approval and reconnects from the same origin", async () => {
     const limited = await openLimitedBrowserDevice("live-scope-upgrade-browser-origin");
     let reconnected: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
