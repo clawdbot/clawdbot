@@ -142,6 +142,28 @@ async function sendClickClackInboundNotice(params: {
   });
 }
 
+function isClickClackDirectReplySuppressed(params: {
+  access: ClickClackInboundAccess;
+  accountId: string;
+}): boolean {
+  if (!params.access.botLoopProtection) {
+    return false;
+  }
+  const loopResult = recordChannelBotPairLoopAndCheckSuppression(params.access.botLoopProtection);
+  if (!loopResult.suppressed) {
+    return false;
+  }
+  getClickClackRuntime()
+    .logging.getChildLogger({ plugin: "clickclack", feature: "bot-loop-protection" })
+    .warn(
+      `[${params.accountId}] ClickClack bot-pair loop suppressed for ${Math.max(
+        0,
+        Math.ceil((loopResult.cooldownUntilMs - Date.now()) / 1000),
+      )}s`,
+    );
+  return true;
+}
+
 async function dispatchModelReply(params: {
   account: ResolvedClickClackAccount;
   cfg: OpenClawConfig;
@@ -235,6 +257,14 @@ export async function handleClickClackInbound(params: {
   }
   const hasAttachments = (message.attachments?.length ?? 0) > 0;
   if (params.account.replyMode === "model" && !discussionRoute && hasAttachments) {
+    if (
+      isClickClackDirectReplySuppressed({
+        access,
+        accountId: params.account.accountId,
+      })
+    ) {
+      return;
+    }
     await sendClickClackInboundNotice({
       account: params.account,
       cfg: params.config,
@@ -259,6 +289,14 @@ export async function handleClickClackInbound(params: {
       throw error;
     }
     if (params.abortSignal?.aborted) {
+      return;
+    }
+    if (
+      isClickClackDirectReplySuppressed({
+        access,
+        accountId: params.account.accountId,
+      })
+    ) {
       return;
     }
     await sendClickClackInboundNotice({
@@ -298,19 +336,13 @@ export async function handleClickClackInbound(params: {
       })
     : undefined;
   if (params.account.replyMode === "model" && !discussionRoute) {
-    if (access.botLoopProtection) {
-      const loopResult = recordChannelBotPairLoopAndCheckSuppression(access.botLoopProtection);
-      if (loopResult.suppressed) {
-        runtime.logging
-          .getChildLogger({ plugin: "clickclack", feature: "bot-loop-protection" })
-          .warn(
-            `[${params.account.accountId}] ClickClack bot-pair loop suppressed for ${Math.max(
-              0,
-              Math.ceil((loopResult.cooldownUntilMs - Date.now()) / 1000),
-            )}s`,
-          );
-        return;
-      }
+    if (
+      isClickClackDirectReplySuppressed({
+        access,
+        accountId: params.account.accountId,
+      })
+    ) {
+      return;
     }
     progress?.start();
     try {
