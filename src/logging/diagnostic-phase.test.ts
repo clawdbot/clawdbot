@@ -1,5 +1,6 @@
 // Diagnostic phase tests cover phase timing and diagnostic event emission.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getCurrentDiagnosticPhase,
   getRecentDiagnosticPhases,
@@ -46,23 +47,14 @@ describe("getRecentDiagnosticPhases", () => {
 
   it("does not apply completed-phase recency filtering to active phases", async () => {
     resetDiagnosticPhasesForTest();
-    let releasePhase: (() => void) | undefined;
-    const phase = withDiagnosticPhase(
-      "legitimate.long-running-work",
-      () =>
-        new Promise<void>((resolve) => {
-          releasePhase = resolve;
-        }),
-    );
-    if (!releasePhase) {
-      throw new Error("Expected diagnostic phase release callback to be initialized");
-    }
+    const deferred = createDeferred();
+    const phase = withDiagnosticPhase("legitimate.long-running-work", () => deferred.promise);
 
     try {
       expect(getRecentDiagnosticPhases(1, { completedAfter: Date.now() })).toEqual([]);
       expect(getCurrentDiagnosticPhase()).toBe("legitimate.long-running-work");
     } finally {
-      releasePhase();
+      deferred.resolve();
       await phase;
     }
   });
