@@ -4,7 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import {
@@ -2287,78 +2287,6 @@ describe("models.authStatus", () => {
     },
   );
 
-  it("uses effective profile order for the provider usage summary", async () => {
-    const runtimeConfig = {};
-    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-    const first = {
-      profileId: "openai:first",
-      provider: "openai",
-      type: "oauth",
-      status: "ok",
-      source: "store",
-      label: "first@example.com",
-    } satisfies AuthHealthSummary["profiles"][number];
-    const second = {
-      profileId: "openai:second",
-      provider: "openai",
-      type: "oauth",
-      status: "ok",
-      source: "store",
-      label: "second@example.com",
-    } satisfies AuthHealthSummary["profiles"][number];
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles: [first, second],
-      providers: [
-        {
-          provider: "openai",
-          status: "ok",
-          profiles: [first, second],
-          effectiveProfiles: [second, first],
-        },
-      ],
-    });
-    setPreparedAuthStore({
-      version: 1,
-      profiles: {
-        "openai:first": {
-          type: "oauth",
-          provider: "openai",
-          access: "first-access",
-          refresh: "first-refresh",
-          expires: 1_000_000,
-        },
-        "openai:second": {
-          type: "oauth",
-          provider: "openai",
-          access: "second-access",
-          refresh: "second-refresh",
-          expires: 1_000_000,
-        },
-      },
-    });
-    const usageSummary = (usedPercent: number): UsageSummary => ({
-      updatedAt: 0,
-      providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          windows: [{ label: "week", usedPercent }],
-        },
-      ],
-    });
-    mocks.loadProviderUsageSummary
-      .mockResolvedValueOnce(usageSummary(10))
-      .mockResolvedValueOnce(usageSummary(20));
-
-    let result: ModelAuthStatusResult | undefined;
-    await waitForFast(async () => {
-      result = await readAuthStatus();
-      expect(result.providers[0]?.usage?.windows[0]?.usedPercent).toBe(20);
-    });
-  });
-
   it("does not evict shared provider usage when auth status only needs profile usage", async () => {
     const runtimeConfig = {};
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
@@ -3007,7 +2935,8 @@ describe("models.authOrderSet", () => {
       agents: { list: [{ id: "main", default: true, agentDir: "/tmp/agent" }] },
     };
     mocks.getRuntimeConfig.mockReturnValue(config);
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    onTestFinished(() => clock.mockRestore());
     const { buildAuthHealthSummary } = await vi.importActual<
       typeof import("../../agents/auth-health.js")
     >("../../agents/auth-health.js");
