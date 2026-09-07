@@ -1534,7 +1534,11 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
-  test("names the refused plugin when it is not bundled or trusted official", async () => {
+  test.each([
+    { pluginId: "community-plugin", reason: /Plugin "community-plugin" is neither\./ },
+    { pluginId: "missing-plugin", reason: /Plugin "missing-plugin" is neither\./ },
+    { pluginId: undefined, reason: /This call carries no plugin identity\./ },
+  ])("explains the Gateway refusal for plugin identity $pluginId", async ({ pluginId, reason }) => {
     loadOpenClawPlugins.mockReturnValue(
       addLoadedPlugin(createRegistry([]), { id: "community-plugin", origin: "global" }),
     );
@@ -1542,26 +1546,19 @@ describe("loadGatewayPlugins", () => {
     serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-refused"));
     const runtime = createRuntimeFromLastGatewayLoad();
 
-    await expect(
-      gatewayRequestScopeModule.withPluginRuntimePluginScope(
-        { pluginId: "community-plugin", pluginOrigin: "global" },
-        () => runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
-      ),
-    ).rejects.toThrow(/community-plugin/);
-  });
+    const request = pluginId
+      ? gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId, pluginOrigin: "global" },
+          () => runtime.gateway.request("sessions.list", {}),
+        )
+      : runtime.gateway.request("sessions.list", {});
 
-  test("reports a missing plugin identity distinctly from an untrusted plugin", async () => {
-    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    loadGatewayStartupPluginsForTest();
-    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-unscoped"));
-    const runtime = createRuntimeFromLastGatewayLoad();
-    const attempt = () => runtime.gateway.request("voicecall.start", { to: "+15550001234" });
-
-    await expect(attempt()).rejects.toThrow(/carries no plugin identity/i);
-    // Plugin authors install from npm and have no docs/ directory, so cite the published page.
-    await expect(attempt()).rejects.toThrow(
-      /https:\/\/docs\.openclaw\.ai\/plugins\/sdk-runtime#api-runtime-gateway/,
+    await expect(request).rejects.toThrow(reason);
+    await expect(request).rejects.toThrow("bundled or trusted official plugins");
+    await expect(request).rejects.toThrow(
+      "https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-gateway",
     );
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
   test("lets trusted official plugins request explicit Gateway scopes", async () => {

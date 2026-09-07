@@ -87,8 +87,6 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   const scope = getPluginRuntimeGatewayRequestScope();
   const pluginId = scope?.pluginId?.trim();
   if (!canTrustedOfficialPluginRequestScopes(scope ?? {})) {
-    // Refusal has two distinct causes. Name which one so an author is not left
-    // guessing whether the plugin is untrusted or the call carries no identity.
     throw new Error(
       `Gateway requests are only available to bundled or trusted official plugins. ${
         pluginId ? `Plugin "${pluginId}" is neither.` : "This call carries no plugin identity."
