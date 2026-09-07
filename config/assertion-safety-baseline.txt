@@ -3687,7 +3687,7 @@ src/wizard/clack-navigation-prompts.ts	11
 src/wizard/clack-prompter.ts	2
 src/wizard/navigation-prompter.ts	5
 src/wizard/session.ts	3
-src/wizard/setup.gateway-config.ts	5
+src/wizard/setup.gateway-config.ts	4
 src/wizard/setup.migration-canonical.ts	1
 src/wizard/setup.migration-finalize.ts	1
 src/wizard/setup.migration-snapshot.ts	5

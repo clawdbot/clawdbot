@@ -7,7 +7,7 @@ import {
   randomToken,
   validateGatewayPasswordInput,
 } from "../commands/onboard-helpers.js";
-import type { GatewayAuthChoice, SecretInputMode } from "../commands/onboard-types.js";
+import type { SecretInputMode } from "../commands/onboard-types.js";
 import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
 import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
 import {
@@ -24,7 +24,6 @@ import { findTailscaleBinary } from "../infra/tailscale.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { maskApiKey } from "../security/secret-mask.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
@@ -138,21 +137,7 @@ export async function configureGatewayForSetup(
     }
   }
 
-  let authMode =
-    flow === "quickstart"
-      ? quickstartGateway.authMode
-      : ((await prompter.select({
-          message: t("wizard.gateway.accessProtection"),
-          options: [
-            {
-              value: "token",
-              label: t("common.tokenRecommended"),
-              hint: t("wizard.gateway.plaintextTokenHint"),
-            },
-            { value: "password", label: t("common.password") },
-          ],
-          initialValue: quickstartGateway.authMode,
-        })) as GatewayAuthChoice);
+  let authMode = quickstartGateway.authMode;
 
   const tailscaleMode: GatewayWizardSettings["tailscaleMode"] =
     flow === "quickstart"
@@ -255,51 +240,24 @@ export async function configureGatewayForSetup(
         gatewayTokenInput = resolved.ref;
         gatewayToken = resolved.resolvedValue;
       }
-    } else if (flow === "quickstart") {
-      gatewayToken = (quickstartTokenString ?? ambientToken) || randomToken();
-      gatewayTokenInput = gatewayToken;
     } else {
-      const existingToken = quickstartTokenString ?? ambientToken;
-      let tokenInput: string | undefined;
-      if (existingToken) {
-        const keep = await prompter.confirm({
-          message: t("wizard.gateway.existingTokenConfirm", { token: maskApiKey(existingToken) }),
-          initialValue: true,
-        });
-        tokenInput = keep
-          ? existingToken
-          : await prompter.text({
-              message: t("wizard.gateway.tokenPromptGenerate"),
-              placeholder: t("wizard.gateway.tokenPlaceholder"),
-              sensitive: true,
-            });
-      } else {
-        tokenInput = await prompter.text({
-          message: t("wizard.gateway.tokenPromptGenerate"),
-          placeholder: t("wizard.gateway.tokenPlaceholder"),
-          sensitive: true,
-        });
-      }
-      gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
+      gatewayToken = (quickstartTokenString ?? ambientToken) || randomToken();
       gatewayTokenInput = gatewayToken;
     }
   }
 
   if (authMode === "password") {
-    const existingPassword = normalizeSecretInputString(quickstartGateway.password);
     const existingPasswordRef = resolveSecretInputRef({
       value: quickstartGateway.password,
       defaults: nextConfig.secrets?.defaults,
     }).ref;
-    const quickstartNeedsPasswordRef =
-      flow === "quickstart" &&
+    const needsPasswordRef =
       opts.secretInputMode === "ref" &&
       !existingPasswordRef &&
       quickstartGateway.password !== opts.baseConfig.gateway?.auth?.password;
-    let password: SecretInput | undefined =
-      flow === "quickstart" && !quickstartNeedsPasswordRef
-        ? quickstartGateway.password
-        : (existingPasswordRef ?? undefined);
+    let password: SecretInput | undefined = !needsPasswordRef
+      ? quickstartGateway.password
+      : (existingPasswordRef ?? undefined);
     if (!password) {
       const selectedMode = await resolveSecretInputModeForEnvSelection({
         prompter,
@@ -323,25 +281,13 @@ export async function configureGatewayForSetup(
         });
         password = resolved.ref;
       } else {
-        let passwordInput: string | undefined;
-        if (existingPassword) {
-          const keep = await prompter.confirm({
-            message: t("wizard.gateway.existingPasswordConfirm", {
-              password: maskApiKey(existingPassword),
-            }),
-            initialValue: true,
-          });
-          passwordInput = keep ? existingPassword : undefined;
-        }
-        password =
-          passwordInput ??
-          normalizeWizardTextInput(
-            await prompter.text({
-              message: t("wizard.gateway.passwordPrompt"),
-              validate: validateGatewayPasswordInput,
-              sensitive: true,
-            }),
-          );
+        password = normalizeWizardTextInput(
+          await prompter.text({
+            message: t("wizard.gateway.passwordPrompt"),
+            validate: validateGatewayPasswordInput,
+            sensitive: true,
+          }),
+        );
       }
     }
     nextConfig = {

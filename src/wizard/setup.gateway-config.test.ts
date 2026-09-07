@@ -91,7 +91,7 @@ describe("configureGatewayForSetup", () => {
   }) {
     const authChoice = params?.authChoice ?? "token";
     const prompter = createPrompter({
-      selectQueue: [params?.bindChoice ?? "loopback", authChoice, params?.tailscaleChoice ?? "off"],
+      selectQueue: [params?.bindChoice ?? "loopback", params?.tailscaleChoice ?? "off"],
       textQueue: params?.textQueue ?? ["18789", undefined],
     });
     const runtime = createRuntime();
@@ -141,13 +141,56 @@ describe("configureGatewayForSetup", () => {
     }
   });
 
-  it("generates a token when the prompt returns undefined", async () => {
-    mocks.randomToken.mockReturnValue("generated-token");
-    const result = await runGatewayConfig();
+  it.each(["quickstart", "advanced"] as const)(
+    "%s generates a Gateway secret without an auth or secret text prompt",
+    async (flow) => {
+      mocks.randomToken.mockReturnValue("generated-token");
+      const prompter = createPrompter({ selectQueue: [], textQueue: [] });
+      const result = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, () =>
+        configureGatewayForSetup({
+          flow,
+          baseConfig: {},
+          nextConfig: {},
+          localPort: 18789,
+          quickstartGateway: resolveQuickstartGatewayDefaults({}),
+          prompter,
+          runtime: createRuntime(),
+        }),
+      );
+      expect(result.nextConfig.gateway?.auth).toEqual({ mode: "token", token: "generated-token" });
+      expect(prompter.select).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Gateway access protection" }),
+      );
+      expect(vi.mocked(prompter.text).mock.calls.map(([params]) => params.message)).toEqual(
+        flow === "quickstart" ? [] : ["Gateway port"],
+      );
+      expect(result.nextConfig.gateway?.nodes?.commands).toBeUndefined();
+    },
+  );
 
-    expect(result.settings.gatewayToken).toBe("generated-token");
-    expect(result.nextConfig.gateway?.nodes?.commands).toBeUndefined();
-  });
+  it.each(["quickstart", "advanced"] as const)(
+    "%s preserves an existing password-mode config without an auth prompt",
+    async (flow) => {
+      const baseConfig = {
+        gateway: { auth: { mode: "password" as const, password: "saved-password" } },
+      };
+      const prompter = createPrompter({ selectQueue: [], textQueue: [] });
+      const result = await configureGatewayForSetup({
+        flow,
+        baseConfig,
+        nextConfig: baseConfig,
+        localPort: 18789,
+        quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
+        prompter,
+        runtime: createRuntime(),
+      });
+      expect(result.nextConfig.gateway?.auth).toEqual(baseConfig.gateway.auth);
+      expect(prompter.select).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Gateway access protection" }),
+      );
+      expect(prompter.confirm).not.toHaveBeenCalled();
+    },
+  );
 
   it("seeds advanced gateway prompts from explicit classic options", async () => {
     const gatewayDefaults = resolveQuickstartGatewayDefaults(
@@ -155,7 +198,6 @@ describe("configureGatewayForSetup", () => {
       {
         gatewayPort: 19511,
         gatewayBind: "lan",
-        gatewayAuth: "password",
         gatewayPassword: "manual-gateway-password-placeholder",
         tailscale: "off",
       },
@@ -185,9 +227,10 @@ describe("configureGatewayForSetup", () => {
     expect(select).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Gateway bind address", initialValue: "lan" }),
     );
-    expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Gateway access protection", initialValue: "password" }),
+    expect(select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Gateway access protection" }),
     );
+    expect(confirm).not.toHaveBeenCalled();
     expect(select).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Tailscale exposure", initialValue: "off" }),
     );
@@ -229,14 +272,14 @@ describe("configureGatewayForSetup", () => {
     }
   });
 
-  it("keeps OPENCLAW_GATEWAY_TOKEN in advanced flow when user confirms keeping existing", async () => {
+  it("keeps OPENCLAW_GATEWAY_TOKEN in advanced flow without a credential prompt", async () => {
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "advanced-env-token";
     mocks.randomToken.mockReturnValue("should-not-be-used");
     mocks.randomToken.mockClear();
 
     try {
-      const selectQueue = ["loopback", "token", "off"];
+      const selectQueue = ["loopback", "off"];
       const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
         const next = selectQueue.shift();
         if (next !== undefined) {
@@ -318,7 +361,7 @@ describe("configureGatewayForSetup", () => {
     process.env.OPENCLAW_GATEWAY_PASSWORD = "gateway-secret"; // pragma: allowlist secret
     try {
       const prompter = createPrompter({
-        selectQueue: ["loopback", "password", "off", "env"],
+        selectQueue: ["loopback", "off", "env"],
         textQueue: ["18789", "OPENCLAW_GATEWAY_PASSWORD"],
       });
       const runtime = createRuntime();
@@ -403,7 +446,7 @@ describe("configureGatewayForSetup", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "token-from-env";
     try {
       const prompter = createPrompter({
-        selectQueue: ["loopback", "token", "off", "env"],
+        selectQueue: ["loopback", "off", "env"],
         textQueue: ["18789", "OPENCLAW_GATEWAY_TOKEN"],
       });
       const runtime = createRuntime();
