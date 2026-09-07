@@ -1,6 +1,7 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatCommandErrorForUser } from "../../process/command-error.js";
 import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
@@ -300,6 +301,10 @@ export function renderSanitizedUserFacingText(
     return shouldRewriteRawPayloadWithoutErrorContext(trimmed)
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
+  }
+  const commandError = formatCommandErrorForUser(trimmed);
+  if (commandError) {
+    return commandError;
   }
   const execDenied = formatExecDeniedUserMessage(trimmed);
   if (execDenied) {
