@@ -483,7 +483,13 @@ export function meetStatusScript(params: {
     lastCaptionAt = last?.at;
     lastCaptionSpeaker = last?.speaker;
     lastCaptionText = last?.text;
-    recentTranscript = lines.slice(-5);
+    // Visible caption rows carry a live DOM node for lifecycle tracking;
+    // strip it so JSON.stringify never encounters a __soy circular reference. (#140455)
+    recentTranscript = lines.slice(-5).map((entry) => ({
+      at: entry.at,
+      speaker: entry.speaker,
+      text: entry.text,
+    }));
   }
   const lobbyWaiting = !inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText);
   const leaveReason = !inCall && /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i.test(pageText)
@@ -530,7 +536,7 @@ export function meetStatusScript(params: {
     title: document.title,
     url: pageUrl,
     notes
-  });
+  }, (function(){var seen=new WeakSet();return function(k,v){if(v&&typeof v==='object'){if(typeof v.nodeType==='number')return undefined;if(seen.has(v))return undefined;seen.add(v);}return v;};})());
 }`;
 }
 

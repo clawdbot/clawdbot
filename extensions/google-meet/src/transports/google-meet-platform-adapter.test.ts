@@ -210,3 +210,96 @@ describe("GOOGLE_MEET_PLATFORM_ADAPTER audio routing", () => {
     expect(MeetingPlatformAdapter.isRealtimeRouteReady("agent", health)).toBe(false);
   });
 });
+
+describe("meetStatusScript circular JSON safety", () => {
+  it("serializes caption state without crashing on __soy circular references (#140455)", async () => {
+    // Google Meet DOM nodes carry a __soy property whose object closes a cycle
+    // back to the node, causing JSON.stringify to throw “Converting circular
+    // structure to JSON”.
+    const captionRegion: Record<string, unknown> = {
+      nodeType: 1,
+      textContent: "Alice\nHello world",
+      innerText: "Alice\nHello world",
+      getAttribute: () => "Captions",
+    };
+    captionRegion["__soy"] = { node: captionRegion };
+
+    const leave = pageNode("Leave call");
+    const media = {
+      sinkId: "",
+      setSinkId: vi.fn(async () => {}),
+    };
+    const document = {
+      body: { textContent: "" },
+      title: "Meet",
+      querySelector() {
+        return null;
+      },
+      querySelectorAll(selector: string) {
+        if (selector === "button") {
+          return [leave];
+        }
+        if (selector === "input") {
+          return [];
+        }
+        if (selector === "audio, video") {
+          return [media];
+        }
+        if (selector.includes("aption") || selector.includes("aria-live")) {
+          return [captionRegion];
+        }
+        if (selector.includes("button") || selector.includes('[role="')) {
+          return [leave];
+        }
+        return [];
+      },
+    };
+
+    const result = await runInNewContext(
+      `(${meetStatusScript({
+        allowMicrophone: true,
+        autoJoin: false,
+        captureCaptions: true,
+        guestName: "OpenClaw Agent",
+      })})()`,
+      {
+        Event: globalThis.Event,
+        JSON,
+        String,
+        Date,
+        WeakSet,
+        crypto: globalThis.crypto,
+        MutationObserver: class MockMutationObserver {
+          observe() {}
+          disconnect() {}
+        },
+        document,
+        location: { href: MEETING_URL, hostname: "meet.google.com" },
+        navigator: {
+          mediaDevices: {
+            enumerateDevices: async () => [
+              { deviceId: "input-1", kind: "audioinput", label: "BlackHole 2ch" },
+              { deviceId: "output-1", kind: "audiooutput", label: "OpenClaw Meeting Audio" },
+            ],
+          },
+        },
+        setTimeout: (callback: () => void) => {
+          callback();
+          return 1;
+        },
+        clearTimeout,
+        window: {},
+      },
+    );
+
+    // The key assertion: JSON.parse must not throw on the result.
+    const health = JSON.parse(result) as Record<string, unknown>;
+    expect(health.inCall).toBe(true);
+    // recentTranscript must not carry the live DOM node.
+    const transcript = health.recentTranscript as Array<Record<string, unknown>>;
+    expect(transcript).toHaveLength(1);
+    expect(transcript[0]?.speaker).toBe("Alice");
+    expect(transcript[0]?.text).toBe("Hello world");
+    expect(transcript[0]?.node).toBeUndefined();
+  });
+});
