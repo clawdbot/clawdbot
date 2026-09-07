@@ -258,6 +258,12 @@ Current content is ready for readers even while its version is unpublished.
 Ordinary CLI commands can run alongside the Gateway throughout this window;
 publication alone does not trigger schema repair or require stopping the Gateway.
 
+A subsequent update can run during this window. Its migration verification and
+rollback checks compare applied content versions from private database snapshots.
+Publishing already-applied content is not another migration; applying new content
+still blocks rollback even when the published number has not changed. Managed
+service stop, activation, and Doctor maintenance keep their normal ownership rules.
+
 Publication waits until **every** update row whose `before.version` identifies
 the 2026.9.2 release line meets its applicable condition:
 
