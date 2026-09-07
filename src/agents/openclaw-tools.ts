@@ -358,6 +358,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             : [
                 createComputerTool({
                   transport: options?.computerTransport,
+                  pairedNodeComputerUse: options?.pairedNodeComputerUse,
                   config: options?.config,
                   modelHasVision: options?.modelHasVision,
                   // Run ids expire before later assistant runs can reuse a provider call id.

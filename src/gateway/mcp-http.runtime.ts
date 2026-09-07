@@ -3,6 +3,10 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
+  loadPairedComputerUseAvailability,
+  type PairedComputerUseAvailability,
+} from "../agents/computer-use-node-capabilities.js";
+import {
   isCoreCodingSurfaceToolName,
   listCoreToolFactoryDescriptors,
 } from "../agents/core-tool-factory-descriptors.js";
@@ -55,6 +59,7 @@ type McpLoopbackScopeParams = {
   yieldContextCacheKey?: string;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   nodeExecAvailability?: Awaited<ReturnType<typeof loadNodeExecAvailability>>;
+  pairedComputerUseAvailability?: PairedComputerUseAvailability;
   signal?: AbortSignal;
 };
 
@@ -85,18 +90,23 @@ function resolveMediatedNativeTools(
   );
 }
 
-async function resolveNodeExecScope(
+async function resolveNodeScope(
   params: McpLoopbackScopeParams,
   mode: LoopbackToolsAllowMode,
 ): Promise<McpLoopbackScopeParams> {
-  if (
-    params.rootedExecution ||
-    params.context.nodeExecAllowed !== true ||
-    resolveMediatedNativeTools(params.context.toolsAllow, mode).size > 0
-  ) {
+  const shouldResolveExec =
+    !params.rootedExecution &&
+    params.context.nodeExecAllowed === true &&
+    resolveMediatedNativeTools(params.context.toolsAllow, mode).size === 0;
+  const shouldResolveComputer = !params.rootedExecution && params.context.modelHasVision !== false;
+  if (!shouldResolveExec && !shouldResolveComputer) {
     return params;
   }
-  return { ...params, nodeExecAvailability: await loadNodeExecAvailability(params.signal) };
+  const [nodeExecAvailability, pairedComputerUseAvailability] = await Promise.all([
+    shouldResolveExec ? loadNodeExecAvailability(params.signal) : undefined,
+    shouldResolveComputer ? loadPairedComputerUseAvailability(params.signal) : undefined,
+  ]);
+  return { ...params, nodeExecAvailability, pairedComputerUseAvailability };
 }
 
 function resolveMcpLoopbackTools(
@@ -141,6 +151,7 @@ function resolveMcpLoopbackTools(
     mediatedToolNames: mediatedNativeTools,
     includeNodeExecTool,
     nodeExecAvailable: params.nodeExecAvailability?.isAvailable,
+    pairedNodeComputerUse: params.pairedComputerUseAvailability?.prepared,
   });
   return {
     agentId: scoped.agentId,
@@ -158,7 +169,7 @@ export async function resolveMcpLoopbackScopedTools(params: McpLoopbackScopePara
   workspaceDir?: string;
   tools: McpLoopbackTool[];
 }> {
-  return resolveMcpLoopbackTools(await resolveNodeExecScope(params, "exact"), "exact");
+  return resolveMcpLoopbackTools(await resolveNodeScope(params, "exact"), "exact");
 }
 
 /** Materializes runtime policy expressions against the concrete loopback catalog. */
@@ -166,7 +177,7 @@ export async function resolveMcpLoopbackPolicyTools(params: McpLoopbackScopePara
   agentId: string | undefined;
   tools: McpLoopbackTool[];
 }> {
-  return resolveMcpLoopbackTools(await resolveNodeExecScope(params, "policy"), "policy");
+  return resolveMcpLoopbackTools(await resolveNodeScope(params, "policy"), "policy");
 }
 
 /**
@@ -217,7 +228,7 @@ export class McpLoopbackToolCache {
   async resolve(input: McpLoopbackScopeParams): Promise<CachedScopedTools> {
     const epoch = this.#epoch;
     // Availability belongs to the current connection, not the schema TTL.
-    const params = await resolveNodeExecScope(input, "exact");
+    const params = await resolveNodeScope(input, "exact");
     input.signal?.throwIfAborted();
     const { context } = params;
     // Only the serializable grant context enters this key. Prepared credentials,
@@ -240,6 +251,7 @@ export class McpLoopbackToolCache {
       authProfileStoreAgentDir: params.authProfileStoreAgentDir,
       yieldContextCacheKey: params.yieldContextCacheKey,
       nodeExecAvailability: params.nodeExecAvailability?.cacheKey,
+      pairedComputerUseAvailability: params.pairedComputerUseAvailability?.cacheKey,
     })}`;
     const cached = this.#entries.get(cacheKey, params.cfg);
     if (cached) {

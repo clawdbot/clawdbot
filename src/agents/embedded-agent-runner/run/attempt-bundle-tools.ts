@@ -26,7 +26,7 @@ import {
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type PreparedToolBase = ReturnType<typeof prepareEmbeddedAttemptToolBase>;
+type PreparedToolBase = Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
 
 export async function prepareEmbeddedAttemptBundleTools(params: {
   agentDir: string;

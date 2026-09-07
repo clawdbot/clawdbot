@@ -19,6 +19,7 @@ import {
   type EligibleNodeMessages,
   resolveEligibleNodeFromList,
 } from "../../shared/node-resolve.js";
+import { isEligibleComputerNode } from "../computer-use-node-capabilities.js";
 import { computerActionNeedsFrame, validateCapabilityBoundInput } from "./computer-tool-request.js";
 import type {
   ComputerContextEpoch,
@@ -54,17 +55,6 @@ const DEFINITIVE_NODE_COMMAND_REASONS = new Set([
   "command not declared by node",
   "node did not declare commands",
 ]);
-
-function isEligibleComputerNode(node: NodeListNode): boolean {
-  const commands = Array.isArray(node.commands) ? node.commands : [];
-  // The tool loop authorizes coordinates against captured frames, so screenshot
-  // support is a functional requirement rather than gating by platform name.
-  return (
-    node.connected === true &&
-    commands.includes(COMPUTER_ACT_COMMAND) &&
-    commands.includes(SCREEN_SNAPSHOT_COMMAND)
-  );
-}
 
 const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
   ineligibleExact: (query, eligibleIds) =>

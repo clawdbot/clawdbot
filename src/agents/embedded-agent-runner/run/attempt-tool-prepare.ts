@@ -19,6 +19,7 @@ import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
+import { loadPairedComputerUseAvailability } from "../../computer-use-node-capabilities.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
   isLocalModelLeanEnabled,
@@ -58,7 +59,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
 type SkillUsagePaths = OpenClawCodingToolsOptions["skillUsagePaths"];
 
-export function prepareEmbeddedAttemptToolBase(params: {
+export async function prepareEmbeddedAttemptToolBase(params: {
   agentDir: string;
   attempt: EmbeddedRunAttemptParams;
   setup: EmbeddedAttemptSetup;
@@ -133,6 +134,10 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolConstructionPlan.constructTools ||
     toolSearchControlsEnabledForRun ||
     codeModeControlsEnabledForRun;
+  const pairedNodeComputerUse =
+    shouldConstructTools && (attempt.model.input?.includes("image") ?? true)
+      ? (await loadPairedComputerUseAvailability(params.runAbortController.signal)).prepared
+      : undefined;
   // Compaction summaries omit screenshot image blocks. Frames are bound to this
   // generation so retained tool-result text cannot authorize stale coordinates.
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
@@ -259,6 +264,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
             channelContext: attempt.channelContext,
             allowGatewaySubagentBinding: attempt.allowGatewaySubagentBinding,
             operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
+            pairedNodeComputerUse,
             conversationRecall: attempt.conversationRecall,
             oneShotCliRun: attempt.oneShotCliRun,
             toolSearchCatalogRef,
