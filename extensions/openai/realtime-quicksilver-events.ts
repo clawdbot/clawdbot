@@ -55,6 +55,7 @@ const delegationSchema = z
 export type OpenAIQuicksilverInboundEvent =
   | { kind: "ignored"; eventType: string }
   | { kind: "session-started"; expiresAt?: number }
+  | { kind: "audio-cleared" }
   | { kind: "audio"; data: string }
   | { kind: "transcript-delta"; role: "user" | "assistant"; text: string }
   | { kind: "transcript-done"; role: "user" | "assistant"; text: string }
@@ -156,6 +157,9 @@ export function parseOpenAIQuicksilverEvent(payload: string): OpenAIQuicksilverI
     return audio.success
       ? { kind: "audio", data: audio.data.audio }
       : { kind: "ignored", eventType };
+  }
+  if (eventType === "output_audio_buffer.cleared") {
+    return { kind: "audio-cleared" };
   }
   if (eventType === "session.updated") {
     return { kind: "ignored", eventType };

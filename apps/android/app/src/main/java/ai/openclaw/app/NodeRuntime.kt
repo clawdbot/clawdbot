@@ -5540,6 +5540,10 @@ class NodeRuntime private constructor(
     if (event == GatewayEvent.VoicewakeChanged.rawValue) {
       applyVoiceWakeWords(payloadJson)
     }
+    if (operatorConnected && (event == "config.changed" || event == "chat.metadata.changed")) {
+      refreshModelCatalog()
+      refreshProviderModels()
+    }
     if (event == "config.changed" || event == GatewayEvent.UsersPrefsChanged.rawValue) {
       // Config changes invalidate the snapshot; profile changes are targeted by
       // the gateway to connections bound to our own profile.

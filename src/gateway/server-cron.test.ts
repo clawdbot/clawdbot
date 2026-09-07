@@ -682,6 +682,96 @@ describe("buildGatewayCronService", () => {
     },
   );
 
+  it.each(
+    (["heartbeat", "skill-collection-review"] as const).flatMap((family) =>
+      (["stop", "replace", "supersede"] as const).map((action) => ({ family, action })),
+    ),
+  )("observes $action between committed $family monitor mutations", async ({ family, action }) => {
+    const baseConfig = createCronConfig(`server-cron-fairness-${family}-${action}`);
+    const cfg = {
+      ...baseConfig,
+      cron: { ...baseConfig.cron, enabled: false },
+      agents: {
+        ownership: "explicit",
+        defaults: { heartbeat: { every: "1h" } },
+        entries: { a: {}, b: {} },
+      },
+      skills: { workshop: { autonomous: { mode: "off" } } },
+    } satisfies OpenClawConfig;
+    const replacement = {
+      ...cfg,
+      agents: { ...cfg.agents, defaults: { heartbeat: { every: "2h" } } },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } satisfies OpenClawConfig;
+    const state = loadCronService(cfg);
+    const addJob = state.cron.add.bind(state.cron);
+    let checkpoint: Promise<void> | undefined;
+    let nextPass: ReturnType<typeof state.reconcileSystemJobs> | undefined;
+    const committed: Array<{ agentId?: string; everyMs?: number; enabled?: boolean }> = [];
+    vi.spyOn(state.cron, "add").mockImplementation(async (input, options) => {
+      const result = await addJob(input, options);
+      if (input.declarationKey?.startsWith(`${family}:`)) {
+        committed.push({
+          agentId: input.agentId,
+          everyMs: input.schedule.kind === "every" ? input.schedule.everyMs : undefined,
+          enabled: input.enabled,
+        });
+        checkpoint ??= new Promise((resolve) => {
+          setImmediate(() => {
+            if (action === "stop") {
+              state.cron.stop();
+            } else {
+              loadConfigMock.mockReturnValue(replacement);
+              if (action === "supersede") {
+                nextPass = state.reconcileSystemJobs();
+              }
+            }
+            resolve();
+          });
+        });
+      }
+      return result;
+    });
+    try {
+      const result = await state.reconcileSystemJobs();
+      await checkpoint;
+      if (action === "stop") {
+        expect(result).toBe("superseded");
+        expect(committed.map(({ agentId }) => agentId)).toEqual(["a"]);
+      } else {
+        expect(result).toBe(action === "replace" ? "converged" : "superseded");
+        if (nextPass) {
+          await expect(nextPass).resolves.toBe("converged");
+        }
+        expect(committed).not.toContainEqual(
+          expect.objectContaining(
+            family === "heartbeat"
+              ? { agentId: "b", everyMs: 3_600_000 }
+              : { agentId: "b", enabled: false },
+          ),
+        );
+        const jobs = (await state.cron.list({ includeDisabled: true })).filter((job) =>
+          job.declarationKey?.startsWith(`${family}:`),
+        );
+        expect(
+          jobs.map((job) => job.agentId).toSorted((a, b) => String(a).localeCompare(String(b))),
+        ).toEqual(["a", "b"]);
+        for (const job of jobs) {
+          expect(job).toMatchObject(
+            family === "heartbeat" ? { schedule: { everyMs: 7_200_000 } } : { enabled: true },
+          );
+        }
+      }
+    } finally {
+      try {
+        await checkpoint;
+        await nextPass;
+      } finally {
+        state.cron.stop();
+      }
+    }
+  });
+
   it("converges Workshop after a heartbeat inventory failure and cancels its retry on stop", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const cfg = {

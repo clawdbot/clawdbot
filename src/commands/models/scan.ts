@@ -151,7 +151,7 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
 }
 
 function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined || raw === null) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
@@ -162,7 +162,7 @@ function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): numb
 }
 
 function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined || raw === null) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
@@ -173,7 +173,7 @@ function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number 
 }
 
 function parsePositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined || raw === null) {
     return fallback;
   }
   const parsed = parseStrictPositiveInteger(raw);

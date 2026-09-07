@@ -1459,7 +1459,9 @@ at startup. After the last human leaves, it waits 30 seconds before leaving and
 generating notes; a return during that grace keeps capture running. Episodes use
 generated session IDs, ignoring a configured `sessionId`. A session stopped less
 than 10 minutes ago can reopen for the same source after a Gateway restart or a
-short gap, preserving its ID, start time, and accumulated utterances.
+short gap when its stored origin confirms a generated ID. It preserves its ID,
+start time, and accumulated utterances. Supplied IDs and legacy records with an
+unknown origin stay archived; capture starts fresh without changing those notes.
 
 Notes include participants, an overview, decisions, action items, and risks.
 They use the agent's utility model, falling back to its primary model and then
@@ -1746,6 +1748,18 @@ message(action="send", channel="discord", target="channel:123", path="/path/to/a
     - verify guild allowlist under `channels.discord.guilds`
     - if a guild `channels` map exists, only listed channels are allowed
     - verify `requireMention` behavior and mention patterns
+
+    The Control UI channel details and `openclaw channels status` warn when the
+    effective policy is `allowlist` but no guilds are configured. Add your server
+    under `channels.discord.guilds`, or the account's `guilds` map when overridden.
+    An explicit `channels.discord.accounts.default.guilds` map also overrides the
+    top-level map, even when the account map is empty.
+
+    If status reports a deferred configuration reload, wait for active work to
+    finish and refresh. A successful channel stop/start does not apply unpublished
+    configuration. The warning distinguishes waiting to publish configuration
+    from channel work deferred after publication; connection health alone does
+    not confirm that a policy change has applied.
 
     Useful checks:
 

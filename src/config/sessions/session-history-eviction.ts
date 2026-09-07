@@ -18,6 +18,7 @@ import {
 } from "./disk-budget.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
   collectSessionStateIdsForEntry,
@@ -30,6 +31,7 @@ import {
   runExclusiveSqliteSessionReclamation,
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
+import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -132,9 +134,15 @@ export async function inspectSqliteSessionHistoryDiskBudget(
 
 function collectProtectedHistoricalSessionIds(params: {
   database: OpenClawAgentDatabase;
+  preserveRecentMs?: number | null;
   storePath: string;
 }): Set<string> {
-  const protectedSessionIds = readReferencedSessionIds(params.database);
+  const protectedSessionIds = readReferencedSessionIds(
+    params.database,
+    undefined,
+    undefined,
+    params,
+  );
   for (const sessionId of collectAdmissionProtectedSessionIds(params)) {
     protectedSessionIds.add(sessionId);
   }
@@ -177,49 +185,13 @@ function collectRecentSessionHistoryIds(params: {
   );
 }
 
-function isRecentHistoricalSessionId(params: {
-  database: OpenClawAgentDatabase;
-  preserveRecentMs?: number | null;
-  sessionId: string;
-}): boolean {
-  if (params.preserveRecentMs == null) {
-    return false;
-  }
-  const db = getSessionKysely(params.database.db);
-  const row = executeSqliteQuerySync(
-    params.database.db,
-    db
-      .selectFrom("session_windows")
-      .innerJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
-      .select([
-        "session_nodes.current_session_id",
-        "session_nodes.entry_json",
-        "session_nodes.session_key",
-        "session_nodes.updated_at",
-      ])
-      .where("session_windows.session_id", "=", params.sessionId),
-  ).rows[0];
-  if (!row) {
-    return false;
-  }
-  const entry = parseSessionEntryJson(row);
-  return Boolean(
-    entry &&
-    isRecentSessionMaintenanceEntry({
-      key: row.session_key,
-      entry,
-      preserveRecentMs: params.preserveRecentMs,
-    }),
-  );
-}
-
-function collectCandidateProtectedHistoricalSessionIds(params: {
+function collectCandidateAdditionalProtection(params: {
   database: OpenClawAgentDatabase;
   preserveRecentMs?: number | null;
   sessionId: string;
   storePath: string;
 }): Set<string> {
-  const protectedSessionIds = collectProtectedHistoricalSessionIds(params);
+  const protectedSessionIds = collectAdmissionProtectedSessionIds(params);
   if (isRecentHistoricalSessionId(params)) {
     protectedSessionIds.add(params.sessionId);
   }
@@ -529,12 +501,20 @@ async function enforceSessionHistoryMaintenanceSerialized(
         const plan = await runExclusiveSqliteSessionWrite(resolved, async () => {
           // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across awaits.
           const database = openOpenClawAgentDatabase(databaseOptions);
-          const protectedBeforeArchive = collectCandidateProtectedHistoricalSessionIds({
+          const protectedBeforeArchive = collectCandidateAdditionalProtection({
             database,
             preserveRecentMs: params.maintenance.preserveRecentMs,
             sessionId,
             storePath: params.storePath,
           });
+          for (const referenced of readReferencedSessionIds(
+            database,
+            undefined,
+            [sessionId],
+            params.maintenance,
+          )) {
+            protectedBeforeArchive.add(referenced);
+          }
           return planSessionStateDeleteIfUnreferenced({
             archiveDirectory,
             archiveTranscript: true,
@@ -551,33 +531,40 @@ async function enforceSessionHistoryMaintenanceSerialized(
         // fences admission while the store writer is released for archive I/O.
         const committedArchives = await runExclusiveSqliteSessionReclamation(async () => {
           const materialized = await materializeSessionStateDeletePlans([plan]);
-          return await runExclusiveSqliteSessionWrite(resolved, async () => {
-            const database = openOpenClawAgentDatabase(databaseOptions);
-            const reclamationPlan = createHistoryEvictionReclamationPlan({
-              databaseOptions,
-              materializedPlans: materialized,
-              protectedSessionIds: collectCandidateProtectedHistoricalSessionIds({
-                database,
-                preserveRecentMs: params.maintenance.preserveRecentMs,
+          const diagnostics: SqliteSessionReclamationDiagnostics = {};
+          return await runExclusiveSqliteSessionWrite(
+            resolved,
+            async () => {
+              const database = openOpenClawAgentDatabase(databaseOptions);
+              const reclamationPlan = createHistoryEvictionReclamationPlan({
+                databaseOptions,
+                diskBudget: { preserveRecentMs: params.maintenance.preserveRecentMs },
+                materializedPlans: materialized,
+                protectedSessionIds: collectCandidateAdditionalProtection({
+                  database,
+                  preserveRecentMs: params.maintenance.preserveRecentMs,
+                  sessionId,
+                  storePath: params.storePath,
+                }),
                 sessionId,
-                storePath: params.storePath,
-              }),
-              sessionId,
-            });
-            const reclaimed = await runSqliteSessionReclamation({
-              forceInProcess: false,
-              plan: reclamationPlan,
-            });
-            if (reclaimed.kind !== reclamationPlan.kind) {
-              throw new Error(
-                `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
-              );
-            }
-            if (!reclaimed.value.deleted) {
-              return null;
-            }
-            return reclaimed.value.archivedTranscripts;
-          });
+              });
+              const reclaimed = await runSqliteSessionReclamation({
+                diagnostics,
+                forceInProcess: false,
+                plan: reclamationPlan,
+              });
+              if (reclaimed.kind !== reclamationPlan.kind) {
+                throw new Error(
+                  `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
+                );
+              }
+              if (!reclaimed.value.deleted) {
+                return null;
+              }
+              return reclaimed.value.archivedTranscripts;
+            },
+            diagnostics,
+          );
         });
         if (!committedArchives) {
           return null;

@@ -90,7 +90,10 @@ export const discordConfigAdapter = createScopedChannelConfigAdapter<
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
   resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  formatAllowFrom: (allowFrom) =>
+    formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(discord|user|pk):/i }).map((entry) =>
+      entry.replace(/^<@!?(\d+)>$/, "$1"),
+    ),
   resolveDefaultTo: (account) => account.defaultTo,
 });
 

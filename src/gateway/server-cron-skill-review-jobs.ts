@@ -1,4 +1,5 @@
 // Converges the system-owned skill collection review jobs at startup and reload.
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveSkillCollectionReviewMonitorSpecs,
@@ -32,7 +33,11 @@ export async function reconcileSkillCollectionReviewJobs(params: {
     jobs,
     skillCollectionReviewMonitorAgentId,
   );
+  // Let I/O run between mutations, then fence stale passes before wrappers
+  // that can stop process owners ahead of their database commit guard.
   for (const { agentId, job } of duplicates) {
+    await yieldToEventLoop();
+    params.commitGuard?.();
     try {
       await params.cron.remove(job.id, {
         systemOwned: true,
@@ -48,6 +53,8 @@ export async function reconcileSkillCollectionReviewJobs(params: {
     }
   }
   for (const spec of specs) {
+    await yieldToEventLoop();
+    params.commitGuard?.();
     try {
       await params.cron.add(spec.input, {
         enabledExplicit: true,
@@ -69,6 +76,8 @@ export async function reconcileSkillCollectionReviewJobs(params: {
     if (desired.has(agentId)) {
       continue;
     }
+    await yieldToEventLoop();
+    params.commitGuard?.();
     try {
       await params.cron.remove(job.id, {
         systemOwned: true,

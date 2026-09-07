@@ -30,12 +30,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
@@ -206,6 +211,140 @@ class ChatReaderScrollOwnershipLayoutTest {
     composeRule.waitForIdle()
     assertEquals(ViewportPosition(0, 0), viewport().position)
     composeRule.onNodeWithText("reopened reply 4").assertIsDisplayed()
+  }
+
+  @Test
+  fun manualGestureBeforeBookmarkLoadPreservesViewportAndPersistsWhenBound() {
+    verifyPendingRestore(manual = true)
+  }
+
+  @Test
+  fun delayedBookmarkLoadWithoutInputStillRestoresSavedViewport() {
+    verifyPendingRestore(manual = false)
+  }
+
+  @Test
+  fun manualGestureRetiresDeferredHistoryRestoration() {
+    // Controller contract coverage for independently published history readiness. The
+    // production regression above has authoritative history and a suspended store read;
+    // it does not assume a long-lived partial-cache/known-session-ID startup window.
+    verifyPendingRestore(manual = true, deferHistory = true)
+  }
+
+  private fun verifyPendingRestore(
+    manual: Boolean,
+    deferHistory: Boolean = false,
+  ) {
+    val fullHistory =
+      listOf(message("old user", "user", 1)) +
+        (0 until 20).map { message("assistant $it", "assistant", it + 2) } +
+        message("current user", "user", 30) +
+        (20 until 60).map { message("assistant $it", "assistant", it + 40) }
+    val fullTimeline = buildChatTimeline(fullHistory, 0, emptyList(), null)
+    val savedPosition = ChatReaderPosition("assistant 10", 23)
+    val savedIndex = fullTimeline.items.indexOfFirst { (it as? ChatTimelineItem.Message)?.message?.id == savedPosition.messageId }
+    val loadEntered = CompletableDeferred<Unit>()
+    val releaseLoad = CompletableDeferred<Unit>()
+    bookmark = savedPosition
+    composeRule.setContent {
+      ClawDesignTheme {
+        // Keep the current user turn in the cached slice, but not the older bookmark.
+        var messages by remember { mutableStateOf(if (deferHistory) fullHistory.takeLast(41) else fullHistory) }
+        var historyResolved by remember { mutableStateOf(!deferHistory) }
+        val timeline = remember(messages) { buildChatTimeline(messages, 0, emptyList(), null) }
+        val current =
+          rememberChatReaderScrollController(
+            gatewayId = "gateway-a",
+            ownerAgentId = "main",
+            sessionKey = "main",
+            sessionId = "session-a",
+            timeline = timeline,
+            historyLoading = false,
+            historyResolved = historyResolved,
+            loadPosition = {
+              loadEntered.complete(Unit)
+              if (!deferHistory) releaseLoad.await()
+              ChatReaderPositionBinding(it, savedPosition)
+            },
+            savePosition = { _, position -> bookmark = position },
+            clearPosition = { bookmark = null },
+          )
+        SideEffect { reader = current }
+        Column {
+          TextButton(onClick = {
+            messages = fullHistory
+            historyResolved = true
+            releaseLoad.complete(Unit)
+          }) { Text("Finish restore") }
+          TextButton(onClick = { messages = messages + message("new assistant", "assistant", 200) }) { Text("Append assistant") }
+          TextButton(onClick = { messages = messages + message("new user", "user", 300) }) { Text("Append user") }
+          LazyColumn(
+            state = current.listState,
+            reverseLayout = true,
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                .height(480.dp)
+                .testTag("pending-reader")
+                .nestedScroll(current.nestedScrollConnection),
+          ) {
+            items(timeline.items, key = ::chatTimelineItemKey) { item ->
+              Box(Modifier.fillMaxWidth().height(64.dp)) {
+                Text(
+                  (item as ChatTimelineItem.Message)
+                    .message.content
+                    .single()
+                    .text
+                    .orEmpty(),
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+    try {
+      composeRule.waitForIdle()
+      assertTrue("The real load callback must have started", loadEntered.isCompleted)
+      assertEquals(ViewportPosition(0, 0), viewport().position)
+      if (manual) {
+        composeRule.onNodeWithTag("pending-reader").performTouchInput { swipeDown(durationMillis = 800) }
+        composeRule.waitForIdle()
+      }
+      val selected = viewport().position
+      if (manual) {
+        assertTrue("A real LazyColumn gesture must move the viewport", selected.index > 0 && selected.index < savedIndex)
+      }
+      if (!deferHistory) assertEquals("No write lease exists before the delayed load completes", savedPosition, bookmark)
+      click("Finish restore")
+      composeRule.waitForIdle()
+      println("READER_PENDING_RESTORE manual=$manual deferredHistory=$deferHistory selected=$selected after=" + viewport().position + " bookmark=$bookmark")
+      if (!manual) {
+        assertEquals(ViewportPosition(savedIndex, savedPosition.itemOffset), viewport().position)
+        assertEquals(savedPosition.messageId, bookmark?.messageId)
+        assertEquals(savedPosition.itemOffset, bookmark?.itemOffset)
+        return
+      }
+      assertEquals("Late restoration must not override deliberate reading", selected, viewport().position)
+      val selectedMessage = (fullTimeline.items[selected.index] as ChatTimelineItem.Message).message
+      assertEquals(selectedMessage.id, bookmark?.messageId)
+      assertEquals(selected.offset, bookmark?.itemOffset)
+
+      // Resolving the existing user turn is not new input; assistant output must
+      // keep the chosen row, while a genuine new user turn still follows live.
+      click("Append assistant")
+      composeRule.waitForIdle()
+      assertEquals(ViewportPosition(selected.index + 1, selected.offset), viewport().position)
+      assertEquals(selectedMessage.id, bookmark?.messageId)
+      click("Append user")
+      composeRule.waitForIdle()
+      assertEquals(ViewportPosition(0, 0), viewport().position)
+      composeRule.onNodeWithText("new user").assertIsDisplayed()
+      assertNull(bookmark)
+    } finally {
+      releaseLoad.complete(Unit)
+      composeRule.waitForIdle()
+    }
   }
 
   private fun verifyManualTakeover(replaceRunningTransition: Boolean) {

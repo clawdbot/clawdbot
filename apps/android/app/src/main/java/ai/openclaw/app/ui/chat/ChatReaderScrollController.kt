@@ -145,7 +145,11 @@ internal fun rememberChatReaderScrollController(
   var positionLoaded by remember(gatewayId, ownerAgentId, sessionKey, sessionId) { mutableStateOf(false) }
 
   fun pauseFollowing() {
-    readerState = readerState.copy(followTarget = null)
+    // Manual input retires a pending restore without moving the viewport. Seed the
+    // timeline facts too, so completing the load cannot look like a new user turn.
+    val currentState =
+      if (readerState.initialized) readerState else initialChatReaderTransition(currentTimeline, sessionKey).state
+    readerState = currentState.copy(followTarget = null)
     // Stop an older automatic animation at its default priority, never interrupt
     // a newer user drag that has already taken ownership of the scroll state.
     if (applyingScrollCount > 0) scope.launch(start = CoroutineStart.UNDISPATCHED) { listState.stopScroll() }

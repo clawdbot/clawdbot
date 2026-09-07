@@ -2,10 +2,13 @@
 summary: "Adds OpenAI model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the openai plugin
-title: "OpenAI plugin"
+title: "OpenAI plugin reference"
 ---
 
-# OpenAI plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds OpenAI model provider support to OpenClaw.
 
@@ -16,7 +19,8 @@ Adds OpenAI model provider support to OpenClaw.
 
 ## Surface
 
-providers: `openai`; contracts: `embeddingProviders`, `imageGenerationProviders`, `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`
+- Providers: `openai`
+- Contracts: `embeddingProviders`, `imageGenerationProviders`, `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`
 
 ## Related docs
 

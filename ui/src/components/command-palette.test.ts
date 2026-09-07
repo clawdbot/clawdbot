@@ -54,6 +54,7 @@ function createGateway(
     connection: { gatewayUrl: "ws://localhost", token: "", bootstrapToken: "", password: "" },
     connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -873,22 +874,23 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).toContain("Unrelated title");
   });
 
-  it("shows a search failure instead of a false empty result", async () => {
+  it.each(["zzz-unmatched", "plugins"])("shows a chat search failure for %s", async (query) => {
     const { gateway } = createGateway(true);
     const list = vi
       .fn<ApplicationContext<RouteId>["sessions"]["list"]>()
       .mockRejectedValueOnce(new Error("store needs doctor migration"))
       .mockResolvedValueOnce(createSessionResult("agent:main:zz", "Recovered chat"));
     const { palette } = await mountPalette(createContext(gateway, list));
-    // The query matches no navigation item, so a swallowed search failure
-    // would render the plain "No results" empty state.
-    await enterQuery(palette, "zzz-unmatched");
+    await enterQuery(palette, query);
     await vi.advanceTimersByTimeAsync(50);
     await palette.updateComplete;
 
     expect(list).toHaveBeenCalledOnce();
     expect(palette.textContent).toContain("Chat search failed");
     expect(palette.textContent).not.toContain("No results");
+    if (query === "plugins") {
+      expect(findPaletteOption(palette, "Plugins")).toBeDefined();
+    }
 
     // A new keystroke clears the failure state and retries cleanly.
     await enterQuery(palette, "zz");

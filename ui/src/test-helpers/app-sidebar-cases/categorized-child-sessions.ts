@@ -65,6 +65,41 @@ describe("AppSidebar categorized child sessions", () => {
       ),
     ).not.toBeNull();
     expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).toBeNull();
+
+    harness.publishList({
+      result: {
+        ...harness.sessions.state.result!,
+        count: 2,
+        sessions: [
+          parent!,
+          {
+            key: categorizedKey,
+            kind: "direct",
+            label: "Current ordinary child",
+            spawnedBy: parentKey,
+            updatedAt: 4,
+          },
+        ],
+      },
+    });
+    await waitForFast(() => {
+      const rows = sidebar.querySelectorAll(`[data-session-key="${categorizedKey}"]`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.textContent).toContain("Current ordinary child");
+      expect(rows[0]?.closest(`[data-session-tree="${parentKey}"]`)).not.toBeNull();
+    });
+    expect(sidebar.textContent).not.toContain("Cached categorized child");
+    expect(
+      sidebar.querySelector(
+        `[data-session-section="category:Research"] [data-session-key="${categorizedKey}"]`,
+      ),
+    ).toBeNull();
+    expect(
+      sidebar.querySelector(
+        `[data-session-tree="${parentKey}"] [data-session-key="${ordinaryKey}"]`,
+      ),
+    ).not.toBeNull();
+    expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).toBeNull();
   });
 
   it("places a categorized child in its section while keeping ordinary siblings nested", async () => {

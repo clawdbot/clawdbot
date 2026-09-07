@@ -329,8 +329,15 @@ describe("official external plugin catalog", () => {
       "utf8",
     );
 
-    expect(source).not.toMatch(/from ["']\.\.\/infra\/net\/fetch-guard\.js["']/);
-    expect(source).toContain('await import("../infra/net/fetch-guard.js")');
+    const hostedSource = readFileSync(
+      new URL("./official-external-plugin-catalog-hosted.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).not.toMatch(/from ["'].*(?:catalog-hosted|fetch-guard)\.js["']/);
+    expect(source).toContain('await import("./official-external-plugin-catalog-hosted.js")');
+    expect(hostedSource).not.toMatch(/from ["']\.\.\/infra\/net\/fetch-guard\.js["']/);
+    expect(hostedSource).toContain('await import("../infra/net/fetch-guard.js")');
   });
 
   it.each([

@@ -721,6 +721,28 @@ describe("gateway session utils", () => {
     expect(all.sessions.map((session) => session.key)).toEqual(["pinned", "recent", "archived"]);
   });
 
+  test.each([
+    ["agent:main:dashboard:child", { spawnedBy: "agent:main:main" }],
+    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:main" }],
+    ["agent:main:subagent:child", {}],
+  ] as const)(
+    "ignores stale child pins in session list projection and ordering: %s %j",
+    async (key, lineage) => {
+      const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+      const store: Record<string, SessionEntry> = {
+        "agent:main:dashboard:root": { sessionId: "root", updatedAt: 30 },
+        [key]: { sessionId: "child", updatedAt: 10, pinnedAt: 40, ...lineage },
+      };
+      for (const limit of [undefined, 2]) {
+        const listed = await listSessionFixture({ cfg, storePath: "", store, opts: { limit } });
+        const child = listed.sessions.find((row) => row.key === key);
+        expect.soft(child?.pinned).toBe(false);
+        expect.soft(child?.pinnedAt).toBeUndefined();
+        expect(listed.sessions.map((row) => row.key)).toEqual(["agent:main:dashboard:root", key]);
+      }
+    },
+  );
+
   test("session lists page from an offset after filtering and sorting", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(

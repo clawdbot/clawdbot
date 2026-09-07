@@ -294,6 +294,7 @@ function resolveSourceWorkerExecArgv(): string[] {
 }
 
 function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
+  diagnostics?: { workerThreadId?: number };
   expectedMessageType: "done" | "published" | "reclaimed";
   onCommitRequest?: () => void;
   transferList?: ArrayBuffer[];
@@ -310,6 +311,10 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
       execArgv: sourceWorkerExecArgv,
       transferList: params.transferList,
     });
+    // Node clears threadId at exit. Keep only the spawned identity for the awaiting writer.
+    if (params.diagnostics) {
+      params.diagnostics.workerThreadId = worker.threadId;
+    }
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
   }
@@ -358,6 +363,7 @@ const sqliteTranscriptArchiveWorkerQueue = new KeyedAsyncQueue();
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
 export function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
+  diagnostics?: { workerThreadId?: number };
   expectedMessageType: "done" | "published" | "reclaimed";
   onCommitRequest?: () => void;
   transferList?: ArrayBuffer[];

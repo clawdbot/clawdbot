@@ -30,6 +30,7 @@ import { createWorkerNodeEnrollmentManager } from "./worker-environments/node-en
 import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from "./worker-environments/node-worker-gateway-namespace.js";
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
+import type { NodeWorkerBundleRetention } from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
@@ -63,6 +64,7 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerLiveEvents?: WorkerLiveEventReceiver;
   workerTunnelManager?: WorkerTunnelManager;
   nodeWorkerGatewayNamespace?: string;
+  nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindWorkerNodeDesktopControl?: (transport: NodeWorkerSupervisorTransport) => void;
@@ -291,11 +293,23 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     validateWorkerTurn: (binding) => placementGate.validateWorkerTurn(binding),
     workspaceTransfer: nodeWorkspaceTransfer,
   });
-  const ensureNodeWorkerBundle = createGatewayNodeWorkerBundleInstaller({
+  const isEnvironmentOwnedNode = (nodeId: string) =>
+    params.startup.store.hasNodeEnrollmentOwner(nodeId);
+  const nodeWorkerBundleInstaller = createGatewayNodeWorkerBundleInstaller({
     gatewayNamespace: nodeWorkerGatewayNamespace,
     getTransport: () => deviceRuntime.getNodeTransport(),
     transfer: nodeWorkerBundleTransfer,
   });
+  const nodeWorkerBundleRetention: NodeWorkerBundleRetention = {
+    isEnvironmentOwnedNode,
+    currentBuild: async () => {
+      const artifact = await prepareInstallation("bundle");
+      if (artifact.install !== "bundle") {
+        throw new Error("Node worker retention requires a bundle artifact");
+      }
+      return artifact;
+    },
+  };
   const nodeEnrollment = createWorkerNodeEnrollmentManager({
     store: params.startup.store,
     getConfig: getRuntimeConfig,
@@ -383,7 +397,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         ? deviceRuntime.provider
         : resolveWorkerProvider(params.getPluginRegistry(), providerId),
     prepareInstallation,
-    ensureNodeWorkerBundle,
+    ensureNodeWorkerBundle: nodeWorkerBundleInstaller,
     prepareNodeBootstrap: nodeEnrollment.prepare,
     prepareNodeEnrollment: nodeEnrollment.begin,
     prepareNodeRuntime: nodeEnrollment.prepareRuntime,
@@ -517,6 +531,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     workerLiveEvents,
     workerTunnelManager,
     nodeWorkerGatewayNamespace,
+    nodeWorkerBundleRetention,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
     },

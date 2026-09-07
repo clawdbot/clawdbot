@@ -151,16 +151,20 @@ export function createMeetingOutputLoopbackVerifier(options: {
   let lastOutputLoopbackPeak: number | undefined;
   let lastOutputLoopbackRms: number | undefined;
 
+  const clearCorrelationScratch = () => {
+    inputPcm = Buffer.alloc(0);
+    nextInputStartSample = 0;
+    outputFingerprint = undefined;
+    pendingOutputPcm = Buffer.alloc(0);
+  };
+
   const resetGeneration = (started: boolean) => {
     generationStarted = started;
     generationVerified = false;
     if (started) {
       outputGeneration += 1;
     }
-    inputPcm = Buffer.alloc(0);
-    nextInputStartSample = 0;
-    outputFingerprint = undefined;
-    pendingOutputPcm = Buffer.alloc(0);
+    clearCorrelationScratch();
     outputObservationDeadlineMs = Number.NEGATIVE_INFINITY;
     outputQueuedUntilMs = Number.NEGATIVE_INFINITY;
   };
@@ -264,6 +268,7 @@ export function createMeetingOutputLoopbackVerifier(options: {
         lastOutputLoopbackCorrelation = matchedCorrelation;
         lastOutputLoopbackPeak = matchedStats.peak;
         lastOutputLoopbackRms = matchedStats.rms;
+        clearCorrelationScratch();
         return;
       }
       nextInputStartSample = Math.max(0, lastStartSample + 1);
@@ -280,19 +285,25 @@ export function createMeetingOutputLoopbackVerifier(options: {
       if (audio.byteLength === 0) {
         return;
       }
-      const decoded = decodeMeetingAudio(audio, options.audioFormat);
-      const durationMs = decoded.byteLength * 0.5 * sampleRate ** -1 * 1_000;
+      const samples =
+        options.audioFormat === "g711-ulaw-8khz" ? audio.byteLength : audio.byteLength * 0.5;
+      const durationMs = samples * sampleRate ** -1 * 1_000;
       outputQueuedUntilMs = Math.max(outputAtMs, outputQueuedUntilMs) + durationMs;
+      outputObservationDeadlineMs = Math.max(
+        outputObservationDeadlineMs,
+        outputQueuedUntilMs + OUTPUT_LOOPBACK_OBSERVATION_WINDOW_MS,
+      );
+      // Verified generations still extend their deadline, but no longer need correlation data.
+      if (generationVerified) {
+        return;
+      }
+      const decoded = decodeMeetingAudio(audio, options.audioFormat);
       pendingOutputPcm = Buffer.concat([pendingOutputPcm, decoded]);
       if (!outputFingerprint) {
         consumePendingOutput(true);
       } else if (pendingOutputPcm.byteLength >= fullReferenceBytes) {
         consumePendingOutput(false);
       }
-      outputObservationDeadlineMs = Math.max(
-        outputObservationDeadlineMs,
-        outputQueuedUntilMs + OUTPUT_LOOPBACK_OBSERVATION_WINDOW_MS,
-      );
     },
     getHealth(): MeetingOutputLoopbackHealth {
       return {

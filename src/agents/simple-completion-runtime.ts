@@ -57,7 +57,7 @@ import {
   buildProviderModelAuthSourcePlan,
 } from "./provider-model-auth-source-plan.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
-import { protectPreparedProviderRuntimeAuth } from "./provider-secret-egress.js";
+import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
 import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
