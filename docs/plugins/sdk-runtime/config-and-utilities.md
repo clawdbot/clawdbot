@@ -57,12 +57,19 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
-The deprecated `infra-runtime` exports `resolveExecModeFromPolicy` and
-`resolveExecPolicyForMode` are retired. Official plugins can use
-`resolveExecModePolicy` from `openclaw/plugin-sdk/exec-approvals-runtime` for
-mode/policy projection. This private runtime facade ships JavaScript without
-packaged TypeScript declarations; the retirement provides no equivalent typed
-third-party replacement.
+Import `execPolicy` from `openclaw/plugin-sdk/agent-harness-runtime` for the
+host's exec mode algebra. `execPolicy.resolveExecModePolicy({ mode, security, ask })`
+returns the mode, security, ask, and auto-review settings. An explicit mode
+determines those settings; without one, the helper preserves the security/ask
+pair and derives its display mode. `execPolicy.minSecurity(a, b)` chooses the
+more restrictive security value, and `execPolicy.maxAsk(a, b)` chooses the
+stronger approval requirement. Provider adapters retain their own strict input
+validation and native sandbox/approval projection.
+
+These typed object members replace the retired `minSecurity` and `maxAsk`
+exports from `infra-runtime`. The retired `resolveExecModeFromPolicy`,
+`resolveExecPolicyForMode`, and `resolveExecModePolicy` exports can also migrate
+to `execPolicy.resolveExecModePolicy`, selecting the returned fields they need.
 
 Native command probes should use `runCommandWithTimeout` from
 `openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and

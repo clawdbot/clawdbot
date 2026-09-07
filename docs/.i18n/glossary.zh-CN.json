@@ -2484,6 +2484,38 @@
     "target": "Codex harness 故障排查"
   },
   {
+    "source": "How automations work",
+    "target": "自动化的工作原理"
+  },
+  {
+    "source": "Automation schedules",
+    "target": "自动化计划"
+  },
+  {
+    "source": "Automation payloads",
+    "target": "自动化载荷"
+  },
+  {
+    "source": "Automation delivery",
+    "target": "自动化投递"
+  },
+  {
+    "source": "Manage automations",
+    "target": "管理自动化"
+  },
+  {
+    "source": "Inbound webhooks",
+    "target": "入站 Webhook"
+  },
+  {
+    "source": "Gmail PubSub triggers",
+    "target": "Gmail PubSub 触发器"
+  },
+  {
+    "source": "Automation troubleshooting",
+    "target": "自动化故障排查"
+  },
+  {
     "source": "Run tests locally",
     "target": "本地运行测试"
   },

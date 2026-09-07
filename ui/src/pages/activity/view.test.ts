@@ -74,6 +74,7 @@ describe("renderActivity", () => {
         navigate: vi.fn(),
         connected: true,
         loading: false,
+        incomplete: false,
         onRetry: vi.fn(),
         result: {
           ts: 1,
@@ -109,6 +110,40 @@ describe("renderActivity", () => {
       container.querySelector('a[data-session-key="agent:work:global"]')?.getAttribute("href"),
     ).toBe("/control/chat/work/~key/global");
   });
+
+  it.each([false, true])(
+    "distinguishes an incomplete empty snapshot from a normal empty refresh (incomplete: %s)",
+    async (incomplete) => {
+      await i18n.setLocale("en");
+      const container = document.createElement("div");
+      document.body.append(container);
+      render(
+        renderCurrentWork({
+          basePath: "/control",
+          fallbackAgentId: "main",
+          mainKey: "main",
+          globalScope: false,
+          navigate: vi.fn(),
+          connected: true,
+          loading: true,
+          incomplete,
+          onRetry: vi.fn(),
+          result: {
+            ts: 1,
+            path: "",
+            count: 0,
+            defaults: { model: null, modelProvider: null, contextTokens: null },
+            sessions: [],
+          },
+        }),
+        container,
+      );
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(
+        incomplete ? "Loading active sessions…" : "No active sessions.",
+      );
+      expect(container.querySelector("section")?.getAttribute("aria-busy")).toBe("true");
+    },
+  );
 
   it("renders the summary from localized labels", async () => {
     await i18n.setLocale("de");
