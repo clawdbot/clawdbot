@@ -48,9 +48,10 @@ Onboarding usually configures a gateway token for shared-secret auth. If the Gat
 
 ## Agents home
 
-Open **Agents** in the sidebar, or visit `/agents`, to see your configured agents
-as a roster. Each card shows the agent's identity, model, current work status,
-last activity, and a preview from its main chat. **Open chat** opens that agent's
+Open **Agents** in the sidebar, choose **All agents** in the agent switcher, or
+visit `/agents` to see your configured agents as a roster. Each card shows the
+agent's identity, model, current work status, last activity, and a preview from its
+main chat. **Open chat** opens that agent's
 main session. Working agents appear first, followed by the most recently active.
 
 **Manage agents** opens `/settings/agents`. **New agent** opens the existing
