@@ -27,7 +27,6 @@ import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
-import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isAccountEnabled } from "../../shared/account-enabled.js";
@@ -43,6 +42,10 @@ import type {
   ChannelRuntimeSnapshot,
 } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  collectGatewayChannelStatusIssues,
+  resolveDeferredChannelReloadIssue,
+} from "./channels-status-issues.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
@@ -71,26 +74,6 @@ type ChannelOperationParams = {
   channel?: unknown;
   accountId?: unknown;
 };
-
-function resolveDeferredChannelReloadIssue(
-  context: GatewayRequestContext,
-  channel: ChannelId,
-  accountId: string,
-): ChannelStatusIssue | undefined {
-  const deferred = context.getDeferredChannelReloads?.().find((entry) => entry.channel === channel);
-  if (!deferred) {
-    return undefined;
-  }
-  return {
-    channel,
-    accountId,
-    kind: "config",
-    message: deferred.publicationPending
-      ? "Channel configuration reload is deferred while active work finishes. The previous configuration is still in use."
-      : "Channel reload is deferred while active work finishes.",
-    fix: "Wait for active work to finish, then refresh channel status. Stopping and starting the channel does not apply unpublished configuration; use config.get to inspect the active configuration.",
-  };
-}
 
 function resolveChannelOperationParams<TParams extends ChannelOperationParams>(params: {
   method: string;
@@ -616,24 +599,13 @@ export const channelsHandlers: GatewayRequestHandlers = {
         defaultAccountIdMap[result.pluginId] = result.defaultAccountId;
       }
     }
-    const statusIssues: ChannelStatusIssue[] = [];
-    for (const plugin of statusPlugins) {
-      try {
-        statusIssues.push(...collectChannelStatusIssues(payload, [plugin]));
-      } catch (error) {
-        statusWarnings.push(`${plugin.id} status diagnostics failed: ${formatForLog(error)}`);
-      }
-      const defaultAccountId = defaultAccountIdMap[plugin.id];
-      const deferredIssue = resolveDeferredChannelReloadIssue(
-        context,
-        plugin.id,
-        typeof defaultAccountId === "string" ? defaultAccountId : DEFAULT_ACCOUNT_ID,
-      );
-      if (deferredIssue) {
-        statusIssues.push(deferredIssue);
-      }
-    }
-    payload.statusIssues = statusIssues.slice(0, 50);
+    payload.statusIssues = collectGatewayChannelStatusIssues({
+      payload,
+      plugins: statusPlugins,
+      defaultAccountIds: defaultAccountIdMap,
+      context,
+      warnings: statusWarnings,
+    });
     if (statusWarnings.length > 0) {
       payload.partial = true;
       payload.warnings = statusWarnings.toSorted().slice(0, 50);
