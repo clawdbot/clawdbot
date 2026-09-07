@@ -28,6 +28,7 @@ import {
 } from "./conversation-id.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import * as iMessageMediaStaging from "./monitor/media-staging.js";
+import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
 import {
   advanceIMessageRecoveryCursor,
   loadIMessageRecoveryCursor,
@@ -328,6 +329,7 @@ describe("iMessage monitor last-route updates", () => {
           | "is_group"
           | "created_at"
           | "destination_caller_id"
+          | "reply_to_guid"
         >
       >,
   ): IMessagePayload {
@@ -343,6 +345,7 @@ describe("iMessage monitor last-route updates", () => {
       is_group: message.is_group ?? false,
       created_at: message.created_at ?? new Date().toISOString(),
       destination_caller_id: message.destination_caller_id,
+      reply_to_guid: message.reply_to_guid,
     };
   }
 
@@ -714,6 +717,56 @@ describe("iMessage monitor last-route updates", () => {
         ([params]) => params.ctx.BodyForAgent,
       ),
     ).toEqual(texts);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(
+      runtime.log.mock.calls.some(([message]) => String(message).includes("rate limiter tripped")),
+    ).toBe(false);
+  });
+
+  it("keeps verified self-chat reply reflections out of the loop budget", async () => {
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
+    const outboundGuid = "p:0/outbound-parent-guid";
+    const reflectedText = "reflected reply";
+    const legitimateText = "legitimate self-chat follow-up";
+    rememberPersistedIMessageEcho({
+      scope: `default:imessage:${DEFAULT_SENDER}`,
+      text: reflectedText,
+      messageId: outboundGuid,
+    });
+
+    await runMessageCase({
+      messages: [
+        ...Array.from({ length: 5 }, (_, index) =>
+          createInboundMessage({
+            id: index + 1,
+            guid: `p:0/reflected-row-${index + 1}`,
+            reply_to_guid: outboundGuid,
+            text: reflectedText,
+            chat_identifier: DEFAULT_SENDER,
+            is_from_me: false,
+            destination_caller_id: DEFAULT_SENDER,
+          }),
+        ),
+        createInboundMessage({
+          id: 6,
+          guid: "p:0/legitimate-user-row",
+          text: legitimateText,
+          chat_identifier: DEFAULT_SENDER,
+          is_from_me: true,
+          destination_caller_id: DEFAULT_SENDER,
+        }),
+      ],
+      afterNotify: async () => {
+        await vi.waitFor(() => {
+          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+        });
+      },
+      monitor: { runtime },
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.BodyForAgent).toBe(
+      legitimateText,
+    );
     expect(runtime.error).not.toHaveBeenCalled();
     expect(
       runtime.log.mock.calls.some(([message]) => String(message).includes("rate limiter tripped")),
