@@ -97,7 +97,15 @@ describe("worktrees.create authorization", () => {
     expect(write.respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
+      expect.objectContaining({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      }),
     );
 
     const admin = await dispatchCreate({

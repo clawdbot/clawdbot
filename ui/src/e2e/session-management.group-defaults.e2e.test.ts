@@ -245,6 +245,81 @@ suite.define(() => {
     },
   );
 
+  it("shows the admin requirement when probing an outside-workspace folder is denied", async () => {
+    const outsideCwd = "/home/peter/outside-project";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+        "worktrees.branches": {
+          __mockError: {
+            code: "FORBIDDEN",
+            message: "missing scope: operator.admin",
+            details: {
+              code: "MISSING_SCOPE",
+              missingScope: "operator.admin",
+              requiredScopes: ["operator.admin"],
+            },
+          },
+        },
+      },
+      sessionGroups: ["Client work"],
+      sessionGroupDefaults: { "Client work": { cwd: outsideCwd, worktree: false } },
+      workspace: "/home/peter/openclaw",
+      workspaceGit: true,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const group = page.locator('[data-session-section="category:Client work"]');
+      await group.waitFor({ state: "visible", timeout: 10_000 });
+      await group.locator(".sidebar-recent-sessions__head").hover();
+      await group.getByRole("button", { name: "Group options for Client work" }).click();
+      await page.getByRole("menuitem", { name: "New session defaults" }).click();
+      const dialog = page.locator(
+        `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
+      );
+      await dialog.waitFor({ state: "visible" });
+
+      const environment = dialog.locator("[data-session-group-environment]");
+      await expect
+        .poll(() => environment.getAttribute("data-session-group-environment"))
+        .toBe("restricted");
+      const save = dialog.getByRole("button", { name: "Save" });
+      await expect.poll(() => save.isDisabled()).toBe(true);
+      // The denial is an authorization problem, not a repository inspection failure.
+      await expect.poll(() => environment.textContent()).toContain("requires operator.admin");
+      await expect.poll(() => environment.textContent()).not.toContain("Couldn't verify Git");
+      expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
+
+      // Once the connection holds admin scope the same retry recovers and the
+      // saved Local default (worktree false) can be submitted unchanged.
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [{ kind: "local", name: "main" }],
+        defaultBranch: "main",
+        repositoryStatus: "git",
+      });
+      await dialog.getByRole("button", { name: "Retry" }).click();
+      await expect
+        .poll(() => environment.getAttribute("data-session-group-environment"))
+        .toBe("git");
+      await expect.poll(() => save.isEnabled()).toBe(true);
+      await save.click();
+      expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
+        name: "Client work",
+        cwd: outsideCwd,
+        worktree: false,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("omits the group category for a legacy Gateway", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
