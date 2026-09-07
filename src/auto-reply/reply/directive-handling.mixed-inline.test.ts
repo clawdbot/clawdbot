@@ -958,4 +958,49 @@ describe("mixed inline directives", () => {
     expect(persistenceMocks.persist).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
+
+  it("keeps the reporter's prose /model mention flowing to the model (#137197)", async () => {
+    const body =
+      "Prüfe anschließend, ob das Modell über /model bzw. /models in Telegram auswählbar ist.";
+    const cfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.6-sol",
+          modelPolicy: { allow: ["openai/gpt-5.6-sol"] },
+        },
+      },
+    } as OpenClawConfig;
+    const directives = resolveReplyDirectiveRouting({
+      commandText: body,
+      agentText: body,
+      modelAliases: [],
+      canInterpretTextDirectives: true,
+      isAuthorizedSender: true,
+      isGroup: false,
+      wasMentioned: false,
+      ctx: buildTestCtx({ Body: body, CommandAuthorized: true }),
+      cfg,
+      agentId: "main",
+      resetTriggered: false,
+    }).directives;
+    // The bare prose token never becomes a model directive.
+    expect(directives.hasModelDirective).toBe(false);
+
+    const { result, sessionEntry } = await applyMixedDirectives({
+      body,
+      cfg,
+      directives,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-sol",
+      allowedModels: [{ provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+    });
+
+    // The turn continues on the pinned model with no error and no mutation.
+    expect(result).toMatchObject({ kind: "continue" });
+    expect(sessionEntry).toEqual(createSessionEntry());
+    expect(persistenceMocks.persist).not.toHaveBeenCalled();
+  });
 });
