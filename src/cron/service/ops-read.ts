@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
@@ -28,7 +29,6 @@ import {
   ensureLoadedForRead,
   ownsStreamSource,
   resolveCurrentDefaultAgentId,
-  resolveEffectiveJobAgentId,
 } from "./ops-shared.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
@@ -341,7 +341,8 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       }
       if (
         requestedAgentId &&
-        resolveEffectiveJobAgentId(job, resolveCurrentDefaultAgentId(state)) !== requestedAgentId
+        tryResolveCronJobEffectiveAgentId(job, resolveCurrentDefaultAgentId(state)) !==
+          requestedAgentId
       ) {
         return false;
       }

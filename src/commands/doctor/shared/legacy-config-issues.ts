@@ -14,6 +14,7 @@ import {
 } from "../../../plugins/doctor-contract-registry.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+import { LEGACY_SYSTEM_AGENT_OWNER_RULE } from "./legacy-config-migrations.runtime.system-agent.js";
 
 function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
   return new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
@@ -43,6 +44,7 @@ export function findDoctorLegacyConfigIssues(
     raw,
     sourceRaw,
     [
+      LEGACY_SYSTEM_AGENT_OWNER_RULE,
       ...collectChannelLegacyConfigRules(raw, touchedPaths),
       ...collectPluginLegacyConfigRules(raw, touchedPaths),
     ],
