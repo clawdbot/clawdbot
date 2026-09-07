@@ -1633,6 +1633,8 @@ describe("install-sh E2E runner", () => {
     );
     expect(script).toContain('timeout --kill-after=15s "${AGENT_TURN_TIMEOUT_SECONDS}s"');
     expect(script).toContain('\\"timeoutSeconds\\":${OPENAI_PROVIDER_TIMEOUT_SECONDS}');
+    expect(script).toContain('openclaw --profile "$profile" agent \\');
+    expect(script).not.toContain("\n    --local \\\n");
   });
 
   it("normalizes agent JSON when structured lifecycle diagnostics follow the result", () => {

@@ -22,8 +22,10 @@ import {
   type OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
-import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
-import { readStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
+import {
+  assertSupportedStateSchemaVersion,
+  readStateSchemaContentVersion,
+} from "./openclaw-state-db-schema-version.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
 

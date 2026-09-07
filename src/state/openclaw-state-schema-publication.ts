@@ -1,25 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseSemver } from "semver";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  prepareSqliteQuerySync,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { CONTENT_VERSION_KEY } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
-const CONTENT_VERSION_KEY = "state.schema.contentVersion";
 const TERMINAL_GRACE_MS = 5 * 60_000;
 const ABANDONED_RUN_MS = 30 * 60_000;
 type PublicationDatabase = Pick<DB, "config_machine_state" | "update_runs">;
-// Admission also runs on cached reads. Retain the SQL, never the content version.
-const contentVersionQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSqliteQuerySync<void, Pick<DB["config_machine_state"], "value_json">>>
->();
 
 export type StateSchemaPublicationBlocker = {
   runId: string;
@@ -31,37 +22,6 @@ export type StateSchemaPublicationBlocker = {
 function isUnfencedUpdateDriver(version: unknown): boolean {
   const parsed = typeof version === "string" ? parseSemver(version) : null;
   return parsed !== null && `${parsed.major}.${parsed.minor}.${parsed.patch}` === "2026.9.2";
-}
-
-/** Content and its marker commit together, even while older readers retain their version floor. */
-export function readStateSchemaContentVersion(db: DatabaseSync): number {
-  const published = readSqliteUserVersion(db);
-  if (!tableExists(db, "config_machine_state")) {
-    return published;
-  }
-  let query = contentVersionQueries.get(db);
-  if (!query) {
-    query = prepareSqliteQuerySync(db, () =>
-      getNodeSqliteKysely<PublicationDatabase>(db)
-        .selectFrom("config_machine_state")
-        .select("value_json")
-        .where("state_key", "=", CONTENT_VERSION_KEY),
-    );
-    contentVersionQueries.set(db, query);
-  }
-  const row = query().rows[0];
-  if (!row) {
-    return published;
-  }
-  const contentVersion: unknown = JSON.parse(row.value_json);
-  if (
-    typeof contentVersion !== "number" ||
-    !Number.isSafeInteger(contentVersion) ||
-    contentVersion < 0
-  ) {
-    throw new Error(`Invalid shared state schema content version in ${CONTENT_VERSION_KEY}.`);
-  }
-  return Math.max(published, contentVersion);
 }
 
 /** Every unfenced driver must clear its own deadline; a newer run cannot hide an older one. */
