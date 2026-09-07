@@ -58,11 +58,15 @@ export function removeLegacyUpdateCompatChunks(packageRoot) {
   );
 }
 
-export function markFutureUpdateFixture(packageRoot, sequence = 0) {
+function futureFixtureVersion(sequence) {
   if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > 9) {
     throw new Error("future fixture sequence must be an integer from 0 to 9");
   }
-  const version = FUTURE_FIXTURE_VERSION.replace(/0$/, String(sequence));
+  return FUTURE_FIXTURE_VERSION.replace(/0$/, String(sequence));
+}
+
+export function markFutureUpdateFixture(packageRoot, sequence = 0) {
+  const version = futureFixtureVersion(sequence);
   removeLegacyUpdateCompatChunks(packageRoot);
   const paths = resolveFixturePaths(packageRoot);
   const packageJson = readJson(paths.packageJson);
@@ -74,7 +78,7 @@ export function markFutureUpdateFixture(packageRoot, sequence = 0) {
   writeJson(paths.buildInfo, buildInfo);
 }
 
-export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
+function packTransformedFixture(candidateTarball, outputTarball, transform) {
   const source = path.resolve(candidateTarball);
   const output = path.resolve(outputTarball);
   if (source === output || fs.existsSync(output)) {
@@ -85,12 +89,11 @@ export function packFutureUpdateFixture(candidateTarball, outputTarball, sequenc
     execFileSync("tar", ["-xzf", source, "-C", root]);
     const packageRoot = path.join(root, "package");
     const sourceVersion = readJson(path.join(packageRoot, "package.json")).version;
-    markFutureUpdateFixture(packageRoot, sequence);
+    transform(packageRoot);
     execFileSync("tar", ["-czf", output, "-C", root, "package"], {
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     });
     return {
-      method: "candidate-same-schema-self-update-fixture",
       sourceVersion,
       targetVersion: readJson(path.join(packageRoot, "package.json")).version,
       sourceSha256: createHash("sha256").update(fs.readFileSync(source)).digest("hex"),
@@ -101,17 +104,58 @@ export function packFutureUpdateFixture(candidateTarball, outputTarball, sequenc
   }
 }
 
+export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
+  return {
+    method: "candidate-same-schema-self-update-fixture",
+    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
+      markFutureUpdateFixture(root, sequence);
+    }),
+  };
+}
+
+function packFutureRuntimeFixture(candidateTarball, outputTarball, sequence = 0) {
+  const version = futureFixtureVersion(sequence);
+  return {
+    method: "candidate-same-schema-runtime-fixture",
+    name: "@openclaw/codex",
+    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
+      const manifestPath = path.join(root, "package.json");
+      const manifest = readJson(manifestPath);
+      if (manifest.name !== "@openclaw/codex") {
+        throw new Error("future runtime fixture requires the @openclaw/codex package");
+      }
+      if (
+        typeof manifest.version !== "string" ||
+        !/^\d{4}\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/iu.test(
+          manifest.version,
+        ) ||
+        manifest.openclaw?.build?.openclawVersion !== manifest.version
+      ) {
+        throw new Error("runtime package version and OpenClaw build cohort must match");
+      }
+      manifest.version = version;
+      manifest.openclaw.build.openclawVersion = version;
+      writeJson(manifestPath, manifest);
+    }),
+  };
+}
+
 function main() {
   const [mode, packageRoot, outputTarball, sequence] = process.argv.slice(2);
-  if (mode === "future-tarball" && packageRoot && outputTarball) {
+  if (
+    (mode === "future-tarball" || mode === "future-runtime-tarball") &&
+    packageRoot &&
+    outputTarball
+  ) {
+    const pack = mode === "future-tarball" ? packFutureUpdateFixture : packFutureRuntimeFixture;
     process.stdout.write(
-      `${JSON.stringify(packFutureUpdateFixture(packageRoot, outputTarball, sequence === undefined ? 0 : Number(sequence)), null, 2)}\n`,
+      `${JSON.stringify(pack(packageRoot, outputTarball, sequence === undefined ? 0 : Number(sequence)), null, 2)}\n`,
     );
     return;
   }
   if (!packageRoot || (mode !== "negative" && mode !== "future")) {
     throw new Error(
-      "usage: update-first-hop-package-fixtures.mjs <negative|future> <package-root>",
+      "usage: update-first-hop-package-fixtures.mjs <negative|future> <package-root> OR <future-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
     );
   }
   if (mode === "negative") {
