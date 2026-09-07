@@ -410,7 +410,7 @@ function extractMarkerField(marker, name) {
   return match?.[1] ?? "";
 }
 
-function isTrustedClawSweeperComment(comment) {
+export function isTrustedClawSweeperComment(comment) {
   const appSlug = String(
     comment?.performed_via_github_app?.slug ?? comment?.performedViaGithubApp?.slug ?? "",
   ).toLowerCase();
@@ -425,35 +425,39 @@ function isTrustedClawSweeperComment(comment) {
 }
 
 /**
- * @param {{ pullRequest?: PullRequest, comments?: Comment[] }} [params]
+ * Match one trusted ClawSweeper pass marker to the current pull-request head.
+ * Keep actor authentication and marker parsing here so every policy consumer
+ * follows the same fail-closed contract.
+ *
+ * @param {{ pullRequest?: PullRequest, comment?: Comment }} [params]
  * @returns {boolean}
  */
-export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
+export function commentHasClawSweeperExactHeadProof({ pullRequest, comment } = {}) {
   const rawPullNumber = pullRequest?.number;
   const pullNumber =
     typeof rawPullNumber === "string" || typeof rawPullNumber === "number"
       ? String(rawPullNumber)
       : "";
   const headSha = String(pullRequest?.head?.sha ?? pullRequest?.head_sha ?? "").toLowerCase();
-  if (!pullNumber || !/^[0-9a-f]{40}$/i.test(headSha)) {
+  if (!pullNumber || !/^[0-9a-f]{40}$/i.test(headSha) || !isTrustedClawSweeperComment(comment)) {
     return false;
   }
 
-  for (const comment of comments) {
-    if (!isTrustedClawSweeperComment(comment)) {
-      continue;
-    }
-    const body = typeof comment?.body === "string" ? comment.body : "";
-    const markers = body.match(/<!--\s*clawsweeper-verdict:pass\b[\s\S]*?-->/gi) ?? [];
-    for (const marker of markers) {
-      const item = extractMarkerField(marker, "item");
-      const sha = extractMarkerField(marker, "sha").toLowerCase();
-      if (item === pullNumber && sha === headSha) {
-        return true;
-      }
-    }
-  }
-  return false;
+  const body = typeof comment?.body === "string" ? comment.body : "";
+  const markers = body.match(/<!--\s*clawsweeper-verdict:pass\b[\s\S]*?-->/gi) ?? [];
+  return markers.some((marker) => {
+    const item = extractMarkerField(marker, "item");
+    const sha = extractMarkerField(marker, "sha").toLowerCase();
+    return item === pullNumber && sha === headSha;
+  });
+}
+
+/**
+ * @param {{ pullRequest?: PullRequest, comments?: Comment[] }} [params]
+ * @returns {boolean}
+ */
+export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
+  return comments.some((comment) => commentHasClawSweeperExactHeadProof({ pullRequest, comment }));
 }
 
 /**

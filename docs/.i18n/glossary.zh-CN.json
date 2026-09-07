@@ -1800,6 +1800,10 @@
     "target": "安全审计"
   },
   {
+    "source": "PR convergence audit",
+    "target": "PR 收敛审计"
+  },
+  {
     "source": "Linux Canvas plugin",
     "target": "Linux Canvas plugin"
   },
