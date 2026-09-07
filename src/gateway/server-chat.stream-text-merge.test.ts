@@ -86,14 +86,15 @@ describe("server chat stream text merge", () => {
   });
 
   it("does not resurrect a discarded scoped prefix after a shorter correction", () => {
-    const snapshot = "y".repeat(LIVE_CHAT_BUFFER_CHARS - 5);
+    // The item boundary owes a paragraph separator, so the snapshot leaves room for it.
+    const snapshot = "y".repeat(LIVE_CHAT_BUFFER_CHARS - 6);
     const merged = mergeAssistantText(
       { text: "x🚀keep" },
       { itemId: "answer", text: snapshot, delta: snapshot },
       "live",
     );
     const capped = capLiveAssistantText(merged);
-    expect(capped).toBe(`keep${snapshot}`);
+    expect(capped).toBe(`keep\n\n${snapshot}`);
     expect(
       capLiveAssistantText(
         mergeAssistantText(
@@ -102,7 +103,67 @@ describe("server chat stream text merge", () => {
           "live",
         ),
       ),
-    ).toBe("keep!");
+    ).toBe("keep\n\n!");
+  });
+
+  it.each([
+    {
+      name: "no trailing newline",
+      prefix: "First.",
+      next: "Second.",
+      expected: "First.\n\nSecond.",
+    },
+    {
+      name: "one trailing newline",
+      prefix: "First.\n",
+      next: "Second.",
+      expected: "First.\n\nSecond.",
+    },
+    {
+      name: "paragraph break already present",
+      prefix: "First.\n\n",
+      next: "Second.",
+      expected: "First.\n\nSecond.",
+    },
+    {
+      name: "leading newlines on the next item",
+      prefix: "First.",
+      next: "\n\nSecond.",
+      expected: "First.\n\nSecond.",
+    },
+    {
+      name: "table as the next item",
+      prefix: "Intro line",
+      next: "| a | b |\n| - | - |",
+      expected: "Intro line\n\n| a | b |\n| - | - |",
+    },
+    { name: "empty prefix", prefix: "", next: "Second.", expected: "Second." },
+    { name: "empty next item", prefix: "First.", next: "", expected: "First." },
+  ])(
+    "keeps a paragraph boundary between distinct assistant items ($name)",
+    ({ prefix, next, expected }) => {
+      expect(
+        mergeAssistantText(
+          { text: prefix },
+          { itemId: "next-item", text: next, delta: next },
+          "live",
+        ).text,
+      ).toBe(expected);
+    },
+  );
+
+  it("owes the paragraph boundary to a new item that starts with a delta, not to its later deltas", () => {
+    const first = mergeAssistantText(
+      { text: "First." },
+      { itemId: "next-item", delta: "Sec" },
+      "live",
+    );
+    expect(first.text).toBe("First.\n\nSec");
+    const grown = mergeAssistantText(first, { itemId: "next-item", delta: "ond." }, "live");
+    expect(grown.text).toBe("First.\n\nSecond.");
+    expect(
+      mergeAssistantText(grown, { itemId: "next-item", text: "Second!", delta: "!" }, "live").text,
+    ).toBe("First.\n\nSecond!");
   });
 
   it("does not start the capped tail with the low half of a surrogate pair", () => {
