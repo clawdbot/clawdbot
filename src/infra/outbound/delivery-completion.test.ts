@@ -233,7 +233,7 @@ describe("pending-final delivery completion", () => {
     );
 
     await expect(
-      settlePendingFinalDelivery(completion, "delivered", undefined, tmpDir),
+      settlePendingFinalDelivery(completion, "delivered", undefined, { stateDir: tmpDir }),
     ).resolves.toEqual({ state: "delivered" });
 
     expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith({

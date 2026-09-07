@@ -1,11 +1,62 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { readProposalFrontmatter } from "../../skills/workshop/frontmatter.js";
 import { inspectSkillProposal } from "../../skills/workshop/service.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+
+it("resolves a Workshop skill by display name or canonical key", async () => {
+  await withOpenClawTestState(
+    { label: "workshop-selector-key", scenario: "minimal" },
+    async (state) => {
+      const workshopDir = resolveWorkshopSkillsDir({}, "main", state.env);
+      await Promise.all([
+        writeSkill({
+          dir: path.join(workshopDir, "alpha-guide"),
+          name: "Alpha Guide",
+          description: "A named procedure",
+          metadata: '{"openclaw":{"skillKey":"alpha-guide"}}',
+          body: "# Alpha Guide\n\nFollow the procedure.\n",
+        }),
+        writeSkill({
+          dir: path.join(workshopDir, "alpha-guide-alias"),
+          name: "Alpha_Guide",
+          description: "A different procedure",
+          metadata: '{"openclaw":{"skillKey":"other-guide"}}',
+          body: "# Alpha Guide Alias\n\nDo something else.\n",
+        }),
+      ]);
+      const tool = createSkillWorkshopTool({
+        workspaceDir: state.workspaceDir,
+        config: {},
+        env: state.env,
+        agentId: "main",
+        updateProposals: true,
+      });
+
+      await expect(
+        tool.execute("read-by-key", { action: "read", skill_name: "alpha-guide" }),
+      ).resolves.toMatchObject({
+        details: { skillName: "Alpha Guide", skillKey: "alpha-guide" },
+      });
+      await expect(
+        tool.execute("read-by-name", { action: "read", skill_name: "Alpha Guide" }),
+      ).resolves.toMatchObject({
+        details: { skillName: "Alpha Guide", skillKey: "alpha-guide" },
+      });
+      await expect(
+        tool.execute("update-by-key", {
+          action: "update",
+          skill_name: "alpha-guide",
+          proposal_content: "# Alpha Guide\n\nFollow the updated procedure.\n",
+        }),
+      ).resolves.toMatchObject({ details: { skillKey: "alpha-guide", status: "pending" } });
+    },
+  );
+});
 
 it.each([
   { action: "update", preparation: "read" },
@@ -19,28 +70,32 @@ it.each([
       async (state) => {
         const oldString = "Check the starting conditions.";
         const newString = "Check the starting conditions and record the result.";
-        await writeWorkspaceSkills(state.workspaceDir, [
-          {
+        const workshopDir = resolveWorkshopSkillsDir({}, "main", state.env);
+        await Promise.all([
+          writeSkill({
+            dir: path.join(workshopDir, "alpha-guide"),
             name: "alpha-guide",
             description: "Intended procedure",
             metadata: '{"openclaw":{"skillKey":"beta-guide"}}',
             body: `# Alpha\n\n${oldString}\n`,
-          },
-          {
+          }),
+          writeSkill({
+            dir: path.join(workshopDir, "beta-guide"),
             name: "beta-guide",
             description: "Other procedure",
             metadata: '{"openclaw":{"skillKey":"beta-key"}}',
             body: `# Beta\n\n${oldString}\n`,
-          },
+          }),
         ]);
         const paths = ["alpha-guide", "beta-guide"].map((name) =>
-          path.join(state.workspaceDir, "skills", name, "SKILL.md"),
+          path.join(workshopDir, name, "SKILL.md"),
         );
         const originals = await Promise.all(paths.map((file) => fs.readFile(file, "utf8")));
         const tool = createSkillWorkshopTool({
           workspaceDir: state.workspaceDir,
           config: {},
           env: state.env,
+          agentId: "main",
           proposalOnly: true,
           updateProposals: true,
           proposalMutationBudget: { remaining: 1 },
@@ -96,7 +151,8 @@ it.each([
         });
         const proposalId = (proposed.details as { id: string }).id;
         const stored = await inspectSkillProposal(proposalId, {
-          workspaceDir: state.workspaceDir,
+          config: {},
+          agentId: "main",
           env: state.env,
         });
         expect(stored?.record.target).toMatchObject({
@@ -131,6 +187,7 @@ it("keeps an existing skill name through proposal revision and apply", async () 
         workspaceDir: state.workspaceDir,
         config: {},
         env: state.env,
+        agentId: "main",
         updateProposals: true,
       });
       const created = await tool.execute("seed-create", {
@@ -152,7 +209,8 @@ it("keeps an existing skill name through proposal revision and apply", async () 
       });
       const proposalId = (updated.details as { id: string }).id;
       const proposed = await inspectSkillProposal(proposalId, {
-        workspaceDir: state.workspaceDir,
+        config: {},
+        agentId: "main",
         env: state.env,
       });
       expect(readProposalFrontmatter(proposed?.content ?? "")?.name).toBe("alpha-guide");
@@ -163,7 +221,8 @@ it("keeps an existing skill name through proposal revision and apply", async () 
         proposal_content: `${proposed?.content}\nVerify the saved outcome.\n`,
       });
       const revision = await inspectSkillProposal(proposalId, {
-        workspaceDir: state.workspaceDir,
+        config: {},
+        agentId: "main",
         env: state.env,
       });
       expect(readProposalFrontmatter(revision?.content ?? "")?.name).toBe("alpha-guide");

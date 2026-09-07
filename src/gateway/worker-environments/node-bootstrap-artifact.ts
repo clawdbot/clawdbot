@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants, createReadStream, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { valid } from "semver";
@@ -21,6 +20,7 @@ import {
   composePackagePlugins,
   type DistributionPackageManifest,
 } from "../../infra/package-plugin-composition.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleArchiveManifest,
@@ -457,9 +457,12 @@ export function createNodeBootstrapArtifactProvider(options: ArtifactOptions) {
       if (closed) {
         throw new Error("Node bootstrap artifact provider is closed");
       }
-      prepared ??= (async () => {
+      // Assign the shared promise before synchronous scratch-root failures can clear it.
+      prepared ??= Promise.resolve().then(async () => {
         try {
-          temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-runtime-"));
+          temporaryRoot = await fs.mkdtemp(
+            path.join(resolvePreferredOpenClawTmpDir(), "openclaw-node-runtime-"),
+          );
           if (closed) {
             throw new Error("Node bootstrap artifact provider is closed");
           }
@@ -476,7 +479,7 @@ export function createNodeBootstrapArtifactProvider(options: ArtifactOptions) {
           prepared = undefined;
           throw error;
         }
-      })();
+      });
       // Cancellation releases this consumer; process shutdown still drains the shared producer.
       const artifact = await racePromiseWithAbortSignal(prepared, signal);
       signal?.throwIfAborted();

@@ -14,7 +14,7 @@ import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./auth-profiles/constants.js";
 import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
-import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
@@ -444,6 +444,12 @@ describe("prepared model catalog worker boundary", () => {
 
       const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
       const fullAuth = getPreparedModelFullCatalogAuth(catalog!);
+
+      expect(fullAuth?.credentials?.[DISCOVERED_HARNESS_ID]).toEqual({
+        type: "api_key",
+        key: "discovered-native-login-not-real",
+      });
+      expect(catalog).not.toHaveProperty("credentials");
 
       if (asyncSyntheticAuth) {
         expect(
@@ -981,7 +987,7 @@ describe("prepared model catalog worker boundary", () => {
       pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
       isCurrent: fixture.isCurrent,
     });
-    const catalog = await worker.loadCatalog();
+    const { modelCatalog: catalog } = await worker.loadCatalog();
 
     expect(catalog.entries).toContainEqual(
       expect.objectContaining({

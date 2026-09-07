@@ -752,6 +752,31 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
+    func `conflicting legacy sources across directories throw detailed diagnostic`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        let material1 = DeviceIdentityStore.generateMaterial()
+        let material2 = DeviceIdentityStore.generateMaterial()
+        let json1 = try String(decoding: JSONEncoder().encode(material1.identity), as: UTF8.self)
+        let json2 = try String(decoding: JSONEncoder().encode(material2.identity), as: UTF8.self)
+        let source1 = try fixture.source("source1", contents: json1)
+        let source2 = try fixture.source("source2", contents: json2)
+
+        do {
+            _ = try fixture.load(sources: [source1, source2])
+            Issue.record("Expected conflicting sources to throw")
+        } catch let error as NSError {
+            #expect(error.localizedDescription.contains("Legacy device identity sources conflict across"))
+            #expect(error.localizedDescription.contains(source1.identityURL.path))
+            #expect(error.localizedDescription.contains(source2.identityURL.path))
+            #expect(error.localizedDescription.contains(material1.identity.deviceId))
+            #expect(error.localizedDescription.contains(material2.identity.deviceId))
+        }
+
+        #expect(FileManager.default.fileExists(atPath: source1.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: source2.identityURL.path))
+    }
+
+    @Test
     func `unparseable native claim is preserved with recreated source`() throws {
         let fixture = DeviceIdentityMigrationFixture()
         let source = try fixture.source()

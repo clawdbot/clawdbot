@@ -230,29 +230,52 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).not.toContain("REMOTE_NOTE_");
   });
 
-  it("preserves the exact full-catalog bytes when a remote note fits", () => {
-    const skill = makeSkill("weather", "Get weather data");
-    const remoteNote = "Remote node skills are available.";
-    const catalog = formatSkillsForPromptCore([skill]);
-    const expected = [remoteNote, catalog].join("\n");
-    const prompt = buildWorkspaceSkillsPrompt("/fake", {
-      entries: [makeEntry(skill)],
-      config: {
-        skills: { limits: { maxSkillsPromptChars: expected.length } },
-      } satisfies OpenClawConfig,
-      eligibility: {
-        remote: {
-          platforms: ["linux"],
-          hasBin: () => false,
-          hasAnyBin: () => false,
-          note: remoteNote,
-        },
-      },
-    });
+  it.each(["full", "compact", "count-limited", "empty"])(
+    "preserves exact %s catalog bytes at the optional remote-note boundary",
+    (format) => {
+      const skill = makeSkill(
+        "weather",
+        format === "compact" ? "A".repeat(800) : "Get weather data",
+      );
+      const skills = format === "empty" ? [] : [skill];
+      const remoteNote = "Remote node skills are available.";
+      const notice =
+        format === "compact"
+          ? COMPACT_SHORTENED_NOTICE
+          : format === "count-limited"
+            ? "⚠️ Skills truncated: included 1 of 2. Run `openclaw skills check` to audit."
+            : "";
+      const catalog =
+        format === "compact" ? formatSkillsCompact(skills) : formatSkillsForPromptCore(skills);
+      const withoutNote = [notice, catalog].filter(Boolean).join("\n");
+      const withNote = [remoteNote, withoutNote].filter(Boolean).join("\n");
+      const entries = (format === "count-limited" ? [...skills, makeSkill("zoo")] : skills).map(
+        makeEntry,
+      );
 
-    expect(prompt).toBe(expected);
-    expect(prompt.length).toBeLessThanOrEqual(expected.length);
-  });
+      for (const delta of [-1, 0, 1]) {
+        const prompt = buildWorkspaceSkillsPrompt("/fake", {
+          entries,
+          config: {
+            skills: {
+              limits: { maxSkillsInPrompt: 1, maxSkillsPromptChars: withNote.length + delta },
+            },
+          } satisfies OpenClawConfig,
+          eligibility: {
+            remote: {
+              platforms: ["linux"],
+              hasBin: () => false,
+              hasAnyBin: () => false,
+              note: remoteNote,
+            },
+          },
+        });
+
+        expect(prompt).toBe(delta < 0 ? withoutNote : withNote);
+        expect(prompt.length).toBeLessThanOrEqual(withNote.length + delta);
+      }
+    },
+  );
 
   it("budgets the final rendered prompt including limit notices", () => {
     const skills = Array.from({ length: 24 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(160)));

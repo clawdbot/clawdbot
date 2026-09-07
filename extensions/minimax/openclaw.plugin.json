@@ -1,5 +1,6 @@
 {
   "id": "minimax",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

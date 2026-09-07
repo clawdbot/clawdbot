@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type {
@@ -5,6 +6,7 @@ import type {
   BoardOp,
   BoardSnapshot,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { BOARD_REPORT_GUIDANCE } from "../../boards/board-report.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -75,12 +77,12 @@ const DashboardToolSchema = Type.Object(
       Type.String({
         pattern: BOARD_PLUGIN_KIND_PATTERN,
         description:
-          "Plugin widget kind, for example session:progress, workboard:card, workboard:mini, or workboard:board",
+          "Registered widget kind; session:report renders data reports natively, session:progress renders live session progress",
       }),
     ),
     props: Type.Optional(
       Type.Record(Type.String(), Type.Unknown(), {
-        description: "Plugin-owned JSON props (maximum 8KB encoded)",
+        description: `Plugin-owned JSON props (maximum 8KB encoded). For session:report: ${BOARD_REPORT_GUIDANCE}`,
       }),
     ),
   },
@@ -143,14 +145,11 @@ function readOptionalTabId(params: Record<string, unknown>): string | undefined 
 }
 
 function readPluginProps(params: Record<string, unknown>): Record<string, unknown> | undefined {
-  const props = params.props;
-  if (props === undefined) {
-    return undefined;
-  }
-  if (!props || typeof props !== "object" || Array.isArray(props)) {
+  const props = asOptionalRecord(params.props);
+  if (params.props !== undefined && !props) {
     throw new ToolInputError("props must be an object");
   }
-  return props as Record<string, unknown>;
+  return props;
 }
 
 function opForAction(action: string, params: Record<string, unknown>): BoardOp {
@@ -277,7 +276,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     label: "Dashboard",
     name: "dashboard",
     description:
-      "Keep one ad hoc visualization inline; use only for an explicit dashboard request or multiple non-code visualizations. Read layout; widget_put updates plugin widgets only. Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Plugin examples: session:progress props {sessionKey?} renders the session's live progress card (omit sessionKey for the current session), workboard:card props {cardId}, workboard:mini props {boardId, limit}, workboard:board props {boardId}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
+      "Keep one ad hoc visualization inline; use only for an explicit dashboard request or multiple non-code visualizations. Read layout; widget_put updates plugin widgets only. Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Prefer session:report for data reports with text, metrics, tables, charts, and links; it renders directly without a document frame. Use session:progress props {sessionKey?} for live session progress (omit sessionKey for the current session). Other widget kinds are supplied by enabled plugins. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
     parameters: DashboardToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;

@@ -274,7 +274,8 @@ outbound policy after DNS resolution.
 <Note>
   If no HTTP(S) proxy env var is configured, or the target host is excluded by
   `NO_PROXY`, `web_fetch` falls back to the normal strict path with local DNS
-  pinning.
+  pinning. Hostname matching ignores case and a single trailing DNS dot in
+  either the URL or the `NO_PROXY` entry.
 </Note>
 
 ## Limits and safety

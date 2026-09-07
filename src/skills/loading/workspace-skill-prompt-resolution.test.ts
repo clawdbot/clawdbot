@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
@@ -45,6 +46,47 @@ function createEntry(name: string): SkillEntry {
 }
 
 describe("resolveSkillsPrompt", () => {
+  it.each([8_192, 32_768])(
+    "compacts descriptions at %i tokens without changing admitted skill resources",
+    async (contextTokenBudget) => {
+      const entries = Array.from({ length: 24 }, (_, index) => {
+        const entry = createEntry(`skill-${index}`);
+        entry.skill.description = `Inspect records & preserve <identifiers>. ${"Detailed matching guidance. ".repeat(10)}`;
+        entry.skill.locationNote = "Load the complete instruction file at this location.";
+        entry.skill.readContent = `${"Complete instruction body. ".repeat(300)}END_${index}`;
+        return entry;
+      });
+      const snapshot = buildSkillSnapshot("/tmp/openclaw", { entries });
+      const original = snapshot.prompt.trim();
+      const projected = resolveSkillsPrompt({
+        workspaceDir: "/tmp/openclaw",
+        skillsSnapshot: snapshot,
+        contextTokenBudget,
+      });
+      expect(projected.length).toBeLessThan(original.length);
+      const omitDescriptions = (prompt: string) =>
+        prompt.replace(/<description>[\s\S]*?<\/description>/gu, "");
+      expect(omitDescriptions(projected)).toBe(omitDescriptions(original));
+      expect(projected).toContain("&amp; preserve &lt;identifiers&gt;");
+      expect(snapshot.prompt.trim()).toBe(original);
+      expect(resolveSkillsPrompt({ workspaceDir: "/tmp/openclaw", skillsSnapshot: snapshot })).toBe(
+        original,
+      );
+      const resources = resolveCodeModeSkills({
+        skillsPrompt: projected,
+        candidates: snapshot.resolvedSkills!,
+      });
+      expect(resources.map((skill) => skill.name)).toEqual(
+        snapshot.resolvedSkills!.map((skill) => skill.name),
+      );
+      for (const resource of resources) {
+        expect(await readCodeModeSkill(resource)).toBe(
+          entries.find((entry) => entry.skill.name === resource.name)!.skill.readContent,
+        );
+      }
+    },
+  );
+
   it("prefers snapshot prompt when available", () => {
     const prompt = resolveSkillsPrompt({
       skillsSnapshot: { prompt: "SNAPSHOT", skills: [] },

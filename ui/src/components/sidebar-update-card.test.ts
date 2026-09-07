@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import "./sidebar-update-card.ts";
 
 type SidebarUpdateCardElement = HTMLElement & {
@@ -11,6 +13,8 @@ type SidebarUpdateCardElement = HTMLElement & {
   compact: boolean;
   heldUpdateCampaignId: string | null;
   updateBusy: boolean;
+  updateRun: UpdateRunRecord | null;
+  updateRunAcknowledged: boolean;
   canUpdate: boolean;
   canHoldUpdate: boolean;
   onUpdate: () => void;
@@ -187,6 +191,33 @@ describe("SidebarUpdateCard", () => {
     expect(element.textContent).toContain("Update failed");
     element.querySelector<HTMLButtonElement>(".sidebar-update-card__review")?.click();
     expect(onReviewUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("shows live run progress and stops surfacing an acknowledged or old result", async () => {
+    const element = await mount(null);
+    element.updateRun = createUpdateRunFixture();
+    await element.updateComplete;
+    expect(element.textContent).toContain("OpenClaw update in progress: staging");
+    expect(element.textContent).toContain("phases complete");
+    expect(element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.disabled).toBe(
+      false,
+    );
+
+    element.updateRun = createUpdateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: Date.now(),
+      after: { version: "2026.9.2" },
+    });
+    await element.updateComplete;
+    expect(element.textContent).toContain("OpenClaw updated to 2026.9.2");
+    element.updateRunAcknowledged = true;
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card")).toBeNull();
+    element.updateRunAcknowledged = false;
+    element.updateRun = { ...element.updateRun, finishedAtMs: Date.now() - 24 * 60 * 60 * 1000 };
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card")).toBeNull();
   });
 
   it("renders an available update and narrates it after the Gateway drops its metadata", async () => {

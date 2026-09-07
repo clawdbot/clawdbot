@@ -1,11 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover tool-call classification and view-model resolution.
 import { describe, expect, it } from "vitest";
-import {
-  resolveToolCallKind,
-  resolveToolCallView,
-  unwrapShellWrapperCommand,
-} from "./tool-call-view.ts";
+import { resolveToolCallKind, resolveToolCallView } from "./tool-call-view.ts";
 
 const TEXT_EDITOR_TOOL_NAMES = ["str_replace_editor", "str_replace_based_edit_tool"] as const;
 
@@ -49,7 +45,7 @@ describe("resolveToolCallKind", () => {
   });
 });
 
-describe("unwrapShellWrapperCommand", () => {
+describe("shell command views", () => {
   it.each([
     ["/bin/zsh -lc 'pnpm test ui'", "pnpm test ui"],
     ['/bin/bash -c "git status"', "git status"],
@@ -57,13 +53,9 @@ describe("unwrapShellWrapperCommand", () => {
     ["pnpm test ui", "pnpm test ui"],
     ["/bin/zsh -lc unquoted", "/bin/zsh -lc unquoted"],
   ])("unwraps %s", (wrapped, expected) => {
-    expect(unwrapShellWrapperCommand(wrapped)).toBe(expected);
-  });
-
-  it("unwraps the shell wrapper in command views", () => {
-    expect(
-      resolveToolCallView({ name: "bash", args: { command: "/bin/zsh -lc 'node --version'" } }),
-    ).toEqual({ kind: "command", command: "node --version" });
+    expect(resolveToolCallView({ name: "bash", args: { command: wrapped } }).command).toBe(
+      expected,
+    );
   });
 });
 

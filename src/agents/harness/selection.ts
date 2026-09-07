@@ -471,7 +471,9 @@ export async function runAgentHarnessAttempt(
     }
     assertCurrent();
     // Promote approved input before the host binds annotation to its exact stored row.
-    await internalParams.userTurnTranscriptRecorder.persistApproved();
+    await internalParams.userTurnTranscriptRecorder.persistApproved({
+      cwd: internalParams.cwd ?? internalParams.workspaceDir,
+    });
     assertCurrent();
   }
   if (nativeSessionRuntime) {
@@ -704,8 +706,10 @@ function withoutPluginHarnessPrivateState(
   // separate projections can drift and expose authority on less common operations.
   const {
     admittedRunContext: _admittedRunContext,
+    assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,
     onContextAccountingEvent: _onContextAccountingEvent,
+    onCompactionRequestBudget: _onCompactionRequestBudget,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
     hostCapabilities: _hostCapabilities,
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,

@@ -9,6 +9,7 @@ import {
   enablePluginInConfigMock,
   planPluginUninstallMock,
   replaceConfigFileMock,
+  restorePersistedInstalledPluginIndexIfCurrentMock,
   refreshPluginRegistryMock,
   resetPluginsCliTestState,
   pluginsCliRuntimeLogs,
@@ -18,6 +19,7 @@ import {
   applyPluginUninstallDirectoryRemovalMock,
 } from "../cli/plugins-cli-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ConfigWriteOptions } from "../config/io.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
@@ -48,6 +50,42 @@ describe("persistPluginInstall", () => {
     clearPluginMetadataLifecycleCaches();
     resetPluginsCliTestState();
   });
+
+  it.each(["before index", "at config publication"])(
+    "rejects an expired owner %s and restores tentative state",
+    async (phase) => {
+      const { persistPluginInstall } = await import("./install-persistence.js");
+      const expired = new Error("approved operation owner expired");
+      let ownerActive = phase === "at config publication";
+      replaceConfigFileMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const params = args[0] as { nextConfig: OpenClawConfig; writeOptions: ConfigWriteOptions };
+        await Promise.resolve();
+        ownerActive = false;
+        await params.writeOptions.beforeCommit?.();
+        await configWriteMock(params.nextConfig);
+      });
+      await expect(
+        persistPluginInstall({
+          snapshot: { config: {}, baseHash: "config-1", writeOptions: installWriteOptions },
+          pluginId: "alpha",
+          install: { source: "archive", sourcePath: "/tmp/alpha.tgz", installPath: "/tmp/alpha" },
+          beforePersistentEffect: async () => {
+            if (!ownerActive) {
+              throw expired;
+            }
+          },
+        }),
+      ).rejects.toBe(expired);
+      expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).toHaveBeenCalledTimes(
+        phase === "before index" ? 0 : 1,
+      );
+      expect(restorePersistedInstalledPluginIndexIfCurrentMock).toHaveBeenCalledTimes(
+        phase === "before index" ? 0 : 1,
+      );
+      expect(configWriteMock).not.toHaveBeenCalled();
+      expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("labels plugin lifecycle config writes", async () => {
     const { selectInstallMutationWriteOptions } = await import("./install-persistence.js");

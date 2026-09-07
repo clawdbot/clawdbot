@@ -32,4 +32,4 @@ scenario:
       requiredProviderMode: mock-openai
     args: [--output-dir, "${outputDir}"]
     timeoutMs: 900000
-    summary: Requires a disposable Linux Testbox with OPENCLAW_TESTBOX=1, Chromium, Xvfb, and sudo sshd. Real Gateway and browser behavior; simulated provider, GitHub, favicon, APNs, and node upstreams.
+    summary: Requires a disposable Linux Testbox with OPENCLAW_TESTBOX=1, Chromium, Xvfb, sudo sshd, and avahi-browse with its daemon. Real Gateway and browser behavior; simulated provider, GitHub, favicon, APNs, and node upstreams.

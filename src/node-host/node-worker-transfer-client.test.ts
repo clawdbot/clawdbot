@@ -122,7 +122,12 @@ describe("node worker transfer client", () => {
           environmentId: "environment-windows-executable",
           workspaceDir,
           manifestHome: root,
-          transfer: { direction: "upload", token: "upload-token", baseManifestRef: manifestRef },
+          transfer: {
+            direction: "upload",
+            token: "upload-token",
+            baseManifestRef: manifestRef,
+            referenceManifestRef: manifestRef,
+          },
         });
         expect(currentRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
         expect(JSON.parse(uploadedRaw!)).toMatchObject({
@@ -349,6 +354,7 @@ describe("node worker transfer client", () => {
             direction: "upload",
             token: "upload-token",
             baseManifestRef: manifestRef,
+            referenceManifestRef: manifestRef,
           },
         }),
       ).resolves.toBe(uploadManifestRef);
@@ -709,7 +715,12 @@ describe("node worker transfer client", () => {
           environmentId: "environment-snapshot",
           workspaceDir,
           manifestHome: root,
-          transfer: { direction: "upload", token: "upload-token", baseManifestRef: baseRef },
+          transfer: {
+            direction: "upload",
+            token: "upload-token",
+            baseManifestRef: baseRef,
+            referenceManifestRef: baseRef,
+          },
         }),
       ).resolves.toBe(currentRef);
       expect(mutated).toBe(true);
@@ -818,6 +829,7 @@ describe("node worker transfer client", () => {
             direction: "upload",
             token: "upload-token",
             baseManifestRef: manifestRef,
+            referenceManifestRef: manifestRef,
           },
         }),
       ).resolves.toBe(uploadManifestRef);

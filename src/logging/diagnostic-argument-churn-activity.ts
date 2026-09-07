@@ -1,3 +1,5 @@
+import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
+
 // A semantic-stall clock remains continuous across short model/tool handoffs,
 // but later model progress wins once no churn observation refreshes this lease.
 const ARGUMENT_CHURN_CONTINUITY_WINDOW_MS = 60_000;
@@ -36,18 +38,6 @@ export type DiagnosticArgumentChurnObservationParams = {
   now?: number;
 };
 
-function resolveCurrentArgumentChurnOwner<T extends { sequence: number }>(
-  owners: Iterable<T>,
-): T | undefined {
-  let currentOwner: T | undefined;
-  for (const owner of owners) {
-    if (!currentOwner || owner.sequence > currentOwner.sequence) {
-      currentOwner = owner;
-    }
-  }
-  return currentOwner;
-}
-
 function hasArgumentChurnContinuityExpired(
   activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
   now: number,
@@ -69,15 +59,14 @@ function hasArgumentChurnContinuityExpired(
   );
 }
 
-export function resolveArgumentChurnProgress<T extends { runId: string; sequence: number }>(
+export function resolveArgumentChurnProgress(
   activity: DiagnosticArgumentChurnActivity & {
     lastProgressAt: number;
     lastProgressReason?: string;
   },
-  owners: Iterable<T>,
+  currentOwnerRunId: string | undefined,
   now: number,
 ): { lastProgressAt: number; lastProgressReason?: string } {
-  const currentOwnerRunId = resolveCurrentArgumentChurnOwner(owners)?.runId;
   if (
     currentOwnerRunId !== undefined &&
     activity.argumentChurnPolicyWaitRunId === currentOwnerRunId &&
@@ -186,7 +175,7 @@ export function applyArgumentChurnObservation<T extends { runId: string; sequenc
 ): void {
   const now = params.now ?? Date.now();
   const runId = params.runId?.trim() || undefined;
-  const currentOwnerRunId = resolveCurrentArgumentChurnOwner(owners)?.runId;
+  const currentOwnerRunId = resolveCurrentDiagnosticRunId(owners);
   if (currentOwnerRunId !== undefined && currentOwnerRunId !== runId) {
     return;
   }

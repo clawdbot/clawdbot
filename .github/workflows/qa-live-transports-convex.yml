@@ -429,6 +429,24 @@ jobs:
             --fast \
             --output-dir "${{ steps.run_lane.outputs.output_dir }}/gateway-restart-gpt-5.4-runtime-pair"
 
+      - name: Run full-access gateway restart recovery
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          pnpm openclaw qa suite \
+            --repo-root . \
+            --provider-mode live-frontier \
+            --scenario gateway-restart-full-access-live \
+            --concurrency 1 \
+            --model openai/gpt-5.6-luna \
+            --alt-model openai/gpt-5.6-luna \
+            --fast \
+            --output-dir "${{ steps.run_lane.outputs.output_dir }}/gateway-restart-full-access"
+
       - name: Generate live runtime token-efficiency report
         if: steps.run_lane.outcome == 'success'
         shell: bash

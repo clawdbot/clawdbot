@@ -56,6 +56,17 @@ export function resolveDebugProxySettings(
   };
 }
 
+export function resolveEnabledDebugProxySettings(
+  resolved?: DebugProxySettings,
+): DebugProxySettings | undefined {
+  // Disabled transport capture must not discover filesystem paths on every frame.
+  // Explicit settings retain their lifecycle; ambient callers observe current env.
+  if (!(resolved?.enabled ?? isTruthy(process.env[OPENCLAW_DEBUG_PROXY_ENABLED]))) {
+    return undefined;
+  }
+  return resolved ?? resolveDebugProxySettings();
+}
+
 export function applyDebugProxyEnv(
   env: NodeJS.ProcessEnv,
   params: {
@@ -105,6 +116,5 @@ export function resolveEffectiveDebugProxyUrl(configuredProxyUrl?: string): stri
   if (explicit) {
     return explicit;
   }
-  const settings = resolveDebugProxySettings();
-  return settings.enabled ? settings.proxyUrl : undefined;
+  return resolveEnabledDebugProxySettings()?.proxyUrl;
 }

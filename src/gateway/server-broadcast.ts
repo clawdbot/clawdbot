@@ -13,6 +13,7 @@ import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
 import {
   ADMIN_SCOPE,
@@ -33,7 +34,7 @@ import type {
 } from "./server-broadcast-types.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
-import { GatewayClientRegistry } from "./server/client-registry.js";
+import type { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
@@ -71,6 +72,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   task: [READ_SCOPE],
   "task.suggestion": [READ_SCOPE],
   "update.available": [],
+  [GATEWAY_EVENT_UPDATE_RUN_CHANGED]: [ADMIN_SCOPE],
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
@@ -92,6 +94,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],
   "controlUi.sessionPullRequests.changed": [READ_SCOPE],
+  "plugins.controlUi.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
   "session.message": [READ_SCOPE],
   "session.observer": [READ_SCOPE],
@@ -124,12 +127,10 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
 ]);
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
-  // Serialize one field through JSON.stringify so embedded values keep JSON
-  // escaping, then splice it into the shared per-client frame body.
+  // Keep the wrapper for toJSON's property key and reuse its serialized field.
+  // Only splice wrappers that still start with that field after inherited toJSON.
   const fieldJSON = JSON.stringify({ [name]: value });
-  const keyJSON = JSON.stringify(name);
-  const prefix = `{${keyJSON}:`;
-  return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
+  return fieldJSON.startsWith(`{"${name}":`) ? `,${fieldJSON.slice(1, -1)}` : "";
 }
 
 function resolveBroadcastSessionScope(
@@ -214,8 +215,39 @@ function hasEventScope(
   return required.some((scope) => scopes.includes(scope));
 }
 
+type FrameBase = {
+  eventJSON: string;
+  payloadFragment: string;
+  stateVersionFragment: string;
+  reservedBytes?: number;
+};
+// ws bufferedAmount includes the unmasked server frame's 2/4/10-byte header.
+const MAX_SERVER_FRAME_HEADER_BYTES = 10;
+
+function frameWithSequence(base: FrameBase, seq: number, payload = base.payloadFragment): string {
+  return `{"type":"event","event":${base.eventJSON}${payload},"seq":${seq}${base.stateVersionFragment}}`;
+}
+
+type PendingLiveText = {
+  group: AbortSignal;
+  key: string;
+  payload: unknown;
+  bytes: number;
+  isCurrent?: () => boolean;
+  send: () => void;
+};
+type ClientDelivery = {
+  socket: GatewayWsClient["socket"];
+  retired: boolean;
+  inFlight: number;
+  draining: boolean;
+  bytes: number;
+  groups: Map<AbortSignal, { entries: Map<string, PendingLiveText>; retire: () => void }>;
+  pending: Set<PendingLiveText>;
+};
+
 export function createGatewayBroadcaster(params: {
-  clients: Set<GatewayWsClient>;
+  clients: GatewayClientRegistry;
   preparePresenceProjection?: (
     presence: SystemPresence[],
   ) => (client: GatewayWsClient) => SystemPresence[];
@@ -231,8 +263,76 @@ export function createGatewayBroadcaster(params: {
 }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
-  const indexedClients =
-    params.clients instanceof GatewayClientRegistry ? params.clients : undefined;
+  const deliveries = new WeakMap<GatewayWsClient, ClientDelivery>();
+  const deliveryFor = (client: GatewayWsClient) => {
+    let state = deliveries.get(client);
+    if (!state || state.socket !== client.socket) {
+      if (state) {
+        clearPending(state);
+      }
+      state = {
+        socket: client.socket,
+        retired: false,
+        inFlight: 0,
+        draining: false,
+        bytes: 0,
+        groups: new Map(),
+        pending: new Set(),
+      };
+      deliveries.set(client, state);
+    }
+    return state;
+  };
+  // Pending text and socket writes share the connection budget and upstream backpressure.
+  const bufferedBytes = (state: ClientDelivery) => state.socket.bufferedAmount + state.bytes;
+  const takePending = (state: ClientDelivery, entry: PendingLiveText) => {
+    state.pending.delete(entry);
+    const group = state.groups.get(entry.group)!;
+    group.entries.delete(entry.key);
+    if (!group.entries.size) {
+      entry.group.removeEventListener("abort", group.retire);
+      state.groups.delete(entry.group);
+    }
+    state.bytes -= entry.bytes;
+  };
+  const clearPending = (state: ClientDelivery) => {
+    for (const entry of state.pending) {
+      takePending(state, entry);
+    }
+  };
+  const isCurrent = (predicate?: () => boolean) => {
+    try {
+      return predicate?.() !== false;
+    } catch {
+      return false;
+    }
+  };
+  const drain = (state: ClientDelivery, group?: AbortSignal) => {
+    if (state.retired || state.draining) {
+      return;
+    }
+    state.draining = true;
+    try {
+      // A barrier may overtake in-flight writes, but never another group's queue.
+      // The guard also contains synchronous send callbacks without recursive drains.
+      for (const entry of state.pending) {
+        if (group ? entry.group !== group : state.inFlight !== 0) {
+          if (group) {
+            continue;
+          }
+          break;
+        }
+        takePending(state, entry);
+        try {
+          entry.send();
+        } catch (err) {
+          log.error(`broadcast pending send failed: ${formatErrorMessage(err)}`);
+        }
+      }
+    } finally {
+      state.draining = false;
+    }
+  };
 
   const broadcastInternal = (
     event: string,
@@ -240,11 +340,13 @@ export function createGatewayBroadcaster(params: {
     opts?: GatewayBroadcastOpts,
     targetConnIds?: ReadonlySet<string>,
     explicitPluginScope?: GatewayPluginEventScope,
+    retained?: { client: GatewayWsClient; socket: GatewayWsClient["socket"]; base: FrameBase },
   ) => {
-    if (event === "sessions.changed") {
+    if (!retained && event === "sessions.changed") {
       // Delivery is queued here so process-local handlers run after websocket fanout returns.
       queuePluginSessionsChanged(payload);
     }
+    const live = opts?.liveText;
     if (params.clients.size === 0) {
       return;
     }
@@ -259,44 +361,43 @@ export function createGatewayBroadcaster(params: {
       event === "presence" ? (payload as { presence: SystemPresence[] }) : undefined;
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let outboundEventLogged = false;
-    let frameBase:
-      | {
-          eventJSON: string;
-          payloadFragment: string;
-          stateVersionFragment: string;
-        }
-      | undefined;
+    let frameBase: FrameBase | undefined = retained?.base;
+    let frameFields: Omit<FrameBase, "payloadFragment"> | undefined;
+    const frameBaseFor = (value: unknown): FrameBase => {
+      frameFields ??= {
+        eventJSON: JSON.stringify(event),
+        stateVersionFragment:
+          opts?.stateVersion === undefined
+            ? ""
+            : serializeFrameField("stateVersion", opts.stateVersion),
+      };
+      return {
+        ...frameFields,
+        payloadFragment: presencePayload ? "" : serializeFrameField("payload", value),
+      };
+    };
     // Lazy so filtered-out broadcasts (zero eligible clients) never pay
     // JSON.stringify for the payload.
     const getFrameBase = () => {
-      if (!frameBase) {
-        frameBase = {
-          eventJSON: JSON.stringify(event),
-          payloadFragment: presencePayload ? "" : serializeFrameField("payload", payload),
-          stateVersionFragment:
-            opts?.stateVersion === undefined
-              ? ""
-              : serializeFrameField("stateVersion", opts.stateVersion),
-        };
-      }
-      return frameBase;
+      return (frameBase ??= frameBaseFor(payload));
     };
-    const sessionSubscriptionVerified =
-      (opts as { sessionSubscriptionVerified?: boolean } | undefined)
-        ?.sessionSubscriptionVerified === true;
+    const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
     const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
     const sessionMessageSubscribers = params.sessionMessageSubscribers;
     let sessionSubscriberConnIdsByKey: Array<ReadonlySet<string> | undefined> | undefined;
-    const recipients =
-      targetConnIds && indexedClients
-        ? indexedClients.getByConnectionIds(targetConnIds)
+    const recipients = retained
+      ? [retained.client]
+      : targetConnIds
+        ? params.clients.getByConnectionIds(targetConnIds)
         : params.clients;
     for (const c of recipients) {
       // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
-      if (c.invalidated === true || c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
-        continue;
-      }
-      if (targetConnIds && !indexedClients && !targetConnIds.has(c.connId)) {
+      if (
+        !params.clients.has(c) ||
+        (retained && c.socket !== retained.socket) ||
+        c.invalidated === true ||
+        c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE
+      ) {
         continue;
       }
       if (!hasEventScope(c, event, explicitPluginScope)) {
@@ -311,10 +412,14 @@ export function createGatewayBroadcaster(params: {
       }
       const requiresSessionSubscription =
         event === "session.typing" ||
+        sessionSubscriptionVerified ||
         ((isBrowserCopilotClient(c.connect.client) ||
           hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)) &&
           isSessionSubscriptionEvent);
-      if (requiresSessionSubscription && !(isTargeted && sessionSubscriptionVerified)) {
+      if (
+        requiresSessionSubscription &&
+        !(isTargeted && sessionSubscriptionVerified && !retained)
+      ) {
         if (!sessionKeys.length || !sessionMessageSubscribers) {
           continue;
         }
@@ -338,6 +443,10 @@ export function createGatewayBroadcaster(params: {
           continue;
         }
       }
+      // Retirement releases progress without suppressing its captured abort terminal.
+      if ((retained && !isCurrent(live?.isCurrent)) || (live?.coalesce && live.group.aborted)) {
+        continue;
+      }
       if (!outboundEventLogged) {
         outboundEventLogged = true;
         logWs("out", "event", () => {
@@ -356,15 +465,23 @@ export function createGatewayBroadcaster(params: {
           return logMeta;
         });
       }
+      const state = deliveryFor(c);
+      if (live && !live.coalesce) {
+        drain(state, live.group);
+      }
+      if (state.retired) {
+        continue;
+      }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
-      const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
+      const bufferedAmount = bufferedBytes(state);
+      const slow = bufferedAmount > MAX_BUFFERED_BYTES;
       if (!slow) {
         reportedSlowPayloadClients.delete(c);
       } else if (!reportedSlowPayloadClients.has(c)) {
         reportedSlowPayloadClients.add(c);
         logRejectedLargePayload({
           surface: "gateway.ws.outbound_buffer",
-          bytes: c.socket.bufferedAmount,
+          bytes: bufferedAmount,
           limitBytes: MAX_BUFFERED_BYTES,
           reason: opts?.dropIfSlow ? "ws_send_buffer_drop" : "ws_send_buffer_close",
         });
@@ -376,12 +493,79 @@ export function createGatewayBroadcaster(params: {
         continue;
       }
       if (slow) {
+        state.retired = true;
+        clearPending(state);
         try {
           c.socket.close(1008, "slow consumer");
         } catch {
           /* ignore */
         }
         c.socket.terminate();
+        continue;
+      }
+      if (!retained && live?.coalesce && state.inFlight > 0) {
+        let previous = state.groups.get(live.group)?.entries.get(live.coalesce.key);
+        if (previous && !isCurrent(previous.isCurrent)) {
+          takePending(state, previous);
+          previous = undefined;
+        }
+        try {
+          const nextPayload = previous ? live.coalesce.merge(previous.payload, payload) : payload;
+          const base = previous ? frameBaseFor(nextPayload) : getFrameBase();
+          // Reserve the complete frame and maximum sequence width once per serialized base;
+          // unrelated sends can advance the sequence while this entry is waiting to drain.
+          const bytes = (base.reservedBytes ??=
+            Buffer.byteLength(frameWithSequence(base, Number.MAX_SAFE_INTEGER)) +
+            MAX_SERVER_FRAME_HEADER_BYTES);
+          if (bufferedBytes(state) - (previous?.bytes ?? 0) + bytes <= MAX_BUFFERED_BYTES) {
+            if (previous) {
+              takePending(state, previous);
+            }
+            const socket = c.socket;
+            const entry: PendingLiveText = {
+              group: live.group,
+              key: live.coalesce.key,
+              payload: nextPayload,
+              bytes,
+              isCurrent: live.isCurrent,
+              send: () =>
+                broadcastInternal(event, nextPayload, opts, targetConnIds, explicitPluginScope, {
+                  client: c,
+                  socket,
+                  base,
+                }),
+            };
+            let group = state.groups.get(live.group);
+            if (!group) {
+              const entries = new Map<string, PendingLiveText>();
+              const retire = () => {
+                // Release only this generation; written frames remain socket-owned.
+                for (const pending of entries.values()) {
+                  takePending(state, pending);
+                }
+              };
+              group = { entries, retire };
+              state.groups.set(live.group, group);
+              live.group.addEventListener("abort", retire, { once: true });
+            }
+            group.entries.set(entry.key, entry);
+            state.pending.add(entry);
+            state.bytes += bytes;
+            continue;
+          }
+        } catch (err) {
+          log.error(
+            `broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`,
+          );
+          return;
+        }
+        // Flush the old deltas, then send this ingress unmerged under the normal slow policy.
+        drain(state, live.group);
+        broadcastInternal(event, payload, opts, targetConnIds, explicitPluginScope, {
+          client: c,
+          socket: c.socket,
+          base: getFrameBase(),
+        });
         continue;
       }
       // Build the frame before consuming the seq: a serialization failure
@@ -404,7 +588,7 @@ export function createGatewayBroadcaster(params: {
             presence: projectPresence(c),
           });
         }
-        frame = `{"type":"event","event":${base.eventJSON}${payloadFragment},"seq":${nextSeq}${base.stateVersionFragment}}`;
+        frame = frameWithSequence(base, nextSeq, payloadFragment);
       } catch (err) {
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
         return;
@@ -413,11 +597,34 @@ export function createGatewayBroadcaster(params: {
       // an unstamped frame is invisible to the client's gap detector, so a
       // drop between two targeted sends would go unnoticed forever.
       clientSeq.set(c, nextSeq);
+      state.inFlight += 1;
+      let finished = false;
+      const sent = (err?: Error) => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        state.inFlight -= 1;
+        // ws fails every queued write when compression loses its socket. Settle
+        // each callback, but retire this delivery generation only once.
+        if (state.retired) {
+          return;
+        }
+        if (err) {
+          state.retired = true;
+          clearPending(state);
+          log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, {
+            event,
+          });
+          state.socket.terminate();
+        } else {
+          drain(state);
+        }
+      };
       try {
-        c.socket.send(frame);
+        state.socket.send(frame, sent);
       } catch (err) {
-        log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, { event });
-        c.socket.terminate();
+        sent(err instanceof Error ? err : new Error(String(err)));
       }
     }
   };
@@ -432,15 +639,13 @@ export function createGatewayBroadcaster(params: {
   };
 
   const getBufferedAmount: GatewayBufferedAmountFn = (connId) => {
-    if (indexedClients) {
-      return indexedClients.getByConnectionId(connId)?.socket.bufferedAmount;
+    const client = params.clients.getByConnectionId(connId);
+    if (!client || client.invalidated || client.socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
+      return undefined;
     }
-    for (const client of params.clients) {
-      if (client.connId === connId) {
-        return client.socket.bufferedAmount;
-      }
-    }
-    return undefined;
+    const state = deliveryFor(client);
+    // Failed compression retains ws's queued byte count after transport retirement.
+    return state.retired ? undefined : bufferedBytes(state);
   };
 
   const broadcastPluginEvent: GatewayPluginEventBroadcastFn = (event, payload, scope) => {

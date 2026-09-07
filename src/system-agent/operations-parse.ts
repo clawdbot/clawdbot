@@ -42,7 +42,7 @@ export type SystemAgentOperationResult = {
 /** Injectable command dependencies used by tests and alternate runners. */
 export type SystemAgentCommandDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
+  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
   formatOverview?: SystemAgentOverviewFormatter;
@@ -523,6 +523,7 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
     operation.kind === "plugin-install" ||
+    operation.kind === "plugin-activate-artifact" ||
     operation.kind === "plugin-uninstall" ||
     (operation.kind === "create-agent" &&
       !operation.model?.trim() &&
@@ -552,6 +553,8 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return "run openclaw doctor --fix on the machine running OpenClaw, with OpenClaw stopped";
     case "plugin-install":
       return `install plugin ${operation.spec}`;
+    case "plugin-activate-artifact":
+      return `install the trusted plugin artifact ${operation.path} (SHA256 ${operation.sha256}), including its declared capabilities and native UI; restart the Gateway to load it`;
     case "plugin-uninstall":
       return `uninstall plugin ${operation.pluginId}`;
     case "create-agent":

@@ -121,7 +121,7 @@ describe("authenticated WebSocket request cancellation", () => {
       );
     });
 
-    await dispatcher.dispatch(
+    const dispatch = dispatcher.dispatch(
       {
         type: "req",
         id: "paired-node-cli-inference",
@@ -134,20 +134,22 @@ describe("authenticated WebSocket request cancellation", () => {
       },
       client,
     );
-    await waitForFrameCount(1);
-    expect(socket.listenerCount("close")).toBe(1);
-
-    socket.emit("close", 1000, Buffer.alloc(0));
-
-    await waitForFrameCount(2);
-    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
-    expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
-      event: "node.invoke.cancel",
-      payload: { invokeId: request.payload?.id, nodeId: "paired-node" },
-    });
-    await awaitResponseFrame("paired-node-cli-inference");
-    // Listener removal is the dispatch finally block, a microtask after the response.
-    await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(0));
+    try {
+      await waitForFrameCount(1);
+      expect(socket.listenerCount("close")).toBe(1);
+      socket.emit("close", 1000, Buffer.alloc(0));
+      await waitForFrameCount(2);
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+      expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+        event: "node.invoke.cancel",
+        payload: { invokeId: request.payload?.id, nodeId: "paired-node" },
+      });
+      await awaitResponseFrame("paired-node-cli-inference");
+    } finally {
+      socket.emit("close", 1000, Buffer.alloc(0));
+      await dispatch;
+    }
+    expect(socket.listenerCount("close")).toBe(0);
   });
 
   it.each(["test.trace", "sessions.cleanup", "agents.delete"])(
@@ -165,20 +167,23 @@ describe("authenticated WebSocket request cancellation", () => {
         options.respond(true, { ok: true });
       });
 
-      await dispatcher.dispatch(
+      const dispatch = dispatcher.dispatch(
         { type: "req", id: "ordinary-request", method, params: {} },
         client,
       );
-      await invoked.promise;
-      expect(handleGatewayRequest).toHaveBeenCalledOnce();
+      try {
+        await invoked.promise;
+        expect(handleGatewayRequest).toHaveBeenCalledOnce();
 
-      expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-      expect(socket.listenerCount("close")).toBe(0);
-      socket.emit("close", 1006, Buffer.alloc(0));
-      expect(completed).toBe(false);
-
-      completion.resolve();
-      await awaitResponseFrame("ordinary-request");
+        expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+        expect(socket.listenerCount("close")).toBe(0);
+        socket.emit("close", 1006, Buffer.alloc(0));
+        expect(completed).toBe(false);
+      } finally {
+        completion.resolve();
+        await awaitResponseFrame("ordinary-request");
+        await dispatch;
+      }
       expect(completed).toBe(true);
     },
   );
@@ -199,7 +204,7 @@ describe("authenticated WebSocket request cancellation", () => {
       await abortObserved.promise;
     });
 
-    await dispatcher.dispatch(
+    const dispatch = dispatcher.dispatch(
       {
         type: "req",
         id: "session-companion",
@@ -208,16 +213,18 @@ describe("authenticated WebSocket request cancellation", () => {
       },
       client,
     );
-    // Emitting close before the handler registers its abort listener would leave
-    // the already-aborted signal unobserved; wait for the handler first.
-    await invoked.promise;
-    expect(socket.listenerCount("close")).toBe(1);
-
-    socket.emit("close", 1000, Buffer.alloc(0));
-
-    await abortObserved.promise;
-    expect(observedSignal?.aborted).toBe(true);
-    await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(0));
+    try {
+      // Wait for the handler to own its abort listener before closing the socket.
+      await invoked.promise;
+      expect(socket.listenerCount("close")).toBe(1);
+      socket.emit("close", 1000, Buffer.alloc(0));
+      await abortObserved.promise;
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      socket.emit("close", 1000, Buffer.alloc(0));
+      await dispatch;
+    }
+    expect(socket.listenerCount("close")).toBe(0);
   });
 
   it.each([
@@ -252,7 +259,7 @@ describe("authenticated WebSocket request cancellation", () => {
         options.respond(result.ok, result.payload);
       });
 
-      await dispatcher.dispatch(
+      const dispatch = dispatcher.dispatch(
         {
           type: "req",
           id: "paired-node-ordinary-inference",
@@ -265,22 +272,25 @@ describe("authenticated WebSocket request cancellation", () => {
         },
         client,
       );
-      await waitForFrameCount(1);
-      expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-      expect(socket.listenerCount("close")).toBe(0);
-
-      socket.emit("close", 1000, Buffer.alloc(0));
-
-      expect(frames).toHaveLength(1);
-      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
-      expect(
-        registry.handleInvokeResult({
-          id: request.payload?.id ?? "",
-          nodeId: "paired-node",
-          connId: "paired-node-connection",
-          ok: true,
-        }),
-      ).toBe(true);
+      try {
+        await waitForFrameCount(1);
+        expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+        expect(socket.listenerCount("close")).toBe(0);
+        socket.emit("close", 1000, Buffer.alloc(0));
+        expect(frames).toHaveLength(1);
+        const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+        expect(
+          registry.handleInvokeResult({
+            id: request.payload?.id ?? "",
+            nodeId: "paired-node",
+            connId: "paired-node-connection",
+            ok: true,
+          }),
+        ).toBe(true);
+      } finally {
+        registry.unregister("paired-node-connection");
+        await dispatch;
+      }
     },
   );
 });

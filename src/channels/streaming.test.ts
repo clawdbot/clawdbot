@@ -25,6 +25,47 @@ describe("buildChannelProgressDraftLine", () => {
     expect(isChannelProgressDraftWorkToolName("update_plan")).toBe(false);
   });
 
+  it.each(["progress_card", "update_plan"])(
+    "keeps %s arguments out of generic tool and item rows",
+    (name) => {
+      const args = {
+        markdown: '<progress aria-label="CI · 2/3" value="2" max="3"></progress>',
+        plan: [{ step: "Inspect", status: "in_progress" }],
+      };
+      expect(buildChannelProgressDraftLine({ event: "tool", name, args })).toBeUndefined();
+      expect(
+        buildChannelProgressDraftLine({
+          event: "item",
+          itemKind: "tool",
+          name,
+          meta: args.markdown,
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["failed", "blocked"])(
+    "keeps %s plan-tool attention without raw argument metadata",
+    (status) => {
+      expect(
+        buildChannelProgressDraftLine({
+          event: "item",
+          itemId: "plan-failed",
+          itemKind: "tool",
+          name: "progress_card",
+          status,
+          meta: '<progress aria-label="private" value="1" max="2"></progress>',
+        }),
+      ).toMatchObject({
+        id: "plan-failed",
+        kind: "item",
+        label: "Progress Card",
+        status,
+        text: "🗺️ Progress Card",
+      });
+    },
+  );
+
   it("omits generic completed status from successful command output with title", () => {
     const line = buildChannelProgressDraftLine(
       {
@@ -339,6 +380,19 @@ describe("streaming config resolution", () => {
 });
 
 describe("progress narration", () => {
+  it("preserves the shipped plain checklist option", () => {
+    expect(
+      formatPlanChecklistLines(
+        [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ],
+        { maxLines: 3, maxLineChars: 80, plain: true },
+      ),
+    ).toEqual(["Completed: Inspect", "In progress: Patch", "Pending: Verify"]);
+  });
+
   it("renders plan markers and keeps the checklist under narration", () => {
     const plan = [
       { step: "Inspect", status: "completed" as const },
@@ -373,6 +427,19 @@ describe("progress narration", () => {
         { maxLines: 3, maxLineChars: 80 },
       ),
     ).toEqual(["✅ 2/4 done", "▸ Three", "▢ Four"]);
+  });
+
+  it("uses only a summary when the checklist has one line available", () => {
+    expect(
+      formatPlanChecklistLines(
+        [
+          { step: "Done", status: "completed" },
+          { step: "Active", status: "in_progress" },
+          { step: "Next", status: "pending" },
+        ],
+        { maxLines: 1, maxLineChars: 80 },
+      ),
+    ).toEqual(["✅ 1/3 done"]);
   });
 
   it("keeps the active step when later pending work fills the checklist", () => {
