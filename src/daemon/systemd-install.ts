@@ -6,6 +6,7 @@ import {
   readStateDirDotEnvFromStateDir,
 } from "../config/state-dir-dotenv.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { writeTextAtomic } from "../infra/json-files.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -462,7 +463,12 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
     return;
   }
   const content = serializeSystemdEnvironmentFile(remaining);
-  await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
+  // Publish atomically: the file holds the gateway token, and a torn rewrite
+  // leaves the service unable to authenticate on its next start.
+  await writeTextAtomic(envFilePath, `${content}\n`, {
+    mode: 0o600,
+    dirMode: (await fs.stat(stateDir)).mode & 0o777,
+  });
   await fs.chmod(envFilePath, 0o600);
 }
 

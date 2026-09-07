@@ -2041,6 +2041,29 @@ describe("launchd install", () => {
     expect(launchctlCommandNames()).toEqual(["print", "print", "enable", "bootstrap", "print"]);
   });
 
+  it("keeps the prior environment file when its rewrite fails to publish", async () => {
+    const env = createDefaultLaunchdEnv();
+    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const originalEnv = "export OPENCLAW_GATEWAY_TOKEN='original-token'\n";
+    state.files.set(envFilePath, originalEnv);
+    // The env file publishes through a staged temp + rename; fail the rename as
+    // a full disk would, before any plist mutation happens.
+    vi.mocked(fs.rename).mockRejectedValueOnce(
+      Object.assign(new Error("ENOSPC: no space left on device, rename"), { code: "ENOSPC" }),
+    );
+
+    const error = await installLaunchAgent(
+      defaultLaunchAgentFixture(env, {
+        environment: { OPENCLAW_GATEWAY_PORT: "19000" },
+      }),
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOSPC");
+    expect(state.files.get(envFilePath)).toBe(originalEnv);
+    expect([...state.files.keys()].filter((key) => key.includes(".tmp"))).toEqual([]);
+  });
+
   it("fails closed when rollback cannot determine the replacement state", async () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
