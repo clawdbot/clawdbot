@@ -110,6 +110,8 @@ Accepted child sessions retain their saved repository choice across parent archi
 
 ## Troubleshoot creation
 
+If creation reports `git checkout has no commits`, create an initial commit in the source repository, then retry. Running `git init` alone does not provide a commit for the new worktree.
+
 If **New session** reports `git worktree add failed`, read the termination reason and the final Git error lines. `Preparing worktree` and `Updating files` are progress, not the cause of failure. Error messages collapse carriage-return progress redraws and bound the diagnostic tail so it cannot flood the banner.
 
 `timed out after 300 seconds` means a worktree checkout reached its five-minute limit. Other Git commands report `timed out after 120 seconds` at their two-minute limit. Check repository access and available disk space on the Gateway host. A signal or nonzero exit status alone does not establish a timeout; use any accompanying `fatal:` or `error:` detail to investigate. An output-limit error means the command exceeded its output capture limit.
