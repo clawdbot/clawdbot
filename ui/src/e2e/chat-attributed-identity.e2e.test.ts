@@ -3,7 +3,11 @@ import { expect, type Locator, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
 // Control UI E2E tests cover attributed chat identity placement.
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -68,6 +72,63 @@ function expectStableNamePosition(
 }
 
 suite.define(() => {
+  it.each(["none", "min-content", "max-content", "48rem", "82%", "min(768px, 82%)"])(
+    "keeps restored message width %s inside the mobile safe area",
+    async (messageWidth) => {
+      await suite.withPage({ viewport: { width: 932, height: 430 } }, async ({ page, context }) => {
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setSafeAreaInsetsOverride", {
+          insets: { left: 44, right: 0, top: 0, bottom: 0 },
+        });
+        await installMockGateway(page, {
+          presenceUsers: [
+            {
+              self: true,
+              id: "profile-morgan",
+              identity: { type: "profile", id: "profile-morgan" },
+              name: "Morgan",
+            },
+          ],
+          historyMessages: [
+            { role: "assistant", content: "Keep the restored reading column clear of the notch." },
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}settings/appearance#settings-appearance-chat`);
+        const widthInput = page.locator("[data-settings-chat-message-width]");
+        await widthInput.fill(messageWidth);
+        await widthInput.press("Tab");
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (key) => JSON.parse(localStorage.getItem(key) ?? "{}").chatMessageMaxWidth,
+              controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            ),
+          )
+          .toBe(messageWidth);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+        const transcript = page.locator(".chat-thread-inner");
+        await transcript
+          .getByText("Keep the restored reading column clear of the notch.")
+          .waitFor({ state: "attached" });
+        for (const direction of ["ltr", "rtl"]) {
+          await page.evaluate((dir) => {
+            document.documentElement.dir = dir;
+          }, direction);
+          await captureProof(page, `restored-width-${direction}.png`);
+          for (const frame of [transcript, page.locator(".agent-chat__composer-shell")]) {
+            const bounds = await frame.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return { left: rect.left, right: rect.right };
+            });
+            expect(bounds.left).toBeGreaterThanOrEqual(48);
+            expect(bounds.right).toBeLessThanOrEqual(924);
+            expect(bounds.left - 48).toBeCloseTo(924 - bounds.right, 0);
+          }
+        }
+      });
+    },
+  );
+
   it.each([
     { width: 320, height: 860, profiled: true, safeAreaLeft: 0 },
     { width: 328, height: 860, profiled: true, safeAreaLeft: 0 },

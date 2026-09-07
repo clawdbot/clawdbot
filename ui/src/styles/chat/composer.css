@@ -3826,23 +3826,16 @@
     --chat-frame-inset-left: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px));
     --chat-frame-inset-right: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px));
     width: calc(100% - var(--chat-frame-inset-left) - var(--chat-frame-inset-right));
-    /* Center the capped frame inside the safe area, including asymmetric notches. */
-    margin-right: max(
-      var(--chat-frame-inset-right),
-      calc(
-        (100% - var(--chat-thread-max-width, 100%) - var(--chat-frame-inset-left) +
-            var(--chat-frame-inset-right)) /
-          2
-      )
-    );
-    margin-left: max(
-      var(--chat-frame-inset-left),
-      calc(
-        (100% - var(--chat-thread-max-width, 100%) + var(--chat-frame-inset-left) -
-            var(--chat-frame-inset-right)) /
-          2
-      )
-    );
+    margin-left: var(--chat-frame-inset-left);
+    margin-right: var(--chat-frame-inset-right);
+  }
+
+  .chat-thread-inner,
+  .chat .agent-chat__composer-shell {
+    position: relative;
+    /* Center within physical safe areas without doing arithmetic on max-width keywords. */
+    left: calc((var(--chat-frame-inset-left) - var(--chat-frame-inset-right)) / 2);
+    margin-inline: auto;
   }
 
   .agent-chat__composer-shell {
