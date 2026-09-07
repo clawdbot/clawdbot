@@ -4,6 +4,7 @@ export type ResponsesToolCallIdentity = { itemId?: string; callId?: string };
 
 export type ResponsesToolCallState = ResponsesToolCallIdentity & {
   argumentStreamReliable: boolean;
+  argumentsStreamed: boolean;
   outputIndex?: number;
 };
 

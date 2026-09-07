@@ -218,4 +218,174 @@ describe("Responses terminal tool completion", () => {
       { type: "toolcall_end", contentIndex: 1 },
     ]);
   });
+
+  it("prefers streamed arguments over a disagreeing output_item.done snapshot", async () => {
+    const fullArgs = JSON.stringify({ path: "README.md" });
+    const staleArgs = JSON.stringify({ path: "READ" });
+    const result = await runFixture([
+      added(0),
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 0,
+        item_id: "fc_0",
+        delta: fullArgs,
+      },
+      {
+        type: "response.function_call_arguments.done",
+        output_index: 0,
+        item_id: "fc_0",
+        name: "lookup",
+        arguments: fullArgs,
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: tool(0, { arguments: staleArgs }),
+      },
+      completed("resp_stale_done", [tool(0, { arguments: fullArgs })]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
+      { type: "toolcall_end", contentIndex: 0 },
+    ]);
+    const toolCall = result.content[0] as { type: string; name: string; arguments: unknown };
+    expect(toolCall).toMatchObject({ type: "toolCall", name: "lookup" });
+    expect(toolCall.arguments).toEqual({ path: "README.md" });
+  });
+
+  it("prefers streamed arguments when both are schema-valid but different", async () => {
+    const streamedArgs = JSON.stringify({ if_match: '"rev-4"', object_id: "x" });
+    const doneArgs = JSON.stringify({ if_match: '"rev-1"', object_id: "x" });
+    const result = await runFixture([
+      added(0),
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 0,
+        item_id: "fc_0",
+        delta: streamedArgs,
+      },
+      {
+        type: "response.function_call_arguments.done",
+        output_index: 0,
+        item_id: "fc_0",
+        name: "lookup",
+        arguments: streamedArgs,
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: tool(0, { arguments: doneArgs }),
+      },
+      completed("resp_schema_valid_disagree", [tool(0, { arguments: streamedArgs })]),
+    ]);
+    expect(result.error).toBeNull();
+    const toolCall = result.content[0] as { arguments: unknown };
+    expect(toolCall.arguments).toEqual({ if_match: '"rev-4"', object_id: "x" });
+  });
+
+  it("falls back to done snapshot when streamed buffer is incomplete JSON", async () => {
+    const doneArgs = JSON.stringify({ path: "README.md" });
+    const result = await runFixture([
+      added(0),
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 0,
+        item_id: "fc_0",
+        delta: '{"path":"READ',
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: tool(0, { arguments: doneArgs }),
+      },
+      completed("resp_incomplete_streamed", [tool(0, { arguments: doneArgs })]),
+    ]);
+    expect(result.error).toBeNull();
+    const toolCall = result.content[0] as { arguments: unknown };
+    expect(toolCall.arguments).toEqual({ path: "README.md" });
+  });
+
+  it("uses done snapshot when streamed and done arguments agree", async () => {
+    const args = JSON.stringify({ path: "README.md" });
+    const result = await runFixture([
+      added(0),
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 0,
+        item_id: "fc_0",
+        delta: args,
+      },
+      {
+        type: "response.function_call_arguments.done",
+        output_index: 0,
+        item_id: "fc_0",
+        name: "lookup",
+        arguments: args,
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: tool(0, { arguments: args }),
+      },
+      completed("resp_agree", [tool(0, { arguments: args })]),
+    ]);
+    expect(result.error).toBeNull();
+    const toolCall = result.content[0] as { arguments: unknown };
+    expect(toolCall.arguments).toEqual({ path: "README.md" });
+  });
+
+  it("uses done snapshot when streamed buffer is marked unreliable", async () => {
+    const doneArgs = JSON.stringify({ slot: 0 });
+    const streamedArgs = JSON.stringify({ slot: 9 });
+    const result = await runFixture([
+      added(0),
+      // Route a complete, disagreeing buffer so the preference would fire
+      // without the reliability gate.
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 0,
+        item_id: "fc_0",
+        delta: streamedArgs,
+      },
+      added(1),
+      // A delta with no output_index and a non-matching item_id cannot route
+      // to either active call, so markArgumentsUnreliable fires on both,
+      // clearing the preference even though the buffer is complete JSON.
+      {
+        type: "response.function_call_arguments.delta",
+        item_id: "fc_unknown",
+        delta: streamedArgs,
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: tool(0, { arguments: doneArgs }),
+      },
+      completed("resp_unreliable", [tool(0, { arguments: doneArgs }), tool(1)]),
+    ]);
+    expect(result.error).toBeNull();
+    const toolCall = result.content[0] as { arguments: unknown };
+    expect(toolCall.arguments).toEqual({ slot: 0 });
+  });
+
+  it("does not prefer an opening snapshot over a complete done snapshot", async () => {
+    const doneArgs = JSON.stringify({ path: "README.md" });
+    const result = await runFixture([
+      // The added event carries an opening arguments value of "{}" with no
+      // subsequent argument delta or done event. The done snapshot carries the
+      // complete arguments. The opening snapshot must not be preferred.
+      {
+        ...added(0, { arguments: "{}" }),
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: tool(0, { arguments: doneArgs }),
+      },
+      completed("resp_opening_snapshot", [tool(0, { arguments: doneArgs })]),
+    ]);
+    expect(result.error).toBeNull();
+    const toolCall = result.content[0] as { arguments: unknown };
+    expect(toolCall.arguments).toEqual({ path: "README.md" });
+  });
 });

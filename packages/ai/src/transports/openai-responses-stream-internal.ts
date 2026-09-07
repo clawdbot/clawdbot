@@ -21,6 +21,7 @@ import {
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { createCompactionTracker } from "./openai-responses-compaction-replay.js";
 import { OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY } from "./openai-responses-contracts.js";
 import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-responses-debug.js";
@@ -365,6 +366,7 @@ export async function processResponsesStream<TApi extends Api>(
             block: toolCallBlock,
             contentIndex,
             argumentStreamReliable: true,
+            argumentsStreamed: false,
             previewSchedule: createToolArgumentPreviewSchedule(),
             ...readResponsesToolCallItemIdentity(item),
           };
@@ -469,6 +471,7 @@ export async function processResponsesStream<TApi extends Api>(
         const toolCall = streamingToolCalls.resolve(event);
         if (toolCall) {
           toolCall.block.partialJson += event.delta;
+          toolCall.argumentsStreamed = true;
           // Preview refresh is geometric; the done event and terminal finalize
           // re-parse the full buffer authoritatively either way.
           if (toolCall.previewSchedule(toolCall.block.partialJson.length)) {
@@ -496,6 +499,7 @@ export async function processResponsesStream<TApi extends Api>(
             toolCall.block.partialJson = doneArguments;
             toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
             toolCall.argumentStreamReliable = true;
+            toolCall.argumentsStreamed = true;
           }
 
           if (doneArguments?.startsWith(previousPartialJson)) {
@@ -653,9 +657,25 @@ export async function processResponsesStream<TApi extends Api>(
           ) {
             continue;
           }
+          // The output_item.done snapshot can carry stale partial arguments that
+          // disagree with the streamed buffer. Prefer the streamed buffer only
+          // when it was populated by routed argument deltas or a done event
+          // (not just the opening added snapshot), is reliable (not marked
+          // unreliable by an unrouteable delta), and parses as complete JSON;
+          // otherwise fall back to the done snapshot.
+          const streamedArguments = streamingToolCall?.block.partialJson || "";
+          const preferredArguments =
+            streamingToolCall?.argumentStreamReliable &&
+            streamingToolCall?.argumentsStreamed &&
+            streamedArguments.length > 0 &&
+            completedArguments !== undefined &&
+            streamedArguments !== completedArguments &&
+            parseJsonObjectPreservingUnsafeIntegers(streamedArguments) !== null
+              ? streamedArguments
+              : completedArguments || streamedArguments;
           const validated = resolveCompletedResponsesToolCall(item, {
             name: streamingToolCall?.block.name,
-            arguments: completedArguments || streamingToolCall?.block.partialJson || "",
+            arguments: preferredArguments,
           });
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
