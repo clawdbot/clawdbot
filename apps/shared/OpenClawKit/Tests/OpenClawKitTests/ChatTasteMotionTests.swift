@@ -13,7 +13,6 @@ struct ChatTasteMotionTests {
         #expect(desktop == .none)
         #expect(quickChat == .none)
         #expect(!chatTasteAllowsSymbolReplace(tasteMotionEnabled: false, reduceMotion: false))
-        #expect(!chatTasteAllowsHeightAnimation(tasteMotionEnabled: false, reduceMotion: false))
         #expect(chatTasteRowAnimation(.none) == nil)
     }
 
@@ -46,7 +45,7 @@ struct ChatTasteMotionTests {
             transcriptHasSettled: true) == .none)
     }
 
-    @Test func `reduce motion keeps opacity only and disables symbol and height motion`() {
+    @Test func `reduce motion keeps opacity only and disables symbol motion`() {
         #expect(chatTasteRowInsertion(
             tasteMotionEnabled: true,
             composerChromeIsClean: true,
@@ -54,13 +53,11 @@ struct ChatTasteMotionTests {
             transcriptHasSettled: true) == .opacity)
         #expect(chatTasteWorkingAppear(tasteMotionEnabled: true, reduceMotion: true) == .opacity)
         #expect(!chatTasteAllowsSymbolReplace(tasteMotionEnabled: true, reduceMotion: true))
-        #expect(!chatTasteAllowsHeightAnimation(tasteMotionEnabled: true, reduceMotion: true))
         #expect(chatTasteRowAnimation(.opacity) != nil)
     }
 
-    @Test func `iOS host can replace send symbols and grow the composer`() {
+    @Test func `iOS host can replace send symbols`() {
         #expect(chatTasteAllowsSymbolReplace(tasteMotionEnabled: true, reduceMotion: false))
-        #expect(chatTasteAllowsHeightAnimation(tasteMotionEnabled: true, reduceMotion: false))
         #expect(chatTasteWorkingAppear(tasteMotionEnabled: true, reduceMotion: false) == .scaleAndOpacity)
     }
 
@@ -86,6 +83,5 @@ struct ChatTasteMotionTests {
             reduceMotion: false,
             transcriptHasSettled: true) == .none)
         #expect(chatTasteWorkingAppear(tasteMotionEnabled: false, reduceMotion: false) == .none)
-        #expect(!chatTasteAllowsHeightAnimation(tasteMotionEnabled: false, reduceMotion: false))
     }
 }

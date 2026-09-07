@@ -97,6 +97,11 @@ struct CommandSessionRow: View {
             OpenClawSessionColorStripe(color: self.item.sessionColor)
         }
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityValue([
+            self.item.isUnread ? String(localized: "Unread") : nil,
+            self.item.isPinned ? String(localized: "Pinned") : nil,
+        ].compactMap(\.self).joined(separator: ", "))
     }
 
     private var progressLabel: String {
@@ -132,7 +137,9 @@ struct CommandSessionActions {
 /// Session menus inherit the app brand tint. DESIGN.md reserves red for
 /// destructive work, so standard actions use the system label instead.
 enum CommandSessionMenuChrome {
-    static var standardActionTint: Color { .primary }
+    static var standardActionTint: Color {
+        .primary
+    }
 }
 
 struct CommandSessionActionsModifier: ViewModifier {

@@ -67,8 +67,10 @@ extension OpenClawChatComposer {
     }
 
     @ViewBuilder
-    var cleanInlinePermissionMenu: some View {
+    func cleanInlinePermissionMenu(inOptionsMenu: Bool = false) -> some View {
         if self.viewModel.composerCapabilityControlsAvailable {
+            let permissionLabel = self.viewModel.composerPermissionMode?
+                .displayName ?? String(localized: "Default (inherited)")
             Menu {
                 self.permissionButton(nil, title: String(localized: "Default (inherited)"))
                 ForEach(OpenClawChatPermissionMode.allCases, id: \.rawValue) { mode in
@@ -80,18 +82,29 @@ extension OpenClawChatComposer {
                         .font(OpenClawChatTypography.caption)
                 }
             } label: {
-                self.cleanInlinePermissionGlyph
-                    .frame(
-                        width: CleanChatComposerMetrics.controlTouchSize,
-                        height: CleanChatComposerMetrics.controlTouchSize)
-                    .contentShape(Rectangle())
+                if inOptionsMenu {
+                    Label {
+                        Text("Permissions: \(permissionLabel)")
+                            .font(OpenClawChatTypography.body)
+                    } icon: {
+                        Image(systemName: "shield")
+                    }
+                } else {
+                    self.cleanInlinePermissionGlyph
+                        .frame(
+                            width: CleanChatComposerMetrics.controlTouchSize,
+                            height: CleanChatComposerMetrics.controlTouchSize)
+                        .contentShape(Rectangle())
+                }
             }
             .menuIndicator(.hidden)
             .tint(OpenClawChatTheme.muted)
             .disabled(
                 !self.viewModel.composerCapabilityCatalog.permissionMutationAvailable ||
                     self.viewModel.composerCapabilityMutationDisabled)
-            .accessibilityLabel("Session permissions")
+            .accessibilityLabel(inOptionsMenu
+                ? String(localized: "Session permissions: \(permissionLabel)")
+                : String(localized: "Session permissions"))
             .accessibilityValue(
                 self.viewModel.composerPermissionMode?.displayName ?? String(localized: "Default (inherited)"))
             .accessibilityHint(self.viewModel.composerPermissionMutationDisabledReason ?? "")

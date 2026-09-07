@@ -249,7 +249,16 @@ struct OpenClawChatComposer: View {
     private var composerContent: some View {
         VStack(alignment: .leading, spacing: 4) {
             if self.composerChrome == .clean {
+                #if os(iOS)
+                HStack(alignment: .bottom, spacing: 8) {
+                    self.cleanAttachmentMenu
+                        .modifier(CleanChatComposerSurface(cornerRadius: 22))
+                    self.cleanComposerCard
+                        .frame(maxWidth: .infinity)
+                }
+                #else
                 self.cleanComposerCard
+                #endif
             } else {
                 if self.showsToolbar, self.voiceNoteControl?.recorder.isRecording != true {
                     self.composerToolbar
@@ -578,15 +587,12 @@ struct OpenClawChatComposer: View {
             }
         }
         #if os(iOS)
-        .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
+        .frame(minHeight: CleanChatComposerMetrics.controlTouchSize, alignment: .bottom)
         #else
             .padding(.horizontal, self.isDesktopLayout ? 0 : 6)
             .padding(.vertical, self.isDesktopLayout ? 0 : 2)
         #endif
         .modifier(CleanChatComposerSurface(cornerRadius: self.cleanCornerRadius))
-        #if os(iOS)
-        .animation(self.composerHeightAnimation, value: self.composerGrowthToken)
-        #endif
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-composer-surface")
     }
@@ -594,15 +600,13 @@ struct OpenClawChatComposer: View {
     @ViewBuilder
     private var cleanEditor: some View {
         #if os(iOS)
-        VStack(alignment: .leading, spacing: CleanChatComposerMetrics.rowGap) {
-            self.cleanDraftRow
-            HStack(alignment: .center, spacing: 0) {
-                self.cleanLeadingControls
-                Spacer(minLength: 0)
-                self.cleanTrailingControls
-            }
-            .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-            .padding(.bottom, CleanChatComposerMetrics.footerBlockInset)
+        HStack(alignment: .bottom, spacing: 0) {
+            self.editorOverlay
+                .frame(maxWidth: .infinity, minHeight: self.textMinHeight, alignment: .topLeading)
+                .padding(.leading, CleanChatComposerMetrics.editorInlineInset)
+                .padding(.vertical, 10)
+            self.cleanCaptureAndPrimaryControls
+                .padding(.trailing, 4)
         }
         #elseif os(macOS)
         if self.isDesktopLayout {
@@ -677,7 +681,7 @@ struct OpenClawChatComposer: View {
         }
         #if os(iOS)
         .modifier(ChatTasteSymbolReplaceModifier(enabled: self.tasteSymbolReplaceEnabled))
-        .animation(self.composerControlAnimation, value: self.showsCompactTalkControl)
+            .animation(self.composerControlAnimation, value: self.showsCompactTalkControl)
         #endif
     }
 
@@ -1163,16 +1167,6 @@ extension OpenClawChatComposer {
         #endif
     }
 
-    private var composerHeightAnimation: Animation? {
-        #if os(iOS)
-        chatTasteAllowsHeightAnimation(
-            tasteMotionEnabled: self.enablesTasteMotion,
-            reduceMotion: self.reduceMotion) ? .easeOut(duration: 0.18) : nil
-        #else
-        nil
-        #endif
-    }
-
     private var composerControlAnimation: Animation? {
         self.tasteSymbolReplaceEnabled ? .easeOut(duration: 0.16) : nil
     }
@@ -1182,14 +1176,6 @@ extension OpenClawChatComposer {
             hasDraftToSend: self.viewModel.hasDraftToSend,
             hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
             isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive)
-    }
-
-    private var composerGrowthToken: Int {
-        var token = self.viewModel.attachments.count
-        token &+= self.viewModel.replyTarget == nil ? 0 : 1
-        token &+= self.voiceNoteControl?.recorder.isRecording == true ? 2 : 0
-        token &+= self.viewModel.input.split(whereSeparator: \.isNewline).count
-        return token
     }
 
     var textMinHeight: CGFloat {

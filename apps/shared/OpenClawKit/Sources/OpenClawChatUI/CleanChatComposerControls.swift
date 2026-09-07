@@ -41,7 +41,6 @@ struct CleanChatComposerSurface: ViewModifier {
 
 enum CleanChatComposerMetrics {
     static let surfaceCornerRadius: CGFloat = 20
-    static let restingMinHeight: CGFloat = 104
     static let controlTouchSize: CGFloat = 44
     static let primaryVisualSize: CGFloat = 32
     static let editorInlineInset: CGFloat = 14
@@ -234,6 +233,7 @@ struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
         } label: {
             CompactChatAttachmentLabel()
         }
+        .menuOrder(.fixed)
         .help("Composer options")
         .accessibilityLabel("Composer options")
         .accessibilityIdentifier("chat-attachment-picker")

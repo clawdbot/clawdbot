@@ -44,7 +44,6 @@ struct CommandCenterTab: View {
                 self.commandAmbientOverlay
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        self.header
                         self.gatewayCard
                         self.threadTiles
                             .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -78,35 +77,67 @@ struct CommandCenterTab: View {
         }
         .navigationTitle(self.headerTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
+        .toolbar {
+            if let headerSidebarAction {
+                OpenClawSidebarToolbarItem(action: headerSidebarAction, placement: .topBarLeading)
+            }
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 2) {
+                    Text(LocalizedStringKey(self.headerTitle))
+                        .font(OpenClawType.headline)
+                        .lineLimit(1)
+                    Text(self.gatewaySubtitle)
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: self.openSettings) {
+                    Image(systemName: "gearshape.fill")
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Gateway settings")
+                .accessibilityHint("Opens gateway settings")
+            }
+        }
     }
 
     private var threadTiles: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
             self.threadTile(
                 title: String(localized: "Sessions"),
-                value: self.overviewCountText(self.overviewSessions.count))
+                value: self.overviewCountText(self.overviewSessions.count),
+                action: self.openSessions,
+                hint: String(localized: "Opens Sessions"))
             self.threadTile(
                 title: String(localized: "Live"),
-                value: self.overviewCountText(self.overviewLiveCount))
+                value: self.overviewCountText(self.overviewLiveCount),
+                action: self.openSessions,
+                hint: String(localized: "Opens Sessions"))
             self.threadTile(
                 title: String(localized: "Unread"),
-                value: self.overviewCountText(self.overviewUnreadCount))
+                value: self.overviewCountText(self.overviewUnreadCount),
+                action: self.openSessions,
+                hint: String(localized: "Opens Sessions"))
             self.threadTile(
                 title: String(localized: "Tokens"),
-                value: self.overviewTokenText)
+                value: self.overviewTokenText,
+                action: self.openUsage,
+                hint: String(localized: "Opens Usage"))
         }
     }
 
-    private func threadTile(title: String, value: String) -> some View {
-        Button {
-            self.openSessions()
-        } label: {
+    private func threadTile(title: String, value: String, action: @escaping () -> Void, hint: String) -> some View {
+        Button(action: action) {
             ProCard(padding: 10) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(verbatim: value)
                         .font(OpenClawType.headline)
-                        .foregroundStyle(OpenClawBrand.accent)
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                     Text(verbatim: title)
@@ -117,7 +148,7 @@ struct CommandCenterTab: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityHint(String(localized: "Opens Sessions"))
+        .accessibilityHint(hint)
     }
 
     @ViewBuilder
@@ -258,34 +289,6 @@ struct CommandCenterTab: View {
     {
         guard horizontalSizeClass == .regular else { return false }
         return containerWidth >= 1000
-    }
-
-    private var header: some View {
-        OpenClawAdaptiveHeaderRow(
-            title: .localized(self.headerTitle),
-            subtitle: .localized(self.gatewaySubtitle),
-            titleFont: OpenClawType.title3SemiBold,
-            subtitleFont: OpenClawType.caption,
-            subtitleLineLimit: 1)
-        {
-            if let headerSidebarAction {
-                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
-            }
-        } accessory: {
-            HStack(spacing: 10) {
-                Button(action: self.openSettings) {
-                    Image(systemName: "gearshape.fill")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(
-                            width: OpenClawProMetric.compactControlSize,
-                            height: OpenClawProMetric.compactControlSize)
-                }
-                .openClawGlassButton()
-                .accessibilityLabel("Gateway settings")
-                .accessibilityHint("Opens gateway settings")
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     @ViewBuilder

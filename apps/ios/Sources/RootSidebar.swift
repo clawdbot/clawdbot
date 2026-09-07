@@ -332,6 +332,8 @@ struct RootSidebar: View {
                     Image(systemName: "xmark.circle.fill")
                         .font(OpenClawType.subhead)
                         .foregroundStyle(OpenClawSidebarPalette.muted)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(String(localized: "Clear session search"))
@@ -418,7 +420,7 @@ struct RootSidebar: View {
                 } label: {
                     Image(systemName: "square.and.pencil")
                         .font(OpenClawType.captionSemiBold)
-                        .frame(width: 40, height: 32)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

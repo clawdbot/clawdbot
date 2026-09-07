@@ -6,75 +6,6 @@ import AppKit
 import UIKit
 #endif
 
-enum ChatReaderUserTransition: Equatable {
-    case unchanged
-    case added(UUID)
-    case removed(latestRemainingID: UUID?)
-}
-
-enum ChatReaderInitialRestorePolicy: Equatable {
-    case liveEdge
-    case latestTurn
-}
-
-func chatReaderInitialRestorePolicy() -> ChatReaderInitialRestorePolicy {
-    #if os(iOS)
-    .liveEdge
-    #else
-    .latestTurn
-    #endif
-}
-
-func chatReaderUserTransition(
-    previousID: UUID?,
-    visibleIDs: [UUID]) -> ChatReaderUserTransition
-{
-    let latestID = visibleIDs.last
-    if let previousID, !visibleIDs.contains(previousID) {
-        return .removed(latestRemainingID: latestID)
-    }
-    if let latestID, latestID != previousID {
-        return .added(latestID)
-    }
-    return .unchanged
-}
-
-func chatReaderHasNewerContent(
-    after messageID: UUID,
-    visibleIDs: [UUID],
-    hasTransientContent: Bool) -> Bool
-{
-    guard let messageIndex = visibleIDs.firstIndex(of: messageID) else { return false }
-    return messageIndex < visibleIDs.index(before: visibleIDs.endIndex) || hasTransientContent
-}
-
-/// `hasNewerContentBelow` is derived structurally (a later message or streaming text exists),
-/// which is true from the first Writing tick of a turn even when the whole transcript is on
-/// screen. Gating on the live-edge geometry keeps the jump affordance hidden until content is
-/// actually below the viewport; without it the button flashes during every reply (#108693).
-func chatReaderShowsJumpToLatest(
-    hasNewerContentBelow: Bool,
-    isAtLiveEdge: Bool,
-    hasVisibleContent: Bool,
-    isLoading: Bool) -> Bool
-{
-    hasNewerContentBelow && !isAtLiveEdge && hasVisibleContent && !isLoading
-}
-
-/// The view's own one-shot positioning always runs in a nil-animation transaction, so
-/// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
-/// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
-func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
-    switch phase {
-    case .interacting, .animating:
-        true
-    case .idle, .tracking, .decelerating:
-        false
-    @unknown default:
-        false
-    }
-}
-
 private enum ScrollFollowTarget: Equatable {
     case latest
     case turn(UUID)
@@ -131,7 +62,14 @@ public struct OpenClawChatView: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var scrollerBottomID = UUID()
+    #if os(iOS)
+    @State private var composerOverlayHeight: CGFloat = 0
+    #endif
+    #if os(iOS)
+    @State private var nativeScrollPosition = ScrollPosition(idType: UUID.self)
+    #else
     @State private var scrollPosition: UUID?
+    #endif
     @State private var hasPerformedInitialScroll = false
     @State private var lastTurnStartID: UUID?
     @State private var hasNewerContentBelow = false
@@ -334,7 +272,7 @@ public struct OpenClawChatView: View {
         #elseif os(iOS)
         self.messageList
             .padding(.horizontal, Layout.outerPaddingHorizontal)
-            .modifier(ChatFloatingComposerBar {
+            .modifier(ChatFloatingComposerBar(height: self.$composerOverlayHeight) {
                 self.iOSFloatingBottomChrome
             })
             .padding(.top, Layout.outerPaddingVertical)
@@ -364,7 +302,6 @@ public struct OpenClawChatView: View {
     }
 
     #if os(iOS)
-    @ViewBuilder
     private var iOSFloatingBottomChrome: some View {
         VStack(spacing: 0) {
             self.progressCard
@@ -392,7 +329,7 @@ public struct OpenClawChatView: View {
                 steps: progressCard.steps ?? [],
                 markdown: progressCard.markdown)
                 .modifier(ChatTasteInsertModifier(style: self.workingAppearStyle))
-                .animation(self.workingAppearAnimation, value: progressCard.steps.count)
+                .animation(self.workingAppearAnimation, value: progressCard.steps?.count ?? 0)
         }
     }
 
@@ -449,13 +386,13 @@ public struct OpenClawChatView: View {
                         #if os(macOS)
                             .frame(height: Layout.messageListPaddingBottom)
                         #else
-                            .frame(height: Layout.messageListPaddingBottom + 1)
+                            .frame(height: Layout.messageListPaddingBottom + self.composerOverlayHeight + 1)
                         #endif
                         .id(self.scrollerBottomID)
                 }
                 // Use scroll targets for stable auto-scroll without ScrollViewReader relayout glitches.
                 .scrollTargetLayout()
-                .animation(self.rowInsertionAnimation, value: self.viewModel.timelineRevision)
+                .animation(chatTasteRowAnimation(self.rowInsertionStyle), value: self.viewModel.timelineRevision)
                 .animation(self.workingAppearAnimation, value: self.showsWorkingIndicator)
                 .padding(.top, Layout.messageListPaddingTop)
                 .padding(.horizontal, Layout.messageListPaddingHorizontal)
@@ -468,7 +405,11 @@ public struct OpenClawChatView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 self.messageListNoticeBanner
             }
+            #if os(iOS)
+            .scrollPosition(self.$nativeScrollPosition, anchor: .bottom)
+            #else
             .scrollPosition(id: self.$scrollPosition, anchor: .bottom)
+            #endif
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
                 return distanceFromBottom <= Layout.liveEdgeThreshold
@@ -480,6 +421,15 @@ public struct OpenClawChatView: View {
                     self.hasNewerContentBelow = false
                 }
             }
+            #if os(iOS)
+            .onScrollGeometryChange(for: CGSize.self) { $0.containerSize } action: { old, new in
+                // Keyboard and window resizing change the viewport without changing
+                // composer height. Apply the live-edge policy after that layout change.
+                if old != new, self.followTarget == .latest, !self.isUserScrolling, self.searchMessageID == nil {
+                    self.moveScrollPosition(to: self.scrollerBottomID)
+                }
+            }
+            #endif
             .onScrollPhaseChange { _, phase in
                 guard self.hasPerformedInitialScroll else { return }
                 if phase == .interacting {
@@ -506,10 +456,16 @@ public struct OpenClawChatView: View {
             }
 
             self.messageListOverlay
+                #if os(iOS)
+                    .padding(.bottom, self.composerOverlayHeight)
+                #endif
 
             if self.showsJumpToLatest {
                 self.jumpToLatestButton
                     .padding(.bottom, 12)
+                    #if os(iOS)
+                    .padding(.bottom, self.composerOverlayHeight)
+                    #endif
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -521,6 +477,15 @@ public struct OpenClawChatView: View {
             TapGesture().onEnded {
                 self.dismissKeyboardIfNeeded()
             })
+        #if os(iOS)
+        .onChange(of: self.composerOverlayHeight) { _, _ in
+            // Keep the last message above growing input, without moving a reader
+            // who has deliberately scrolled back into the conversation.
+            if self.followTarget == .latest, !self.isUserScrolling, self.searchMessageID == nil {
+                self.moveScrollPosition(to: self.scrollerBottomID)
+            }
+        }
+        #endif
         .onChange(of: self.viewModel.isLoading) { _, isLoading in
             guard !isLoading, !self.hasPerformedInitialScroll else { return }
             self.restoreInitialScrollPosition()
@@ -883,10 +848,14 @@ public struct OpenClawChatView: View {
             Image(systemName: "arrow.down")
                 .font(.system(size: 15, weight: .semibold))
                 .frame(width: 36, height: 36)
+                #if os(macOS)
                 .background(
                     Circle()
                         .fill(OpenClawChatTheme.subtleCard)
                         .shadow(color: .black.opacity(0.16), radius: 8, y: 3))
+                #else
+                .modifier(CleanChatComposerSurface(cornerRadius: 18))
+                #endif
                 // Padding keeps a ~44pt tap target around the compact visual circle.
                 .padding(4)
                 .contentShape(Circle())
@@ -996,7 +965,9 @@ public struct OpenClawChatView: View {
                 .padding(.bottom, 8)
         }
     }
+}
 
+extension OpenClawChatView {
     private var surfaceDecision: ChatSurfaceDecision {
         chatSurfaceDecision(
             ChatSurfaceState(
@@ -1051,10 +1022,6 @@ public struct OpenClawChatView: View {
         #else
         .none
         #endif
-    }
-
-    private var rowInsertionAnimation: Animation? {
-        chatTasteRowAnimation(self.rowInsertionStyle)
     }
 
     private var workingAppearAnimation: Animation? {
@@ -1187,6 +1154,23 @@ extension OpenClawChatView {
     {
         var transaction = Transaction(animation: nil)
         transaction.scrollTargetAnchor = anchor
+        #if os(iOS)
+        withTransaction(transaction) {
+            if id == self.scrollerBottomID {
+                // Target the scroll edge itself so keyboard resizing cannot leave
+                // a one-frame row-ID request behind the new viewport.
+                self.nativeScrollPosition.scrollTo(edge: .bottom)
+            } else {
+                self.nativeScrollPosition.scrollTo(id: id, anchor: anchor)
+                let request = self.nativeScrollPosition
+                DispatchQueue.main.async {
+                    guard self.nativeScrollPosition == request else { return }
+                    // Turn/search positioning is one-shot; only the live edge stays anchored.
+                    self.nativeScrollPosition.isPositionedByUser = true
+                }
+            }
+        }
+        #else
         withTransaction(transaction) {
             self.scrollPosition = id
         }
@@ -1196,6 +1180,7 @@ extension OpenClawChatView {
             // keeping an overflowing transcript bound to any row can loop SwiftUI scroll layout.
             self.scrollPosition = nil
         }
+        #endif
     }
 
     private func revealSearchMessage(_ messageID: UUID) {

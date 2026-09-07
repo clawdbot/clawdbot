@@ -32,10 +32,6 @@ func chatTasteAllowsSymbolReplace(tasteMotionEnabled: Bool, reduceMotion: Bool) 
     tasteMotionEnabled && !reduceMotion
 }
 
-func chatTasteAllowsHeightAnimation(tasteMotionEnabled: Bool, reduceMotion: Bool) -> Bool {
-    tasteMotionEnabled && !reduceMotion
-}
-
 func chatTasteRowAnimation(
     _ insertion: ChatTasteRowInsertion) -> Animation?
 {
@@ -51,16 +47,17 @@ struct ChatTasteInsertModifier: ViewModifier {
     let style: ChatTasteRowInsertion
 
     func body(content: Content) -> some View {
+        content.transition(self.transition)
+    }
+
+    private var transition: AnyTransition {
         switch self.style {
-        case .none:
-            content
-        case .opacity:
-            content.transition(.opacity)
+        case .none: .identity
+        case .opacity: .opacity
         case .scaleAndOpacity:
-            content.transition(
-                .asymmetric(
-                    insertion: .scale(scale: 0.98).combined(with: .opacity),
-                    removal: .opacity))
+            .asymmetric(
+                insertion: .scale(scale: 0.98).combined(with: .opacity),
+                removal: .opacity)
         }
     }
 }
