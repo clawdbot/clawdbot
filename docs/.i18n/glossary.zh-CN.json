@@ -1020,6 +1020,34 @@
     "target": "插件清单"
   },
   {
+    "source": "Manifest model fields",
+    "target": "清单模型字段"
+  },
+  {
+    "source": "Manifest provider fields",
+    "target": "清单提供商字段"
+  },
+  {
+    "source": "Manifest setup and auth fields",
+    "target": "清单设置与认证字段"
+  },
+  {
+    "source": "Manifest capability fields",
+    "target": "清单能力字段"
+  },
+  {
+    "source": "Manifest host surface fields",
+    "target": "清单宿主界面字段"
+  },
+  {
+    "source": "Manifest config and secret fields",
+    "target": "清单配置与密钥字段"
+  },
+  {
+    "source": "Manifest versus package.json",
+    "target": "清单与 package.json 对比"
+  },
+  {
     "source": "Building plugins",
     "target": "构建插件"
   },

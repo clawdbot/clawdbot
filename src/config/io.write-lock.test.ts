@@ -160,44 +160,58 @@ describe("direct config writer exclusion", () => {
 });
 
 describe("included config writer exclusion", () => {
-  it("waits for exact included-file exclusion before writing through its root", async () => {
-    const stateDir = tempDirs.make("openclaw-included-writer-exclusion-");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const includePath = path.join(stateDir, "gateway.json5");
-    const rootRaw = '{"gateway":{"$include":"./gateway.json5"}}\n';
-    const includeRaw = '{"mode":"local","port":18789}\n';
-    await fs.writeFile(configPath, rootRaw);
-    await fs.writeFile(includePath, includeRaw);
-    await withEnvAsync(
-      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
-      async () => {
-        const io = createConfigIO({ configPath, observe: false, pluginValidation: "skip" });
-        expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(18789);
-        const startWriter = deferred();
-        const writer = startWriter.promise.then(() =>
-          mutateConfigFileWithRetry({
-            writeOptions: { skipPluginValidation: true, skipRuntimeSnapshotRefresh: true },
-            mutate: (draft) => {
-              draft.gateway = { ...draft.gateway, port: 19876 };
-            },
-          }),
-        );
-        try {
-          await withConfigWriteLock(includePath, async () => {
+  it.each(["top-level", "delegated"] as const)(
+    "waits for exact included-file exclusion through a %s include",
+    async (shape) => {
+      const stateDir = tempDirs.make("openclaw-included-writer-exclusion-");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const includePath = path.join(stateDir, "gateway.json5");
+      const rootRaw =
+        shape === "delegated"
+          ? '{"gateway":{"$include":"./gateway-parent.json5"}}\n'
+          : '{"gateway":{"$include":"./gateway.json5"}}\n';
+      const includeRaw = '{"mode":"local","port":18789}\n';
+      const parentPath = path.join(stateDir, "gateway-parent.json5");
+      const parentRaw = '{"$include":"./gateway.json5"}\n';
+      if (shape === "delegated") {
+        await fs.writeFile(parentPath, parentRaw);
+      }
+      await fs.writeFile(configPath, rootRaw);
+      await fs.writeFile(includePath, includeRaw);
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+        async () => {
+          const io = createConfigIO({ configPath, observe: false, pluginValidation: "skip" });
+          expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(18789);
+          const startWriter = deferred();
+          const writer = startWriter.promise.then(() =>
+            mutateConfigFileWithRetry({
+              writeOptions: { skipPluginValidation: true, skipRuntimeSnapshotRefresh: true },
+              mutate: (draft) => {
+                draft.gateway = { ...draft.gateway, port: 19876 };
+              },
+            }),
+          );
+          try {
+            await withConfigWriteLock(includePath, async () => {
+              startWriter.resolve();
+              expect(
+                await Promise.race([writer.then(() => "wrote"), delay(250).then(() => "blocked")]),
+              ).toBe("blocked");
+              expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+              expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+            });
+          } finally {
             startWriter.resolve();
-            expect(
-              await Promise.race([writer.then(() => "wrote"), delay(250).then(() => "blocked")]),
-            ).toBe("blocked");
-            expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
-            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
-          });
-        } finally {
-          startWriter.resolve();
-          await writer;
-        }
-        expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
-        expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(19876);
-      },
-    );
-  });
+            await writer;
+          }
+          expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+          expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(19876);
+          if (shape === "delegated") {
+            expect(await fs.readFile(parentPath, "utf8")).toBe(parentRaw);
+          }
+        },
+      );
+    },
+  );
 });

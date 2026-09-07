@@ -95,6 +95,11 @@ subscription quota are separate billing buckets.
 - For SSH, Docker, VPS, or other remote setups, use
   `openclaw models auth login --provider xai --method oauth`; it uses
   device-code verification, not a localhost callback.
+- If a previous OAuth login left xAI using the API-key endpoint or catalog,
+  rerun `openclaw models auth login --provider xai --method oauth`. A successful
+  login refreshes the subscription catalog and proxy route from your account.
+  It preserves your primary model and fallbacks; the moving alias remains
+  discovery-owned so it can follow later default changes.
 - If sign-in succeeds but Grok is not the default model, run
   `openclaw models set xai/auto`. OAuth login preserves an existing
   primary model unless you explicitly change it.

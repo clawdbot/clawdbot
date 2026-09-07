@@ -824,8 +824,14 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(logWsControl.warn).not.toHaveBeenCalled();
   });
 
-  it("logs the authenticated user when a connection closes", async () => {
-    const { socket, logWsControl, passed } = await connectTestWs();
+  it.each([
+    { reason: "normal peer close", durationMs: 1_000, cause: undefined, code: 1000 },
+    { reason: "missed protocol pong", durationMs: 50_000, cause: "heartbeat-timeout", code: 1006 },
+  ])("records connected close ownership after $reason", async ({ durationMs, cause, code }) => {
+    vi.useFakeTimers();
+    const socket = createGatewayWsTestSocket({ ping: true });
+    socket.terminate.mockImplementation(() => socket.emit("close", 1006, Buffer.alloc(0)));
+    const { logWsControl, passed } = await connectTestWs({ socket });
     const handlerParams = passed as {
       setClient: (client: never) => boolean;
     };
@@ -833,19 +839,29 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(
       handlerParams.setClient({
         socket,
-        connect: { client: { id: "openclaw-control-ui", mode: "ui" } },
+        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
         connId: "conn-authenticated-user",
         authenticatedUserId: "alice@example.com",
         usesSharedGatewayAuth: false,
       } as never),
     ).toBe(true);
 
-    socket.emit("close", 1000, Buffer.from("done"));
-
+    vi.advanceTimersByTime(durationMs);
+    if (!cause) {
+      socket.emit("close", code, Buffer.from("done"));
+    }
+    const closeReason = cause ? "n/a" : "done";
+    expect(logWsControl.info).toHaveBeenCalledWith(
+      expect.stringContaining(`webchat disconnected code=${code} reason=${closeReason} conn=`),
+      { cause, durationMs },
+    );
     expect(logWsControl.info).toHaveBeenCalledWith(
       expect.stringMatching(
-        /^authenticated user disconnected code=1000 reason=done conn=.+ user=alice@example\.com$/,
+        new RegExp(
+          `^authenticated user disconnected code=${code} reason=${closeReason} conn=.+ user=alice@example\\.com$`,
+        ),
       ),
+      { cause, durationMs },
     );
   });
 

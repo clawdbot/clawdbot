@@ -7,7 +7,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
-import { activeSessions } from "../../transcripts/capture.js";
+import { activeSessions, createTranscriptSessionId } from "../../transcripts/capture.js";
 import type {
   TranscriptOccupancyWatchRequest,
   TranscriptSourceProvider,
@@ -104,6 +104,60 @@ function harness() {
 }
 
 describe("occupancy-driven transcript lifecycle", () => {
+  it.each([undefined, null, "invalid", "supplied", "generated"])(
+    "reopens only a newest capture with recorded generated origin (%s)",
+    async (origin) => {
+      const h = harness();
+      const source = {
+        providerId: h.provider.id,
+        accountId: "default",
+        guildId: "guild",
+        channelId: "voice",
+      };
+      const older = {
+        sessionId: "older-generated",
+        source,
+        startedAt: "2026-08-01T11:40:00.000Z",
+        stoppedAt: "2026-08-01T11:58:00.000Z",
+        metadata: { sessionIdOrigin: "generated" },
+      };
+      const newest = {
+        ...older,
+        sessionId: createTranscriptSessionId(),
+        startedAt: "2026-08-01T11:50:00.000Z",
+        stoppedAt: "2026-08-01T11:59:00.000Z",
+        metadata: origin === undefined ? {} : { sessionIdOrigin: origin },
+      };
+      for (const session of [older, newest]) {
+        await h.store.writeSession(session);
+        await h.store.appendUtteranceForSession(session, { text: "Archived speech" });
+      }
+      closeOpenClawStateDatabaseForTest();
+      await withPluginRuntimeRegistryScope(h.registry, async () => {
+        const service = h.service();
+        try {
+          service.start();
+          await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+          h.watches[0]!.onOccupied();
+          const capture = await h.started(1);
+          expect(capture.session.sessionId === newest.sessionId).toBe(origin === "generated");
+          expect(capture.session.sessionId).not.toBe(older.sessionId);
+          expect(capture.session.metadata?.sessionIdOrigin).toBe("generated");
+          await capture.onUtterance({ text: "Current speech" });
+          expect(await h.store.readSession(older.sessionId)).toEqual(older);
+          if (origin !== "generated") {
+            expect(await h.store.readSession(newest.sessionId)).toEqual(newest);
+            expect(await h.store.readUtterancesForSession(newest)).toMatchObject([
+              { text: "Archived speech" },
+            ]);
+          }
+        } finally {
+          await service.stop();
+        }
+      });
+    },
+  );
+
   it("keeps admitted history with its original agent after the room is reassigned", async () => {
     const h = harness();
     const configFor = (agentId: string): OpenClawConfig => ({
@@ -155,9 +209,13 @@ describe("occupancy-driven transcript lifecycle", () => {
     });
   });
 
-  it.each([false, true])(
-    "retains one capture identity across failed starts (whenOccupied=%s)",
-    async (whenOccupied) => {
+  it.each([
+    { whenOccupied: false, sessionId: undefined, origin: "generated" },
+    { whenOccupied: false, sessionId: "fixed-retry", origin: "supplied" },
+    { whenOccupied: true, sessionId: "ignored-fixed", origin: "generated" },
+  ])(
+    "retains one capture identity across failed starts (whenOccupied=$whenOccupied, ID=$sessionId)",
+    async ({ whenOccupied, sessionId: configuredSessionId, origin }) => {
       const h = harness();
       const identities: Array<{ sessionId: string; startedAt: string }> = [];
       const entered = Array.from({ length: 3 }, () => createDeferred());
@@ -166,6 +224,7 @@ describe("occupancy-driven transcript lifecycle", () => {
         return { ok: true, value: { stop: h.unwatch } };
       };
       h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
+        expect(request.session.metadata?.sessionIdOrigin).toBe(origin);
         identities.push(request.session);
         entered[identities.length - 1]!.resolve();
         if (identities.length < 3) {
@@ -175,7 +234,7 @@ describe("occupancy-driven transcript lifecycle", () => {
         return { ok: true, session: request.session };
       });
       await withPluginRuntimeRegistryScope(h.registry, async () => {
-        const service = h.service([{ ...h.entry, whenOccupied, sessionId: undefined }]);
+        const service = h.service([{ ...h.entry, whenOccupied, sessionId: configuredSessionId }]);
         try {
           service.start();
           await entered[0]!.promise;
@@ -337,6 +396,7 @@ describe("occupancy-driven transcript lifecycle", () => {
         },
         startedAt: `2026-07-${30 + index}T10:00:00.000Z`,
         stoppedAt: "2026-08-01T11:59:00.000Z",
+        metadata: { sessionIdOrigin: "generated" },
       });
     }
     await withPluginRuntimeRegistryScope(h.registry, async () => {
@@ -412,6 +472,7 @@ describe("occupancy-driven transcript lifecycle", () => {
           await first.stop();
         }
         await vi.advanceTimersByTimeAsync(gap);
+        closeOpenClawStateDatabaseForTest();
         const second = h.service([{ ...h.entry, title: "Future meeting" }]);
         try {
           second.start();
@@ -423,6 +484,7 @@ describe("occupancy-driven transcript lifecycle", () => {
           expect(reopened.session.startedAt === original.session.startedAt).toBe(within);
           expect(reopened.session.title).toBe(within ? "Original meeting" : "Future meeting");
           expect(reopened.session.stoppedAt).toBeUndefined();
+          expect(reopened.session.metadata?.sessionIdOrigin).toBe("generated");
           await original.onUtterance({ text: "Stale callback" });
           await reopened.onUtterance({ text: "After restart" });
           await second.stop();

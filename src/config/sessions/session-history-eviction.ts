@@ -18,6 +18,7 @@ import {
 } from "./disk-budget.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
   collectSessionStateIdsForEntry,
@@ -530,34 +531,40 @@ async function enforceSessionHistoryMaintenanceSerialized(
         // fences admission while the store writer is released for archive I/O.
         const committedArchives = await runExclusiveSqliteSessionReclamation(async () => {
           const materialized = await materializeSessionStateDeletePlans([plan]);
-          return await runExclusiveSqliteSessionWrite(resolved, async () => {
-            const database = openOpenClawAgentDatabase(databaseOptions);
-            const reclamationPlan = createHistoryEvictionReclamationPlan({
-              databaseOptions,
-              diskBudget: { preserveRecentMs: params.maintenance.preserveRecentMs },
-              materializedPlans: materialized,
-              protectedSessionIds: collectCandidateAdditionalProtection({
-                database,
-                preserveRecentMs: params.maintenance.preserveRecentMs,
+          const diagnostics: SqliteSessionReclamationDiagnostics = {};
+          return await runExclusiveSqliteSessionWrite(
+            resolved,
+            async () => {
+              const database = openOpenClawAgentDatabase(databaseOptions);
+              const reclamationPlan = createHistoryEvictionReclamationPlan({
+                databaseOptions,
+                diskBudget: { preserveRecentMs: params.maintenance.preserveRecentMs },
+                materializedPlans: materialized,
+                protectedSessionIds: collectCandidateAdditionalProtection({
+                  database,
+                  preserveRecentMs: params.maintenance.preserveRecentMs,
+                  sessionId,
+                  storePath: params.storePath,
+                }),
                 sessionId,
-                storePath: params.storePath,
-              }),
-              sessionId,
-            });
-            const reclaimed = await runSqliteSessionReclamation({
-              forceInProcess: false,
-              plan: reclamationPlan,
-            });
-            if (reclaimed.kind !== reclamationPlan.kind) {
-              throw new Error(
-                `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
-              );
-            }
-            if (!reclaimed.value.deleted) {
-              return null;
-            }
-            return reclaimed.value.archivedTranscripts;
-          });
+              });
+              const reclaimed = await runSqliteSessionReclamation({
+                diagnostics,
+                forceInProcess: false,
+                plan: reclamationPlan,
+              });
+              if (reclaimed.kind !== reclamationPlan.kind) {
+                throw new Error(
+                  `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
+                );
+              }
+              if (!reclaimed.value.deleted) {
+                return null;
+              }
+              return reclaimed.value.archivedTranscripts;
+            },
+            diagnostics,
+          );
         });
         if (!committedArchives) {
           return null;

@@ -660,6 +660,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   installSpec: string;
   packageName: string;
   packageRoot?: string | null;
+  requirePackageReplacement?: boolean;
   runCommand: CommandRunner;
   runStep: PackageUpdateStepRunner;
   timeoutMs: number;
@@ -1068,6 +1069,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         stagedInstall &&
         !params.expectedGitCheckout &&
         requireStaging &&
+        !params.requirePackageReplacement &&
         candidateVersion &&
         candidateVersion === (await readPackageVersionIfPresent(originalPackageRoot))
       ) {

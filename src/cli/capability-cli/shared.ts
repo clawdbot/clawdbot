@@ -161,7 +161,7 @@ export function parseOptionalFiniteNumber(
   raw: string | number | undefined,
   label: string,
 ): number | undefined {
-  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+  if (raw === undefined) {
     return undefined;
   }
   const value = parseStrictFiniteNumber(raw);
@@ -172,7 +172,7 @@ export function parseOptionalFiniteNumber(
 }
 
 export function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+  if (raw === undefined) {
     return undefined;
   }
   const value = parseStrictPositiveInteger(raw);
@@ -183,7 +183,7 @@ export function parseOptionalPositiveInteger(raw: unknown, label: string): numbe
 }
 
 export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
-  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+  if (raw === undefined) {
     return undefined;
   }
   return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error" });

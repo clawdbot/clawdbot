@@ -494,13 +494,20 @@ do not start a second CLI node for the same Mac. Its native camera, screen, and
 desktop capabilities remain on that identity. If the shared runtime cannot
 start, native capabilities remain available, but session hosting is unavailable.
 
-On the first session dispatch
-for a Gateway build, the node downloads one sealed worker artifact from that
-paired Gateway, verifies its exact content hash, and publishes it atomically
-under the Gateway-namespaced node-host bundle root. The artifact already
-contains its complete JavaScript dependency closure; the node does not install
-packages or execute lifecycle scripts. Later turns reuse the immutable artifact
-while its receipt still matches the Gateway's current build.
+When a session first needs the current worker build, the Gateway sends its sealed
+worker artifact to the paired host. The node verifies the exact content hash,
+publishes the artifact atomically, and prewarms it when supported by the execution mode.
+The artifact contains its complete JavaScript dependency closure; the node does
+not install packages or execute lifecycle scripts. Installation belongs to the
+session request and receives its cancellation signal. Reconnect maintenance does
+not install or prewarm a worker build.
+
+Once installed, persistent nodes retain one current worker artifact per Gateway
+namespace, even with no sessions. Older builds remain only while a live or
+recoverable placement needs them; normal maintenance removes unreferenced builds.
+Each new dispatch still validates the installed artifact and reuses it when valid,
+avoiding another download. Cloud-enrolled nodes keep their own execution-mode-specific
+installation and retention lifecycle.
 
 You can also enroll and enable a service host in one step with
 `openclaw connect --service --session-host`. In Control UI New Session, a
@@ -512,9 +519,9 @@ device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
 
 The Devices page shows the validated Gateway-owned worker version in the node's
-metadata. If the retained artifact is missing or fails validation, Devices shows
-a **worker missing** warning; start a new session on that device to reinstall the
-current bundle. This status is observational and reconnect-scoped: launch still
+metadata. If the current artifact is missing or fails validation, Devices shows
+a **worker missing** warning; an explicit new session installs the current bundle.
+This status is observational and reconnect-scoped: launch still
 requires the exact durable receipt and current node authority.
 
 Node hosts must support the current private worker-supervisor dialect before

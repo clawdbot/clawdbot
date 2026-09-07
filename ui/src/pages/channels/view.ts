@@ -263,10 +263,12 @@ function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null 
 
 function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
   const label = resolveChannelLabel(props, key);
-  const description =
-    lastActivityLine(key, props) ??
-    resolveChannelDetailLabel(props, key) ??
-    t("channels.hub.openDetails");
+  const statusIssue = props.snapshot?.statusIssues?.find((issue) => issue.channel === key);
+  const description = statusIssue
+    ? formatUiExternalText(statusIssue.message)
+    : (lastActivityLine(key, props) ??
+      resolveChannelDetailLabel(props, key) ??
+      t("channels.hub.openDetails"));
   return html`
     <button
       type="button"
@@ -282,7 +284,7 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
         <span class="settings-row__desc">${description}</span>
       </div>
       <div class="settings-row__control">
-        ${rowStatus(resolveRowState(key, props))}
+        ${rowStatus(statusIssue ? "attention" : resolveRowState(key, props))}
         <span class="settings-row__chevron">${icons.chevronRight}</span>
       </div>
     </button>

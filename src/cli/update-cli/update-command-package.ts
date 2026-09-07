@@ -256,6 +256,7 @@ export async function runPackageInstallUpdate(
     installSpec,
     packageName,
     packageRoot: pkgRoot,
+    requirePackageReplacement: params.installKind === "git",
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),

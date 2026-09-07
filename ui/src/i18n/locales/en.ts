@@ -2785,10 +2785,13 @@ export const en: TranslationMap & {
       title: "Speaker voice",
       description: "Voice used for spoken replies. GPT-Live locks the voice once a call starts.",
       default: "Provider default",
+      unsupported: "unsupported",
+      unsupportedDefault:
+        "This saved voice is unavailable for the selected route. Provider default will be used.",
     },
     gptLive: {
       title: "GPT-Live",
-      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed for browser or Gateway-relay Talk. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
   },
@@ -3426,11 +3429,12 @@ export const en: TranslationMap & {
   githubConnections: {
     title: "GitHub connections",
     description:
-      "Publishing access is separate from your verified GitHub sign-in and co-author credit. Connect an account here to publish with it.",
+      "Check the accounts used for agent commands, dashboard data, and publishing. These connections are separate from your GitHub sign-in and co-author credit.",
     mine: "My GitHub",
     system: "System GitHub",
     personalDescription: "Your account for explicitly selected Publish PR actions.",
-    systemDescription: "Shared account for agents and default publication.",
+    systemDescription:
+      "Default account for agent commands, authenticated dashboards, and publishing.",
     unboundDescription:
       "Sign in with a personal Gateway profile to connect My GitHub. Administrators can still manage System GitHub.",
     signInRequired: "Personal sign-in required",
@@ -3458,6 +3462,10 @@ export const en: TranslationMap & {
       "My GitHub is used only when you explicitly select it for Gateway-brokered Publish PR on an idle, reconciled local workspace. Publication still needs write access to the session. Agent git/gh, model actions, previews, and workers keep the shared account. Finish and reclaim remote work before personal publication. Connecting My GitHub changes no defaults.",
     details: "Connection details",
     agentTitle: "GitHub account",
+    agentFor: "GitHub for {agent}",
+    agentDescription:
+      "Used for this agent's commands and authenticated dashboard data. Verified confirms the account; repository access is checked when data is requested.",
+    viewAgent: "View agent account",
     agentOverride: "Agent override",
     advancedOverride: "Advanced: agent GitHub override",
     manageCommon: "Manage connections in Profile",
@@ -3594,8 +3602,8 @@ export const en: TranslationMap & {
         "Compares saved instructions with the installed skill. Intermediate edits and supporting files are not shown.",
       noSavedVersion: "No saved version is available to compare with this skill.",
       savedVersionError: "Could not load saved versions. Refresh to try again.",
+      comparing: "Comparing saved instructions…",
       unchanged: "The instructions match this saved version.",
-      diffTruncated: "This diff is shortened. Some changes may not be shown.",
     },
     recency: {
       today: "Today",
