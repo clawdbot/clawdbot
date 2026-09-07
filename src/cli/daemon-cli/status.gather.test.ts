@@ -1622,29 +1622,113 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
-  it("resolves daemon gateway auth password SecretRef values before probing", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "lan",
-        tls: { enabled: true },
-        auth: {
-          password: { source: "env", provider: "default", id: "DAEMON_GATEWAY_PASSWORD" },
+  it.each([undefined, "password", "trusted-proxy"] as const)(
+    "resolves daemon gateway auth password SecretRef values before probing in %s mode",
+    async (mode) => {
+      daemonLoadedConfig = {
+        gateway: {
+          bind: "lan",
+          tls: { enabled: true },
+          auth: {
+            mode,
+            password: { source: "env", provider: "default", id: "DAEMON_GATEWAY_PASSWORD" },
+          },
         },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
         },
-      },
-    };
-    setTestEnvValue("DAEMON_GATEWAY_PASSWORD", "daemon-secretref-password"); // pragma: allowlist secret
+      };
+      setTestEnvValue("DAEMON_GATEWAY_PASSWORD", "daemon-secretref-password"); // pragma: allowlist secret
 
-    await gatherStatus();
+      await gatherStatus();
 
-    expect((callArg(callGatewayStatusProbe) as { password?: string }).password).toBe(
-      "daemon-secretref-password",
-    ); // pragma: allowlist secret
-  });
+      expect((callArg(callGatewayStatusProbe) as { password?: string }).password).toBe(
+        "daemon-secretref-password",
+      ); // pragma: allowlist secret
+    },
+  );
+
+  it.each([false, true])(
+    "authenticates a trusted-proxy status probe with its file password (requireRpc=%s)",
+    async (requireRpc) => {
+      const actualProbe = await vi.importActual<typeof import("./probe.js")>("./probe.js");
+      const originalProbe = callGatewayStatusProbe.getMockImplementation();
+      assert(originalProbe);
+      const password = "synthetic-local-status-password";
+      const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+      const authenticated: boolean[] = [];
+      const methods: string[] = [];
+      wss.on("connection", (ws) => {
+        sendMinimalGatewayConnectChallenge(ws);
+        ws.on("message", (raw) => {
+          const frame = parseMinimalGatewayRequestFrame(raw);
+          if (!frame.id) {
+            return;
+          }
+          if (frame.method === "connect") {
+            const accepted = Reflect.get(frame.params?.auth ?? {}, "password") === password;
+            authenticated.push(accepted);
+            if (!accepted) {
+              ws.close(1008, "password required");
+              return;
+            }
+            sendMinimalGatewayResponse(
+              ws,
+              frame.id,
+              buildMinimalGatewayHelloOkPayload({
+                auth: { role: "operator", scopes: ["operator.read"] },
+              }),
+            );
+          } else if (frame.method === "status") {
+            methods.push(frame.method);
+            sendMinimalGatewayResponse(ws, frame.id, {});
+          }
+        });
+      });
+      callGatewayStatusProbe.mockImplementation(actualProbe.probeGatewayStatus);
+      try {
+        await new Promise<void>((resolve) => wss.once("listening", resolve));
+        const address = wss.address();
+        assert(address && typeof address !== "string");
+        await withStatusConfig(undefined, async (configPath) => {
+          const passwordPath = path.join(path.dirname(configPath), "gateway-password");
+          await fs.writeFile(passwordPath, password, { mode: 0o600 });
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({
+              gateway: {
+                mode: "local",
+                bind: "loopback",
+                port: address.port,
+                auth: {
+                  mode: "trusted-proxy",
+                  password: { source: "file", provider: "local", id: "value" },
+                },
+                remote: { url: "wss://unrelated.example", password: "unrelated-password" },
+              },
+              secrets: {
+                providers: { local: { source: "file", path: passwordPath, mode: "singleValue" } },
+              },
+            }),
+          );
+          const result = await gatherStatus({
+            rpc: { port: String(address.port), json: true, timeout: "2000" },
+            requireRpc,
+          });
+          expect(result.rpc?.ok, result.rpc?.error).toBe(true);
+          expect(authenticated).toEqual([true]);
+          expect(methods).toEqual(requireRpc ? ["status"] : []);
+          expect(JSON.stringify(result)).not.toContain(password);
+        });
+      } finally {
+        callGatewayStatusProbe.mockImplementation(originalProbe);
+        await closeMinimalGatewayServer(wss);
+        resetSecretRedactionRegistryForTest();
+      }
+    },
+  );
 
   it("resolves daemon gateway auth token SecretRef values before probing", async () => {
     daemonLoadedConfig = {
