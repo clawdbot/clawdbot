@@ -703,7 +703,7 @@ describe("OAuth refresh authority chain", () => {
       scenario.provider.releaseRefresh();
       await expect(owner.terminal).resolves.toMatchObject({ status: "ok" });
       const peerTerminal = await peer.terminal;
-      expectAuthError(peerTerminal, `No API key found for provider "${PROVIDER_ID}".`);
+      expectAuthError(peerTerminal, `No credentials found for profile "${PROFILE_ID}".`);
       await vi.waitFor(() => expect(scenario.provider.modelRequests).toHaveLength(1), {
         interval: 20,
         timeout: REQUEST_TIMEOUT_MS,
