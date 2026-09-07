@@ -6,6 +6,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { collectPackageDistInventory } from "../../infra/package-dist-inventory.js";
+import * as tmpDirs from "../../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 
@@ -67,9 +69,12 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
     "dist/entry.js",
     'import { answer } from "./extensions/remote-runtime/index.js"; import { name } from "@fixture/ai"; console.log(`${name}:${answer}`);',
   );
+  await write(packageRoot, "dist/control-ui/index.html", "<title>Gateway dashboard</title>");
+  await write(packageRoot, "dist/control-ui/assets/app.js", 'console.log("gateway-ui");');
   await write(packageRoot, "dist/shared.js", 'export const answer = "cloud-ready";');
   await write(packageRoot, "dist/worker/worker.mjs", 'console.log("separate-worker-bundle");');
   await write(packageRoot, "dist/worker/workspace-rsync-receiver.mjs", "export {};");
+  await write(packageRoot, "dist/worker/github-exec-launcher.mjs", "export {};");
   await write(packageRoot, "dist/build-info.json", { version, buildId });
   await write(packageRoot, "dist/extensions/remote-runtime/package.json", pluginPackage);
   await write(packageRoot, "dist/extensions/remote-runtime/openclaw.plugin.json", {
@@ -184,6 +189,10 @@ describe("node bootstrap distribution", () => {
         ),
       ).toBe(false);
       expect(entries.some((entry) => entry.startsWith("package/dist/worker/"))).toBe(false);
+      expect(entries.some((entry) => entry.startsWith("package/dist/control-ui/"))).toBe(false);
+      expect(await collectPackageDistInventory(packageRoot)).toEqual(
+        expect.arrayContaining(["dist/control-ui/index.html", "dist/control-ui/assets/app.js"]),
+      );
       if (process.platform !== "win32") {
         for (const [relative, requestedMode] of [
           ["openclaw.mjs", 0o755],
@@ -241,18 +250,25 @@ describe("node bootstrap distribution", () => {
     await expect(provider.prepare()).resolves.toMatchObject({ buildId });
   });
 
-  it("retries preparation after temporary staging storage becomes available", async () => {
-    const { provider } = await fixture();
-    const makeTemp = vi
-      .spyOn(fs, "mkdtemp")
-      .mockRejectedValueOnce(new Error("temporary storage unavailable"));
-    try {
-      await expect(provider.prepare()).rejects.toThrow("temporary storage unavailable");
-    } finally {
-      makeTemp.mockRestore();
-    }
-    await expect(provider.prepare()).resolves.toMatchObject({ buildId });
-  });
+  it.each(["root resolution", "staging creation"])(
+    "retries preparation after temporary %s becomes available",
+    async (stage) => {
+      const { provider } = await fixture();
+      const failure = new Error("temporary storage unavailable");
+      const makeTemp =
+        stage === "root resolution"
+          ? vi.spyOn(tmpDirs, "resolvePreferredOpenClawTmpDir").mockImplementationOnce(() => {
+              throw failure;
+            })
+          : vi.spyOn(fs, "mkdtemp").mockRejectedValueOnce(failure);
+      try {
+        await expect(provider.prepare()).rejects.toThrow("temporary storage unavailable");
+      } finally {
+        makeTemp.mockRestore();
+      }
+      await expect(provider.prepare()).resolves.toMatchObject({ buildId });
+    },
+  );
 
   it("does not return an artifact when its lifecycle closes during preparation", async () => {
     const { provider } = await fixture();

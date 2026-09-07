@@ -312,11 +312,10 @@ describe("queued embedded run context liveness", () => {
 
         abort.abort(new Error("queued run canceled"));
         expect(isAgentRunWaitingForCapacity(params.runId)).toBe(false);
-        expect(getCommandLaneSnapshot(blockedLane).queuedCount).toBe(1);
+        expect(getCommandLaneSnapshot(blockedLane).queuedCount).toBe(0);
         expect(sweepStaleRunContexts()).toBe(1);
         expect(getAgentRunContext(params.runId)).toBeUndefined();
 
-        setCommandLaneConcurrency(blockedLane, 1);
         await expect(run).rejects.toThrow("queued run canceled");
       } finally {
         setCommandLaneConcurrency(blockedLane, 1);
@@ -354,7 +353,7 @@ describe("queued embedded run context liveness", () => {
     },
   );
 
-  test("releases ownership when a custom queue rejects admission synchronously", () => {
+  test("releases ownership when a custom queue rejects admission synchronously", async () => {
     const registeredAt = 1_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     const { controller, params } = createRunController({
@@ -367,9 +366,9 @@ describe("queued embedded run context liveness", () => {
       registeredAt,
     });
 
-    expect(() =>
+    await expect(
       controller.enqueueSession(() => controller.enqueueGlobal(async () => createRunResult())),
-    ).toThrow("custom lane rejected admission");
+    ).rejects.toThrow("custom lane rejected admission");
 
     clock.mockReturnValue(registeredAt + CONTEXT_TTL_MS + 1);
     expect(sweepStaleRunContexts()).toBe(1);

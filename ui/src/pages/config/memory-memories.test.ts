@@ -298,4 +298,55 @@ describe("MemoryMemoriesElement", () => {
       element.remove();
     }
   });
+
+  it.each([false, true])(
+    "shows stale guidance alongside results and clears it after a fresh search (hits=%s)",
+    async (hasHits) => {
+      const warning =
+        "Memory index is stale: index scope changed (owner: configuration, code: scope). Search results may be incomplete.";
+      const action =
+        "Run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.";
+      const fresh = { ...result, snippet: "Freshly indexed Ada prefers careful reviews." };
+      const request = vi
+        .fn<Request>()
+        .mockResolvedValueOnce({
+          agentId: "main",
+          provider: "none",
+          searchMode: "fts-only",
+          results: hasHits ? [result] : [],
+          stale: true,
+          warning,
+          action,
+        })
+        .mockResolvedValueOnce({
+          agentId: "main",
+          provider: "none",
+          searchMode: "fts-only",
+          results: [fresh],
+        });
+      const element = createElement(request);
+      const readText = () => (element.textContent ?? "").replace(/\s+/gu, " ").trim();
+      try {
+        await typeQuery(element, "Ada");
+        submit(element);
+        await waitForFast(() =>
+          expect(element.querySelector(".memory-memories__results-heading")).not.toBeNull(),
+        );
+        expect(element.querySelectorAll("article")).toHaveLength(hasHits ? 1 : 0);
+        expect.soft(readText(), "stale result warning").toContain(warning);
+        expect.soft(readText(), "agent-scoped recovery guidance").toContain(action);
+        if (hasHits) {
+          expect(readText()).toContain(result.snippet);
+        }
+
+        await typeQuery(element, "Ada fresh");
+        submit(element);
+        await waitForFast(() => expect(readText()).toContain(fresh.snippet));
+        expect(readText()).not.toContain(warning);
+        expect(readText()).not.toContain(action);
+      } finally {
+        element.remove();
+      }
+    },
+  );
 });

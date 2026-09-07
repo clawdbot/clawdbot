@@ -6,16 +6,14 @@ import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
 import { renderSessionAppearancePicker } from "./session-icon-picker.ts";
 import {
+  renderCompactSessionMenuFrame,
   renderCompactSessionMenuNavigationItem,
-  renderCompactSessionMenuView,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
 import { renderSessionEditorOptions, renderSessionGroupOptions } from "./session-menu-options.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
-import {
-  renderSessionOwnerAssignmentMenu,
-  sessionOwnerAssignmentFromMenuValue,
-} from "./session-owner-menu.ts";
+import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
+import { SessionOwnerMenu } from "./session-owner-menu.ts";
+import "../styles/sidebar-menus.css";
 
 export type SessionMenuData = {
   label: string;
@@ -34,6 +32,7 @@ export type SessionManagementAction =
   | { kind: "open-in"; editor: EditorId; path: string }
   | { kind: "copy-session-id" }
   | { kind: "copy-session-link" }
+  | { kind: "copy-session-preview-link" }
   | { kind: "copy-markdown" }
   | { kind: "open-new-tab" }
   | { kind: "open-new-window" }
@@ -80,9 +79,7 @@ type SessionMenuActionsState = {
   archiveAllowed: boolean;
   deleteAllowed: boolean;
   groups: readonly string[];
-  ownerOptions: readonly SessionOwnerOption[];
-  selfOwner: SessionOwnerOption | null;
-  currentOwnerId: string | null;
+  currentOwner: SessionCreatedActor | null;
   worktreePath: string | null;
   navigationAllowed: boolean;
   copyMarkdownAllowed: boolean;
@@ -94,6 +91,7 @@ const SESSION_ICON_GRID_COLUMNS = 6;
 
 /** Canonical single-session actions shared by sidebar and chat-header menus. */
 export class SessionMenuActions {
+  private readonly ownerMenu: SessionOwnerMenu;
   private iconPickerMode: "grid" | "custom" = "grid";
   private customIconValue = "";
 
@@ -102,7 +100,15 @@ export class SessionMenuActions {
     private readonly readState: () => SessionMenuActionsState,
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
-  ) {}
+  ) {
+    this.ownerMenu = new SessionOwnerMenu(host);
+  }
+
+  readonly loadOwners = () => {
+    if (this.readState().selectionCount === 1) {
+      this.ownerMenu.load();
+    }
+  };
 
   private actionDisabled(kind: SessionManagementActionKind, extra = false): boolean {
     const state = this.readState();
@@ -121,6 +127,7 @@ export class SessionMenuActions {
       case "open-in":
         return batch || !state.worktreePath;
       case "copy-session-link":
+      case "copy-session-preview-link":
       case "open-new-tab":
       case "open-new-window":
         return batch || !state.navigationAllowed;
@@ -172,9 +179,14 @@ export class SessionMenuActions {
   }
 
   handleSelect(value: string): boolean {
+    if (value === "reload-owners") {
+      this.ownerMenu.load();
+      return true;
+    }
     if (
       value === "copy-session-id" ||
       value === "copy-session-link" ||
+      value === "copy-session-preview-link" ||
       value === "copy-markdown" ||
       value === "open-new-tab" ||
       value === "open-new-window" ||
@@ -208,9 +220,9 @@ export class SessionMenuActions {
       });
       return true;
     }
-    const owner = sessionOwnerAssignmentFromMenuValue(value);
-    if (owner) {
-      this.runAction({ kind: "assign-owner", owner });
+    const [action, type, encodedId] = value.split(":");
+    if (action === "assign-owner" && (type === "human" || type === "agent") && encodedId) {
+      this.runAction({ kind: "assign-owner", owner: { type, id: decodeURIComponent(encodedId) } });
       return true;
     }
     return false;
@@ -305,23 +317,30 @@ export class SessionMenuActions {
     view: Exclude<CompactSessionMenuView, "root">,
     label: string,
     icon: TemplateResult,
-    body: () => TemplateResult,
     disabled = false,
+    title?: string,
   ) {
     if (this.readState().compact) {
-      return renderCompactSessionMenuNavigationItem({ view, label, icon, disabled });
+      return renderCompactSessionMenuNavigationItem({
+        value: `compact:open-${view}`,
+        label,
+        icon,
+        disabled,
+        title,
+      });
     }
+    const shortcut = view === "icon" ? "i" : view === "copy" ? "c" : undefined;
     return html`<wa-dropdown-item
       class="session-menu__item"
       ?disabled=${disabled}
-      data-shortcut=${view === "icon" ? "i" : view === "copy" ? "c" : nothing}
-      aria-keyshortcuts=${view === "icon" ? "I" : view === "copy" ? "C" : nothing}
+      title=${title ?? nothing}
+      data-shortcut=${shortcut ?? nothing}
+      aria-keyshortcuts=${shortcut?.toUpperCase() ?? nothing}
       @submenu-opening=${view === "icon" ? this.focusAppearanceOnOpen : nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
       <span class="session-menu__text">${label}</span>
-      ${view === "icon" ? menuShortcutHint("i") : view === "copy" ? menuShortcutHint("c") : nothing}
-      ${body()}
+      ${shortcut ? menuShortcutHint(shortcut) : nothing} ${this.renderSubmenuBody(view)}
     </wa-dropdown-item>`;
   }
 
@@ -330,19 +349,23 @@ export class SessionMenuActions {
     const batch = selectionCount > 1;
     const count = String(selectionCount);
     return html`
-      ${batch || session.isChild
-        ? nothing
-        : this.renderItem(
-            "toggle-pin",
-            t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession"),
-            session.pinned ? icons.pinOff : icons.pin,
-            { shortcut: "p" },
-          )}
-      ${batch
-        ? nothing
-        : this.renderItem("rename", t("sessionsView.renameSessionMenu"), icons.edit, {
-            shortcut: "r",
-          })}
+      ${
+        batch || session.isChild
+          ? nothing
+          : this.renderItem(
+              "toggle-pin",
+              t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession"),
+              session.pinned ? icons.pinOff : icons.pin,
+              { shortcut: "p" },
+            )
+      }
+      ${
+        batch
+          ? nothing
+          : this.renderItem("rename", t("sessionsView.renameSessionMenu"), icons.edit, {
+              shortcut: "r",
+            })
+      }
       ${this.renderItem(
         "toggle-unread",
         t(
@@ -380,35 +403,28 @@ export class SessionMenuActions {
     const state = this.readState();
     const batch = state.selectionCount > 1;
     return html`
-      ${batch
-        ? nothing
-        : this.renderSubmenu(
-            "icon",
-            t("sessionsView.setIconColorMenu"),
-            icons.palette,
-            () => this.renderAppearancePicker(),
-            this.actionDisabled("set-icon") && this.actionDisabled("set-color"),
-          )}
+      ${
+        batch
+          ? nothing
+          : this.renderSubmenu(
+              "icon",
+              t("sessionsView.setIconColorMenu"),
+              icons.palette,
+              this.actionDisabled("set-icon") && this.actionDisabled("set-color"),
+            )
+      }
       ${this.renderGroupAction()}
-      ${batch
-        ? nothing
-        : state.compact
-          ? state.selfOwner || state.ownerOptions.length > 0
-            ? renderCompactSessionMenuNavigationItem({
-                view: "assign-owner",
-                label: t("sessionsView.assignTo"),
-                icon: icons.users,
-                disabled: this.actionDisabled("assign-owner"),
-                title: state.actionDisabledReasons["assign-owner"],
-              })
-            : nothing
-          : renderSessionOwnerAssignmentMenu({
-              ownerOptions: state.ownerOptions,
-              selfOwner: state.selfOwner,
-              currentOwnerId: state.currentOwnerId,
-              disabled: this.actionDisabled("assign-owner"),
-              disabledReason: state.actionDisabledReasons["assign-owner"],
-            })}
+      ${
+        !batch
+          ? this.renderSubmenu(
+              "assign-owner",
+              t("sessionsView.assignTo"),
+              icons.users,
+              this.actionDisabled("assign-owner"),
+              state.actionDisabledReasons["assign-owner"],
+            )
+          : nothing
+      }
     `;
   }
 
@@ -422,49 +438,32 @@ export class SessionMenuActions {
         shortcut: "f",
         title: state.forkFromLastCompleted ? t("sessionsView.forkFromLastCompleted") : undefined,
       })}
-      ${this.renderSubmenu("copy", t("common.copy"), icons.copy, () => this.renderCopySubmenu())}
-      ${state.navigationAllowed || state.worktreePath || state.renderOpenInExtra
-        ? this.renderSubmenu(
-            "open-in",
-            t("sessionsView.openInEditorMenu"),
-            icons.externalLink,
-            () => this.renderOpenSubmenu(),
-          )
-        : nothing}
+      ${this.renderSubmenu("copy", t("common.copy"), icons.copy)}
+      ${
+        state.navigationAllowed || state.worktreePath || state.renderOpenInExtra
+          ? this.renderSubmenu("open-in", t("sessionsView.openInEditorMenu"), icons.externalLink)
+          : nothing
+      }
     `;
   }
 
-  renderGroupAction() {
+  private renderGroupAction() {
     const state = this.readState();
     const batch = state.selectionCount > 1;
     const count = String(state.selectionCount);
     if (state.session.isChild === true) {
       return nothing;
     }
-    if (state.compact) {
-      return renderCompactSessionMenuNavigationItem({
-        view: "group",
-        label: batch
-          ? t("sessionsView.moveToGroupMenuCount", { count })
-          : t("sessionsView.moveToGroupMenu"),
-        icon: icons.folder,
-        disabled: this.actionDisabled("move-to-group"),
-        title: state.actionDisabledReasons["move-to-group"],
-      });
-    }
-    return html`<wa-dropdown-item
-      class="session-menu__item"
-      ?disabled=${this.actionDisabled("move-to-group")}
-      title=${this.actionTitle("move-to-group")}
-    >
-      <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
-      <span class="session-menu__text"
-        >${batch
-          ? t("sessionsView.moveToGroupMenuCount", { count })
-          : t("sessionsView.moveToGroupMenu")}</span
-      >
-      ${this.renderGroupSubmenu()}
-    </wa-dropdown-item>`;
+    const label = batch
+      ? t("sessionsView.moveToGroupMenuCount", { count })
+      : t("sessionsView.moveToGroupMenu");
+    return this.renderSubmenu(
+      "group",
+      label,
+      icons.folder,
+      this.actionDisabled("move-to-group"),
+      state.actionDisabledReasons["move-to-group"],
+    );
   }
 
   renderDeleteAction() {
@@ -477,29 +476,57 @@ export class SessionMenuActions {
   }
 
   renderCompactView(view: CompactSessionMenuView) {
+    return view === "root"
+      ? nothing
+      : renderCompactSessionMenuFrame(this.renderSubmenuBody(view, true));
+  }
+
+  private renderSubmenuBody(view: Exclude<CompactSessionMenuView, "root">, inline = false) {
     const state = this.readState();
-    return renderCompactSessionMenuView({
-      view,
-      ownerOptions: state.ownerOptions,
-      selfOwner: state.selfOwner,
-      currentOwnerId: state.currentOwnerId,
-      assignOwnerDisabled: this.actionDisabled("assign-owner"),
-      assignOwnerDisabledReason: state.actionDisabledReasons["assign-owner"],
-      renderOpenIn: () => this.renderOpenSubmenu(true),
-      renderCopy: () => this.renderCopySubmenu(true),
-      renderIcon: () => this.renderAppearancePicker(true),
-      renderGroup: () => this.renderGroupSubmenu(true),
-    });
+    switch (view) {
+      case "copy":
+        return this.renderCopySubmenu(inline);
+      case "open-in":
+        return this.renderOpenSubmenu(inline);
+      case "icon":
+        return this.renderAppearancePicker(inline);
+      case "group":
+        return this.renderGroupSubmenu(inline);
+      case "assign-owner":
+        return this.ownerMenu.render(
+          {
+            currentOwner: state.currentOwner,
+            disabled: this.actionDisabled("assign-owner"),
+            disabledReason: state.actionDisabledReasons["assign-owner"],
+          },
+          inline,
+        );
+      default:
+        return view satisfies never;
+    }
   }
 
   private renderCopySubmenu(inline = false) {
     const state = this.readState();
     return html`
-      ${state.navigationAllowed
-        ? this.renderItem("copy-session-link", t("sessionsView.copySessionLink"), icons.link, {
-            inline,
-          })
-        : nothing}
+      ${
+        state.navigationAllowed
+          ? html`
+              ${this.renderItem(
+                "copy-session-link",
+                t("sessionsView.copySessionLink"),
+                icons.link,
+                { inline },
+              )}
+              ${this.renderItem(
+                "copy-session-preview-link",
+                t("sessionsView.copySessionPreviewLink"),
+                icons.link,
+                { inline },
+              )}
+            `
+          : nothing
+      }
       ${this.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {
         inline,
       })}
@@ -510,35 +537,46 @@ export class SessionMenuActions {
   private renderOpenSubmenu(inline = false) {
     const state = this.readState();
     return html`
-      ${state.navigationAllowed
-        ? html`
-            ${this.renderItem("open-new-tab", t("sessionsView.openNewTab"), icons.externalLink, {
-              inline,
-            })}
-            ${this.renderItem("open-new-window", t("sessionsView.openNewWindow"), icons.monitor, {
-              inline,
-            })}
-          `
-        : nothing}
-      ${state.splitAllowed
-        ? html`
-            ${this.renderItem("split-right", t("chat.splitView.splitRight"), icons.columns2, {
-              inline,
-            })}
-            ${this.renderItem("split-below", t("sessionsView.splitBelow"), icons.panelBottomOpen, {
-              inline,
-            })}
-          `
-        : nothing}
+      ${
+        state.navigationAllowed
+          ? html`
+              ${this.renderItem("open-new-tab", t("sessionsView.openNewTab"), icons.externalLink, {
+                inline,
+              })}
+              ${this.renderItem("open-new-window", t("sessionsView.openNewWindow"), icons.monitor, {
+                inline,
+              })}
+            `
+          : nothing
+      }
+      ${
+        state.splitAllowed
+          ? html`
+              ${this.renderItem("split-right", t("chat.splitView.splitRight"), icons.columns2, {
+                inline,
+              })}
+              ${this.renderItem(
+                "split-below",
+                t("sessionsView.splitBelow"),
+                icons.panelBottomOpen,
+                {
+                  inline,
+                },
+              )}
+            `
+          : nothing
+      }
       ${state.renderOpenInExtra?.(inline) ?? nothing}
-      ${state.worktreePath
-        ? html`
-            <div slot=${inline ? nothing : "submenu"} class="session-menu__info">
-              ${t("sessionsView.workspaceEditors")}
-            </div>
-            ${renderSessionEditorOptions({ inline, disabled: this.actionDisabled("open-in") })}
-          `
-        : nothing}
+      ${
+        state.worktreePath
+          ? html`
+              <div slot=${inline ? nothing : "submenu"} class="session-menu__info">
+                ${t("sessionsView.workspaceEditors")}
+              </div>
+              ${renderSessionEditorOptions({ inline, disabled: this.actionDisabled("open-in") })}
+            `
+          : nothing
+      }
     `;
   }
 

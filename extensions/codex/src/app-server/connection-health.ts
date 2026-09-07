@@ -2,12 +2,8 @@ import type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { isUnsupportedCodexAppServerVersionError, type CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
-import {
-  getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
-} from "./shared-client.js";
+import type { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerRuntimeOptions } from "./config-contracts.js";
 
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
@@ -22,23 +18,13 @@ export function createCodexAppServerConnectionHealthService(
 ): OpenClawPluginService {
   let abortController: AbortController | undefined;
   let monitor: Promise<void> | undefined;
-  let leasedClient: CodexAppServerClient | undefined;
-
-  const releaseClient = () => {
-    if (!leasedClient) {
-      return;
-    }
-    const client = leasedClient;
-    leasedClient = undefined;
-    releaseLeasedSharedCodexAppServerClient(client);
-  };
-
   const run = async (ctx: OpenClawPluginServiceContext, signal: AbortSignal) => {
+    const { resolveCodexAppServerRuntimeOptions } = await import("./config-runtime.js");
     let consecutiveFailures = 0;
 
     while (!signal.aborted) {
       let pluginConfig: unknown;
-      let runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
+      let runtime: CodexAppServerRuntimeOptions;
       try {
         pluginConfig = options.getPluginConfig();
         runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig });
@@ -55,6 +41,13 @@ export function createCodexAppServerConnectionHealthService(
         return;
       }
 
+      const { getLeasedSharedCodexAppServerClient, releaseLeasedSharedCodexAppServerClient } =
+        await import("./shared-client.js");
+      const { isUnsupportedCodexAppServerVersionError } = await import("./client.js");
+      if (signal.aborted) {
+        return;
+      }
+      let leasedClient: CodexAppServerClient | undefined;
       try {
         leasedClient = await getLeasedSharedCodexAppServerClient({
           pluginConfig,
@@ -75,7 +68,12 @@ export function createCodexAppServerConnectionHealthService(
       } catch (error) {
         if (!signal.aborted) {
           const message = error instanceof Error ? error.message : String(error);
-          if (isPermanentCodexAppServerConnectionFailure(error)) {
+          if (
+            isPermanentCodexAppServerConnectionFailure(
+              error,
+              isUnsupportedCodexAppServerVersionError,
+            )
+          ) {
             ctx.logger.error(
               `codex app-server remote WebSocket requires an authentication or version update; not retrying: ${message}`,
             );
@@ -85,7 +83,9 @@ export function createCodexAppServerConnectionHealthService(
           ctx.logger.warn(`codex app-server remote WebSocket connection failed: ${message}`);
         }
       } finally {
-        releaseClient();
+        if (leasedClient) {
+          releaseLeasedSharedCodexAppServerClient(leasedClient);
+        }
       }
 
       if (!signal.aborted) {
@@ -114,14 +114,16 @@ export function createCodexAppServerConnectionHealthService(
     async stop() {
       abortController?.abort();
       await monitor;
-      releaseClient();
       monitor = undefined;
       abortController = undefined;
     },
   };
 }
 
-function isPermanentCodexAppServerConnectionFailure(error: unknown): boolean {
+function isPermanentCodexAppServerConnectionFailure(
+  error: unknown,
+  isUnsupportedCodexAppServerVersionError: typeof import("./client.js").isUnsupportedCodexAppServerVersionError,
+): boolean {
   const seen = new Set<Error>();
   let current = error;
 

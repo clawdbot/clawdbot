@@ -36,6 +36,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 },
                 timestamp: message.timestamp,
                 transcriptMessageID: message.transcriptMessageID,
+                transcriptRunID: message.transcriptRunID,
                 isTruncated: message.isTruncated,
                 idempotencyKey: message.idempotencyKey,
                 toolCallId: message.toolCallId,

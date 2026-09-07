@@ -27,11 +27,17 @@ import UIKit
         #expect(delegate._test_resolvedAppModel() === explicitModel)
     }
 
-    @Test @MainActor func `derives background refresh task identifier from app bundle identifier`() {
+    @Test @MainActor func `background refresh task is permitted and launchable from the app bundle`() throws {
+        // BGTaskScheduler rejects submit with .notPermitted unless the identifier is listed
+        // and the `fetch` background mode is declared; both contracts live in the app Info.plist.
         let delegate = OpenClawAppDelegate()
-        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "ai.openclawfoundation.app.tests"
+        let bundleIdentifier = try #require(Bundle.main.bundleIdentifier)
+        let info = try #require(Bundle.main.infoDictionary)
+        let identifier = delegate._test_wakeRefreshTaskIdentifier()
 
-        #expect(delegate._test_wakeRefreshTaskIdentifier() == "\(bundleIdentifier).bgrefresh")
+        #expect(identifier == "\(bundleIdentifier).bgrefresh")
+        #expect(info["BGTaskSchedulerPermittedIdentifiers"] as? [String] == [identifier])
+        #expect((info["UIBackgroundModes"] as? [String])?.contains("fetch") == true)
     }
 
     @Test @MainActor func `stages a gateway URL when the model is ready`() async throws {

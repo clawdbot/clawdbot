@@ -18,6 +18,7 @@ import {
 } from "../../media/media-reference.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
@@ -299,17 +300,33 @@ async function runPdfPrompt(params: {
           }
         }
 
-        // PDF-only model selections may not have loaded their provider plugin yet.
-        // Register before complete() so plugin-owned APIs resolve on first use.
-        registerProviderStreamForModel({
-          model,
-          cfg: effectiveCfg,
-          agentDir: runtimeAgentDir,
-          apiRegistry: modelRuntime.apiRegistry,
-          ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
-        });
+        // Provider hooks may own request preparation such as managed preset reloads.
+        // Registration alone is insufficient when a built-in API already owns dispatch.
+        const providerStreamFn = withPluginRuntimeGenerationScope(preparedRuntime, () =>
+          registerProviderStreamForModel({
+            model,
+            cfg: effectiveCfg,
+            agentDir: runtimeAgentDir,
+            wrapProviderStream: true,
+            apiRegistry: modelRuntime.apiRegistry,
+            ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
+          }),
+        );
 
         const extractions = await getExtractions();
+        const completeExtraction = async (context: Context) => {
+          // A run cancelled mid-dispatch must not buy another provider call.
+          params.signal?.throwIfAborted();
+          const streamOptions = {
+            apiKey,
+            maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+            signal: params.signal,
+          };
+          const completion = providerStreamFn
+            ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
+            : complete(model, context, streamOptions);
+          return params.signal ? await abortable(params.signal, completion) : await completion;
+        };
         const hasImages = extractions.some((e) => e.images.length > 0);
         if (hasImages && !model.input?.includes("image")) {
           const hasText = extractions.some((e) => e.text.trim().length > 0);
@@ -323,31 +340,13 @@ async function runPdfPrompt(params: {
             images: [],
           }));
           const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
-          // A run cancelled mid-dispatch must not buy another provider call.
-          params.signal?.throwIfAborted();
-          const completion = complete(model, context, {
-            apiKey,
-            maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
-            signal: params.signal,
-          });
-          const message = params.signal
-            ? await abortable(params.signal, completion)
-            : await completion;
+          const message = await completeExtraction(context);
           const text = coercePdfAssistantText({ message, provider, model: modelId });
           return { text, provider, model: modelId, native: false };
         }
 
         const context = buildPdfExtractionContext(params.prompt, extractions, model);
-        // A run cancelled mid-dispatch must not buy another provider call.
-        params.signal?.throwIfAborted();
-        const completion = complete(model, context, {
-          apiKey,
-          maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
-          signal: params.signal,
-        });
-        const message = params.signal
-          ? await abortable(params.signal, completion)
-          : await completion;
+        const message = await completeExtraction(context);
         const text = coercePdfAssistantText({ message, provider, model: modelId });
         return { text, provider, model: modelId, native: false };
       },

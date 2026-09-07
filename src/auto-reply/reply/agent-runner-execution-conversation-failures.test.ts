@@ -5,6 +5,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
+  createFailureRunAgentTurnParams,
   createMockTypingSignaler,
   createFollowupRun,
   createMinimalRunAgentTurnParams,
@@ -13,7 +14,7 @@ import {
   createNonDirectFailureSessionCtx,
 } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: conversation failures", () => {
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
@@ -124,28 +125,7 @@ describe("executeAgentTurn: conversation failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {

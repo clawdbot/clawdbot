@@ -6,7 +6,11 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { cancelBackgroundExecSession } from "../../agents/bash-process-control.js";
-import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
+import {
+  acknowledgeNotifyOnExit,
+  getFinishedSession,
+  getSession,
+} from "../../agents/bash-process-registry.js";
 import { renderExecExitLabel } from "../../agents/bash-tools.exec-output.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
@@ -15,6 +19,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { clampInt } from "../../utils.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
@@ -252,13 +257,16 @@ export async function handleBashChatCommand(params: {
       }
       const exitLabel = renderExecExitLabel(finished);
       const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
-      return {
-        text: [
-          `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
-          `Exit: ${exitLabel}`,
-          formatOutputBlock(finished.aggregated || finished.tail),
-        ].join("\n"),
-      };
+      return setReplyPayloadMetadata(
+        {
+          text: [
+            `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
+            `Exit: ${exitLabel}`,
+            formatOutputBlock(finished.aggregated || finished.tail),
+          ].join("\n"),
+        },
+        { onFinalDeliverySuccess: () => acknowledgeNotifyOnExit(finished) },
+      );
     }
     if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
       activeJob = null;
@@ -331,8 +339,10 @@ export async function handleBashChatCommand(params: {
       allowBackground: true,
       timeoutSec,
       sessionKey: params.sessionKey,
-      mainKey: params.cfg.session?.mainKey,
-      sessionScope: params.cfg.session?.scope,
+      eventRouting: {
+        mainKey: params.cfg.session?.mainKey,
+        sessionScope: params.cfg.session?.scope,
+      },
       notifyOnExit,
       notifyOnExitEmptySuccess,
       elevated: {

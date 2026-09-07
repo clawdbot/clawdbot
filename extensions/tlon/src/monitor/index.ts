@@ -43,7 +43,7 @@ import {
 import { resolveChannelAuthorization } from "./authorization.js";
 import { createTlonCitationResolver } from "./cites.js";
 import { fetchAllChannels, fetchInitData } from "./discovery.js";
-import { cacheMessage, fetchThreadHistory, getChannelHistory } from "./history.js";
+import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
 import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
 import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
 import {
@@ -181,6 +181,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   // Track recent threads we've participated in so replies can omit a mention.
   const participatedThreads = createParticipatedThreadTracker();
+  const channelHistory = createChannelHistoryCache();
 
   // Track DM senders per session to detect shared sessions (security warning)
   const dmSendersBySession = new Map<string, Set<string>>();
@@ -390,7 +391,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     if (isGroup && groupChannel && isSummarizationRequest(messageText)) {
       try {
-        const history = await getChannelHistory(api, groupChannel, 50, runtime);
+        const history = await channelHistory.getChannelHistory(api, groupChannel, 50, runtime);
         if (history.length === 0) {
           const noHistoryMsg =
             "I couldn't fetch any messages for this channel. It might be empty or there might be a permissions issue.";
@@ -850,7 +851,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       const contentBody = content.content;
       const sentAt = asFiniteNumber(content?.sent) ?? Date.now();
 
-      cacheMessage(nest, {
+      channelHistory.cacheMessage(nest, {
         author: senderShip,
         content: rawText,
         timestamp: sentAt,

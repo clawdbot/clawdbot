@@ -35,7 +35,7 @@ suite.define(() => {
     }
   });
 
-  it("shows advertised cloud machines only to admins", async () => {
+  it("shows advertised cloud machines after selecting a profile", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -63,9 +63,13 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
+      const where = page.locator("#new-session-where-trigger");
+      await where.click();
       const picker = page.locator("wa-popover.new-session-page__where-popover");
-      await picker.locator('[data-value="cloud:aws"]').click();
+      const profile = picker.locator('[data-value="cloud:aws"]');
+      await profile.click();
+      await profile.waitFor({ state: "hidden" });
+      await where.click();
       await picker.locator('[data-value="machine:fast"]').waitFor();
     } finally {
       await context.close();

@@ -36,6 +36,16 @@ const syncSteeringGetterByCallback = new WeakMap<
   InternalSyncSteeringGetter
 >();
 
+export type InternalSteeringQueueObserver = {
+  peek: () => readonly AgentMessage[];
+  reserve: (messages: readonly AgentMessage[]) => () => void;
+  subscribe: (listener: () => void) => () => void;
+};
+const steeringQueueObserverByCallback = new WeakMap<
+  InternalSteeringGetter,
+  InternalSteeringQueueObserver
+>();
+
 export type InternalToolExecutionPreparation =
   | {
       kind: "immediate";
@@ -102,9 +112,19 @@ export function takeInternalToolBatchLifecycle(
 export function attachInternalSyncSteeringGetter(
   callback: InternalSteeringGetter,
   syncGetter: InternalSyncSteeringGetter,
+  observer?: InternalSteeringQueueObserver,
 ): InternalSteeringGetter {
   syncSteeringGetterByCallback.set(callback, syncGetter);
+  if (observer) {
+    steeringQueueObserverByCallback.set(callback, observer);
+  }
   return callback;
+}
+
+export function getInternalSteeringQueueObserver(
+  callback: InternalSteeringGetter | undefined,
+): InternalSteeringQueueObserver | undefined {
+  return callback ? steeringQueueObserverByCallback.get(callback) : undefined;
 }
 
 export function getInternalSyncSteeringGetter(
@@ -148,9 +168,13 @@ export function attachInternalToolResultAcknowledgement<T extends object>(
 
 export function attachInternalToolResultProvenance<T extends object>(
   value: T,
-  provenance: object,
+  provenance: object | undefined,
 ): T {
-  toolResultProvenanceByValue.set(value, provenance);
+  if (provenance) {
+    toolResultProvenanceByValue.set(value, provenance);
+  } else {
+    toolResultProvenanceByValue.delete(value);
+  }
   return value;
 }
 

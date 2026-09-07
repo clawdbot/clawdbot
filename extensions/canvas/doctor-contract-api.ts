@@ -1,9 +1,8 @@
-// Canvas doctor contract migrates documents from configured host roots into core storage.
+// Canvas Doctor keeps copy-time dependencies cold until legacy documents exist.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { pathExists } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   listLegacyCanvasDocumentIds,
   migrateCanvasHostConfig,
@@ -64,6 +63,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       if (documentIds.length === 0) {
         return { changes, warnings };
       }
+      const { pathExists } = await import("openclaw/plugin-sdk/text-utility-runtime");
 
       const coreDir = path.resolve(params.stateDir, "canvas", "documents");
       await fs.mkdir(coreDir, { recursive: true });

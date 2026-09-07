@@ -375,10 +375,7 @@ describe("scanOpenRouterModels", () => {
   it("caps oversized scan timeouts before scheduling catalog aborts", async () => {
     // Timer APIs cannot safely schedule above the platform max; cap before
     // creating the catalog abort timeout.
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const fetchImpl = createFetchFixture({ data: [] });
 
     await scanOpenRouterModels({

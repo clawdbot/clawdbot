@@ -183,7 +183,6 @@ describe("full release same-parent recovery workflow", () => {
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("continuation_plan_json");
     for (const job of [
       "docker_runtime_assets_preflight",
-      "candidate_acquisition",
       "normal_ci",
       "plugin_prerelease_independent",
       "plugin_prerelease_candidate",
@@ -194,6 +193,16 @@ describe("full release same-parent recovery workflow", () => {
     ]) {
       expect(String(workflow.jobs[job]?.if), job).toContain("github.run_attempt == 1");
     }
+    for (const [job, dispatch] of [
+      ["prepare_npm_package", "Dispatch immutable npm artifact producer"],
+      ["prepare_docker_release", "Dispatch immutable Docker artifact producer"],
+      ["candidate_acquisition", "Dispatch immutable validation candidate producer"],
+    ] as const) {
+      expect(String(workflow.jobs[job]?.if), job).not.toContain("github.run_attempt");
+      expect(step(job, dispatch).if).toBe("github.run_attempt == 1");
+      expect(step(job, "Recover original artifact producer").if).toBeUndefined();
+    }
+    expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
     expect(source).not.toContain("continuationSource");
     expect(source).not.toContain("continuation_plan_json");
   });

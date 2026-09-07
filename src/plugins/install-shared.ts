@@ -10,7 +10,7 @@ import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import {
   attachPluginInstallTransaction,
-  isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -211,13 +211,6 @@ export function emitSuccessfulPluginInstallSecurityEvent(
     hasVersion: Boolean(result.version),
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
   });
-}
-
-export function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
-  return (
-    Object.keys(manifest.dependencies ?? {}).length > 0 ||
-    Object.keys(manifest.optionalDependencies ?? {}).length > 0
-  );
 }
 
 function buildBlockedInstallResult(params: {
@@ -460,9 +453,10 @@ export async function installPluginDirectoryIntoExtensions(params: {
       return { ok: true as const };
     },
   };
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
   const installRes = await runtime.installPackageDir(
-    isPluginInstallCommitDeferred(params)
-      ? requestDeferredPackageDirInstall(packageInstallParams)
+    transactionRequest
+      ? requestDeferredPackageDirInstall(packageInstallParams, transactionRequest.assertOwned)
       : packageInstallParams,
   );
   if (!installRes.ok) {

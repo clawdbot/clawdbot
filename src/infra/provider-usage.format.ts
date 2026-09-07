@@ -4,7 +4,6 @@ import type {
   ProviderUsageBilling,
   ProviderUsageSnapshot,
   UsageSummary,
-  UsageWindow,
 } from "./provider-usage.types.js";
 
 // Compact reset times for chat/status lines; long windows fall back to a date.
@@ -38,13 +37,6 @@ function formatResetRemaining(targetMs?: number, now?: number): string | null {
     month: "short",
     day: "numeric",
   }).format(new Date(targetMs));
-}
-
-function formatWindowShort(window: UsageWindow, now?: number): string {
-  const remaining = clampPercent(100 - window.usedPercent);
-  const reset = formatResetRemaining(window.resetAt, now);
-  const resetSuffix = reset ? ` ⏱${reset}` : "";
-  return `${remaining.toFixed(0)}% left (${window.label}${resetSuffix})`;
 }
 
 function formatBillingAmount(amount: number, unit: string): string {
@@ -94,38 +86,6 @@ export function formatUsageWindowSummary(
     return `${window.label} ${remaining.toFixed(0)}% left${resetSuffix}`;
   });
   return parts.join(" · ");
-}
-
-export function formatUsageSummaryLine(
-  summary: UsageSummary,
-  opts?: { now?: number; maxProviders?: number },
-): string | null {
-  const providers = summary.providers
-    .filter(
-      (entry) =>
-        (entry.windows.length > 0 ||
-          Boolean(entry.summary?.trim()) ||
-          Boolean(entry.billing?.length)) &&
-        !entry.error,
-    )
-    .slice(0, opts?.maxProviders ?? summary.providers.length);
-  if (providers.length === 0) {
-    return null;
-  }
-
-  const parts = providers.map((entry) => {
-    if (entry.windows.length === 0 && entry.summary?.trim()) {
-      return `${entry.displayName} ${entry.summary.trim()}`;
-    }
-    if (entry.windows.length === 0 && entry.billing?.[0]) {
-      return `${entry.displayName} ${formatBillingEntry(entry.billing[0])}`;
-    }
-    const window = entry.windows.reduce((best, next) =>
-      next.usedPercent > best.usedPercent ? next : best,
-    );
-    return `${entry.displayName} ${formatWindowShort(window, opts?.now)}`;
-  });
-  return `📊 Usage: ${parts.join(" · ")}`;
 }
 
 export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: number }): string[] {

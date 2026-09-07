@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import type { ProcessSupervisor, SpawnInput, SpawnProcessAdapter } from "./types.js";
 
-type ChildSpawnOptions = Omit<Extract<SpawnInput, { mode: "child" }>, "backendId" | "mode">;
+type ChildSpawnOptions = Omit<Extract<SpawnInput, { mode: "child" }>, "mode">;
 
 type StubOutputSubscriber = {
   listener: (chunk: string) => void;
@@ -55,6 +55,7 @@ export function createStubChildAdapter(options?: {
   const adapter: StubChildAdapter = {
     pid: options?.pid ?? 1234,
     stdin: undefined,
+    supportsRawOutput: true,
     onStdout: (listener, onRaw) => {
       stdoutSubscribers.push({ listener, ...(onRaw ? { onRaw } : {}) });
     },
@@ -94,7 +95,6 @@ export function createStubChildAdapter(options?: {
 export async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
   return supervisor.spawn({
     ...options,
-    backendId: "test",
     mode: "child",
   });
 }

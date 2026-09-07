@@ -1,21 +1,22 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 
 extension OpenClawChatViewModel {
     func handleProgressCardChanged(_ event: ProgressCardChangedEvent) {
-        guard self.matchesCurrentSessionKey(
+        let session = self.currentSessionSnapshot()
+        let target = self.progressCardTarget(for: session)
+        let canonical = target?.sessionKey ?? session.key
+        guard Self.matchesCurrentSessionKey(
             incoming: event.sessionkey,
-            current: self.sessionKey)
+            current: canonical,
+            mainSessionKey: self.resolvedMainSessionKey,
+            activeAgentId: target?.agentID ?? session.deliveryAgentID)
         else { return }
 
-        if event.revision.value is NSNull {
-            self.clearProgressCard()
-            return
-        }
-        if event.revision.value as? Int == self.progressCard?.revision {
-            return
-        }
-        self.scheduleProgressCardFetch()
+        // Global and ordinary rows can share a wire key. Events invalidate; only the
+        // captured target's get response may publish or clear its durable card.
+        self.scheduleProgressCardFetch(for: session)
     }
 
     func scheduleProgressCardFetch(for session: SessionSnapshot? = nil) {
@@ -27,6 +28,11 @@ extension OpenClawChatViewModel {
         Task { [weak self] in
             guard let self else { return }
             let storeAvailable = await self.transport.gatewayAdvertisesMethod("progressCard.get")
+            guard self.isCurrentProgressCardRequest(
+                session: session,
+                generation: generation,
+                requestID: requestID)
+            else { return }
             self.progressCardStoreAvailable = storeAvailable
             // Gateways without the durable store reject the fetch outright
             // (2026.7.x: "missing scope: operator.admin"); the legacy
@@ -39,9 +45,47 @@ extension OpenClawChatViewModel {
         }
     }
 
-    func clearProgressCard() {
+    func refreshProgressCard(from info: OpenClawChatSessionInfo?, for request: HistoryRequest) {
+        // History may finish on an old physical route. Its canonical target is
+        // reusable only within the session and progress generation that admitted it.
+        guard request.progressCardGeneration == self.progressCardGeneration,
+              self.isCurrentSession(request.session)
+        else { return }
+        self.preparedProgressCardTarget = nil
+        if let key = info?.key,
+           let owner = info?.agentId ?? OpenClawChatSessionKey.agentID(from: key),
+           request.session.deliveryAgentID == nil || request.session.deliveryAgentID == owner,
+           key == "global" || OpenClawChatSessionKey.agentID(from: key) == owner
+        {
+            self.preparedProgressCardTarget = (
+                request.session,
+                request.progressCardGeneration,
+                OpenClawChatSessionTarget(sessionKey: key, agentID: owner))
+        }
+        self.scheduleProgressCardFetch(for: request.session)
+    }
+
+    func invalidateProgressCardTarget() {
         self.progressCardGeneration &+= 1
+        self.preparedProgressCardTarget = nil
+    }
+
+    func clearProgressCard() {
+        self.invalidateProgressCardTarget()
         self.applyProgressCard(nil)
+    }
+
+    private func progressCardTarget(for session: SessionSnapshot) -> OpenClawChatSessionTarget? {
+        if let prepared = self.preparedProgressCardTarget,
+           prepared.generation == self.progressCardGeneration,
+           self.isCurrentSession(prepared.session)
+        {
+            return prepared.target
+        }
+        // A literal global key and selected owner are already canonical;
+        // aliases wait for admitted history instead of guessing a main key.
+        guard session.key == "global", let owner = session.deliveryAgentID else { return nil }
+        return OpenClawChatSessionTarget(sessionKey: "global", agentID: owner)
     }
 
     private func fetchProgressCard(
@@ -49,23 +93,44 @@ extension OpenClawChatViewModel {
         generation: UInt64,
         requestID: UInt64) async
     {
+        guard let target = self.progressCardTarget(for: session), let owner = target.agentID else {
+            self.logDiagnostic("chat.ui progress card waits for canonical history identity")
+            return
+        }
+        let expectedKey = target.sessionKey == "global" ? "agent:\(owner):global" : target.sessionKey
         do {
-            let card = try await self.transport.fetchProgressCard(sessionKey: session.key)
+            let card = try await self.transport.fetchProgressCard(
+                sessionKey: target.sessionKey,
+                agentID: owner)
             guard self.isCurrentProgressCardRequest(
                 session: session,
                 generation: generation,
                 requestID: requestID)
             else { return }
+            if let card, card.sessionkey != expectedKey {
+                self.logDiagnostic("chat.ui progress card response rejected: session identity changed")
+                return
+            }
             self.applyProgressCard(card)
+            if self.errorText == OpenClawChatTransportUpgradeMessage.progressCardAgentScope {
+                self.errorText = nil
+            }
         } catch {
             guard self.isCurrentProgressCardRequest(
                 session: session,
                 generation: generation,
                 requestID: requestID)
             else { return }
-            // Keep the last rendered card on transient failure: the durable
-            // store clears only via a successful null fetch or a null-revision
-            // poke, never via a failed refresh.
+            if let response = error as? GatewayResponseError,
+               response.details["code"]?.stringValue == "SESSION_PARTICIPATION_REQUIRED"
+            {
+                self.applyProgressCard(nil)
+            }
+            if error is OpenClawChatProgressCardError, self.errorText == nil {
+                self.errorText = error.localizedDescription
+            }
+            // Unsupported or transient refresh failures retain the last durable card.
+            // Explicit denial removes its content while preserving the canonical retry target.
             self.logDiagnostic(
                 "chat.ui progress card fetch failed sessionKey=\(session.key) "
                     + "error=\(error.localizedDescription)")

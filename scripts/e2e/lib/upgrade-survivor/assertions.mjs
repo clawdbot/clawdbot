@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
+import { validatePrepublishPluginRegistryArtifact } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { readPostCoreSnapshot } from "./diagnostics.mjs";
 import {
@@ -17,6 +17,7 @@ import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.
 const command = process.argv[2];
 const SCENARIOS = new Set([
   "base",
+  "mobile-pairing-reconnect",
   "acpx-openclaw-tools-bridge",
   "feishu-channel",
   "bootstrap-persona",
@@ -33,6 +34,7 @@ const SCENARIOS = new Set([
   "sqlite-volume",
   "recovery-cleanup",
   "auth-profile-v2026-7-2-beta-5",
+  "watchos-direct-node",
 ]);
 
 const PERSONA_FILES = new Map([
@@ -371,6 +373,11 @@ function seedState() {
     version: 1,
     setupCompletedAt: "2026-04-01T00:00:00.000Z",
   });
+  // Companion reconnect rows own their real pairing state. Generic migration
+  // specimens can block a frozen candidate before its auth path is exercised.
+  if (scenario === "watchos-direct-node" || scenario === "mobile-pairing-reconnect") {
+    return;
+  }
   writeJson(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json"), {
     id: "legacy-session",
     agentId: "main",
@@ -481,7 +488,8 @@ function assertConfigSurvived() {
     assert(config.update?.channel === expectedChannel, "update.channel was not preserved");
   }
   if (acceptsIntent(coverage, "gateway")) {
-    assert(config.gateway?.auth?.mode === "token", "gateway auth mode was not preserved");
+    const expectedAuthMode = scenario === "mobile-pairing-reconnect" ? "password" : "token";
+    assert(config.gateway?.auth?.mode === expectedAuthMode, "gateway auth mode was not preserved");
   }
 
   if (acceptsIntent(coverage, "models")) {
@@ -639,6 +647,9 @@ function assertStateSurvived() {
   const scenario = getScenario();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
   assert(fs.existsSync(path.join(workspace, "IDENTITY.md")), "workspace identity file missing");
+  if (scenario === "watchos-direct-node" || scenario === "mobile-pairing-reconnect") {
+    return;
+  }
   assert(
     fs.existsSync(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json")),
     "legacy session file missing",
@@ -659,17 +670,19 @@ function assertStateSurvived() {
     assertAuthProfileMigrationSurvived(stateDir, stage);
   }
   const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
-  if (stage === "baseline") {
-    if (fs.existsSync(legacyRuntimeRoot)) {
-      assert(
-        fs.existsSync(path.join(legacyRuntimeRoot, "discord")),
-        "legacy plugin runtime deps root exists but discord debris is missing before doctor cleanup",
-      );
-    }
-  } else {
-    assert(
-      !fs.existsSync(legacyRuntimeRoot),
-      `legacy plugin runtime deps root survived update/doctor: ${legacyRuntimeRoot}`,
+  for (const plugin of ["discord", "telegram", "whatsapp"]) {
+    const sentinel = path.join(
+      legacyRuntimeRoot,
+      plugin,
+      ".openclaw-runtime-deps-copy-stale",
+      "node_modules",
+      "stale-sentinel",
+      "package.json",
+    );
+    assertStrict.deepEqual(
+      readJson(sentinel),
+      { name: "stale-sentinel", version: "0.0.0" },
+      `shared plugin runtime cache changed during update/doctor: ${sentinel}`,
     );
   }
   if (scenario === "bootstrap-persona") {
@@ -686,18 +699,21 @@ function assertStateSurvived() {
     );
   }
   if (scenario === "versioned-runtime-deps") {
-    if (stage === "baseline") {
-      return;
-    }
     const version = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION || "2026.4.24";
-    const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
-    const staleVersionedRoots = fs.existsSync(runtimeRoot)
-      ? fs.readdirSync(runtimeRoot).filter((entry) => entry.startsWith(`openclaw-${version}-`))
-      : [];
-    assert(
-      staleVersionedRoots.length === 0,
-      `stale versioned runtime deps survived update/doctor: ${staleVersionedRoots.join(", ")}`,
-    );
+    for (const plugin of ["discord", "feishu", "telegram", "whatsapp"]) {
+      const sentinel = path.join(
+        legacyRuntimeRoot,
+        `openclaw-${version}-${plugin}`,
+        "node_modules",
+        "stale-sentinel",
+        "package.json",
+      );
+      assertStrict.deepEqual(
+        readJson(sentinel),
+        { name: "stale-sentinel", version: "0.0.0" },
+        `versioned shared runtime cache changed during update/doctor: ${sentinel}`,
+      );
+    }
   }
 }
 
@@ -1140,35 +1156,6 @@ function hasCompanionPluginConsent(record) {
   ].some((value) => value !== undefined);
 }
 
-async function loadTrustedOfficialInstallRecordPredicate() {
-  const candidatePackageRoot = path.join(
-    requireEnv("npm_config_prefix"),
-    "lib",
-    "node_modules",
-    "openclaw",
-  );
-  const modulePath = path.join(
-    candidatePackageRoot,
-    "dist",
-    "plugins",
-    "official-external-install-records.js",
-  );
-  assert(
-    fs.existsSync(modulePath),
-    `candidate official install record module missing: ${modulePath}`,
-  );
-  const module = await import(pathToFileURL(modulePath).href);
-  assert(
-    typeof module.isTrustedOfficialPluginInstallRecord === "function",
-    `candidate official install record predicate missing: ${modulePath}`,
-  );
-  return module.isTrustedOfficialPluginInstallRecord;
-}
-
-function isTrustedOfficialNpmCompanion(record, pluginId, packageName, isTrustedOfficialRecord) {
-  return isTrustedOfficialRecord?.({ pluginId, packageName, record }) === true;
-}
-
 function assertCompanionPluginConsent(record, pluginId, integrity) {
   assert(
     record.acceptedSurface && typeof record.acceptedSurface === "object",
@@ -1195,21 +1182,72 @@ function assertCompanionPluginConsent(record, pluginId, integrity) {
   );
 }
 
-async function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
+function assertNpmPluginInstall([
+  pluginId,
+  packageName,
+  expectedVersion,
+  capabilityConsentSupported,
+  pendingUpdateFile,
+  observationRoot,
+  baselineVersion,
+]) {
+  assert(
+    pluginId && packageName && expectedVersion,
+    "npm plugin assertion requires identity and version",
+  );
+  assert(
+    capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
+    "npm plugin assertion requires candidate capability-consent support",
+  );
+  if (
+    pendingUpdateFile &&
+    assertRecoverableUpdateJson([
+      pendingUpdateFile,
+      expectedVersion,
+      observationRoot,
+      baselineVersion,
+    ]).has(pluginId)
+  ) {
+    // Only this plugin's recorded denial defers its artifact check until repair.
+    process.stdout.write(`Plugin "${pluginId}" is awaiting fixture capability consent.\n`);
+    return;
+  }
+  const records = readInstalledPluginIndex().installRecords ?? {};
+  const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
+  const record = records[pluginId];
+  assert(record.source === "npm", `${pluginId} plugin must be installed from npm`);
+  assertPluginArtifactConsent(
+    record,
+    pluginId,
+    packageJson,
+    expectedVersion,
+    capabilityConsentSupported,
+  );
+  const artifactDir = requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR");
+  const { manifest } = validatePrepublishPluginRegistryArtifact({
+    artifactDir,
+    expectedSourceSha: requireEnv("OPENCLAW_DOCKER_E2E_SELECTED_SHA"),
+    expectedCandidateVersion: expectedVersion,
+    expectedManifestSha256: requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"),
+    requiredPackages: [packageName],
+  });
+  const artifact = manifest.packages.find((entry) => entry.name === packageName);
+  const archive = fs.readFileSync(path.join(artifactDir, artifact.tarball));
+  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
+}
+
+function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
   assert(expectedVersion, "assert-companion-installs requires <expected-version>");
   assert(
     capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
     "assert-companion-installs requires candidate capability-consent support",
   );
-  const isTrustedOfficialRecord =
-    capabilityConsentSupported === "1"
-      ? await loadTrustedOfficialInstallRecordPredicate()
-      : undefined;
   const records = readInstalledPluginIndex().installRecords ?? {};
-  for (const [pluginId, packageName, source, allowsOfficialConsentExemption] of [
-    ["discord", "@openclaw/discord", "npm", true],
-    ["whatsapp", "@openclaw/whatsapp", "clawhub", false],
-    ["codex", "@openclaw/codex", "npm", true],
+  for (const [pluginId, packageName, source] of [
+    ["discord", "@openclaw/discord", "npm"],
+    ["whatsapp", "@openclaw/whatsapp", "clawhub"],
+    ["codex", "@openclaw/codex", "npm"],
   ]) {
     const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
     const record = records[pluginId];
@@ -1220,8 +1258,6 @@ async function assertCompanionPluginInstalls([expectedVersion, capabilityConsent
       packageJson,
       expectedVersion,
       capabilityConsentSupported,
-      isTrustedOfficialRecord,
-      allowsOfficialConsentExemption,
     );
   }
 }
@@ -1232,8 +1268,6 @@ function assertPluginArtifactConsent(
   packageJson,
   expectedVersion,
   capabilityConsentSupported,
-  isTrustedOfficialRecord,
-  allowsOfficialConsentExemption = false,
 ) {
   const installedVersion = record.source === "clawhub" ? record.version : record.resolvedVersion;
   assert(
@@ -1249,14 +1283,38 @@ function assertPluginArtifactConsent(
     typeof integrity === "string" && integrity.length > 0,
     `${pluginId} plugin integrity missing`,
   );
-  // Verified first-party packages intentionally omit operator-acceptance metadata.
-  // Any unverified or partially accepted record still takes the strict path below.
-  if (
-    capabilityConsentSupported === "1" &&
-    (!allowsOfficialConsentExemption ||
-      hasCompanionPluginConsent(record) ||
-      !isTrustedOfficialNpmCompanion(record, pluginId, packageJson.name, isTrustedOfficialRecord))
-  ) {
+  if (capabilityConsentSupported === "1") {
+    const inspection = JSON.parse(
+      execFileSync("openclaw", ["plugins", "inspect", pluginId, "--json"], {
+        encoding: "utf8",
+        timeout: 120_000,
+      }),
+    );
+    assert(inspection.plugin?.id === pluginId, `${pluginId} inspected plugin id changed`);
+    assert(
+      inspection.plugin.packageName === packageJson.name,
+      `${pluginId} inspected package name changed`,
+    );
+    assert(
+      typeof inspection.plugin.rootDir === "string" &&
+        fs.realpathSync(inspection.plugin.rootDir) ===
+          fs.realpathSync(resolveHomePath(record.installPath)),
+      `${pluginId} inspected install path changed`,
+    );
+    assertStrict.deepEqual(
+      inspection.install,
+      record,
+      `${pluginId} inspected install record changed`,
+    );
+    // Official provenance is not operator acceptance. Use the metadata owner's
+    // decision for this exact record, but validate any recorded acceptance so a
+    // partial or stale artifact claim cannot pass the upgrade proof.
+    if (inspection.plugin.trustedOfficialInstall === true && !hasCompanionPluginConsent(record)) {
+      process.stdout.write(
+        `Plugin "${pluginId}" has verified official capability-consent exemption.\n`,
+      );
+      return;
+    }
     assertCompanionPluginConsent(record, pluginId, integrity);
   }
 }
@@ -1593,15 +1651,95 @@ function assertUpdateRunSelfUpgrade([file]) {
   );
 }
 
+function assertMobilePairingEvidence(files) {
+  const expectedPhases = ["baseline", "candidate-first", "candidate-restart", "final"];
+  const expectedNodeSurfaceAdditions = ["watch.notify", "watch.status"];
+  assert(
+    files.length === expectedPhases.length,
+    "mobile pairing evidence requires all four reconnect phases",
+  );
+  const evidence = files.map((file, index) => {
+    const value = readJson(file);
+    assert(value?.phase === expectedPhases[index], "mobile pairing evidence phase changed");
+    assert(value?.ok === true, "mobile pairing reconnect did not pass");
+    assert(value?.health === true, "mobile pairing health check did not pass");
+    assert(
+      value?.connectedDevicePresent === true,
+      "mobile pairing connected device assertion did not pass",
+    );
+    assert(value?.pendingDevicePairingCount === 0, "mobile device pairing left a pending request");
+    assert(value?.pairedDevicePresent === true, "paired mobile device missing");
+    assert(value?.pairedNodePresent === true, "paired mobile node missing");
+    const cleanPairingState =
+      value?.pendingPairingCount === 0 &&
+      value?.pendingNodePairingCount === 0 &&
+      value?.nodeSurfaceReapprovalRequired === false &&
+      Array.isArray(value?.nodeSurfaceCommandAdditions) &&
+      value.nodeSurfaceCommandAdditions.length === 0;
+    const scopedNodeSurfaceReapproval =
+      index > 0 &&
+      value?.pendingPairingCount === 1 &&
+      value?.pendingNodePairingCount === 1 &&
+      value?.nodeSurfaceReapprovalRequired === true &&
+      JSON.stringify(value?.nodeSurfaceCommandAdditions) ===
+        JSON.stringify(expectedNodeSurfaceAdditions);
+    assert(
+      typeof value?.nodeSurfaceReapprovalExpected === "boolean",
+      "mobile node pairing reapproval expectation missing",
+    );
+    assert(
+      value.nodeSurfaceReapprovalExpected ? scopedNodeSurfaceReapproval : cleanPairingState,
+      "mobile node pairing pending state exceeded the known command-surface reapproval",
+    );
+    assert(value?.missingPasswordReason === true, "mobile pairing password_missing proof missing");
+    assert(
+      value?.missingPasswordClose1008 === true,
+      "mobile pairing password_missing close code proof missing",
+    );
+    for (const role of ["node", "operator"]) {
+      const credential = value?.credentials?.[role];
+      assert(
+        /^[a-f0-9]{64}$/u.test(credential?.usedTokenHash),
+        `mobile pairing ${role} used token hash missing`,
+      );
+      assert(
+        /^[a-f0-9]{64}$/u.test(credential?.storedTokenHash),
+        `mobile pairing ${role} stored token hash missing`,
+      );
+      assert(
+        typeof credential?.deviceTokenReturned === "boolean",
+        `mobile pairing ${role} token return flag missing`,
+      );
+      assert(
+        typeof credential?.tokenRotated === "boolean",
+        `mobile pairing ${role} rotation flag missing`,
+      );
+    }
+    return value;
+  });
+
+  for (let index = 1; index < evidence.length; index += 1) {
+    for (const role of ["node", "operator"]) {
+      assert(
+        evidence[index - 1]?.credentials?.[role]?.storedTokenHash ===
+          evidence[index]?.credentials?.[role]?.usedTokenHash,
+        `mobile pairing ${role} reconnect did not use the newest stored token`,
+      );
+    }
+  }
+}
+
 if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
 } else if (command === "assert-exec-approvals") {
-  assertExecApprovalPolicySurvived(
-    requireEnv("OPENCLAW_STATE_DIR"),
-    process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
-  );
+  if (!["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())) {
+    assertExecApprovalPolicySurvived(
+      requireEnv("OPENCLAW_STATE_DIR"),
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+    );
+  }
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
@@ -1617,8 +1755,10 @@ if (command === "list-scenarios") {
     "transcript export requires the meeting scenario",
   );
   assertMeetingTranscriptExport(requireEnv("OPENCLAW_STATE_DIR"));
+} else if (command === "assert-npm-plugin-install") {
+  assertNpmPluginInstall(process.argv.slice(3));
 } else if (command === "assert-companion-installs") {
-  await assertCompanionPluginInstalls(process.argv.slice(3));
+  assertCompanionPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-recovered-plugin-installs") {
   assertRecoveredPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-status-json") {
@@ -1631,6 +1771,8 @@ if (command === "list-scenarios") {
   assertRepairJson(process.argv.slice(3));
 } else if (command === "assert-update-run-self-upgrade") {
   assertUpdateRunSelfUpgrade(process.argv.slice(3));
+} else if (command === "assert-mobile-pairing-evidence") {
+  assertMobilePairingEvidence(process.argv.slice(3));
 } else {
   throw new Error(`unknown upgrade-survivor assertion command: ${command ?? "<missing>"}`);
 }

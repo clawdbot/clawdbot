@@ -19,22 +19,18 @@ const INPUT_ACTIONS = new Set<ComputerUseV2ActionName>(
   COMPUTER_USE_V2_ACTION_NAMES.filter((action) => !LOCAL_ACTIONS.has(action)),
 );
 
-const COORDINATE_REQUIRED_ACTIONS = new Set<ComputerToolAction>([
-  "left_click",
-  "right_click",
-  "middle_click",
-  "double_click",
-  "triple_click",
-  "mouse_move",
-  "left_click_drag",
-]);
-
 const ELEMENT_TARGETABLE_CLICK_ACTIONS = new Set<ComputerToolAction>([
   "left_click",
   "right_click",
   "middle_click",
   "double_click",
   "triple_click",
+]);
+
+const COORDINATE_REQUIRED_ACTIONS = new Set<ComputerToolAction>([
+  ...ELEMENT_TARGETABLE_CLICK_ACTIONS,
+  "mouse_move",
+  "left_click_drag",
 ]);
 
 const COORDINATE_OPTIONAL_ACTIONS = new Set<ComputerToolAction>([
@@ -44,11 +40,7 @@ const COORDINATE_OPTIONAL_ACTIONS = new Set<ComputerToolAction>([
 ]);
 
 const MODIFIER_TEXT_ACTIONS = new Set<ComputerToolAction>([
-  "left_click",
-  "right_click",
-  "middle_click",
-  "double_click",
-  "triple_click",
+  ...ELEMENT_TARGETABLE_CLICK_ACTIONS,
   "left_mouse_down",
   "left_mouse_up",
   "scroll",
@@ -113,7 +105,7 @@ function requireCoordinate(params: Record<string, unknown>, action: string): [nu
   if (!coordinate) {
     throw new Error(`coordinate [x, y] required for ${action}`);
   }
-  return [coordinate[0], coordinate[1]];
+  return coordinate;
 }
 
 function readModifiers(params: Record<string, unknown>, action: ComputerToolAction) {
@@ -193,7 +185,7 @@ export function buildComputerActParams(params: {
 }): ComputerActParams {
   const { action, input } = params;
   const wire: Record<string, unknown> = { action, executionId: params.executionId };
-  if ((COMPUTER_ACT_V1_ACTION_NAMES as readonly string[]).includes(action)) {
+  if (POINTER_OR_KEYBOARD_ACTIONS.has(action)) {
     wire.screenIndex = params.screenIndex;
     wire.refWidth = params.refWidth ?? COMPUTER_REF_WIDTH;
   }
@@ -263,15 +255,14 @@ export function buildComputerActParams(params: {
       }
       break;
     }
-    case "get_accessibility_tree": {
-      copyOptionalStringParam(wire, input, "windowRef");
-      copyOptionalStringParam(wire, input, "query");
-      copyOptionalIntegerParam(wire, input, "depth", { min: 0, max: 64 });
-      copyOptionalIntegerParam(wire, input, "maxElements", { min: 1, max: 2_000 });
-      break;
-    }
+    case "get_accessibility_tree":
     case "get_window_state": {
-      wire.windowRef = readToolStringParam(input, "windowRef", { required: true });
+      const windowRef = readToolStringParam(input, "windowRef", {
+        required: action === "get_window_state",
+      });
+      if (windowRef !== undefined) {
+        wire.windowRef = windowRef;
+      }
       copyOptionalStringParam(wire, input, "query");
       copyOptionalIntegerParam(wire, input, "depth", { min: 0, max: 64 });
       copyOptionalIntegerParam(wire, input, "maxElements", { min: 1, max: 2_000 });
@@ -492,7 +483,7 @@ export function validateCapabilityBoundInput(params: {
   if ((browserRef || pageRef) && !capabilities?.targets.includes("browser")) {
     throw new Error(`${COMPUTER_CONTRACT_MISMATCH}: selected node has no browser target support`);
   }
-  if (deliveryMode && !capabilities?.deliveryModes.includes(deliveryMode as never)) {
+  if (deliveryMode && !capabilities?.deliveryModes.some((mode) => mode === deliveryMode)) {
     throw new Error(
       `${COMPUTER_CONTRACT_MISMATCH}: selected node does not advertise ${deliveryMode} delivery`,
     );

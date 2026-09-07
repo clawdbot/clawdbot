@@ -7,8 +7,7 @@
 import { createHash } from "node:crypto";
 import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isLoopbackHost } from "../gateway/net.js";
+import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   SsrFBlockedError,
   type SsrFPolicy,

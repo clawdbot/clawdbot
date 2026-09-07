@@ -37,6 +37,7 @@ describe.skipIf(process.platform !== "darwin")("Mac worker bundled filesystem pr
     for (const bundle of bundles) {
       await bundle[Symbol.asyncDispose]();
     }
+    expect(fs.existsSync(path.join(compiled, "dist/native"))).toBe(false);
     fs.writeFileSync(path.join(compiled, "package.json"), '{"type":"module"}');
   });
 
@@ -169,5 +170,26 @@ registerHooks({
     expect(fs.readFileSync(path.join(home, "native-create-proof"), "utf8")).toBe(
       "bundled worker create proof\n",
     );
+  });
+
+  it("does not recover an omitted platform package from a stale dist native tree", () => {
+    const { packageRoot, home, native, nativePackage } = fixture();
+    const staleNative = path.join(
+      packageRoot,
+      "dist/native",
+      `${process.platform}-${process.arch}`,
+      "fs-safe-native.node",
+    );
+    fs.mkdirSync(path.dirname(staleNative), { recursive: true });
+    fs.copyFileSync(native, staleNative);
+    fs.rmSync(nativePackage.root, { recursive: true });
+    const result = probe(packageRoot, home);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("helper-unavailable");
+    expect(result.stderr).toContain(nativePackage.name);
+    expect(fs.readFileSync(path.join(home, "native-write-proof"), "utf8")).toBe(
+      "before replacement\n",
+    );
+    expect(fs.existsSync(path.join(home, "native-create-proof"))).toBe(false);
   });
 });

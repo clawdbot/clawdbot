@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TSDOWN_NON_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createFixture,
   declarationCacheRecords,
@@ -25,8 +26,9 @@ describe("write-unified-entry-dts", () => {
     expect(closure).toEqual(
       expect.arrayContaining([
         "scripts/lib/tsdown-declaration-generator-inputs.mts",
+        "scripts/lib/tsdown-declaration-boundary.mts",
         "scripts/lib/plugin-sdk-entrypoints.json",
-        "scripts/lib/record-shared.mjs",
+        "scripts/windows-cmd-helpers.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",
         "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
         "src/state/openclaw-state-schema.sql",
@@ -108,6 +110,7 @@ describe("write-unified-entry-dts", () => {
     const { root, write, production, declarations } = createFixture(
       TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
     );
+    materializeNativeCompiler(root);
     expect(Object.values(declarations).every((entries) => entries.length > 0)).toBe(true);
     expect(production).toHaveLength(Object.values(declarations).flat().length);
     write("extensions/fixture-a/runtime-only.js", 'export const runtimeOnly = "runtime";');
@@ -273,6 +276,11 @@ describe("write-unified-entry-dts", () => {
     const env = { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "fixture-a" };
     const initial = runUnifiedWriter(root, env);
     expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+    for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      expect(initial.stderr).toContain(
+        `[tsdown-unified] ${group}: cache miss (record-unavailable)`,
+      );
+    }
     expect(
       (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/6 finished/gu),
     ).toHaveLength(6);
@@ -281,6 +289,9 @@ describe("write-unified-entry-dts", () => {
     const before = treeHashes(path.join(root, "dist"));
     const repeated = runUnifiedWriter(root, env);
     expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
+    for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      expect(repeated.stderr).toContain(`[tsdown-unified] ${group}: cache hit (fresh-cache)`);
+    }
     expect(repeated.stdout + repeated.stderr).not.toContain("[tsdown-build] invocation");
     expect(treeHashes(path.join(root, "dist"))).toEqual(before);
     expectStagingClean(root);
@@ -304,17 +315,19 @@ describe("write-unified-entry-dts", () => {
         "tsdown.config.ts",
         `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
 const selected = configs.find(config => config.name === ${JSON.stringify(last)});
+const register = selected.hooks;
+selected.hooks = async hooks => {
+  await register(hooks);
 ${
   failure === "missing successful receipt"
-    ? "selected.hooks = {};"
-    : `const done = selected.hooks["build:done"];
-selected.hooks = { "build:done": async (context) => {
-  await done(context);
-  if (fs.existsSync(".artifacts/mutate-cached-input")) {
-    fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
-  }
-}};`
+    ? '  hooks.clearHook("build:done");'
+    : `  hooks.hook("build:done", () => {
+    if (fs.existsSync(".artifacts/mutate-cached-input")) {
+      fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
+    }
+  });`
 }
+};
 `,
       );
     }

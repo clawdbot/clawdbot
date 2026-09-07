@@ -107,6 +107,7 @@ function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "deepseek-native" ||
     endpointClass === "mistral-public" ||
     endpointClass === "opencode-native" ||
+    endpointClass === "opencode-go-native" ||
     endpointClass === "xai-native" ||
     isXiaomi ||
     isZai ||

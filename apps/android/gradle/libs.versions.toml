@@ -17,6 +17,7 @@ androidx-wear-compose = "1.6.2"
 androidx-wear-input = "1.2.0"
 androidx-wear-protolayout = "1.4.2"
 androidx-wear-tiles = "1.6.2"
+androidx-window = "1.5.1"
 bcprov = "1.85.2"
 commonmark = "0.30.0"
 coil = "3.6.1"
@@ -50,7 +51,6 @@ androidx-camera-video = { module = "androidx.camera:camera-video", version.ref =
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "androidx-compose-bom" }
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
-androidx-compose-material3-adaptive-navigation-suite = { module = "androidx.compose.material3:material3-adaptive-navigation-suite" }
 androidx-compose-ui = { module = "androidx.compose.ui:ui" }
 androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
@@ -72,6 +72,7 @@ androidx-wear-input = { module = "androidx.wear:wear-input", version.ref = "andr
 androidx-wear-protolayout = { module = "androidx.wear.protolayout:protolayout", version.ref = "androidx-wear-protolayout" }
 androidx-wear-protolayout-material = { module = "androidx.wear.protolayout:protolayout-material3", version.ref = "androidx-wear-protolayout" }
 androidx-wear-tiles = { module = "androidx.wear.tiles:tiles", version.ref = "androidx-wear-tiles" }
+androidx-window = { module = "androidx.window:window", version.ref = "androidx-window" }
 bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bcprov" }
 barcode-scanning = { module = "com.google.mlkit:barcode-scanning", version.ref = "barcode-scanning" }
 commonmark = { module = "org.commonmark:commonmark", version.ref = "commonmark" }

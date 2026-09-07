@@ -5,6 +5,7 @@ import {
   canDecodeChatAudioWaveform,
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
   computeChatAudioWaveformPeaks,
+  retainCachedChatAudioBlob,
   shouldFetchChatAudioWaveform,
 } from "./chat-audio-waveform.ts";
 
@@ -67,7 +68,7 @@ describe("chat audio waveform", () => {
     expect(peaks).toEqual([0.25, 1]);
   });
 
-  it("declines a new Blob when all 32 cache entries are retained", () => {
+  it("enforces the entry cap until the last lease releases an evictable Blob", () => {
     const releases: Array<() => void> = [];
     for (let index = 0; index < 32; index += 1) {
       const retained = cacheAndRetainChatAudioBlob(`retained-${index}`, {
@@ -87,6 +88,26 @@ describe("chat audio waveform", () => {
         sizeBytes: 1,
       }),
     ).toBeNull();
+
+    const shared = retainCachedChatAudioBlob("retained-0");
+    expect(shared).not.toBeNull();
+    releases[0]!();
+    releases[0]!();
+    expect(
+      cacheAndRetainChatAudioBlob("retained-overflow", {
+        blobUrl: "blob:retained-overflow",
+        sizeBytes: 1,
+      }),
+    ).toBeNull();
+
+    shared!.release();
+    const replacement = cacheAndRetainChatAudioBlob("retained-after-release", {
+      blobUrl: "blob:retained-after-release",
+      sizeBytes: 1,
+    });
+    expect(replacement).not.toBeNull();
+    expect(retainCachedChatAudioBlob("retained-0")).toBeNull();
+    replacement?.release();
 
     for (const release of releases) {
       release();

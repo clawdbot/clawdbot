@@ -16,12 +16,40 @@ import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import type { OpenClawConfig } from "./types.js";
 import { materializeLegacyAgentOwnershipForActiveChannelsResult } from "./validation.js";
 
+function cloneConfigPathParents(
+  source: Record<string, unknown>,
+  target: Record<string, unknown>,
+  path: readonly string[],
+): void {
+  let sourceCursor: unknown = source;
+  let targetCursor = target;
+  for (const key of path.slice(0, -1)) {
+    const sourceChild = isRecord(sourceCursor) ? sourceCursor[key] : undefined;
+    const targetChild = targetCursor[key];
+    if (targetChild === sourceChild) {
+      const clone = isRecord(sourceChild) ? { ...sourceChild } : {};
+      targetCursor[key] = clone;
+      targetCursor = clone;
+    } else if (isRecord(targetChild)) {
+      targetCursor = targetChild;
+    } else {
+      const clone: Record<string, unknown> = {};
+      targetCursor[key] = clone;
+      targetCursor = clone;
+    }
+    sourceCursor = sourceChild;
+  }
+}
+
 // Validation and commits share ownership preparation. Cron migration, runtime refresh,
 // and persistence remain in the committing writer.
 export function prepareConfigWriteTopology(
   params: ReadConfigFileSnapshotWithPluginMetadataResult & {
     nextConfig: OpenClawConfig;
-    options: Pick<ConfigWriteOptions, "explicitSetPaths" | "explicitSetValueSource">;
+    options: Pick<
+      ConfigWriteOptions,
+      "explicitSetPaths" | "explicitSetValueSource" | "persistCanonicalAgentRoster"
+    >;
     unsetPaths: readonly (readonly string[])[];
     env: NodeJS.ProcessEnv;
     homedir?: () => string;
@@ -43,6 +71,7 @@ export function prepareConfigWriteTopology(
     previousSoleAgentId && nextAgentIds.has(normalizeAgentId(previousSoleAgentId)),
   );
   const writesOwnershipTopology =
+    options.persistCanonicalAgentRoster === true ||
     !isDeepStrictEqual(previousEntries, nextEntries) ||
     [...(options.explicitSetPaths ?? []), ...unsetPaths].some(
       (writePath) =>
@@ -128,7 +157,6 @@ export function prepareConfigWriteTopology(
     ...ownershipMaterialization.insertedPaths.concat(workspaceCollapse.insertedPaths),
     ...authInheritanceOwnership.insertedPaths, // Persisting explicit ownership must replace the authored legacy roster too.
     ...sessionStoreOwnership.ownershipPaths, // Parent writes must not restore a removed fixed-store owner.
-    ...(persistOwnership || stampOwnership ? [["agents", "entries"]] : []), // Otherwise projection restores the retired default marker.
     ...(stampOwnership ? [["agents", "ownership"]] : []),
   ];
 
@@ -167,8 +195,10 @@ export function prepareConfigWriteTopology(
     ownershipPaths: topologyPaths,
   });
   const explicitSetPaths = [...(options.explicitSetPaths ?? []), ...topologyPaths];
-  const explicitSetValueSource = structuredClone(options.explicitSetValueSource ?? nextConfig);
+  const explicitSource = options.explicitSetValueSource ?? nextConfig;
+  const explicitSetValueSource = { ...explicitSource };
   for (const ownershipPath of topologyPaths) {
+    cloneConfigPathParents(explicitSource, explicitSetValueSource, ownershipPath);
     setConfigValueAtPath(
       explicitSetValueSource,
       ownershipPath,
@@ -179,6 +209,8 @@ export function prepareConfigWriteTopology(
     nextConfig,
     explicitSetPaths,
     explicitSetValueSource,
+    persistCanonicalAgentRoster:
+      options.persistCanonicalAgentRoster === true || persistOwnership || stampOwnership,
     preserveLegacyAgentRoster: Boolean(retainedLegacyDefaultAgentId) && !writesOwnershipTopology,
     cronOwner: persistOwnership
       ? retainedFleetOwner

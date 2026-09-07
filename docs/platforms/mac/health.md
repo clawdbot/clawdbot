@@ -19,10 +19,10 @@ refreshes health on demand.
 
 ## Settings
 
-- In **Connection** settings, **Local Gateway** shows a health row: status
+- In the native **Connection… → Connection** tab, **Local Gateway** shows a health row: status
   dot, channel summary, and an optional failure detail line, with **Retry now** and
   **Open logs** buttons.
-- **Channels tab** surfaces per-channel status and controls (login QR,
+- **Dashboard → Settings → Channels** surfaces per-channel status and controls (login QR,
   logout, probe, last disconnect/error).
 
 The health row uses these states:
@@ -50,6 +50,12 @@ Gateway's health snapshot; it does not request an active channel probe or
 send messages. The app caches the last
 good snapshot and the last error separately so the UI loads instantly and
 does not flicker while offline.
+
+The native health row follows the Primary Gateway.
+Switching Primary immediately clears the previous Gateway's cached status;
+delayed replies from that Gateway cannot replace the new results. Reconnecting
+to the same Gateway retains its last good health snapshot while a fresh check
+runs. Connection errors stay with the Gateway that reported them.
 
 ## When in doubt
 

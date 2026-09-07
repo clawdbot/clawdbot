@@ -15,15 +15,15 @@ import {
   createCodexElicitationResponse,
   type CodexElicitationResponse,
 } from "./elicitation-response.js";
+import type { CodexActiveMcpToolCall } from "./event-projector-native-tool-lifecycle.js";
 import {
-  approvalRequestExplicitlyUnavailable,
-  mapExecDecisionToOutcome,
   requestPluginApproval,
+  requestPluginApprovalOutcome,
   sanitizeCodexApprovalVisibleText,
   truncateCodexApprovalDisplayText as truncateDisplayText,
   type AppServerApprovalOutcome,
   type ExecApprovalDecision,
-  waitForPluginApprovalDecision,
+  type PluginApprovalOutcome,
 } from "./plugin-approval-roundtrip.js";
 import type {
   CodexAppPolicyContextEntry,
@@ -47,7 +47,7 @@ type BridgeableApprovalElicitation = {
   allowedDecisions?: ExecApprovalDecision[];
 };
 
-type ElicitationApprovalOutcome = AppServerApprovalOutcome | "timed-out";
+type ElicitationApprovalOutcome = PluginApprovalOutcome;
 type CodexApprovalElicitationResult =
   | { kind: "not-mine" }
   | { kind: "handled"; response: CodexElicitationResponse };
@@ -94,6 +94,7 @@ export async function routeCodexAppServerElicitationRequest(params: {
   computerUseMcpServerName?: string;
   autoApproveMcpTools?: boolean;
   projectedMcpServers?: NonNullable<CodexBundleMcpThreadConfig["configPatch"]>["mcp_servers"];
+  getActiveMcpToolCall?: (serverName: string) => CodexActiveMcpToolCall | undefined;
   signal?: AbortSignal;
 }): Promise<CodexApprovalElicitationResult> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
@@ -152,6 +153,12 @@ export async function routeCodexAppServerElicitationRequest(params: {
   if (!approvalPrompt) {
     return handled(createCodexElicitationResponse("decline"));
   }
+  let persistence:
+    | Pick<
+        Parameters<typeof requestPluginApproval>[0],
+        "mcpTool" | "toolCallId" | "isMcpToolApprovalActive"
+      >
+    | undefined;
   if (!computerUsePrompt) {
     // App elicitation delegation changes Codex's policy; custom MCP servers still
     // follow the original operator posture unless their server config overrides it.
@@ -168,16 +175,72 @@ export async function routeCodexAppServerElicitationRequest(params: {
       params.paramsForRun.hostCapabilities.assertActive();
       return handled(buildElicitationResponse(approvalPrompt, "approved-once"));
     }
+    // Explicit prompt is per-call consent, even if stale persistence hints arrive.
+    if (mode === "prompt") {
+      approvalPrompt.allowedDecisions = ["allow-once", "deny"];
+    } else if (
+      serverName &&
+      serverName !== CODEX_APPS_SERVER_NAME &&
+      Object.hasOwn(params.paramsForRun.config?.mcp?.servers ?? {}, serverName) &&
+      requestTurnId === params.turnId &&
+      readPersistHints(approvalPrompt.meta, "explicit").includes("always")
+    ) {
+      const resolveItem = () => {
+        const item = params.getActiveMcpToolCall?.(serverName);
+        return item?.server === serverName && matchesMcpApprovalDisplay(item, approvalPrompt.meta)
+          ? item
+          : undefined;
+      };
+      const item = resolveItem();
+      if (item) {
+        persistence = {
+          mcpTool: { server: serverName, tool: item.tool },
+          toolCallId: item.id,
+          // Recheck at the gateway's mint boundary: another call may start or
+          // this item may finish while the operator's approval card is pending.
+          isMcpToolApprovalActive: () => {
+            const current = resolveItem();
+            return current?.id === item.id && current.tool === item.tool;
+          },
+        };
+      }
+    }
   }
 
   const outcome = await requestPluginApprovalOutcome({
-    paramsForRun: params.paramsForRun,
+    hostCapabilities: params.paramsForRun.hostCapabilities,
     title: approvalPrompt.title,
     description: approvalPrompt.description,
     allowedDecisions: approvalPrompt.allowedDecisions,
+    toolName: "codex_mcp_tool_approval",
+    ...persistence,
     signal: params.signal,
   });
   return handled(buildElicitationResponse(approvalPrompt, outcome));
+}
+
+function matchesMcpApprovalDisplay(item: CodexActiveMcpToolCall, meta: JsonObject): boolean {
+  if (!Object.hasOwn(meta, MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY)) {
+    return true;
+  }
+  const display = meta[MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY];
+  if (!Array.isArray(display)) {
+    return false;
+  }
+  const args = item.arguments;
+  return display.every((param) => {
+    if (!isJsonObject(param) || typeof param.name !== "string" || !isJsonObject(args)) {
+      return false;
+    }
+    if (!Object.hasOwn(args, param.name)) {
+      return false;
+    }
+    const value = args[param.name];
+    return (
+      typeof param.value !== "string" ||
+      param.value === (typeof value === "string" ? value : JSON.stringify(value))
+    );
+  });
 }
 
 function handled(response: CodexElicitationResponse): CodexApprovalElicitationResult {
@@ -356,10 +419,11 @@ async function buildPluginPolicyElicitationResponse(params: {
       return response;
     }
     const outcome = await requestPluginApprovalOutcome({
-      paramsForRun: params.paramsForRun,
+      hostCapabilities: params.paramsForRun.hostCapabilities,
       title: approvalPrompt.title,
       description: approvalPrompt.description,
       allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
+      toolName: "codex_mcp_tool_approval",
       signal: params.signal,
     });
     return buildElicitationResponse(approvalPrompt, outcome);
@@ -706,53 +770,6 @@ function sanitizeDisplayText(value: string): string {
   });
   const escaped = sanitized ? formatCodexDisplayText(sanitized) : "";
   return clipped && escaped ? `${escaped}...` : escaped;
-}
-
-async function requestPluginApprovalOutcome(params: {
-  paramsForRun: EmbeddedRunAttemptParams;
-  title: string;
-  description: string;
-  allowedDecisions?: ExecApprovalDecision[];
-  signal?: AbortSignal;
-}): Promise<ElicitationApprovalOutcome> {
-  try {
-    const requestResult = await requestPluginApproval({
-      hostCapabilities: params.paramsForRun.hostCapabilities,
-      signal: params.signal,
-      title: params.title,
-      description: params.description,
-      severity: "warning",
-      toolName: "codex_mcp_tool_approval",
-      allowedDecisions: params.allowedDecisions,
-    });
-
-    const approvalId = requestResult?.id;
-    if (!approvalId) {
-      return "unavailable";
-    }
-
-    const approvalResult = approvalRequestExplicitlyUnavailable(requestResult)
-      ? undefined
-      : await waitForPluginApprovalDecision({
-          hostCapabilities: params.paramsForRun.hostCapabilities,
-          approvalId,
-          signal: params.signal,
-        });
-    if (params.signal?.aborted) {
-      return "cancelled";
-    }
-    if (approvalResult?.terminalReason === "timeout") {
-      return "timed-out";
-    }
-    const decision = approvalResult?.decision;
-    return mapExecDecisionToOutcome(
-      decision === "allow-always" && params.allowedDecisions?.includes("allow-always") === false
-        ? "allow-once"
-        : decision,
-    );
-  } catch {
-    return params.signal?.aborted ? "cancelled" : "denied";
-  }
 }
 
 function buildElicitationResponse(

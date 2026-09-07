@@ -421,13 +421,33 @@ warn when a server uses `auto` and none of its tools has safety annotations;
 that warning describes calls under prompting postures.
 
 When offered, **Allow Always** approves the tool, not just the current arguments.
-For servers configured through OpenClaw, the choice currently lasts for the
-current Codex session. Codex can persist it across sessions when the server is
-also saved in its native config. A request that permits only session persistence
-cannot grant a durable approval, and explicit `prompt` mode keeps asking.
+For Gateway-hosted Codex runs on servers configured in `mcp.servers`, OpenClaw
+saves a durable, per-agent server/tool grant in the host approvals document
+when durable persistence is offered and the approval matches one live Gateway-owned
+tool call unambiguously. Missing or ambiguous matches and requests
+that permit only session persistence retain Codex's native/session behavior.
+Codex apps, native plugin servers, and computer-use servers are excluded.
+
+Stored grants apply under `auto` or an unspecified server mode. Explicit
+`prompt` keeps asking, even with a grant; explicit `approve` already bypasses
+approval. A new grant is picked up at the next thread configuration and hook
+registration, such as a new session or restart. The current session continues
+on Codex's remembered decision.
+
+Use `openclaw approvals get --gateway` to inspect grants and
+`openclaw approvals set --gateway --file <file>` to revoke them by editing
+`agents.<agentId>.mcpTools`. Revocation also takes effect on the next
+preparation/registration. Codex can additionally persist its own approval
+when the server is saved in native config; revoke that separately if present.
+See [MCP tool grants](/tools/exec-approvals#mcp-tool-grants) for the document
+shape and export/edit workflow.
 
 For approval delivery through Slack buttons, see
 [Native approvals in Slack](/channels/slack#native-approvals-in-slack).
+
+When an operator denies an MCP tool approval, Codex reports only its generic
+"user rejected MCP tool call" to the model; the remedy is shown on the operator
+card, not to the model.
 
 The optional `codex` block is OpenClaw projection metadata for Codex app-server
 threads only; it does not change ACP sessions, generic Codex harness config, or

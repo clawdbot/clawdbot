@@ -8,7 +8,7 @@ import fs from "node:fs/promises";
 import {
   listAgentEntries,
   resolveAgentEntry,
-  resolveSoleAgentId,
+  resolveAmbientOwnerAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -17,14 +17,13 @@ import {
   hasResolvedRosterBeforeMigrations,
 } from "../config/agent-roster-provenance.js";
 import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { shortenHomePath } from "../utils.js";
 
 type ConfigIO = {
@@ -56,33 +55,13 @@ type SetupCommandDeps = {
   replaceConfigFile?: ReplaceConfigFile;
 };
 
-type AgentWorkspaceModule = typeof import("../agents/workspace.js");
 type ConfigIOModule = typeof import("../config/config.js");
-type ConfigLoggingModule = typeof import("../config/logging.js");
-
-const agentWorkspaceModuleLoader = createLazyImportLoader<AgentWorkspaceModule>(
-  () => import("../agents/workspace.js"),
-);
-const configIOModuleLoader = createLazyImportLoader<ConfigIOModule>(
-  () => import("../config/config.js"),
-);
-const configLoggingModuleLoader = createLazyImportLoader<ConfigLoggingModule>(
-  () => import("../config/logging.js"),
-);
 
 // Keep setup's cold path small; config/workspace modules are loaded only when
 // their default dependency is actually needed.
-function loadAgentWorkspaceModule(): Promise<AgentWorkspaceModule> {
-  return agentWorkspaceModuleLoader.load();
-}
-
-function loadConfigIOModule(): Promise<ConfigIOModule> {
-  return configIOModuleLoader.load();
-}
-
-function loadConfigLoggingModule(): Promise<ConfigLoggingModule> {
-  return configLoggingModuleLoader.load();
-}
+const loadAgentWorkspaceModule = createLazyPromise(() => import("../agents/workspace.js"));
+const loadConfigIOModule = createLazyPromise(() => import("../config/config.js"));
+const loadConfigLoggingModule = createLazyPromise(() => import("../config/logging.js"));
 
 async function createDefaultConfigIO(): Promise<ConfigIO> {
   const { createConfigIO } = await loadConfigIOModule();
@@ -174,8 +153,10 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
-  const selectedAgentId =
-    tryResolveLegacyCompatibilityAgentId(resolvedConfig) ?? resolveSoleAgentId(resolvedConfig);
+  const selectedAgentId = resolveAmbientOwnerAgentId(resolvedConfig, undefined, {
+    surface: "baseline setup",
+    hint: "Set agents.defaults.systemAgent.agentId.",
+  });
   const defaultEntry = resolveAgentEntry(resolvedConfig, selectedAgentId);
   const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
   const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;

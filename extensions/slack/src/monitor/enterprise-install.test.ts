@@ -38,6 +38,18 @@ describe("resolveSlackInstallationIdentity", () => {
     ).toEqual({ kind: "workspace", teamId: "T123" });
   });
 
+  it("uses the Socket Mode app id for a workspace installation when auth.test omits app_id", () => {
+    expect(
+      resolveSlackInstallationIdentity({
+        auth: {
+          team_id: "T123",
+          is_enterprise_install: false,
+        },
+        transportApiAppId: "A123",
+      }),
+    ).toEqual({ kind: "workspace", teamId: "T123", apiAppId: "A123" });
+  });
+
   it("preserves the human workspace name from auth.test", () => {
     expect(
       resolveSlackInstallationIdentity({

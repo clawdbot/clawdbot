@@ -21,25 +21,39 @@ function readChatCss(): string {
     .join("\n");
 }
 
-// The three shapes the parser can produce, all carrying the same mark:
-// a bare item URL whose label it rewrites to #number, a compact fallback for
-// any other GitHub path, and an authored label. Only the first two carry
-// markdown-bare-url, so the sweep covers both wrap regimes.
+// Item chips stay atomic; other GitHub links keep normal label wrapping.
 const LINK_FORMS = [
   {
-    className: "markdown-bare-url markdown-github-link",
-    id: "human-ref",
+    className: "markdown-bare-url markdown-github-link markdown-github-item",
+    kind: "issue",
+    id: "issue",
     label: "#123309",
     lead: "then follow-up tracked in ",
   },
   {
+    className: "markdown-bare-url markdown-github-link markdown-github-item",
+    kind: "pull",
+    id: "pull",
+    label: "#3434",
+    lead: "then the fix is in ",
+  },
+  {
+    className: "markdown-github-link markdown-github-item",
+    kind: "pull",
+    id: "repository-ref",
+    label: "openclaw/openclaw#3434",
+    lead: "then see ",
+  },
+  {
     className: "markdown-bare-url markdown-github-link",
+    kind: "",
     id: "bare-url",
     label: "text.css",
     lead: "then the owning rule lives at ",
   },
   {
     className: "markdown-github-link",
+    kind: "",
     id: "authored",
     label: "the sibling chip rule",
     lead: "then see ",
@@ -50,9 +64,9 @@ function fixtureDocument(themeMode: "dark" | "light"): string {
   const themeAttributes =
     themeMode === "light" ? `data-theme="light" data-theme-mode="light"` : `data-theme="dark"`;
   const columns = LINK_FORMS.map(
-    ({ className, id, label, lead }) => `
+    ({ className, kind, id, label, lead }) => `
       <div class="chat-text" id="column-${id}">Reproduce the failing run and read the notes
-        first, ${lead}<a id="${id}" class="${className}" href="https://github.com/openclaw/openclaw"
+        first, ${lead}<a id="${id}" class="${className}" ${kind ? `data-github-kind="${kind}"` : ""} href="https://github.com/openclaw/openclaw"
         >${label}</a> before landing the fix.</div>`,
   ).join("");
   return `<!doctype html><html ${themeAttributes}><head><style>${readChatCss()}</style></head>
@@ -62,6 +76,7 @@ function fixtureDocument(themeMode: "dark" | "light"): string {
 type WrapSample = {
   readonly columnWidth: number;
   readonly fragments: number;
+  readonly labelFragments: number;
   readonly labelStartsMarkLine: boolean;
   readonly markLineTop: number;
 };
@@ -105,9 +120,11 @@ async function probeWrap(
             labelRange.setStart(labelText, 0);
             labelRange.setEnd(labelText, 1);
             const labelStart = labelRange.getBoundingClientRect();
+            labelRange.selectNodeContents(link);
             collected.push({
               columnWidth,
               fragments: link.getClientRects().length,
+              labelFragments: labelRange.getClientRects().length,
               labelStartsMarkLine: Math.abs(labelStart.top - linkStart.top) < 2,
               markLineTop: Math.round(linkStart.top),
             });
@@ -147,26 +164,28 @@ afterAll(async () => {
 
 describeGitHubLinkPresentation("chat GitHub link presentation", () => {
   it.each(["light", "dark"] as const)(
-    "keeps the GitHub mark on its label's line at every column width in %s",
+    "keeps GitHub icons with their labels and item chips atomic at every column width in %s",
     async (themeMode) => {
       const samples = await probeWrap(themeMode);
-      for (const { id } of LINK_FORMS) {
+      for (const { id, kind } of LINK_FORMS) {
         const collected = samples[id] ?? [];
         // Vacuity guard: the reference must actually move between lines across
         // the sweep, or the assertion below passes on prose that never wraps.
         expect(new Set(collected.map((sample) => sample.markLineTop)).size).toBeGreaterThan(1);
         const stranded = collected.filter((sample) => !sample.labelStartsMarkLine);
         expect({ id, stranded }).toEqual({ id, stranded: [] });
+        if (kind) {
+          expect(
+            collected.filter((sample) => sample.fragments !== 1 || sample.labelFragments !== 1),
+          ).toEqual([]);
+        }
       }
     },
   );
 
   it("keeps GitHub links breaking across lines instead of moving whole", async () => {
     const samples = await probeWrap("dark");
-    // The file-link chip answers the same invariant by making the whole anchor
-    // atomic. That is the wrong answer here: an atomic anchor never fragments,
-    // so a long URL would move to the next line rather than break inside it and
-    // leave the line it should have filled ragged. Both forms must still split.
+    // Non-item links still fill the line they start on rather than moving whole.
     for (const id of ["bare-url", "authored"]) {
       const collected = samples[id] ?? [];
       expect({ id, splits: collected.some((sample) => sample.fragments > 1) }).toEqual({
@@ -175,4 +194,59 @@ describeGitHubLinkPresentation("chat GitHub link presentation", () => {
       });
     }
   });
+
+  it.each(["light", "dark"] as const)(
+    "paints distinct kind icons and visible hover and keyboard focus states in %s",
+    async (themeMode) => {
+      const fixtureFile = path.join(fixtureDirectory, `${themeMode}-interaction.html`);
+      fs.writeFileSync(fixtureFile, fixtureDocument(themeMode), "utf8");
+      const page = await browser.newPage();
+      try {
+        await page.goto(`file://${fixtureFile}`);
+        const masks: string[] = [];
+        for (const id of ["issue", "pull"]) {
+          const chip = page.locator(`#${id}`);
+          const idle = await chip.evaluate((element) => {
+            const style = getComputedStyle(element);
+            const icon = getComputedStyle(element, "::before");
+            return {
+              background: style.backgroundColor,
+              decoration: style.textDecorationLine,
+              iconColor: icon.backgroundColor,
+              color: style.color,
+              mask: icon.maskImage,
+            };
+          });
+          expect(idle.decoration).toBe("none");
+          expect(idle.iconColor).toBe(idle.color);
+          expect(idle.mask).toContain("data:image/svg+xml");
+          masks.push(idle.mask);
+          await chip.hover();
+          const hover = await chip.evaluate((element) => ({
+            background: getComputedStyle(element).backgroundColor,
+            decoration: getComputedStyle(element).textDecorationLine,
+          }));
+          expect(hover.background).not.toBe(idle.background);
+          expect(hover.decoration).toBe("underline");
+          await page.mouse.move(0, 0);
+          await page.keyboard.press("Tab");
+          await chip.focus();
+          expect(await chip.evaluate((element) => element.matches(":focus-visible"))).toBe(true);
+          expect(
+            await chip.evaluate((element) => ({
+              background: getComputedStyle(element).backgroundColor,
+              decoration: getComputedStyle(element).textDecorationLine,
+            })),
+          ).toEqual(hover);
+          await chip.evaluate((element) => element.blur());
+        }
+        const genericMask = await page
+          .locator("#authored")
+          .evaluate((element) => getComputedStyle(element, "::before").maskImage);
+        expect(new Set([...masks, genericMask]).size).toBe(3);
+      } finally {
+        await page.close();
+      }
+    },
+  );
 });

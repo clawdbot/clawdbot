@@ -96,45 +96,79 @@ describe("handleMessageUpdate text signatures", () => {
       ],
       updates: [{ text: "Done.", delta: "Done." }],
     },
-  ])("uses append events for same-item phased streams ($name)", async ({ chunks, updates }) => {
-    const onAgentEvent = vi.fn();
-    const context = createMessageUpdateContext({ onAgentEvent });
-    const signature = JSON.stringify({ v: 1, id: "item-final", phase: "final_answer" });
-    const partial = {
-      role: "assistant",
-      phase: "final_answer",
-      content: [
-        {
-          type: "text",
-          textSignature: signature,
-          get text() {
-            throw new Error("full partial text should not be read");
-          },
-        },
+    {
+      name: "split voice directive",
+      chunks: ["[[audio_as_", "voice]]Hello", " world"],
+      updates: [
+        { text: "Hello", delta: "Hello" },
+        { text: "Hello world", delta: " world" },
       ],
-    };
+      reply: { audioAsVoice: true },
+    },
+    {
+      name: "split reply target",
+      chunks: ["[[reply_to:", "message-7]]Hello", " world"],
+      updates: [
+        { text: "Hello", delta: "Hello" },
+        { text: "Hello world", delta: " world" },
+      ],
+      reply: { replyToId: "message-7", replyToTag: true },
+    },
+    {
+      name: "duplicate paragraph becomes distinct",
+      chunks: ["One.\n\n", "One.", " More."],
+      updates: [
+        { text: "One.", delta: "One." },
+        { text: "One.\n\nOne. More.", delta: "\n\nOne. More." },
+      ],
+    },
+  ])(
+    "uses append events for same-item phased streams ($name)",
+    async ({ chunks, updates, reply }) => {
+      const onAgentEvent = vi.fn();
+      const context = createMessageUpdateContext({ onAgentEvent });
+      const signature = JSON.stringify({ v: 1, id: "item-final", phase: "final_answer" });
+      const partial = {
+        role: "assistant",
+        phase: "final_answer",
+        content: [
+          {
+            type: "text",
+            textSignature: signature,
+            get text() {
+              throw new Error("full partial text should not be read");
+            },
+          },
+        ],
+      };
 
-    const createPhasedDelta = (delta: string) =>
-      ({
-        message: { role: "assistant", content: [] },
-        assistantMessageEvent: {
-          type: "text_delta",
-          delta,
-          partial,
-        },
-      }) as never;
+      const createPhasedDelta = (delta: string) =>
+        ({
+          message: { role: "assistant", content: [] },
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta,
+            partial,
+          },
+        }) as never;
 
-    for (const chunk of chunks) {
-      await updateMessage(context, createPhasedDelta(chunk));
-    }
+      for (const chunk of chunks) {
+        await updateMessage(context, createPhasedDelta(chunk));
+      }
 
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject(
-      updates.map((data) => ({
-        stream: "assistant",
-        data: { ...data, replace: undefined, phase: "final_answer" },
-      })),
-    );
-  });
+      expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject(
+        updates.map((data) => ({
+          stream: "assistant",
+          data: { ...data, replace: undefined, phase: "final_answer" },
+        })),
+      );
+      if (reply) {
+        expect(
+          consumePendingAssistantReplyDirectivesIntoReply(context.state, { text: "Hello world" }),
+        ).toMatchObject(reply);
+      }
+    },
+  );
 
   it.each(["Hello", ""])(
     "replaces a phased reply with the final snapshot %j",
@@ -203,7 +237,7 @@ describe("handleMessageUpdate text signatures", () => {
               phase: "final_answer",
             }),
             createOpenAiResponsesTextBlock({
-              text: "Second block",
+              text: "Second block [[reply_to_current]]",
               id: "item-2",
               phase: "final_answer",
             }),
@@ -311,8 +345,7 @@ describe("handleMessageUpdate text signatures", () => {
       onPartialReply,
       state: {
         deltaBuffer: "First block",
-        lastStreamedAssistant: "First block",
-        lastStreamedAssistantCleaned: "First block",
+        assistantStream: { raw: "First block", text: "First block" },
         lastAssistantStreamContentIndex: 0,
         lastAssistantStreamItemId: "item-1",
       },

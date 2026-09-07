@@ -3,22 +3,8 @@ import {
   resolveNonNegativeIntegerOption,
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import type { InboundDebounceByProvider } from "../config/types.messages.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
-
-const resolveMs = (value: unknown): number | undefined =>
-  resolveOptionalIntegerOption(value, { min: 0 });
-
-const resolveChannelOverride = (params: {
-  byChannel?: InboundDebounceByProvider;
-  channel: string;
-}): number | undefined => {
-  if (!params.byChannel) {
-    return undefined;
-  }
-  return resolveMs(params.byChannel[params.channel]);
-};
 
 /** Resolve effective inbound debounce milliseconds from explicit, channel, and global config. */
 export function resolveInboundDebounceMs(params: {
@@ -27,13 +13,17 @@ export function resolveInboundDebounceMs(params: {
   overrideMs?: number;
 }): number {
   const inbound = params.cfg.messages?.inbound;
-  const override = resolveMs(params.overrideMs);
-  const byChannel = resolveChannelOverride({
-    byChannel: inbound?.byChannel,
-    channel: params.channel,
-  });
-  const base = resolveMs(inbound?.debounceMs);
-  return override ?? byChannel ?? base ?? 0;
+  for (const value of [
+    params.overrideMs,
+    inbound?.byChannel?.[params.channel],
+    inbound?.debounceMs,
+  ]) {
+    const resolved = resolveOptionalIntegerOption(value, { min: 0 });
+    if (resolved !== undefined) {
+      return resolved;
+    }
+  }
+  return 0;
 }
 
 type DebounceBuffer<T> = {
@@ -357,13 +347,6 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     buffer.timeout.unref?.();
   };
 
-  const canTrackKey = (key: string) => {
-    if (buffers.has(key) || keyChains.has(key)) {
-      return true;
-    }
-    return new Set([...buffers.keys(), ...keyChains.keys()]).size < maxTrackedKeys;
-  };
-
   const enqueue = async (item: T) => {
     const key = params.buildKey(item);
     const debounceMs = resolveDebounceMs(item);
@@ -413,7 +396,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       scheduleFlush(key, existing);
       return;
     }
-    if (!canTrackKey(key)) {
+    // Buffers reserve a chain before insertion and release it only after removal,
+    // so chain keys already cover every tracked debounce key.
+    if (!(keyChains.has(key) || keyChains.size < maxTrackedKeys)) {
       // When the debounce map is saturated, fall back to immediate keyed work
       // instead of buffering, but still preserve same-key ordering.
       const generation = resolveKeyGeneration(key);

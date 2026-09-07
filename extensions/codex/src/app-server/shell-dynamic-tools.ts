@@ -2,6 +2,7 @@ import {
   pinExecToolTarget,
   type CodexScheduledToolProjectionFactory,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { loadNodeExecAvailability } from "openclaw/plugin-sdk/node-selection-runtime";
 import type { CodexPluginConfig } from "./config.js";
 import { normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 
@@ -26,11 +27,23 @@ export function isCodexDynamicToolExcluded(
   );
 }
 
-export function createNodeExecAliasDynamicTool(
+/** Shared only by the runtime and registered catalogs of one attempt. */
+export type NodeExecAvailabilityRef = { current?: ReturnType<typeof loadNodeExecAvailability> };
+
+export async function createNodeExecAliasDynamicTool(
   execTool: OpenClawDynamicTool,
   node?: string,
-): OpenClawDynamicTool {
+  discoverySignal?: AbortSignal,
+  availabilityRef?: NodeExecAvailabilityRef,
+): Promise<OpenClawDynamicTool | undefined> {
   const pinnedNode = node?.trim();
+  const availability = await (availabilityRef
+    ? (availabilityRef.current ??= loadNodeExecAvailability(discoverySignal))
+    : loadNodeExecAvailability(discoverySignal));
+  discoverySignal?.throwIfAborted();
+  if (!availability.isAvailable(pinnedNode)) {
+    return undefined;
+  }
   const pinnedTool = pinExecToolTarget(execTool, {
     host: "node",
     ...(pinnedNode ? { node: pinnedNode } : {}),
@@ -55,8 +68,8 @@ export function createNodeExecAliasDynamicTool(
     ...pinnedTool,
     name: CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
     description: pinnedNode
-      ? "Run a shell command to completion on the OpenClaw configured remote node for this session. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Remote-node background follow-up is unavailable. Use Codex's native shell for local app-server work."
-      : "Run a shell command to completion on an OpenClaw remote node. The sole connected node that can execute commands is selected automatically; select by name or id when several can. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Remote-node background follow-up is unavailable. Use Codex's native shell for local app-server work.",
+      ? "Run a shell command to completion on the OpenClaw configured remote node for this session. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Remote-node background follow-up is unavailable. Use Codex's native shell for local app-server work when it is available."
+      : "Run a shell command to completion on an OpenClaw remote node. The sole connected node that can execute commands is selected automatically; select by name or id when several can. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Remote-node background follow-up is unavailable. Use Codex's native shell for local app-server work when it is available.",
     execute,
   };
 }

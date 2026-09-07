@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { classifyAssistantFailoverReason } from "./assistant-message-failures.js";
 
 describe("classifyAssistantFailoverReason", () => {
@@ -7,14 +8,7 @@ describe("classifyAssistantFailoverReason", () => {
     api: "openai-completions" as const,
     provider: "opencode-go",
     model: "deepseek-v4-flash",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "error" as const,
     errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
     content: [],
@@ -60,14 +54,7 @@ describe("classifyAssistantFailoverReason", () => {
         api: "openai-completions",
         provider: "openai",
         model: "some-model-id",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "error",
         errorMessage: "400 Param Incorrect",
         errorCode: "400",

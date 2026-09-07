@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import JSZip from "jszip";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  downloadFullReleaseNpmPreflight,
+  resolveFullReleaseNpmPreflight,
   validateNpmPreflightProducer,
   validateFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
@@ -11,6 +17,9 @@ import {
   validateReleaseToolingIdentity,
   verifyReleaseToolingIdentity,
 } from "../../scripts/release-tooling-identity.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
@@ -528,8 +537,20 @@ describe("historical npm preflight tooling", () => {
   });
 });
 
-describe("FRV-owned npm qualification", () => {
-  const workflowPath = ".github/workflows/full-release-validation.yml";
+describe.each([
+  {
+    label: "FRV-owned",
+    workflowPath: ".github/workflows/full-release-validation.yml",
+    fullRunId: RUN_ID,
+    fullRunAttempt: "1",
+  },
+  {
+    label: "independent producer after FRV rerun",
+    workflowPath: ".github/workflows/full-release-artifacts.yml",
+    fullRunId: PARENT_RUN_ID,
+    fullRunAttempt: "3",
+  },
+])("$label npm qualification", ({ workflowPath, fullRunId, fullRunAttempt }) => {
   const producer = {
     repository: "openclaw/openclaw",
     workflowRef: `openclaw/openclaw/${workflowPath}@refs/heads/main`,
@@ -543,6 +564,7 @@ describe("FRV-owned npm qualification", () => {
   const manifest = {
     version: 3,
     releaseSha: OTHER_SHA,
+    tarballName: "openclaw.tgz",
     tarballSha256: "c".repeat(64),
     producer,
     preparedBundle: {
@@ -567,8 +589,9 @@ describe("FRV-owned npm qualification", () => {
   };
   const fullReleaseManifest = {
     workflowName: "Full Release Validation",
-    runId: RUN_ID,
-    runAttempt: "1",
+    runId: fullRunId,
+    runAttempt: fullRunAttempt,
+    workflowFullRef: "refs/heads/main",
     targetSha: OTHER_SHA,
     workflowSha: SHA,
     publicationArtifacts: { npmPreflight: qualified },
@@ -582,9 +605,19 @@ describe("FRV-owned npm qualification", () => {
     runId: RUN_ID,
     runAttempt: "1",
     fullReleaseManifest,
+    fullReleaseRunId: fullRunId,
+    fullReleaseRunAttempt: fullRunAttempt,
     manifestSha256: "d".repeat(64),
   };
-  function reader(jobOverrides = {}) {
+  const resolutionInput = {
+    manifest: fullReleaseManifest,
+    repository: producer.repository,
+    runId: fullRunId,
+    runAttempt: fullRunAttempt,
+    sourceSha: OTHER_SHA,
+    toolingSha: SHA,
+  };
+  function reader(jobOverrides = {}, artifactOverrides = {}, runOverrides = {}) {
     const job = {
       id: 999,
       name: producer.jobName,
@@ -607,6 +640,7 @@ describe("FRV-owned npm qualification", () => {
           digest: `sha256:${qualified.artifact.digest}`,
           expired: false,
           workflow_run: { id: Number(RUN_ID), head_sha: SHA },
+          ...artifactOverrides,
         });
       }
       if (endpoint.includes("/jobs?")) {
@@ -624,12 +658,21 @@ describe("FRV-owned npm qualification", () => {
           conclusion: "success",
           repository: { full_name: producer.repository },
           head_repository: { full_name: producer.repository },
+          ...runOverrides,
         });
       }
       throw new Error(`Unexpected proof request: ${endpoint}`);
     };
   }
   it("requires the exact successful qualifier and immutable artifact from the selected FRV", () => {
+    const runGh = vi.fn(reader());
+    expect(resolveFullReleaseNpmPreflight({ ...resolutionInput, runGh })).toMatchObject({
+      producer: { runId: RUN_ID, runAttempt: "1" },
+      artifact: { id: 555 },
+    });
+    expect(runGh.mock.calls.map(([args]) => args[1])).toContain(
+      `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/1`,
+    );
     expect(verifyNpmPreflightProducer({ ...input, runGh: reader() })).toMatchObject({
       provenance: "immutable-manifest",
     });
@@ -649,8 +692,8 @@ describe("FRV-owned npm qualification", () => {
     ).toThrow("qualified version 3");
     const expected = {
       manifest: fullReleaseManifest,
-      runId: RUN_ID,
-      runAttempt: "1",
+      runId: fullRunId,
+      runAttempt: fullRunAttempt,
       sourceSha: OTHER_SHA,
       toolingSha: SHA,
     };
@@ -670,4 +713,147 @@ describe("FRV-owned npm qualification", () => {
       }),
     ).toThrow("qualification");
   });
+
+  it.each(["run", "attempt", "tooling", "workflow", "repository", "ref"])(
+    "rejects a descriptor detached from its %s binding",
+    (mismatch) => {
+      const changed = structuredClone(fullReleaseManifest);
+      const descriptor = changed.publicationArtifacts.npmPreflight;
+      if (mismatch === "run") {
+        descriptor.artifact.runId = "99999";
+      }
+      if (mismatch === "attempt") {
+        descriptor.artifact.runAttempt = "2";
+      }
+      if (mismatch === "tooling") {
+        descriptor.producer.workflowSha = OTHER_SHA;
+      }
+      if (mismatch === "workflow") {
+        descriptor.producer.workflowRef = producer.workflowRef.replace(
+          workflowPath,
+          ".github/workflows/ci.yml",
+        );
+      }
+      if (mismatch === "repository") {
+        descriptor.producer.repository = "other/repository";
+      }
+      if (mismatch === "ref") {
+        descriptor.producer.workflowRef = producer.workflowRef.replace(
+          "refs/heads/main",
+          "refs/heads/other",
+        );
+      }
+      expect(() =>
+        resolveFullReleaseNpmPreflight({ ...resolutionInput, manifest: changed, runGh: reader() }),
+      ).toThrow();
+    },
+  );
+
+  it.each(["run", "attempt", "tooling", "workflow", "repository", "unfinished", "artifact"])(
+    "rejects changed live %s evidence before downloading package bytes",
+    (mismatch) => {
+      const runOverrides: Record<string, unknown> = {};
+      const artifactOverrides: Record<string, unknown> = {};
+      if (mismatch === "run") {
+        runOverrides.id = 777;
+      }
+      if (mismatch === "attempt") {
+        runOverrides.run_attempt = 2;
+      }
+      if (mismatch === "tooling") {
+        runOverrides.head_sha = OTHER_SHA;
+      }
+      if (mismatch === "workflow") {
+        runOverrides.path = ".github/workflows/ci.yml";
+      }
+      if (mismatch === "repository") {
+        runOverrides.repository = { full_name: "other/repository" };
+      }
+      if (mismatch === "unfinished") {
+        Object.assign(runOverrides, { status: "in_progress", conclusion: null });
+      }
+      if (mismatch === "artifact") {
+        artifactOverrides.workflow_run = { id: 777, head_sha: SHA };
+      }
+      expect(() =>
+        resolveFullReleaseNpmPreflight({
+          ...resolutionInput,
+          runGh: reader({}, artifactOverrides, runOverrides),
+        }),
+      ).toThrow();
+    },
+  );
+
+  it.each(["valid", "archive changed", "manifest changed"])(
+    "downloads only the exact qualified archive (%s)",
+    async (outcome) => {
+      const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
+      const tarballBytes = Buffer.from("prepared package bytes");
+      const zip = new JSZip();
+      zip.file("preflight-manifest.json", manifestBytes);
+      zip.file(manifest.tarballName, tarballBytes);
+      zip.file("dependency-evidence/dependency-evidence-manifest.json", "{}", {
+        createFolders: false,
+      });
+      const archive = await zip.generateAsync({
+        type: "nodebuffer",
+        compression: "STORE",
+        platform: "UNIX",
+      });
+      const selected = structuredClone(fullReleaseManifest);
+      selected.publicationArtifacts.npmPreflight.artifact.digest = createHash("sha256")
+        .update(archive)
+        .digest("hex");
+      selected.publicationArtifacts.npmPreflight.manifestSha256 =
+        outcome === "manifest changed"
+          ? "f".repeat(64)
+          : createHash("sha256").update(manifestBytes).digest("hex");
+      const metadata = {
+        id: 555,
+        name: qualified.artifact.name,
+        digest: `sha256:${selected.publicationArtifacts.npmPreflight.artifact.digest}`,
+        size_in_bytes: archive.length,
+        expired: false,
+        expires_at: "2099-10-01T00:00:00Z",
+        workflow_run: { id: Number(RUN_ID), head_sha: SHA },
+      };
+      const delivered = Buffer.from(archive);
+      if (outcome === "archive changed") {
+        delivered.writeUInt8(delivered.readUInt8(0) ^ 1, 0);
+      }
+      const fetchImpl: typeof fetch = async (url) => {
+        const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        return requestUrl.endsWith("/zip")
+          ? new Response(new Uint8Array(delivered))
+          : Response.json(metadata);
+      };
+      const outputDir = join(tempDirs.make("qualified-npm-preflight-"), "qualified");
+      const download = downloadFullReleaseNpmPreflight({
+        ...resolutionInput,
+        manifest: selected,
+        outputDir,
+        token: "test-artifact-token",
+        runGh: reader({}, metadata),
+        fetchImpl,
+      });
+      if (outcome === "valid") {
+        await expect(download).resolves.toMatchObject({
+          producer: { runId: RUN_ID, runAttempt: "1" },
+        });
+        expect(readFileSync(join(outputDir, "preflight-manifest.json"))).toEqual(manifestBytes);
+        expect(readFileSync(join(outputDir, manifest.tarballName))).toEqual(tarballBytes);
+        expect(
+          readFileSync(
+            join(outputDir, "dependency-evidence/dependency-evidence-manifest.json"),
+            "utf8",
+          ),
+        ).toBe("{}");
+      } else {
+        await expect(download).rejects.toThrow(
+          outcome === "archive changed" ? "digest" : "qualified descriptor",
+        );
+        expect(existsSync(outputDir)).toBe(false);
+      }
+    },
+  );
 });

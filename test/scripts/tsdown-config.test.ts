@@ -5,6 +5,10 @@ import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { build } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  collectRootPackageExcludedExtensionDirs,
+  DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
+} from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -12,6 +16,7 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
+import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import buildConfigs from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -39,17 +44,31 @@ const isWorkerRsyncReceiverConfig = (config: TsdownConfig) =>
     "worker/workspace-rsync-receiver",
     "src/worker/workspace-rsync-receiver.ts",
   );
+const isWorkerGitHubExecLauncherConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(config, "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts");
 const isWorkerBuildConfig = (config: TsdownConfig) =>
-  isWorkerDeployConfig(config) || isWorkerRsyncReceiverConfig(config);
+  isWorkerDeployConfig(config) ||
+  isWorkerRsyncReceiverConfig(config) ||
+  isWorkerGitHubExecLauncherConfig(config);
 
 const FS_SAFE_CALLER_PROBE = `
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-const [entry, observer, rootDir, mode, outcome] = process.argv.slice(1);
-const { root } = await import(pathToFileURL(entry).href);
+const [entry, observer, rootDir, mode, outcome, sealed] = process.argv.slice(1);
+if (sealed) registerHooks({ resolve(specifier, context, next) {
+  if (!isBuiltin(specifier) && specifier !== pathToFileURL(entry).href)
+    throw new Error("sealed dependency escaped: " + specifier);
+  return next(specifier, context);
+}});
+const { root, parseJsonWithJson5Fallback, resolvePreferredOpenClawTmpDir, resolveRuntimeProcessEntrypointUrl } = await import(pathToFileURL(entry).href);
+if (sealed) {
+  assert.deepEqual(parseJsonWithJson5Fallback("{value:'bundled',}"), {value:"bundled"});
+  assert.equal(resolvePreferredOpenClawTmpDir({preferredDir:rootDir, tmpdir:()=>rootDir, platform:"linux"}), rootDir);
+  assert.equal(resolveRuntimeProcessEntrypointUrl("githubExec").href, new URL("./github-exec-launcher.mjs", pathToFileURL(entry)).href);
+}
 const { configureFsSafeNative, getFsSafeNativeConfig, FsSafeError } = await import(pathToFileURL(observer).href);
 assert.equal(getFsSafeNativeConfig().mode, mode === "configured" ? "off" : mode);
 if (mode === "configured") configureFsSafeNative({ mode: "require" });
@@ -75,11 +94,20 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 
 describe("tsdown config", () => {
   it.each([false, true])(
-    "runs the bundled memory store with only production dependencies (verbose=%s)",
+    "runs the Docker-selected memory store with only production dependencies (verbose=%s)",
     async (verbose) => {
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
-      const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
       const entryName = "extensions/memory-lancedb/lancedb-store";
+      const defaultConfig = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+      expect(defaultConfig?.entry).not.toHaveProperty(entryName);
+      vi.stubEnv(DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV, "memory-lancedb");
+      // Selection is captured during config evaluation; keep the default graph untouched.
+      const { default: selectedConfigs } = await importFreshModule<
+        typeof import("../../tsdown.config.ts")
+      >(import.meta.url, `../../tsdown.config.ts?docker-memory-lancedb=${verbose}`);
+      const selected = selectedConfigs.find(
+        (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
+      );
       const source = (selected?.entry as Record<string, string> | undefined)?.[entryName];
       expect(source).toBeDefined();
       const root = fs.realpathSync(createTempDir("openclaw-tsdown-memory-"));
@@ -312,14 +340,21 @@ describe("tsdown config", () => {
       const { nativePackages } = worker
         ? { nativePackages: [] }
         : copyFsSafePackageFixture(sourceRoot);
-      if (!worker) expect(nativePackages.length).toBeGreaterThan(0);
+      if (!worker) {
+        expect(nativePackages.length).toBeGreaterThan(0);
+      }
       const sdkSource = path.resolve("src/plugin-sdk/memory-core-host-engine-fs.ts");
       const observerSource = path.join(sourceRoot, "observer.ts");
       fs.writeFileSync(
         observerSource,
         [
           ...(worker
-            ? [`import ${JSON.stringify(path.resolve("src/worker/worker-deploy-runtime.ts"))};`]
+            ? [
+                `import ${JSON.stringify(path.resolve("src/worker/worker-deploy-runtime.ts"))};`,
+                `export { parseJsonWithJson5Fallback } from ${JSON.stringify(path.resolve("src/utils/parse-json-compat.ts"))};`,
+                `export { resolvePreferredOpenClawTmpDir } from ${JSON.stringify(path.resolve("src/infra/tmp-openclaw-dir.ts"))};`,
+                `export { resolveRuntimeProcessEntrypointUrl } from ${JSON.stringify(path.resolve("src/infra/runtime-process-url.ts"))};`,
+              ]
             : []),
           `export { root } from ${JSON.stringify(sdkSource)};`,
           `export { configureFsSafeNative, getFsSafeNativeConfig } from ${JSON.stringify(worker ? require.resolve("@openclaw/fs-safe/config") : "@openclaw/fs-safe/config")};`,
@@ -368,6 +403,7 @@ describe("tsdown config", () => {
                   rootDir,
                   mode,
                   outcome,
+                  worker ? "sealed" : "",
                 ],
                 {
                   cwd: relocatedRoot,
@@ -397,7 +433,9 @@ describe("tsdown config", () => {
           const errors = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : [],
           );
-          if (errors.length) throw new AggregateError(errors, "fs-safe package probes failed");
+          if (errors.length) {
+            throw new AggregateError(errors, "fs-safe package probes failed");
+          }
         };
         if (worker) {
           await join([
@@ -414,10 +452,11 @@ describe("tsdown config", () => {
             probe("shared-config", "configured", "native"),
             probe("default", "off", "fallback"),
           ]);
-          for (const nativePackage of nativePackages)
+          for (const nativePackage of nativePackages) {
             fs.rmSync(path.join(relocatedRoot, path.relative(sourceRoot, nativePackage.root)), {
               recursive: true,
             });
+          }
           await join([
             probe("missing", "require", "missing", { FS_SAFE_NATIVE_MODE: "require" }),
             ...["off", "auto"].map((mode) =>
@@ -426,13 +465,15 @@ describe("tsdown config", () => {
           ]);
         }
       } finally {
-        for (const bundle of bundles) await bundle[Symbol.asyncDispose]();
+        for (const bundle of bundles) {
+          await bundle[Symbol.asyncDispose]();
+        }
       }
     },
   );
 
   it.each(
-    ["runtime", "declarations", "worker", "receiver"].flatMap((target) =>
+    ["runtime", "declarations", "worker", "receiver", "github-launcher"].flatMap((target) =>
       [false, true].map((verbose) => ({ target, verbose })),
     ),
   )(
@@ -441,19 +482,22 @@ describe("tsdown config", () => {
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
       const root = fs.realpathSync(createTempDir("openclaw-tsdown-dependencies-"));
       const declarations = target === "declarations";
-      const bundleAll = target === "worker" || target === "receiver";
+      const bundleAll = ["worker", "receiver", "github-launcher"].includes(target);
       const selected = configs.find(
         target === "worker"
           ? isWorkerDeployConfig
           : target === "receiver"
             ? isWorkerRsyncReceiverConfig
-            : (entry) =>
-                entry.name ===
-                (declarations ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0] : TSDOWN_UNIFIED_CONFIG_GROUP),
+            : target === "github-launcher"
+              ? isWorkerGitHubExecLauncherConfig
+              : (entry) =>
+                  entry.name ===
+                  (declarations
+                    ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0]
+                    : TSDOWN_UNIFIED_CONFIG_GROUP),
       );
       expect(selected).toBeDefined();
       const packages = [
-        "@anthropic-ai/claude-agent-sdk",
         "@anthropic-ai/vertex-sdk",
         "@slack/bolt",
         "@slack/web-api",
@@ -511,6 +555,7 @@ describe("tsdown config", () => {
             !bundleAll &&
             packageName === name &&
             name !== "@lancedb/lancedb" &&
+            name !== "@openclaw/crabline" &&
             (name !== "zod" || declarations)
           ) {
             expectedImports.push(...imports);
@@ -579,16 +624,31 @@ describe("tsdown config", () => {
     }
   });
 
-  it("assigns every TypeScript runtime entry to exactly one bounded declaration graph", () => {
-    const unifiedRuntimeConfig = configs.find(
-      (entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP,
+  it("keeps excluded plugins out of the unified graph without dropping host helpers", () => {
+    const runtime = configs.find((entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    const entries = runtime?.entry as Record<string, string>;
+    const excluded = collectRootPackageExcludedExtensionDirs();
+    expect(
+      Object.keys(entries).filter(
+        (name) => name.startsWith("extensions/") && excluded.has(name.split("/")[1]!),
+      ),
+    ).toEqual([]);
+    expect(entries["plugin-sdk/codex-mcp-projection"]).toBe(
+      "src/plugin-sdk/codex-mcp-projection.ts",
     );
-    const runtimeSources = Object.values(unifiedRuntimeConfig?.entry ?? {}).map((source) => {
-      const sourceString = String(source);
-      return (
-        path.isAbsolute(sourceString) ? path.relative(process.cwd(), sourceString) : sourceString
-      ).replaceAll("\\", "/");
-    });
+    expect(entries["plugin-sdk/codex-session-transcript-runtime"]).toBe(
+      "src/plugin-sdk/codex-session-transcript-runtime.ts",
+    );
+    expect(entries["plugins/public-surface-runtime"]).toBe("src/plugins/public-surface-runtime.ts");
+    expect(Object.values(entries)).toEqual(
+      expect.arrayContaining([
+        "extensions/vault/vault-secret-id.js",
+        "extensions/vault/vault-secret-ref-resolver.js",
+      ]),
+    );
+  });
+
+  it("emits bounded public declarations without private runtime roots", () => {
     const declarationSources = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.flatMap((name) => {
       const declarationConfig = configs.find((entry) => entry.name === name);
       const dts = declarationConfig?.dts;
@@ -599,19 +659,29 @@ describe("tsdown config", () => {
       return dts.entry;
     });
 
-    expect(runtimeSources).toEqual(
+    expect(declarationSources).toEqual(
       expect.arrayContaining([
-        "extensions/vault/vault-secret-id.js",
-        "extensions/vault/vault-secret-ref-resolver.js",
+        "src/index.ts",
+        ...publicPluginSdkEntrypoints.map((entry) => `src/plugin-sdk/${entry}.ts`),
+        "extensions/anthropic/api.ts",
+        "extensions/anthropic/contract-api.ts",
+        "extensions/memory-core/api.ts",
+        "extensions/memory-core/runtime-api.ts",
       ]),
     );
-    expect(declarationSources.toSorted()).toEqual(
-      runtimeSources.filter((source) => /\.[cm]?tsx?$/u.test(source)).toSorted(),
-    );
+    expect(
+      declarationSources.filter(
+        (source) => source.startsWith("src/") && !source.startsWith("src/plugin-sdk/"),
+      ),
+    ).toEqual(["src/index.ts"]);
+    expect(
+      declarationSources.filter((source) => source.startsWith("extensions/anthropic/")).toSorted(),
+    ).toEqual(["extensions/anthropic/api.ts", "extensions/anthropic/contract-api.ts"]);
+    expect(declarationSources.every((source) => /\.[cm]?tsx?$/u.test(source))).toBe(true);
     expect(new Set(declarationSources).size).toBe(declarationSources.length);
   });
 
-  it("keeps public SDK declarations together and isolates private runtime declarations", () => {
+  it("keeps public SDK types canonical without emitting private runtime declarations", () => {
     const [publicDeclarationSources = [], privateDeclarationSources = []] =
       TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.filter((name) =>
         name.startsWith("openclaw-dts-plugin-sdk-"),
@@ -620,21 +690,27 @@ describe("tsdown config", () => {
         return dts && typeof dts === "object" && Array.isArray(dts.entry) ? dts.entry : [];
       });
     const publicSources = publicPluginSdkEntrypoints.map((entry) => `src/plugin-sdk/${entry}.ts`);
-    const publicSourceSet = new Set(publicSources);
-
     expect(publicDeclarationSources.toSorted()).toEqual(publicSources.toSorted());
-    expect(privateDeclarationSources.some((source) => publicSourceSet.has(source))).toBe(false);
-    expect(privateDeclarationSources).toContain("src/plugin-sdk/tts-runtime.ts");
+    expect(privateDeclarationSources).toEqual([]);
+    const runtime = configs.find((entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    expect(runtime?.entry).toHaveProperty(
+      "plugin-sdk/tts-runtime",
+      "src/plugin-sdk/tts-runtime.ts",
+    );
   });
 
   it("builds self-contained worker deploy executables with every dependency bundled", () => {
     const workerConfig = configs.find(isWorkerDeployConfig);
     const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
+    const launcherConfig = configs.find(isWorkerGitHubExecLauncherConfig);
     expect(workerConfig?.entry).toEqual({
       "worker/worker": "src/worker/worker-deploy-entry.ts",
     });
     expect(receiverConfig?.entry).toEqual({
       "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
+    });
+    expect(launcherConfig?.entry).toEqual({
+      "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts",
     });
     const packageVersion = (
       JSON.parse(fs.readFileSync("package.json", "utf8")) as {
@@ -643,6 +719,7 @@ describe("tsdown config", () => {
     ).version;
     expect(workerConfig?.define).toEqual({
       WORKER_DEPLOY_BUILD: "true",
+      SEALED_RUNTIME_BUILD: "true",
       WORKER_DEPLOY_VERSION: JSON.stringify(packageVersion),
     });
     expect(workerConfig?.alias).toMatchObject({
@@ -663,17 +740,19 @@ describe("tsdown config", () => {
       codeSplitting: false,
       assetFileNames: "worker/[name][extname]",
     });
-    expect(receiverConfig?.define).toBeUndefined();
-    expect(receiverConfig?.alias).toBeUndefined();
-    expect(receiverConfig?.plugins).toBeUndefined();
-    expect(receiverConfig?.outputOptions).toEqual({ codeSplitting: false });
+    for (const config of [receiverConfig, launcherConfig]) {
+      expect(config?.define).toBeUndefined();
+      expect(config?.alias).toBeUndefined();
+      expect(config?.plugins).toBeUndefined();
+      expect(config?.outputOptions).toEqual({ codeSplitting: false });
+    }
 
     const context = {
       format: "es",
       options: {},
       pkgType: "module",
     } as Parameters<OutExtensions>[0];
-    for (const config of [workerConfig, receiverConfig]) {
+    for (const config of [workerConfig, receiverConfig, launcherConfig]) {
       expect(config?.dts).toBe(false);
       expect(config?.outDir).toBe("dist");
       expect(config?.shims).toBe(true);

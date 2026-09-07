@@ -41,6 +41,7 @@ export default defineSingleProviderPluginEntry({
       }),
     ],
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildMoonshotProvider,
       buildStaticProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,

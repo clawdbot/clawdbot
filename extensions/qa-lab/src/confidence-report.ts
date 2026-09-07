@@ -939,7 +939,7 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
   ];
   for (const lane of report.lanes) {
     lines.push(
-      `| ${escapeTableCell(lane.id)} | ${lane.status} | ${formatVerdict(lane)} | ${lane.productImpact ?? ""} | ${lane.qaImpact ?? ""} | ${escapeTableCell(lane.details)} |`,
+      `| ${escapeTableCell(lane.id)} | ${lane.status} | ${formatVerdict(lane)} | ${escapeTableCell(lane.productImpact ?? "")} | ${escapeTableCell(lane.qaImpact ?? "")} | ${escapeTableCell(lane.details)} |`,
     );
   }
   if (report.failures.length > 0) {

@@ -36,9 +36,11 @@ import {
   consumePreExecutionBlockedToolCall,
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 type CreateMessageTool = typeof createMessageTool;
 
@@ -593,8 +595,145 @@ describe("message tool gateway timeout", () => {
     );
   });
 
-  it("does not advertise source-reply finality on ordinary message tools", () => {
-    expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
+  it.each([
+    { name: "implicit final source send", route: "current-source", expected: true },
+    { name: "explicit final source send", route: "current-source", final: true, expected: true },
+    { name: "progress send", route: "current-source", final: false },
+    { name: "other conversation", target: "telegram:999" },
+    { name: "partial source send", route: "current-source", partial: true },
+    { name: "dry run", route: "current-source", dryRun: true },
+    { name: "internal UI", route: "current-source", internal: true },
+    { name: "plugin source send", route: "current-source", plugin: true, expected: true },
+    {
+      name: "implicit A2A plugin send without a mirror marker",
+      plugin: true,
+      webchat: true,
+      expected: true,
+    },
+    { name: "partial plugin source send", route: "current-source", plugin: true, partial: true },
+  ])(
+    "records final external delivery for $name",
+    async ({ route, target, final, expected, partial, dryRun, internal, plugin, webchat }) => {
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "telegram",
+        to: target ?? (webchat ? "123" : "telegram:123"),
+        handledBy: internal ? "internal-source" : plugin ? "plugin" : "core",
+        payload: {
+          sourceReplyRoute: route,
+          messageId: "message-1",
+          ...(partial ? { status: "partial_failed" } : {}),
+        },
+        sendResult: {
+          channel: "telegram",
+          to: "telegram:123",
+          via: "direct",
+          mediaUrl: null,
+          deliveryStatus: partial ? "partial_failed" : "sent",
+          dryRun: dryRun === true,
+          result: { channel: "telegram", messageId: "message-1" },
+        },
+        dryRun: dryRun === true,
+      } satisfies MessageActionResult);
+
+      const { result } = await executeSendWithResult({
+        action: { message: "hello", final },
+        toolOptions: {
+          agentSessionKey: "agent:main:telegram:group:123",
+          currentChannelProvider: webchat ? "webchat" : "telegram",
+          currentChannelId: "123",
+          currentMessagingTarget: "telegram:123",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      });
+      expect(result.details).toMatchObject({
+        messageDelivery: { status: dryRun ? "dryRun" : "settled" },
+      });
+      expect(
+        (result.details as { messageDelivery: { sourceReplyDelivered?: true } }).messageDelivery
+          .sourceReplyDelivered,
+      ).toBe(expected);
+    },
+  );
+
+  it.each(
+    (["reply", "thread-reply", "poll"] as const).flatMap((action) =>
+      (["final", "other target", "partial", "progress", "dry run"] as const).map((mode) => ({
+        action,
+        mode,
+      })),
+    ),
+  )("records only final source delivery for $action ($mode)", async ({ action, mode }) => {
+    const sessionKey = "agent:main:telegram:group:123";
+    const marker = "source action delivered once";
+    const target = mode === "other target" ? "telegram:999" : "telegram:123";
+    const payload = {
+      messageId: "delivered-message",
+      receipt: { replyToId: "inbound-message" },
+      ...(mode === "partial" ? { status: "partial_failed" } : {}),
+    };
+    const common = {
+      channel: "telegram" as const,
+      handledBy: "plugin" as const,
+      payload,
+      dryRun: mode === "dry run",
+    };
+    mocks.runMessageAction.mockResolvedValue(
+      action === "poll"
+        ? { ...common, kind: "poll", action, to: target }
+        : { ...common, kind: "action", action },
+    );
+    const { result } = await executeSendWithResult({
+      action: {
+        action,
+        target,
+        messageId: "inbound-message",
+        message: marker,
+        final: mode !== "progress",
+      },
+      toolOptions: {
+        agentSessionKey: sessionKey,
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+        currentMessagingTarget: "telegram:123",
+        currentMessageId: "inbound-message",
+      },
+    });
+    const delivery = readEmbeddedMessageDeliveryFact(
+      (result.details as { messageDelivery?: unknown }).messageDelivery,
+    );
+    if (mode === "final") {
+      const visible = [marker];
+      const gateway = vi.fn();
+      gateway.mockImplementation(async (request) => {
+        if (request.method === "send") {
+          visible.push(request.params.message);
+        }
+        return {};
+      });
+      await runSessionsSendA2AFlow({
+        callGateway: gateway,
+        targetSessionKey: sessionKey,
+        requesterSessionKey: sessionKey,
+        requesterChannel: "telegram",
+        displayKey: sessionKey,
+        message: "Reply to the source",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 0,
+        roundOneReply: marker,
+        sourceReplyDelivered: delivery?.sourceReplyDelivered,
+      });
+      expect(visible).toEqual([marker]);
+    }
+    expect(delivery?.sourceReplyDelivered).toBe(mode === "final" ? true : undefined);
+  });
+
+  it("advertises scoped source-reply finality without exposing idempotency controls", () => {
+    expect(getToolProperties(createMessageTool()).final).toMatchObject({
+      type: "boolean",
+      description: expect.stringContaining("Ignored for other sends"),
+    });
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });
 
@@ -1125,34 +1264,26 @@ describe("poll vote echo guard", () => {
 });
 
 describe("message tool secret scoping", () => {
-  it("marks message-tool-only source replies in the tool description", () => {
-    const scopedTool = createMessageTool({
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
+  it("keeps explicit-target policy out of the reusable tool definition", () => {
+    const defaultTool = createMessageTool({ sourceReplyDeliveryMode: "message_tool_only" });
     const explicitTargetTool = createMessageTool({
       requireExplicitTarget: true,
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    const defaultTool = createMessageTool();
-
-    expect(scopedTool.description).toContain('visible reply: action="send" + message');
-    expect(getToolProperties(scopedTool).final).toMatchObject({ type: "boolean" });
-    expect(scopedTool.description).toContain("target defaults current source");
-    expect(scopedTool.description).toContain("Final answer private");
-    expect(explicitTargetTool.description).toContain("send needs target");
-    expect(explicitTargetTool.description).not.toContain("target defaults current source");
-    expect(defaultTool.description).not.toContain('visible reply: action="send" + message');
-    expect(getToolProperties(defaultTool)).not.toHaveProperty("final");
+    expect(explicitTargetTool.description).toBe(defaultTool.description);
+    expect(explicitTargetTool.parameters).toEqual(defaultTool.parameters);
   });
 
-  it("forwards source reply delivery mode through createOpenClawTools", () => {
-    const tool = createOpenClawTools({
-      config: {} as never,
-      sourceReplyDeliveryMode: "message_tool_only",
-    }).find((candidate) => candidate.name === "message");
-
-    expect(tool?.description).toContain('visible reply: action="send" + message');
-    expect(getToolProperties(tool!).final).toMatchObject({ type: "boolean" });
+  it("keeps the tool definition stable through createOpenClawTools", () => {
+    const tools = (["automatic", "message_tool_only"] as const).map((sourceReplyDeliveryMode) =>
+      createOpenClawTools({ config: {}, sourceReplyDeliveryMode }).find(
+        (candidate) => candidate.name === "message",
+      ),
+    );
+    expect(tools[0]).toBeDefined();
+    expect(tools[1]?.description).toBe(tools[0]?.description);
+    expect(tools[1]?.parameters).toEqual(tools[0]?.parameters);
+    expect(getToolProperties(tools[1]!).final).toMatchObject({ type: "boolean" });
   });
 
   it("passes source reply delivery mode to the outbound runner", async () => {
@@ -4718,95 +4849,32 @@ describe("message tool boot-echo guard", () => {
     });
   });
 
-  it("sanitizes boot echo text and still sends when media content remains", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
+  it.each([
+    ["mediaUrl", "text", "file:///tmp/status.png"],
+    ["media_url", "text", "file:///tmp/status.png"],
+    ["media_urls", "text", ["file:///tmp/one.png", "file:///tmp/two.png"]],
+    ["attachments", "message", [{ media: "file:///tmp/status.png" }]],
+    ["attachments", "message", [{ file_path: "/tmp/status.png" }]],
+  ] as const)(
+    "preserves %s after sanitizing boot echo in %s: %j",
+    async (mediaField, textField, media) => {
+      setBootEchoContextForSession("agent:main", longBootPrompt);
+      mockSendResult({ channel: "telegram", to: "telegram:123" });
 
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        text: echoedText,
-        mediaUrl: "file:///tmp/status.png",
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.text).toBe("");
-    expect(call?.params?.mediaUrl).toBe("file:///tmp/status.png");
-  });
-
-  it("sanitizes boot echo text and still sends when snake_case media content remains", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        text: echoedText,
-        media_url: "file:///tmp/status.png",
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.text).toBe("");
-    expect(call?.params?.media_url).toBe("file:///tmp/status.png");
-  });
-
-  it("sanitizes boot echo text and still sends when snake_case media arrays remain", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        text: echoedText,
-        media_urls: ["file:///tmp/one.png", "file:///tmp/two.png"],
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.text).toBe("");
-    expect(call?.params?.media_urls).toEqual(["file:///tmp/one.png", "file:///tmp/two.png"]);
-  });
-
-  it("sanitizes boot echo text and still sends when structured attachments remain", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        message: echoedText,
-        attachments: [{ media: "file:///tmp/status.png" }],
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.message).toBe("");
-    expect(call?.params?.attachments).toEqual([{ media: "file:///tmp/status.png" }]);
-  });
-
-  it("sanitizes boot echo text and still sends when structured attachment aliases remain", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        message: echoedText,
-        attachments: [{ file_path: "/tmp/status.png" }],
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.message).toBe("");
-    expect(call?.params?.attachments).toEqual([{ file_path: "/tmp/status.png" }]);
-  });
+      const echoedText =
+        "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+      const call = await executeSend({
+        action: {
+          target: "telegram:123",
+          [textField]: echoedText,
+          [mediaField]: structuredClone(media),
+        },
+        toolOptions: { agentSessionKey: "agent:main" },
+      });
+      expect(call?.params?.[textField]).toBe("");
+      expect(call?.params?.[mediaField]).toEqual(media);
+    },
+  );
 
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
     setBootEchoContextForSession("agent:main", longBootPrompt);

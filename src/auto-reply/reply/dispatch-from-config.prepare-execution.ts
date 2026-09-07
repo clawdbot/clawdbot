@@ -30,7 +30,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const {
     cfg,
     ctx,
-    dispatcher,
     isDispatchOperationAborted,
     markInboundDedupeReplayUnsafe,
     markProgress,
@@ -99,7 +98,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     acceptedReplyPayload: false,
     blockCount: 0,
     channelTransformSuppressed: false,
-    hasPendingDirectBlockReplyDelivery: false,
+    pendingDirectBlockReplyDelivery: Promise.resolve(),
     progressCallbackStartTail: Promise.resolve(),
   };
   const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
@@ -152,7 +151,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const shouldSuppressProgressDelivery = () =>
     state.sendPolicyDenied ||
     (state.suppressDelivery && !state.shouldDeliverVerboseProgressDespiteSourceSuppression());
-  const suppressToolErrorWarnings = params.replyOptions?.suppressToolErrorWarnings;
   const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
   const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
   const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -166,16 +164,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     options?.requiresToolSummaryVisibility === true &&
     (params.replyOptions?.suppressDefaultToolProgressMessages === true ||
       options.allowWhenToolSummariesHidden === true);
-  const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
-    if (!progressState.hasPendingDirectBlockReplyDelivery) {
-      return;
-    }
-    // Direct block replies are queued asynchronously so lightweight replies do
-    // not wait for dispatcher idle. Flush only before later tool/progress
-    // callbacks and final completion where external ordering is visible.
-    progressState.hasPendingDirectBlockReplyDelivery = false;
-    await waitForReplyDispatcherIdle(dispatcher, abortSignal);
-  };
+  const waitForPendingDirectBlockReplyDelivery = (abortSignal?: AbortSignal) =>
+    waitForReplyDispatcherIdle(
+      { waitForIdle: () => progressState.pendingDirectBlockReplyDelivery },
+      abortSignal,
+    );
   const shouldForwardProgressCallback = (options?: {
     allowWhenToolSummariesHidden?: boolean;
     forwardWhenSourceDeliverySuppressed?: boolean;
@@ -277,7 +270,19 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   // Snapshot verbose progress visibility for this run: commentary
   // classification in the CLI runners is wired once at run start, so a
   // mid-run verbose toggle cannot move inter-tool commentary between lanes.
-  const deliverStandaloneCommentaryProgress = shouldEmitVerboseProgress();
+  const standaloneCommentaryProgressVisible = shouldEmitVerboseProgress();
+  const resolveVerboseProgressVisibility = () =>
+    standaloneCommentaryProgressVisible &&
+    shouldSendVerboseProgressMessages() &&
+    !shouldSuppressProgressDelivery();
+  const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
+    resolveTurnCommentaryProgressOwner({
+      commentaryPayloadsEnabled: state.commentaryPayloadsEnabled,
+      options: params.replyOptions,
+      resolveVerboseProgressVisibility,
+    });
+  const deliverStandaloneCommentaryProgress =
+    standaloneCommentaryProgressVisible && !draftOwnsCommentaryProgress;
   const itemEventForwardingOptions = {
     forwardWhenSourceDeliverySuppressed: true,
     requiresToolSummaryVisibility: true,
@@ -327,16 +332,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         return await forwardItemEvent?.(payload);
       }
     : undefined;
-  const resolveVerboseProgressVisibility = () =>
-    deliverStandaloneCommentaryProgress &&
-    shouldSendVerboseProgressMessages() &&
-    !shouldSuppressProgressDelivery();
-  const { commentaryPayloadsEnabled } = resolveTurnCommentaryProgressOwner({
-    commentaryPayloadsEnabled: state.commentaryPayloadsEnabled,
-    options: params.replyOptions,
-    resolveVerboseProgressVisibility,
-  });
-
   const replyResolver =
     params.replyResolver ??
     (
@@ -357,7 +352,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     resolveToolDeliveryPayload,
     typing,
     shouldSuppressProgressDelivery,
-    suppressToolErrorWarnings,
     onToolResultFromReplyOptions,
     onPlanUpdateFromReplyOptions,
     onApprovalEventFromReplyOptions,

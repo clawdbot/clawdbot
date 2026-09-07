@@ -1,7 +1,8 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { getSessionEntry, patchSessionEntry, upsertSessionEntry } from "./session-store-runtime.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { getSessionEntry, patchSessionEntry } from "./session-store-runtime.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -21,15 +22,13 @@ describe("plugin session store maintenance", () => {
       const activeSessionKey = "agent:main:active";
       const now = Date.now();
       const seed = (sessionKey: string, sessionId: string, updatedAt: number) =>
-        upsertSessionEntry({
-          agentId: "main",
-          sessionKey,
-          storePath,
-          entry: { sessionId, updatedAt },
-        });
-      await seed(modelRunSessionKey, "session-model-run", now - 2 * DAY_MS);
-      await seed(oldSessionKey, "session-old", now - 3 * DAY_MS);
-      await seed(activeSessionKey, "session-active", now);
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey, storePath },
+          { sessionId, updatedAt },
+        );
+      seed(modelRunSessionKey, "session-model-run", now - 2 * DAY_MS);
+      seed(oldSessionKey, "session-old", now - 3 * DAY_MS);
+      seed(activeSessionKey, "session-active", now);
 
       await patchSessionEntry({
         sessionKey: activeSessionKey,
@@ -46,8 +45,13 @@ describe("plugin session store maintenance", () => {
         update: () => ({ model: "gpt-5.6-luna" }),
       });
 
-      expect(getSessionEntry({ sessionKey: modelRunSessionKey, storePath }) != null).toBe(
-        modelRunSessionPresent,
+      await vi.waitFor(
+        () => {
+          expect(getSessionEntry({ sessionKey: modelRunSessionKey, storePath }) != null).toBe(
+            modelRunSessionPresent,
+          );
+        },
+        { timeout: 5_000 },
       );
     },
   );

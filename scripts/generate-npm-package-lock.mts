@@ -1228,11 +1228,7 @@ function npmLockPackageDirsForChangedPaths(changedPaths: string[]) {
   let hasAmbiguousDependencyPolicyChange = false;
   let hasLockfileChange = false;
 
-  for (const rawPath of changedPaths) {
-    const changedPath = rawPath
-      .trim()
-      .replaceAll("\\", "/")
-      .replace(/^\.\/+/u, "");
+  for (const changedPath of changedPaths) {
     if (!changedPath) {
       continue;
     }

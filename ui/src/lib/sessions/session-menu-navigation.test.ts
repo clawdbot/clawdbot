@@ -30,6 +30,7 @@ function fixture() {
       },
     },
     gateway: {
+      connection: { gatewayUrl: `${window.location.origin.replace(/^http/u, "ws")}/control` },
       snapshot: {
         phase: "connected",
         client: { request },
@@ -60,17 +61,70 @@ afterEach(() => {
 });
 
 describe("session menu navigation actions", () => {
-  it("copies an exact session link with the stored face and deployment prefix", async () => {
+  it.each([
+    ["copy-session-link", "/control"],
+    ["copy-session-preview-link", "/control/share"],
+  ] as const)("copies %s with the stored face and deployment prefix", async (kind, basePath) => {
     const { params } = fixture();
-    await runSessionNavigationAction("copy-session-link", params);
+    await runSessionNavigationAction(kind, params);
     const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0];
     const url = new URL(copied!);
     expect(url.origin).toBe(window.location.origin);
     expect(url.pathname).toBe(
-      "/control/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+      `${basePath}/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
     );
     expect(url.search).toBe("");
     expect(url.hash).toBe("");
+  });
+
+  it.each([
+    ["https://gateway.example.test", "ws://127.0.0.1:28789", "https://gateway.example.test"],
+    [
+      "https://gateway.example.test/remote",
+      "ws://127.0.0.1:28789",
+      "https://gateway.example.test/remote",
+    ],
+    [
+      undefined,
+      "wss://gateway.example.test/remote?token=secret",
+      "https://gateway.example.test/remote",
+    ],
+    [undefined, "ws://192.168.1.10:18789", "http://192.168.1.10:18789"],
+    [undefined, " WSS://gateway.example.test/remote ", "https://gateway.example.test/remote"],
+    [
+      undefined,
+      `${window.location.origin.replace(/^http/u, "ws")}/remote`,
+      `${window.location.origin}/remote`,
+    ],
+  ])("copies the Gateway session address %s through %s", async (controlUiUrl, gatewayUrl, base) => {
+    const { params } = fixture();
+    params.context.gateway.connection.gatewayUrl = gatewayUrl;
+    Object.assign(params.context.gateway.snapshot.hello!, { controlUiUrl });
+    await runSessionNavigationAction("copy-session-link", params);
+    expect(copyToClipboard).toHaveBeenCalledWith(
+      `${base}/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
+    );
+    await runSessionNavigationAction("copy-session-preview-link", params);
+    expect(copyToClipboard).toHaveBeenLastCalledWith(
+      `${base}/share/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
+    );
+  });
+
+  it("keeps the catalog target in preview links without copying connection credentials", async () => {
+    const { params } = fixture();
+    params.session = {
+      key: "agent:research:catalog:codex:dev%3Amac:thread%2F123",
+      sessionId: "catalog-session",
+    };
+    Object.assign(params.context.gateway.snapshot.hello!, {
+      controlUiUrl: "https://gateway.example.test/remote?token=secret#private",
+    });
+
+    await runSessionNavigationAction("copy-session-preview-link", params);
+
+    expect(copyToClipboard).toHaveBeenCalledWith(
+      "https://gateway.example.test/remote/share/chat/research?catalog=codex&host=dev%3Amac&thread=thread%2F123",
+    );
   });
 
   it.each([
@@ -80,10 +134,14 @@ describe("session menu navigation actions", () => {
     const opened = { opener: window, location: { replace: vi.fn() } };
     opened.location.replace.mockImplementation(() => expect(opened.opener).toBeNull());
     const open = vi.spyOn(window, "open").mockReturnValue(opened as unknown as Window);
-    await runSessionNavigationAction(kind, fixture().params);
+    const { params } = fixture();
+    Object.assign(params.context.gateway.snapshot.hello!, {
+      controlUiUrl: "https://gateway.example.test/remote",
+    });
+    await runSessionNavigationAction(kind, params);
     expect(open).toHaveBeenCalledWith("about:blank", "_blank", features);
     expect(opened.location.replace).toHaveBeenCalledWith(
-      expect.stringContaining("/control/dashboard/research/"),
+      `${window.location.origin}/control/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
     );
     expect(opened.opener).toBeNull();
     expect(showToast).not.toHaveBeenCalled();

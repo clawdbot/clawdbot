@@ -4,7 +4,7 @@ import {
   readTranscriptMediaEntries,
 } from "../../lib/chat/message-extract.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { extractMessageAttachments } from "./components/chat-message-media.ts";
+import { projectMessageMedia } from "./components/chat-message-media.ts";
 
 const MANAGED_UUID = "43007e90-2ade-43f2-a781-42b843e9eca3";
 
@@ -75,7 +75,7 @@ describe("chat history attachment card labels", () => {
   });
 
   it("labels a managed inbound attachment with the persisted original fileName", () => {
-    const attachments = extractMessageAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([
         {
           path: `media://inbound/report---${MANAGED_UUID}.pdf`,
@@ -89,7 +89,7 @@ describe("chat history attachment card labels", () => {
   });
 
   it("restores the original name from a legacy managed inbound UUID suffix when fileName is absent", () => {
-    const attachments = extractMessageAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([
         {
           path: `media://inbound/openclaw-attachment-test---${MANAGED_UUID}.docx`,
@@ -104,7 +104,7 @@ describe("chat history attachment card labels", () => {
   it("leaves non-managed https attachment paths unchanged", () => {
     // `---old` is not a canonical managed UUID suffix, so it must not be stripped
     // from https URLs (which never carry the collision-safe managed suffix).
-    const attachments = extractMessageAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([
         {
           path: "https://example.com/files/openclaw-attachment-test---old.docx",
@@ -117,7 +117,7 @@ describe("chat history attachment card labels", () => {
   });
 
   it("does not strip a managed inbound basename that lacks a UUID suffix", () => {
-    const attachments = extractMessageAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([
         {
           path: "media://inbound/plain-name.docx",
@@ -132,7 +132,7 @@ describe("chat history attachment card labels", () => {
   it("strips only the terminal managed UUID suffix, preserving a UUID-shaped segment in the original name", () => {
     // Legacy record (no persisted fileName) whose original filename itself
     // contains a "---<uuid>"-shaped segment before the terminal managed suffix.
-    const attachments = extractMessageAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([
         {
           path: `media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890-final---${MANAGED_UUID}.docx`,
@@ -148,7 +148,7 @@ describe("chat history attachment card labels", () => {
 
   it("preserves a dotted UUID-shaped segment in a legacy attachment name", () => {
     const path = `media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup---${MANAGED_UUID}.pdf`;
-    const attachments = extractMessageAttachments(
+    const { attachments } = projectMessageMedia(
       userMessageWithMedia([{ path, contentType: "application/pdf" }]),
       [],
     );

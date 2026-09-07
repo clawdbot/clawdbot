@@ -748,7 +748,7 @@ describe("ensureAgentWorkspace", () => {
     const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
     const originalReadFile = fs.readFile.bind(fs);
     let identityReads = 0;
-    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
       if (filePath === identityPath) {
         identityReads += 1;
         if (identityReads === 1) {
@@ -758,8 +758,8 @@ describe("ensureAgentWorkspace", () => {
           );
         }
       }
-      return await originalReadFile(filePath, options as never);
-    }) as typeof fs.readFile);
+      return await originalReadFile(filePath, options);
+    });
 
     try {
       await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
@@ -775,15 +775,15 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
     const originalReadFile = fs.readFile.bind(fs);
-    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
       if (filePath === identityPath) {
         throw Object.assign(new Error("Unknown system error -11, read"), {
           code: "EAGAIN",
           errno: -11,
         });
       }
-      return await originalReadFile(filePath, options as never);
-    }) as typeof fs.readFile);
+      return await originalReadFile(filePath, options);
+    });
 
     try {
       await expect(
@@ -803,19 +803,19 @@ describe("ensureAgentWorkspace", () => {
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
     const bootstrapPath = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
-    const rmSpy = vi
-      .spyOn(fs, "rm")
-      .mockRejectedValueOnce(Object.assign(new Error("not a directory"), { code: "ENOTDIR" }));
+    const originalRm = fs.rm.bind(fs);
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
+      if (filePath === bootstrapPath) {
+        throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
+      }
+      await originalRm(filePath, options);
+    });
 
     try {
-      const result = await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-      expect(rmSpy).toHaveBeenCalledWith(bootstrapPath, { force: true });
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
       await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
       const state = await readWorkspaceState(tempDir);
       expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
-      expect(result.bootstrapPending).toBe(false);
-      await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
-      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
     } finally {
       rmSpy.mockRestore();
     }

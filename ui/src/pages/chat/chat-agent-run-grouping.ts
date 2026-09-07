@@ -122,7 +122,6 @@ function messageCanOwnCompletedFrame(message: unknown, explicitOnly: boolean): b
     phase === "commentary" ||
     stopReason === "toolUse" ||
     stopReason === "error" ||
-    metadata?.runtimeActivityKind === "context_compaction" ||
     (metadata?.mirrorOrigin === "codex-app-server" && metadata.runTerminal !== true)
   ) {
     return false;

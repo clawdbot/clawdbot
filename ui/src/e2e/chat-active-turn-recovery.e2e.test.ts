@@ -8,7 +8,10 @@ import {
   type MockGatewayControls,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "active turn recovery",
@@ -97,6 +100,7 @@ function activeRunSnapshot(
       hasActiveRun: true,
       key: "agent:main:main",
       kind: "direct",
+      sessionId: "active-turn-recovery-session",
       status: "running",
       updatedAt: 1_000,
     },
@@ -155,7 +159,7 @@ async function installActiveRunSnapshot(
   const snapshot = activeRunSnapshot(runId, prompt, streamText, opts);
   await gateway.setMethodResponse("chat.startup", snapshot);
   await gateway.setMethodResponse("chat.history", snapshot);
-  await gateway.setMethodResponse("sessions.list", {
+  await gateway.setSessionsListResponse({
     count: 1,
     defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
     path: "",
@@ -235,11 +239,7 @@ async function finishRecoveredTurn(
 }
 
 async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1] = {}) {
-  const context = await suite.newBrowserContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
+  const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
   const page = await context.newPage();
   const gateway = await installMockGateway(page, scenario);
   await page.goto(`${suite.server.baseUrl}chat`);
@@ -349,7 +349,7 @@ suite.define(() => {
   it.each([true, false])(
     "keeps an owned reconnect prompt before a durable reply while history recovery is pending (active=%s)",
     async (active) => {
-      const { context, page, gateway } = await openActiveTurn();
+      const { context, page, gateway } = await openActiveTurn({ deferredMethods: ["chat.send"] });
       const readPane = () =>
         page.locator("openclaw-chat-pane").evaluate((element) => {
           const state = (element as HTMLElement & { state: ChatPageHost }).state;
@@ -378,6 +378,8 @@ suite.define(() => {
         if (typeof runId !== "string") {
           throw new Error("chat.send did not carry its generated run ID");
         }
+        // This scenario commits the user below while disconnected, after acceptance.
+        await gateway.resolveDeferred("chat.send", { runId, status: "started" });
         await expect.poll(readPane).toMatchObject({
           runId,
           sending: false,
@@ -431,7 +433,7 @@ suite.define(() => {
         });
         await gateway.setMethodResponse("chat.startup", history);
         await gateway.setMethodResponse("chat.history", history);
-        await gateway.setMethodResponse("sessions.list", {
+        await gateway.setSessionsListResponse({
           count: 1,
           sessions: [sessionInfo],
           defaults: {},
@@ -490,7 +492,7 @@ suite.define(() => {
         await gateway.setHistoryMessages(completeHistory.messages);
         await gateway.setMethodResponse("chat.startup", completeHistory);
         await gateway.setMethodResponse("chat.history", completeHistory);
-        await gateway.setMethodResponse("sessions.list", {
+        await gateway.setSessionsListResponse({
           count: 1,
           sessions: [replySessionInfo],
           defaults: {},

@@ -252,7 +252,6 @@ function createProviderUsageModuleMock() {
       updatedAt: Date.now(),
       providers: [],
     }),
-    formatUsageSummaryLine: () => null,
   };
 }
 
@@ -357,7 +356,7 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
-vi.mock("./tools/session-status.runtime.js", createCommandsStatusRuntimeModuleMock);
+vi.mock("../status/status-text.js", createCommandsStatusRuntimeModuleMock);
 vi.mock("../auto-reply/group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value ?? "always",
 }));
@@ -2275,7 +2274,7 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("temp:slug-generator");
   });
 
-  it("blocks cross-agent session_status without agent-to-agent access", async () => {
+  it("blocks cross-agent session_status when agent-to-agent access is disabled", async () => {
     resetSessionStore({
       "agent:other:main": {
         sessionId: "s2",
@@ -2286,8 +2285,31 @@ describe("session_status tool", () => {
     const tool = getSessionStatusTool("agent:main:main");
 
     await expect(tool.execute("call5", { sessionKey: "agent:other:main" })).rejects.toThrow(
-      "Session status visibility is restricted",
+      "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
     );
+  });
+
+  it("returns another agent's session status by default with no tools configuration", async () => {
+    resetSessionStore({
+      "agent:other:main": {
+        sessionId: "s2",
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
+
+    const tool = getSessionStatusTool("agent:main:main");
+
+    const result = await tool.execute("call5-default", { sessionKey: "agent:other:main" });
+    expect((result.details as { ok?: boolean }).ok).toBe(true);
   });
 
   it.each([

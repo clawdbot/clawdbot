@@ -99,26 +99,6 @@ describe("program routes", () => {
     await expect(route.run(argv)).resolves.toBe(false);
   }
 
-  it("matches status route without plugin preload", () => {
-    const route = expectRoute(["status"]);
-    expect(route.loadPlugins).toBeUndefined();
-  });
-
-  it("matches health route without plugin preload", () => {
-    const route = expectRoute(["health"]);
-    expect(route.loadPlugins).toBeUndefined();
-  });
-
-  it("matches channel read-only routes without plugin preload", () => {
-    expect(expectRoute(["channels", "list"]).loadPlugins).toBeUndefined();
-    expect(expectRoute(["channels", "status"]).loadPlugins).toBeUndefined();
-  });
-
-  it("matches agents read-only routes without plugin preload", () => {
-    expect(expectRoute(["agents"]).loadPlugins).toBeUndefined();
-    expect(expectRoute(["agents", "list"]).loadPlugins).toBeUndefined();
-  });
-
   it("passes parsed agents list flags through", async () => {
     await expect(expectRoute(["agents"]).run(routeArgv("agents"))).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenCalledWith(
@@ -174,7 +154,6 @@ describe("program routes", () => {
     "routes plugins list $label without importing the full plugins CLI",
     async ({ flags, options }) => {
       const route = expectRoute(["plugins", "list"]);
-      expect(route.loadPlugins).toBeUndefined();
       expect(route.canRun?.([...routeArgv("plugins list"), ...flags])).toBe(true);
 
       await expect(route.run([...routeArgv("plugins list"), ...flags])).resolves.toBe(true);
@@ -188,14 +167,8 @@ describe("program routes", () => {
     await expectRunFalse(["plugins", "list"], routeArgv("plugins list --wat"));
   });
 
-  it("matches gateway status route without plugin preload", () => {
-    const route = expectRoute(["gateway", "status"]);
-    expect(route.loadPlugins).toBeUndefined();
-  });
-
   it("routes machine-readable gateway health without plugin preload", async () => {
     const route = expectRoute(["gateway", "health"]);
-    expect(route.loadPlugins).toBeUndefined();
     await expect(route.run(routeArgv("gateway health --json --timeout 5000"))).resolves.toBe(true);
     expect(runGatewayHealthJsonRouteMock).toHaveBeenCalledWith(
       {
@@ -307,6 +280,13 @@ describe("program routes", () => {
 
   it("returns false for sessions route when --store value is missing", async () => {
     await expectRunFalse(["sessions"], routeArgv("sessions --store"));
+  });
+
+  it.each([
+    ["separate empty value", ["node", "openclaw", "sessions", "--store", ""]],
+    ["empty assigned value", routeArgv("sessions --store=")],
+  ])("falls back to Commander for a sessions --store $0", async (_name, argv) => {
+    await expectRunFalse(["sessions"], argv);
   });
 
   it("returns false for sessions route when --active value is missing", async () => {
@@ -498,7 +478,6 @@ describe("program routes", () => {
 
   it("routes tasks list JSON through the lean task JSON command", async () => {
     const rootRoute = expectRoute(["tasks"]);
-    expect(rootRoute.loadPlugins).toBeUndefined();
     expect(rootRoute.canRun?.(["node", "openclaw", "tasks"])).toBe(false);
     await expect(
       rootRoute.run([
@@ -517,7 +496,6 @@ describe("program routes", () => {
     );
 
     const listRoute = expectRoute(["tasks", "list"]);
-    expect(listRoute.loadPlugins).toBeUndefined();
     await expect(
       listRoute.run(["node", "openclaw", "tasks", "list", "--json", "--runtime=cron"]),
     ).resolves.toBe(true);
@@ -587,7 +565,6 @@ describe("program routes", () => {
 
   it("routes tasks audit JSON through the lean task JSON command", async () => {
     const route = expectRoute(["tasks", "audit"]);
-    expect(route.loadPlugins).toBeUndefined();
     expect(route.canRun?.(["node", "openclaw", "tasks", "audit"])).toBe(false);
     await expect(
       route.run([

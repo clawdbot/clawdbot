@@ -6,7 +6,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   answerConfirmDialog,
-  installDialogPolyfill,
+  createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import {
@@ -15,21 +15,23 @@ import {
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
 
-let restoreDialogPolyfill: () => void;
+let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 
 beforeEach(() => {
-  restoreDialogPolyfill = installDialogPolyfill();
+  dialogs = createModalDialogTestFixture();
 });
 
-afterEach(() => {
-  document.body.replaceChildren();
-  restoreDialogPolyfill();
-  vi.unstubAllGlobals();
+afterEach(async () => {
+  try {
+    await dialogs.cleanup();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 describe("chat pane placement", () => {
   it("shows authoritative device targets to writers and moves to the selected device", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = dialogs.mockRequest(async (method: string) => {
       if (method === "environments.list") {
         return {
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -80,8 +82,8 @@ describe("chat pane placement", () => {
     } as never;
     const session = { ...activePlacementSession(), hasActiveRun: true };
 
-    const moving = pane.moveHeaderPlacement(session);
-    await vi.waitFor(() => {
+    const moving = dialogs.track(pane.moveHeaderPlacement(session));
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="device:runner"]')).not.toBeNull();
     });
     expect(document.body.querySelector('[data-value="cloud:aws"]')).toBeNull();
@@ -120,7 +122,7 @@ describe("chat pane placement", () => {
   });
 
   it("moves an active placement to a selected profile machine", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = dialogs.mockRequest(async (method: string) => {
       if (method === "environments.list") {
         return {
           profiles: [
@@ -152,8 +154,8 @@ describe("chat pane placement", () => {
     } as never;
     const session = activePlacementSession();
 
-    const moving = pane.moveHeaderPlacement(session);
-    await vi.waitFor(() => {
+    const moving = dialogs.track(pane.moveHeaderPlacement(session));
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
     });
     document.body.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')?.click();
@@ -193,7 +195,7 @@ describe("chat pane placement", () => {
   ] as const)(
     "moves $runtimeId to the same two-mode cloud profile while preserving machine selection",
     async ({ runtimeId, executionMode, compatibleSingleMode, incompatibleSingleMode }) => {
-      const request = vi.fn(async (method: string) => {
+      const request = dialogs.mockRequest(async (method: string) => {
         if (method === "environments.list") {
           return {
             profiles: [
@@ -249,57 +251,48 @@ describe("chat pane placement", () => {
         },
       } satisfies GatewaySessionRow;
 
-      const moving = pane.moveHeaderPlacement(session);
-      try {
-        await vi.waitFor(() => {
-          expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
-        });
-        const incompatible = document.body.querySelector<HTMLButtonElement>(
-          `[data-value="cloud:${incompatibleSingleMode}"]`,
-        );
-        expect(incompatible?.disabled).toBe(true);
-        expect(incompatible?.title).toMatch(/compatible cloud worker|cannot use/i);
-        const lifecycleOnly = document.body.querySelector<HTMLButtonElement>(
-          '[data-value="cloud:lifecycle-only"]',
-        );
-        expect(lifecycleOnly?.disabled).toBe(true);
-        expect(lifecycleOnly?.title).toMatch(/compatible cloud worker|cannot use/i);
-        const compatibleSingle = document.body.querySelector<HTMLButtonElement>(
-          `[data-value="cloud:${compatibleSingleMode}"]`,
-        );
-        expect(compatibleSingle?.disabled).toBe(false);
-        const multiMode = document.body.querySelector<HTMLButtonElement>(
-          '[data-value="cloud:aws"]',
-        );
-        expect(multiMode?.disabled).toBe(false);
-        multiMode?.click();
-        document.body.querySelector<HTMLButtonElement>('[data-value="machine:beast"]')?.click();
-        [...document.body.querySelectorAll<HTMLButtonElement>("button")]
-          .find((button) => button.textContent?.trim() === "Move session")
-          ?.click();
-        await moving;
+      const moving = dialogs.track(pane.moveHeaderPlacement(session));
+      await dialogs.waitFor(() => {
+        expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
+      });
+      const incompatible = document.body.querySelector<HTMLButtonElement>(
+        `[data-value="cloud:${incompatibleSingleMode}"]`,
+      );
+      expect(incompatible?.disabled).toBe(true);
+      expect(incompatible?.title).toMatch(/compatible cloud worker|cannot use/i);
+      const lifecycleOnly = document.body.querySelector<HTMLButtonElement>(
+        '[data-value="cloud:lifecycle-only"]',
+      );
+      expect(lifecycleOnly?.disabled).toBe(true);
+      expect(lifecycleOnly?.title).toMatch(/compatible cloud worker|cannot use/i);
+      const compatibleSingle = document.body.querySelector<HTMLButtonElement>(
+        `[data-value="cloud:${compatibleSingleMode}"]`,
+      );
+      expect(compatibleSingle?.disabled).toBe(false);
+      const multiMode = document.body.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
+      expect(multiMode?.disabled).toBe(false);
+      multiMode?.click();
+      document.body.querySelector<HTMLButtonElement>('[data-value="machine:beast"]')?.click();
+      [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "Move session")
+        ?.click();
+      await moving;
 
-        expect(request).toHaveBeenCalledWith(
-          "sessions.move",
-          expect.objectContaining({
-            target: {
-              kind: "profile",
-              profileId: "aws",
-              machineClass: "beast",
-            },
-          }),
-        );
-      } finally {
-        [...document.body.querySelectorAll<HTMLButtonElement>("button")]
-          .find((button) => button.textContent?.trim() === "Cancel")
-          ?.click();
-        await moving;
-      }
+      expect(request).toHaveBeenCalledWith(
+        "sessions.move",
+        expect.objectContaining({
+          target: {
+            kind: "profile",
+            profileId: "aws",
+            machineClass: "beast",
+          },
+        }),
+      );
     },
   );
 
   it("cancels offline-device continuation without opening a picker or sending an RPC", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
+    const request = dialogs.mockRequest(async () => ({ ok: true }));
     const { pane } = createTestChatPane({
       client: { request } as unknown as GatewayBrowserClient,
       sessions: {} as SessionCapability,
@@ -309,7 +302,7 @@ describe("chat pane placement", () => {
       auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     } as never;
 
-    const moving = pane.moveHeaderPlacement(offlineDeviceSession());
+    const moving = dialogs.track(pane.moveHeaderPlacement(offlineDeviceSession()));
     const actions = await waitForConfirmDialogActions();
     expect(document.body.textContent).toContain(
       "Unsynced device files and in-flight work may be lost",
@@ -322,7 +315,7 @@ describe("chat pane placement", () => {
   });
 
   it("continues an offline device placement on the Gateway with exact abandonment", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
+    const request = dialogs.mockRequest(async () => ({ ok: true }));
     const refreshReplacement = vi.fn(async () => undefined);
     const { pane } = createTestChatPane({
       client: { request } as unknown as GatewayBrowserClient,
@@ -334,7 +327,7 @@ describe("chat pane placement", () => {
     } as never;
     const session = offlineDeviceSession();
 
-    const moving = pane.moveHeaderPlacement(session);
+    const moving = dialogs.track(pane.moveHeaderPlacement(session));
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await moving;
 
@@ -355,7 +348,7 @@ describe("chat pane placement", () => {
   });
 
   it("keeps the offline placement visible when continuation fails", async () => {
-    const request = vi.fn(async () => {
+    const request = dialogs.mockRequest(async () => {
       throw new Error("device teardown is still pending; retry Continue on Gateway");
     });
     const refreshReplacement = vi.fn(async () => undefined);
@@ -369,7 +362,7 @@ describe("chat pane placement", () => {
     } as never;
     const session = offlineDeviceSession();
 
-    const moving = pane.moveHeaderPlacement(session);
+    const moving = dialogs.track(pane.moveHeaderPlacement(session));
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await moving;
 
@@ -379,7 +372,7 @@ describe("chat pane placement", () => {
   });
 
   it("disables paired-device moves for a runtime that cannot dispatch there", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = dialogs.mockRequest(async (method: string) => {
       if (method === "environments.list") {
         return {
           profiles: [],
@@ -417,8 +410,8 @@ describe("chat pane placement", () => {
       },
     } satisfies GatewaySessionRow;
 
-    const moving = pane.moveHeaderPlacement(session);
-    await vi.waitFor(() => {
+    const moving = dialogs.track(pane.moveHeaderPlacement(session));
+    await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
     });
     const device = document.body.querySelector<HTMLButtonElement>(
@@ -442,7 +435,7 @@ describe("chat pane placement", () => {
   ] as const)(
     "moves a $runtimeId session to a supported paired device",
     async ({ runtimeId, executionMode }) => {
-      const request = vi.fn(async (method: string) => {
+      const request = dialogs.mockRequest(async (method: string) => {
         if (method === "environments.list") {
           return {
             profiles: [],
@@ -455,6 +448,14 @@ describe("chat pane placement", () => {
                 sessionHost: true,
                 workerSlots: { total: 1, available: 1 },
                 invocableCommands: ["codex.exec-server.stdio.v1"],
+                ...(executionMode === "remote-exec"
+                  ? {
+                      requiredNodeCommand: {
+                        command: "codex.exec-server.stdio.v1",
+                        state: "invocable",
+                      },
+                    }
+                  : {}),
               },
             ],
           };
@@ -488,8 +489,8 @@ describe("chat pane placement", () => {
         },
       } satisfies GatewaySessionRow;
 
-      const moving = pane.moveHeaderPlacement(session);
-      await vi.waitFor(() => {
+      const moving = dialogs.track(pane.moveHeaderPlacement(session));
+      await dialogs.waitFor(() => {
         expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
       });
       document.body.querySelector<HTMLButtonElement>('[data-value="device:build-mac"]')?.click();
@@ -524,6 +525,7 @@ describe("chat pane placement", () => {
       },
       availableSlots: 0,
       invocableCommands: ["codex.exec-server.stdio.v1"],
+      commandState: "invocable",
       disabled: false,
     },
     {
@@ -533,6 +535,7 @@ describe("chat pane placement", () => {
       devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
       availableSlots: 0,
       invocableCommands: [],
+      commandState: undefined,
       disabled: true,
       reason: /worker slots/i,
     },
@@ -546,11 +549,13 @@ describe("chat pane placement", () => {
       },
       availableSlots: 1,
       invocableCommands: [],
+      commandState: "unauthorized",
       disabled: true,
-      reason: /enable|approv/i,
+      reason:
+        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
     },
   ] as const)("$name in the Move Session picker", async (scenario) => {
-    const request = vi.fn(async (method: string) => {
+    const request = dialogs.mockRequest(async (method: string) => {
       if (method === "environments.list") {
         return {
           profiles: [],
@@ -564,6 +569,14 @@ describe("chat pane placement", () => {
               workerSlots: { total: 1, available: scenario.availableSlots },
               capabilities: ["codex.exec-server.stdio.v1"],
               invocableCommands: scenario.invocableCommands,
+              ...(scenario.commandState
+                ? {
+                    requiredNodeCommand: {
+                      command: "codex.exec-server.stdio.v1",
+                      state: scenario.commandState,
+                    },
+                  }
+                : {}),
             },
           ],
         };
@@ -595,24 +608,30 @@ describe("chat pane placement", () => {
       },
     } satisfies GatewaySessionRow;
 
-    const moving = pane.moveHeaderPlacement(session);
-    try {
-      await vi.waitFor(() => {
-        expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
-      });
-      const device = document.body.querySelector<HTMLButtonElement>(
-        '[data-value="device:build-mac"]',
-      );
-      expect(device?.disabled).toBe(scenario.disabled);
-      if (scenario.reason !== undefined) {
+    const moving = dialogs.track(pane.moveHeaderPlacement(session));
+    await dialogs.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("environments.list", {
+        runtimeId: scenario.runtimeId,
+      }),
+    );
+    await dialogs.waitFor(() => {
+      expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
+    });
+    const device = document.body.querySelector<HTMLButtonElement>(
+      '[data-value="device:build-mac"]',
+    );
+    expect(device?.disabled).toBe(scenario.disabled);
+    if (scenario.reason !== undefined) {
+      if (typeof scenario.reason === "string") {
+        expect(device?.title).toBe(scenario.reason);
+      } else {
         expect(device?.title).toMatch(scenario.reason);
       }
-    } finally {
-      [...document.body.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Cancel")
-        ?.click();
-      await moving;
     }
+    [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Cancel")
+      ?.click();
+    await moving;
 
     expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
   });

@@ -321,7 +321,7 @@ describe("handleMessageEnd", () => {
       const ctx = createMessageEndContext({
         onBlockReply,
         state: {
-          lastStreamedAssistantCleaned: "Hello world",
+          assistantStream: { raw: "", text: "Hello world" },
           blockReplyBreak: "text_end",
           deltaBuffer: "",
         },
@@ -373,7 +373,7 @@ describe("handleMessageEnd", () => {
     const ctx = createMessageEndContext({
       onBlockReply,
       state: {
-        lastStreamedAssistantCleaned: "Caption [[oops",
+        assistantStream: { raw: "", text: "Caption [[oops" },
         blockReplyBreak: "message_end",
       },
     });
@@ -478,7 +478,7 @@ describe("handleMessageEnd", () => {
         onAgentEvent,
         bufferedText: previousText,
         state: {
-          lastStreamedAssistantCleaned: previousText,
+          assistantStream: { raw: "", text: previousText },
           deltaBuffer: previousText,
         },
       });
@@ -512,7 +512,7 @@ describe("handleMessageEnd", () => {
     const ctx = createMessageEndContext({
       onAgentEvent,
       state: {
-        lastStreamedAssistantCleaned: "Working...",
+        assistantStream: { raw: "", text: "Working..." },
         blockReplyBreak: "text_end",
         deltaBuffer: "",
       },
