@@ -51,7 +51,6 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSessionSelection>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
-  hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
   authoritativeScheduledTick: boolean;
   skipReason?: HeartbeatSkipReason;
@@ -136,7 +135,6 @@ export async function resolveHeartbeatPreflight(params: {
     session,
     pendingEventEntries,
     turnSourceDeliveryContext,
-    hasTaggedCronEvents,
     shouldInspectPendingEvents,
     authoritativeScheduledTick:
       typeof params.scheduledEveryMs === "number" &&
@@ -158,13 +156,7 @@ export async function resolveHeartbeatPreflight(params: {
 
   // The exec completion can be acknowledged by process poll after its wake is
   // queued. Treat that stale wake as consumed without touching unrelated events.
-  if (
-    wakeFlags.isExecEventWake &&
-    !basePreflight.authoritativeScheduledTick &&
-    !params.scheduledTasks?.length &&
-    !hasTaggedCronEvents &&
-    !pendingEventEntries.some((event) => isExecCompletionEvent(event.text))
-  ) {
+  if (shouldSkipConsumedExecWake(basePreflight, params.scheduledTasks ?? [])) {
     return {
       ...basePreflight,
       skipReason: HEARTBEAT_SKIP_NO_PENDING_EVENT,
@@ -190,6 +182,23 @@ export async function resolveHeartbeatPreflight(params: {
     };
   }
   return basePreflight;
+}
+
+export function shouldSkipConsumedExecWake(
+  preflight: Pick<
+    HeartbeatPreflight,
+    "isExecEventWake" | "authoritativeScheduledTick" | "pendingEventEntries"
+  >,
+  scheduledTasks: readonly HeartbeatScheduledTask[],
+): boolean {
+  return (
+    preflight.isExecEventWake &&
+    !preflight.authoritativeScheduledTick &&
+    scheduledTasks.length === 0 &&
+    !preflight.pendingEventEntries.some(
+      (event) => event.contextKey?.startsWith("cron:") || isExecCompletionEvent(event.text),
+    )
+  );
 }
 
 type HeartbeatPromptResolution = {

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
+import { getReplyFromConfig as dispatchReply } from "../auto-reply/reply.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -20,12 +22,22 @@ import {
   requestHeartbeat,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import * as heartbeatTargets from "./outbound/targets.js";
+import {
+  enqueueSystemEvent,
+  enqueueSystemEventWithReceipt,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
+
+// Keep the heartbeat facade real; replace only the generic reply dispatch.
+vi.mock("../auto-reply/reply.js", () => ({ getReplyFromConfig: vi.fn() }));
 
 describe("stale exec heartbeat wakes", () => {
   type WakeRequest = Parameters<typeof requestHeartbeat>[0];
   type WakeHandler = Parameters<typeof setRuntimeHeartbeatWakeHandler>[0];
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "HOME", "USERPROFILE", "OPENCLAW_HOME"]);
   let currentHandlerDisposer: (() => void) | undefined;
 
   function setHeartbeatWakeHandler(handler: WakeHandler): void {
@@ -43,6 +55,8 @@ describe("stale exec heartbeat wakes", () => {
 
   beforeEach(() => {
     setupTelegramHeartbeatPluginRuntimeForTests();
+    vi.mocked(dispatchReply).mockReset();
+    vi.mocked(dispatchReply).mockResolvedValue({ text: "HEARTBEAT_OK" });
     resetSystemEventsForTest();
     resetGatewayWorkAdmission();
   });
@@ -436,5 +450,180 @@ describe("stale exec heartbeat wakes", () => {
 
     expect(runSpy).toHaveBeenCalledTimes(2);
     runner.stop();
+  });
+
+  it.each([
+    { remaining: "none", expectedSource: undefined, failure: "none" },
+    { remaining: "exec", expectedSource: "exec", failure: "none" },
+    { remaining: "exec", expectedSource: "exec", failure: "dispatch" },
+    { remaining: "exec", expectedSource: "exec", failure: "delivery" },
+    { remaining: "cron", expectedSource: "cron", failure: "none" },
+    { remaining: "cadence", expectedSource: "heartbeat", failure: "none" },
+    { remaining: "task", expectedSource: "heartbeat", failure: "none" },
+  ] as const)(
+    "revalidates acknowledged completions with $remaining work and $failure failure",
+    async ({ remaining, expectedSource, failure }) => {
+      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "telegram" } },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: storePath },
+        };
+        const sessionKey = await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "-100155462274",
+        });
+        const completed = "Exec completed (first-job, code 0) :: already observed";
+        const acknowledge = enqueueSystemEventWithReceipt(completed, { sessionKey });
+        const survivingEvent =
+          remaining === "exec"
+            ? "Exec completed (second-job, code 0) :: unobserved result"
+            : remaining === "cron"
+              ? "Reminder: Check the overnight report"
+              : undefined;
+        if (survivingEvent) {
+          enqueueSystemEvent(survivingEvent, {
+            sessionKey,
+            ...(remaining === "cron" ? { contextKey: "cron:overnight" } : {}),
+          });
+        }
+        enqueueSystemEvent("Unrelated queued event", { sessionKey });
+        const original = peekSystemEventEntries(sessionKey);
+        const resolveTarget = heartbeatTargets.resolveHeartbeatDeliveryTargetWithSessionRoute;
+        vi.spyOn(
+          heartbeatTargets,
+          "resolveHeartbeatDeliveryTargetWithSessionRoute",
+        ).mockImplementationOnce(async (...args) => {
+          const route = await resolveTarget(...args);
+          expect(acknowledge?.()).toBe(true);
+          // Same-text successor must not inherit the acknowledged occurrence's selection.
+          enqueueSystemEvent(completed, { sessionKey });
+          expect(peekSystemEventEntries(sessionKey).at(-1)?.id).not.toBe(original[0]?.id);
+          return route;
+        });
+        const telegram = vi.fn().mockRejectedValue(new Error("Synthetic delivery failure"));
+        replySpy.mockImplementation(async (ctx) => {
+          expect(ctx.Body).not.toContain(completed);
+          expect(ctx.InternalTurnSource).toBe(expectedSource);
+          if (survivingEvent) {
+            expect(ctx.Body).toContain(survivingEvent);
+          }
+          if (remaining === "task") {
+            expect(ctx.Body).toContain("Check the task inbox");
+          }
+          // Selection is read-only until the result is handled successfully.
+          expect(peekSystemEvents(sessionKey)).toContain(completed);
+          if (survivingEvent) {
+            expect(peekSystemEvents(sessionKey)).toContain(survivingEvent);
+          }
+          if (failure === "dispatch") {
+            throw new Error("Synthetic dispatch failure");
+          }
+          return { text: failure === "delivery" ? "Remaining command completed" : "HEARTBEAT_OK" };
+        });
+        const result = await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          ...(remaining === "cadence" ? { scheduledEveryMs: 5 * 60_000 } : {}),
+          ...(remaining === "task"
+            ? { tasks: [{ jobId: "inbox", name: "Inbox", prompt: "Check the task inbox" }] }
+            : {}),
+          deps: { getReplyFromConfig: replySpy, telegram },
+        });
+        if (remaining === "none") {
+          expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT });
+          expect(replySpy).not.toHaveBeenCalled();
+        } else if (failure !== "none") {
+          expect(result).toMatchObject({
+            status: "failed",
+            reason:
+              failure === "dispatch" ? "Synthetic dispatch failure" : "Synthetic delivery failure",
+          });
+          expect(replySpy).toHaveBeenCalledOnce();
+          if (failure === "delivery") {
+            expect(telegram).toHaveBeenCalledOnce();
+          }
+        } else {
+          expect(result.status).toBe("ran");
+          expect(replySpy).toHaveBeenCalledOnce();
+        }
+        expect(peekSystemEvents(sessionKey)).toEqual([
+          ...(failure !== "none" ? [survivingEvent] : []),
+          "Unrelated queued event",
+          completed,
+        ]);
+      });
+    },
+  );
+
+  it.each([
+    { name: "skips an acknowledged completion", acknowledgeDuringPreparation: true },
+    { name: "dispatches a pending completion", acknowledgeDuringPreparation: false },
+  ])("$name after preparing the published runtime", async ({ acknowledgeDuringPreparation }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      for (const key of ["HOME", "USERPROFILE", "OPENCLAW_HOME"]) {
+        setTestEnvValue(key, tmpDir);
+      }
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "0m", target: "telegram" },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "-100155462274",
+      });
+      const completion = "Exec completed (runtime-proof, code 0) :: Synthetic result";
+      const acknowledge = enqueueSystemEventWithReceipt(completion, { sessionKey });
+      if (!acknowledge) {
+        throw new Error("Expected a queued completion receipt");
+      }
+      const prepareRuntime = vi
+        .spyOn(preparedModelRuntime, "loadPublishedGatewayReplyDispatchRuntime")
+        .mockImplementationOnce(async () => {
+          // The real facade is awaiting runtime preparation after preflight took its snapshot.
+          await Promise.resolve();
+          expect(peekSystemEvents(sessionKey)).toEqual([completion]);
+          if (acknowledgeDuringPreparation) {
+            expect(acknowledge()).toBe(true);
+          }
+          return undefined;
+        });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        deps: { telegram: vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" }) },
+      });
+
+      expect(prepareRuntime).toHaveBeenCalledOnce();
+      if (acknowledgeDuringPreparation) {
+        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT });
+        expect(dispatchReply).not.toHaveBeenCalled();
+      } else {
+        expect(result.status).toBe("ran");
+        expect(dispatchReply).toHaveBeenCalledOnce();
+        expect(vi.mocked(dispatchReply).mock.calls[0]?.[0]).toMatchObject({
+          Body: expect.stringContaining(completion),
+          InternalTurnSource: "exec",
+        });
+      }
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+    });
   });
 });

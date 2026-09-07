@@ -69,6 +69,7 @@ import {
   resolveHeartbeatPreflight,
   resolveHeartbeatRunPrompt,
   shouldPreflightWakeBeforeBusy,
+  shouldSkipConsumedExecWake,
 } from "./heartbeat-runner-prompt.js";
 import {
   resolveHeartbeatSession,
@@ -85,6 +86,7 @@ import {
   areHeartbeatsEnabled,
   getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatScheduledTask,
   type HeartbeatWakeIntent,
@@ -95,13 +97,14 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { peekSelectedSystemEventEntries } from "./system-events.js";
 
 const log = heartbeatLog;
 const CRON_COMMAND_LANE: string = CommandLane.Cron;
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
-    getReplyFromConfig?: typeof import("./heartbeat-runner.runtime.js").getHeartbeatReplyFromConfig;
+    getReplyFromConfig?: typeof import("../auto-reply/reply.js").getReplyFromConfig;
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
     isReplyRunActive?: (sessionKey: string) => boolean;
@@ -378,7 +381,7 @@ export type ReadyHeartbeatWake = StageResult<ReturnType<typeof resolveHeartbeatW
 
 export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const { cfg, agentId, heartbeat, preflight } = wake;
-  const { scheduledTasks, startedAt } = wake;
+  const { startedAt } = wake;
   const { listActiveEmbeddedRuns, isReplyRunActive } = wake;
   const { entry, sessionKey, run, conversationEntry } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
@@ -409,7 +412,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     delivery.reason === "no-route" &&
     (wake.wakeSource === undefined || wake.wakeSource === "interval") &&
     preflight.pendingEventEntries.length === 0 &&
-    scheduledTasks.length === 0
+    wake.scheduledTasks.length === 0
   ) {
     return skippedHeartbeatStage("no-route", startedAt);
   }
@@ -441,9 +444,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
     accountId: delivery.accountId,
   });
-  const canRelayToUser = Boolean(
-    delivery.channel !== "none" && delivery.to && visibility.showAlerts,
-  );
   let useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
     cfg,
     agentId,
@@ -451,16 +451,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     entry,
     sessionKey,
     chatType: delivery.chatType,
-  });
-  let heartbeatRunPrompt = resolveHeartbeatRunPrompt({
-    cfg,
-    heartbeat,
-    preflight,
-    canRelayToUser,
-    startedAt,
-    scheduledTasks,
-    heartbeatScratchContent: preflight.heartbeatScratchContent,
-    useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
   });
 
   const runSessionKey = run.sessionKey;
@@ -533,7 +523,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     }
     outboundPolicySessionKey = isolatedBaseSessionKey;
 
-    const actualUseHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
+    useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
       cfg,
       agentId,
       heartbeat,
@@ -541,20 +531,8 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       sessionKey: runSessionKey,
       chatType: delivery.chatType,
     });
-    if (actualUseHeartbeatResponseToolPrompt !== useHeartbeatResponseToolPrompt) {
-      useHeartbeatResponseToolPrompt = actualUseHeartbeatResponseToolPrompt;
-      heartbeatRunPrompt = resolveHeartbeatRunPrompt({
-        cfg,
-        heartbeat,
-        preflight,
-        canRelayToUser,
-        startedAt,
-        scheduledTasks,
-        heartbeatScratchContent: preflight.heartbeatScratchContent,
-        useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
-      });
-    }
   }
+
   return {
     kind: "ready",
     ...preflight.session,
@@ -565,7 +543,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     replyPrefix,
     runSessionKey,
     outboundPolicySessionKey,
-    ...heartbeatRunPrompt,
+    useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
   } as const;
 }
 
@@ -580,15 +558,44 @@ export async function invokeHeartbeatAgentRun(
   prepared: PreparedHeartbeatRun,
 ) {
   const { cfg, agentId, heartbeat, startedAt, preflight } = wake;
-  const { delivery, hasExecCompletion, hasCronEvents, prompt } = prepared;
+  const { delivery } = prepared;
   const { replyPrefix, runSessionKey, sender, suppressOriginatingContext } = prepared;
-  const { usesHeartbeatResponseTool } = prepared;
   const replyOperationRunState: ReplyOperationRunState = {};
   const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
+  const heartbeatWakeAbortSignal = getHeartbeatWakeAbortSignal();
   const getReplyFromConfig =
     opts.deps?.getReplyFromConfig ??
-    (await loadHeartbeatRunnerRuntime()).getHeartbeatReplyFromConfig;
-  const heartbeatWakeAbortSignal = getHeartbeatWakeAbortSignal();
+    (await (
+      await loadHeartbeatRunnerRuntime()
+    ).resolveHeartbeatReplyFromConfig({
+      agentId,
+      abortSignal: heartbeatWakeAbortSignal,
+    }));
+  // Routing, isolated-session setup, typing and runtime loading can all yield.
+  // Revalidate the original occurrences now; successors belong to a later wake.
+  const currentPreflight = {
+    ...preflight,
+    pendingEventEntries: peekSelectedSystemEventEntries(
+      preflight.session.sessionKey,
+      preflight.pendingEventEntries,
+    ),
+  };
+  if (shouldSkipConsumedExecWake(currentPreflight, wake.scheduledTasks)) {
+    return skippedHeartbeatStage(HEARTBEAT_SKIP_NO_PENDING_EVENT, startedAt);
+  }
+  const runPrompt = resolveHeartbeatRunPrompt({
+    cfg,
+    heartbeat,
+    preflight: currentPreflight,
+    canRelayToUser: Boolean(
+      delivery.channel !== "none" && delivery.to && prepared.visibility.showAlerts,
+    ),
+    startedAt,
+    scheduledTasks: wake.scheduledTasks,
+    heartbeatScratchContent: preflight.heartbeatScratchContent,
+    useHeartbeatResponseTool: prepared.useHeartbeatResponseTool,
+  });
+  const { prompt, hasExecCompletion, hasCronEvents, usesHeartbeatResponseTool } = runPrompt;
   const heartbeatContext = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
@@ -625,7 +632,7 @@ export async function invokeHeartbeatAgentRun(
     },
     {
       sessionKey: prepared.inspectsRunQueue ? prepared.sessionKey : runSessionKey,
-      events: prepared.inspectsRunQueue ? prepared.genericEvents : [],
+      events: prepared.inspectsRunQueue ? runPrompt.genericEvents : [],
     },
   );
   const replyResult = await getReplyFromConfig(heartbeatContext, replyOpts, cfg);
@@ -672,6 +679,8 @@ export async function invokeHeartbeatAgentRun(
   }
   return {
     kind: "completed",
+    hasRelayableExecCompletion: runPrompt.hasRelayableExecCompletion,
+    inspectedSystemEventsToConsume: runPrompt.inspectedSystemEventsToConsume,
     heartbeatToolResponse,
     heartbeatTerminalToolFailure,
     agentRunFailed,

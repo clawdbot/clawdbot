@@ -43,7 +43,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   }
   const { cfg, agentId, startedAt } = wake;
   const { delivery, visibility, replyPrefix, runSessionKey } = prepared;
-  const { outboundPolicySessionKey, hasRelayableExecCompletion } = prepared;
+  const { outboundPolicySessionKey } = prepared;
 
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
@@ -140,6 +140,9 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   try {
     await heartbeatTyping?.onReplyStart();
     const agentRun = await invokeHeartbeatAgentRun(opts, wake, prepared);
+    if (agentRun.kind === "skipped") {
+      return { status: "skipped", reason: agentRun.reason };
+    }
     if (agentRun.kind !== "completed") {
       const reason =
         agentRun.kind === "busy"
@@ -152,7 +155,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     }
     const outcome = classifyHeartbeatAgentOutcome({
       agentRun,
-      hasRelayableExecCompletion,
+      hasRelayableExecCompletion: agentRun.hasRelayableExecCompletion,
       suppressUnmarkedSourceReplies:
         resolveSourceReplyDeliveryMode({
           cfg,
@@ -165,6 +168,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       opts,
       wake,
       prepared,
+      inspectedSystemEventsToConsume: agentRun.inspectedSystemEventsToConsume,
       outcome,
       replyPayloadSource: agentRun.replyPayload,
       maybeSendHeartbeatOk,

@@ -372,6 +372,17 @@ export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
   return getSessionQueue(sessionKey)?.queue.map(cloneSystemEvent) ?? [];
 }
 
+/** Read the still-pending occurrences from a prior selection without acknowledging them. */
+export function peekSelectedSystemEventEntries(
+  sessionKey: string,
+  selectedEntries: readonly SystemEvent[],
+): SystemEvent[] {
+  const queue = getSessionQueue(sessionKey)?.queue ?? [];
+  return selectedEntries
+    .filter((selected) => queue.some((event) => matchesConsumedSystemEvent(event, selected)))
+    .map(cloneSystemEvent);
+}
+
 export function peekSystemEvents(sessionKey: string): string[] {
   return getSessionQueue(sessionKey)?.queue.map((event) => event.text) ?? [];
 }

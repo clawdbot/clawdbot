@@ -265,6 +265,7 @@ export async function finalizeHeartbeatOutcome(params: {
   opts: HeartbeatRunOptions;
   wake: ReadyHeartbeatWake;
   prepared: PreparedHeartbeatRun;
+  inspectedSystemEventsToConsume: CompletedHeartbeatAgentRun["inspectedSystemEventsToConsume"];
   outcome: ClassifiedHeartbeatOutcome;
   replyPayloadSource: CompletedHeartbeatAgentRun["replyPayload"];
   maybeSendHeartbeatOk: () => Promise<boolean>;
@@ -291,9 +292,9 @@ export async function finalizeHeartbeatOutcome(params: {
     if (
       consumeEvents &&
       params.wake.preflight.shouldInspectPendingEvents &&
-      params.prepared.inspectedSystemEventsToConsume.length
+      params.inspectedSystemEventsToConsume.length
     ) {
-      consumeSelectedSystemEventEntries(sessionKey, params.prepared.inspectedSystemEventsToConsume);
+      consumeSelectedSystemEventEntries(sessionKey, params.inspectedSystemEventsToConsume);
     }
     return { status: "ran", durationMs: Date.now() - startedAt } as const;
   };
