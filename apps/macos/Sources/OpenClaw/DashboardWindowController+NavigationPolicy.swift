@@ -1,6 +1,12 @@
 import Foundation
 import WebKit
 
+enum DashboardBrowserResponseAction: Equatable {
+    case allow
+    case openExternal(URL)
+    case cancel
+}
+
 extension DashboardWindowController {
     static func isTrustedLinkSource(_ sourceURL: URL?, dashboardURL: URL) -> Bool {
         guard let sourceURL, sameOrigin(sourceURL, dashboardURL) else { return false }
@@ -79,6 +85,17 @@ extension DashboardWindowController {
         }
         guard let scheme = url.scheme?.lowercased() else { return false }
         return scheme == "about" || scheme == "blob" || scheme == "data" || self.isHTTPURL(url)
+    }
+
+    static func browserResponseAction(
+        for url: URL?,
+        canShowMIMEType: Bool,
+        isMainFrame: Bool,
+        userActivated: Bool) -> DashboardBrowserResponseAction
+    {
+        if canShowMIMEType { return .allow }
+        if isMainFrame, userActivated, let url, self.isHTTPURL(url) { return .openExternal(url) }
+        return .cancel
     }
 
     static func shouldAllowIdentityNavigation(

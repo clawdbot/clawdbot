@@ -437,6 +437,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   async selectTab(targetId: string, route?: BrowserRoute): Promise<void> {
+    this.native.cancelPendingActivation();
     const nativeTab = this.native.tabs.find((tab) => tab.id === targetId);
     if (nativeTab) {
       this.invalidateViewOperations();

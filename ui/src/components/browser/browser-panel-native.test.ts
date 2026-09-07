@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type {
   NativeBrowserMessage,
   NativeBrowserState,
@@ -173,6 +174,45 @@ describe("native Browser panel ownership", () => {
       expect(controller.activeTargetId).toBe(existing.id);
       expect(controller.urlDraft).toBe(existing.url);
       expect(controller.tabs.map((tab) => tab.id)).toEqual(["mac-other", "mac-existing"]);
+    },
+  );
+
+  it.each(["state-first", "reply-first", "reused-tab"] as const)(
+    "keeps an explicit tab selection when a pending open completes: %s",
+    async (completion) => {
+      const tabs = [nativeTab("mac-one"), nativeTab("mac-two")];
+      const native = fakeNativeBrowser(tabs);
+      const { controller } = controllerFixture();
+      const reply = createDeferred<{ ok: true; tabId: string }>();
+      native.postMessage.mockImplementationOnce(() => reply.promise);
+      const opening = controller.openUrl("https://example.test/new", {
+        newTab: true,
+        native: true,
+      });
+      const message = native.messages().find((candidate) => candidate.type === "open");
+      expect(message?.type).toBe("open");
+      if (message?.type !== "open") {
+        throw new Error("Expected a native open request");
+      }
+      await controller.selectTab("mac-two");
+      const openedId = completion === "reused-tab" ? "mac-one" : message.tabId;
+      const nextTabs = completion === "reused-tab" ? tabs : [...tabs, nativeTab(openedId)];
+      if (completion === "state-first") {
+        native.publish(nextTabs);
+        expect(controller.activeTargetId).toBe("mac-two");
+      }
+      reply.resolve({ ok: true, tabId: openedId });
+      await opening;
+      if (completion !== "state-first") {
+        native.publish(nextTabs);
+      }
+      expect(controller.activeTargetId).toBe("mac-two");
+      flushFrames();
+      expect(native.messages().at(-1)).toMatchObject({
+        type: "present",
+        tabId: "mac-two",
+        visible: true,
+      });
     },
   );
 
@@ -355,6 +395,50 @@ describe("native Browser panel ownership", () => {
       expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: true });
     },
   );
+
+  it.each(["annotate", "inspect"] as const)(
+    "invalidates a held %s capture when its tab URL changes",
+    async (mode) => {
+      const native = fakeNativeBrowser([nativeTab("mac-one"), nativeTab("mac-two")]);
+      const { controller } = controllerFixture();
+      flushFrames();
+      controller.setMode(mode);
+      await flushBrowserResponses();
+      const capture = controller.view;
+      expect(capture?.url).toBe("https://example.test/page");
+      native.publish([nativeTab("mac-one"), nativeTab("mac-two", "https://example.test/other")]);
+      expect(controller.view).toBe(capture);
+      expect(controller.mode).toBe(mode);
+      native.publish([nativeTab("mac-one", "https://example.test/new"), nativeTab("mac-two")]);
+      expect(controller.mode).toBe("interact");
+      expect(controller.view).toBeNull();
+      expect(controller.urlDraft).toBe("https://example.test/new");
+      flushFrames();
+      expect(native.messages().at(-1)).toMatchObject({
+        type: "present",
+        tabId: "mac-one",
+        visible: true,
+      });
+    },
+  );
+
+  it("discards an inspect reply from the document preceding a native URL change", async () => {
+    vi.useFakeTimers();
+    const native = fakeNativeBrowser([nativeTab("mac-one")]);
+    const { controller } = controllerFixture();
+    controller.setMode("inspect");
+    await flushBrowserResponses();
+    const reply = createDeferred<{ ok: true; node: ReturnType<typeof createInspectedNode> }>();
+    native.postMessage.mockImplementationOnce(() => reply.promise);
+    controller.handleOverlayPointerMove(createPointer(25, 50));
+    await vi.advanceTimersByTimeAsync(120);
+    expect(native.messages().at(-1)).toMatchObject({ type: "inspect" });
+    native.publish([nativeTab("mac-one", "https://example.test/new")]);
+    reply.resolve({ ok: true, node: createInspectedNode("Old document") });
+    await flushBrowserResponses();
+    expect(controller.inspected).toBeNull();
+    expect(controller.inspectPointer).toBeNull();
+  });
 
   it.each([
     { mode: "annotate", action: "reload" },

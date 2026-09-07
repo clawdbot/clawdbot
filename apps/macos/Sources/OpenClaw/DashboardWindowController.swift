@@ -1246,8 +1246,8 @@ extension DashboardWindowController {
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
         let isDashboardWebView = webView === self.webView
-        let isNativeReadingWebView = self.nativeBrowser.owns(webView)
-        guard isDashboardWebView || isNativeReadingWebView else {
+        let nativeTab = self.nativeBrowser.browserTab(for: webView)
+        guard isDashboardWebView || nativeTab != nil else {
             decisionHandler(.cancel)
             return
         }
@@ -1255,7 +1255,14 @@ extension DashboardWindowController {
             decisionHandler(isDashboardWebView ? .allow : .cancel)
             return
         }
-        if isNativeReadingWebView {
+        if let nativeTab {
+            let isMainFrame = navigationAction.targetFrame?.isMainFrame == true
+            if isMainFrame {
+                nativeTab.navigationWasUserActivated = Self.shouldOpenExternalDashboardNavigation(
+                    url,
+                    navigationType: navigationAction.navigationType,
+                    buttonNumber: navigationAction.buttonNumber)
+            }
             // Mac tabs have no download destination UI. Preserve
             // direct pointer-activated downloads by handing them to the default browser.
             if navigationAction.shouldPerformDownload {
@@ -1278,7 +1285,6 @@ extension DashboardWindowController {
                     decisionHandler: decisionHandler)
                 return
             }
-            let isMainFrame = navigationAction.targetFrame?.isMainFrame == true
             if Self.shouldAllowBrowserNavigation(to: url, isMainFrame: isMainFrame) ||
                 url.absoluteString == "about:blank"
             {
@@ -1421,14 +1427,29 @@ extension DashboardWindowController {
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
-        guard self.nativeBrowser.owns(webView), !navigationResponse.canShowMIMEType else {
+        guard let tab = self.nativeBrowser.browserTab(for: webView) else {
             decisionHandler(.allow)
             return
         }
-        if let url = navigationResponse.response.url, Self.isHTTPURL(url) {
-            self.openExternal(url)
+        let userActivated = tab.navigationWasUserActivated
+        if navigationResponse.isForMainFrame {
+            // Consume the main-frame action; subframe responses cannot borrow it.
+            tab.navigationWasUserActivated = false
         }
-        decisionHandler(.cancel)
+        switch Self.browserResponseAction(
+            for: navigationResponse.response.url,
+            canShowMIMEType: navigationResponse.canShowMIMEType,
+            isMainFrame: navigationResponse.isForMainFrame,
+            userActivated: userActivated)
+        {
+        case .allow:
+            decisionHandler(.allow)
+        case let .openExternal(url):
+            self.openExternal(url)
+            decisionHandler(.cancel)
+        case .cancel:
+            decisionHandler(.cancel)
+        }
     }
 
     private func decideTargetlessNavigation(

@@ -189,6 +189,33 @@ struct DashboardNativeBrowserContractTests {
         }
     }
 
+    @MainActor
+    @Test func `non-displayable responses require an activated main frame to open externally`() throws {
+        let url = try #require(URL(string: "https://example.test/download"))
+        let cases: [(mainFrame: Bool, activated: Bool, expected: DashboardBrowserResponseAction)] = [
+            (true, true, .openExternal(url)),
+            (false, true, .cancel),
+            (true, false, .cancel),
+            (false, false, .cancel),
+        ]
+        for testCase in cases {
+            #expect(DashboardWindowController.browserResponseAction(
+                for: url, canShowMIMEType: false,
+                isMainFrame: testCase.mainFrame, userActivated: testCase.activated) == testCase.expected)
+            #expect(DashboardWindowController.browserResponseAction(
+                for: url, canShowMIMEType: true,
+                isMainFrame: testCase.mainFrame, userActivated: testCase.activated) == .allow)
+        }
+        for address in ["file:///private/download", "mailto:reader@example.test", "about:blank"] {
+            let target = try #require(URL(string: address))
+            #expect(DashboardWindowController.browserResponseAction(
+                for: target, canShowMIMEType: false,
+                isMainFrame: true, userActivated: true) == .cancel)
+        }
+        #expect(DashboardWindowController.browserResponseAction(
+            for: nil, canShowMIMEType: false, isMainFrame: true, userActivated: true) == .cancel)
+    }
+
     @Test func `CSS rectangles flip vertically and clip to the dashboard frame`() {
         let dashboard = CGRect(x: 20, y: 30, width: 800, height: 600)
         #expect(DashboardNativeBrowserHost.mappedFrame(

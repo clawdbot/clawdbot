@@ -80,6 +80,14 @@ export class BrowserPanelNativeController {
     this.revision = state.revision;
     this.nativeTabs = state.tabs;
     this.controller.setState("tabs", this.mergeRemoteTabs(this.controller.tabs));
+    const view = this.controller.view;
+    if (
+      view?.kind === "native" &&
+      this.nativeTabs.find((tab) => tab.id === view.targetId)?.url !== view.url
+    ) {
+      this.controller.exitCaptureModes();
+      this.controller.setState("view", null);
+    }
     for (const id of popupScopes.keys()) {
       if (!state.tabs.some((tab) => tab.id === id)) {
         popupScopes.delete(id);
@@ -134,6 +142,10 @@ export class BrowserPanelNativeController {
       this.controller.reportError(reply.error);
     }
     return reply?.ok === true;
+  }
+
+  cancelPendingActivation(): void {
+    this.pendingActivation = null;
   }
 
   async open(url: string, newTab: boolean): Promise<void> {
@@ -239,10 +251,19 @@ export class BrowserPanelNativeController {
 
   inspect(event: PointerEvent): void {
     const tab = this.activeTab;
+    const view = this.controller.view;
     const stage = this.controller.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
-    const point = browserPanelRemotePoint(stage, event, this.controller.view);
+    const point = browserPanelRemotePoint(stage, event, view);
     const normalized = browserPanelNormalizedPoint(stage, event);
-    if (!tab || !point || !normalized || this.controller.mode !== "inspect") {
+    if (
+      !tab ||
+      view?.kind !== "native" ||
+      view.targetId !== tab.id ||
+      view.url !== tab.url ||
+      !point ||
+      !normalized ||
+      this.controller.mode !== "inspect"
+    ) {
       return;
     }
     const generation = ++this.inspectionGeneration;
@@ -251,6 +272,8 @@ export class BrowserPanelNativeController {
       this.controller.host.isConnected &&
       this.controller.host.browserPanelIsOpen() &&
       this.activeTab?.id === tab.id &&
+      this.activeTab.url === view.url &&
+      this.controller.view === view &&
       this.controller.mode === "inspect";
     this.controller.setState("inspectPointer", normalized);
     this.controller.setState("inspected", null);

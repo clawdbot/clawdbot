@@ -100,6 +100,10 @@ final class DashboardNativeBrowserHost {
         self.tabs.contains { $0.browser.webView === webView }
     }
 
+    func browserTab(for webView: WKWebView) -> DashboardBrowserTab? {
+        self.tabs.first { $0.browser.webView === webView }?.browser
+    }
+
     func webView(for tabId: String) -> WKWebView? {
         self.tabs.first { $0.id == tabId }?.browser.webView
     }

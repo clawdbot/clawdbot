@@ -17,6 +17,7 @@ final class DashboardBrowserTab {
     let requestedURL: URL
     var representedURL: URL?
     var title: String?
+    var navigationWasUserActivated = false
     var observations: [NSKeyValueObservation] = []
     private var requestAliasPhase: RequestAliasPhase = .awaitingNavigation
 
