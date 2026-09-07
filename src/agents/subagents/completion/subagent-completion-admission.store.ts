@@ -1,8 +1,16 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   bindDeliveryQueueEntry,
   loadDeliveryQueueEntryInDatabase,
+  loadDeliveryQueueEntryStateInDatabase,
+  loadUnfinishedDeliveryQueueEntryStatesInDatabase,
+  terminalizeBoundDeliveryQueueEntry,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "../../../infra/delivery-queue-sqlite-bound.js";
+import {
+  inferDeliveryQueueFailureRetention,
+  projectDeliveryQueueTerminalEntry,
+} from "../../../infra/delivery-queue-sqlite.types.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import {
   prepareClaimedSessionDelivery,
@@ -34,10 +42,14 @@ import {
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   bindSubagentRunRecord,
+  deleteSubagentRunRowInDatabase,
   readSubagentRun,
   upsertSubagentRunRowInDatabase,
 } from "../registry/subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type {
+  RequesterSettleWakeState,
+  SubagentRunRecord,
+} from "../registry/subagent-registry.types.js";
 
 export const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
@@ -56,7 +68,7 @@ function invokeSynchronousHook(hook: (() => unknown) | undefined): void {
   }
 }
 
-export function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskRecord): void {
+function publishCommittedSubagentRecord(subagent: SubagentRunRecord): void {
   const live = subagentRuns.get(subagent.runId);
   if (live) {
     for (const key of Object.keys(live)) {
@@ -66,6 +78,10 @@ export function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskR
   } else {
     subagentRuns.set(subagent.runId, subagent);
   }
+}
+
+export function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskRecord): void {
+  publishCommittedSubagentRecord(subagent);
   publishTaskRecordAfterAtomicStore(task);
 }
 
@@ -88,6 +104,82 @@ function assertCorrelatedEntry(params: {
   ) {
     throw new Error("subagent completion admission records do not share one owner generation");
   }
+}
+
+function terminalizeOwnedCompletionQueue(params: {
+  database: OpenClawStateDatabase;
+  subagent: SubagentRunRecord;
+  task: TaskRecord;
+  generation: number;
+  now: number;
+}): boolean {
+  const queueId = params.subagent.delivery?.queueId;
+  const loadedEntries = queueId
+    ? [
+        loadDeliveryQueueEntryStateInDatabase(
+          params.database,
+          SESSION_DELIVERY_QUEUE_NAME,
+          queueId,
+        ),
+      ].filter((entry) => entry !== null)
+    : loadUnfinishedDeliveryQueueEntryStatesInDatabase(
+        params.database,
+        SESSION_DELIVERY_QUEUE_NAME,
+      );
+  // A missing physical row cannot replay. Historical logical owners can still
+  // be closed using their exact task, run, generation, and wake fences.
+  if (loadedEntries.length === 0) {
+    return true;
+  }
+  for (const loaded of loadedEntries) {
+    // SAFETY: The session queue stores QueuedSessionDelivery; kind and owner are checked below.
+    const queued = loaded.entry as QueuedSessionDelivery;
+    const owner = queued.kind === "agentTurn" ? queued.owner : undefined;
+    const ownsQueue =
+      owner?.kind === "subagent_completion" &&
+      owner.runId === params.subagent.runId &&
+      owner.taskId === params.task.taskId &&
+      owner.generation === params.generation &&
+      owner.deadlineAt === params.subagent.delivery?.deadlineAt;
+    if (!ownsQueue) {
+      if (queueId) {
+        return false;
+      }
+      continue;
+    }
+    if (
+      loaded.status === "completed" ||
+      (loaded.status === "failed" && loaded.entry.recoveryState !== "settlement_pending")
+    ) {
+      continue;
+    }
+    const retention = inferDeliveryQueueFailureRetention(
+      queued,
+      loaded.id,
+      SESSION_DELIVERY_QUEUE_NAME,
+    );
+    const terminalEntry = retention
+      ? {
+          ...projectDeliveryQueueTerminalEntry(queued, params.now, "failed", retention),
+          kind: "agentTurn" as const,
+          owner,
+        }
+      : undefined;
+    if (
+      !terminalizeBoundDeliveryQueueEntry(
+        params.database.db,
+        SESSION_DELIVERY_QUEUE_NAME,
+        loaded.id,
+        loaded.entryJson,
+        terminalEntry,
+        params.now,
+        loaded.status,
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -173,6 +265,8 @@ export function blockSubagentCompletionDelivery(params: {
   reason: string;
   suspendedReason?: "expiry" | "permanent_failure";
   disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
+  allowMissingHistoricalOutcome?: boolean;
+  terminalizeQueueOwner?: boolean;
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): boolean {
   const generation = params.subagent.delivery?.generation ?? 1;
@@ -191,15 +285,32 @@ export function blockSubagentCompletionDelivery(params: {
     ) {
       return false;
     }
-    const successful = task.status === "succeeded" && subagent.execution.outcome?.status === "ok";
+    // Historical rows written before terminal capture was atomic can have a
+    // canonical terminal task but no producer outcome. The exact run and
+    // delivery generation still fence that task as this completion's owner.
+    const missingHistoricalOutcome =
+      params.allowMissingHistoricalOutcome === true &&
+      subagent.execution.outcome === undefined &&
+      typeof subagent.execution.endedAt === "number";
+    const successful =
+      task.status === "succeeded" &&
+      (subagent.execution.outcome?.status === "ok" || missingHistoricalOutcome);
+    const deliveryAlreadyObserved = task.deliveryStatus === "delivered";
     // A terminal non-success still owns its failed requester wake. Classify the
     // persisted pair; a missing or superseded owner is not permission to settle.
     if (
       !successful &&
       (params.suspendedReason !== undefined ||
         !["cancelled", "failed", "timed_out"].includes(task.status) ||
-        resolveFinalizedSubagentTaskState(subagent)?.status !== task.status ||
+        (!missingHistoricalOutcome &&
+          resolveFinalizedSubagentTaskState(subagent)?.status !== task.status) ||
         !["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending"))
+    ) {
+      return false;
+    }
+    if (
+      params.terminalizeQueueOwner === true &&
+      !terminalizeOwnedCompletionQueue({ database, subagent, task, generation, now })
     ) {
       return false;
     }
@@ -224,7 +335,7 @@ export function blockSubagentCompletionDelivery(params: {
     } else {
       subagent.suppressCompletionDelivery = true;
     }
-    if (successful) {
+    if (successful && !deliveryAlreadyObserved) {
       const terminal = resolveRequiredCompletionDeliveryFailureTerminalResult(params.reason);
       Object.assign(task, {
         ...terminal,
@@ -233,11 +344,15 @@ export function blockSubagentCompletionDelivery(params: {
       });
     }
     Object.assign(task, {
-      deliveryStatus: "failed" as const,
+      // A stale logical completion must not revoke delivery already observed
+      // by the canonical task owner.
+      deliveryStatus: deliveryAlreadyObserved ? ("delivered" as const) : ("failed" as const),
       lastEventAt: now,
     });
     const text =
-      successful && task.notifyPolicy !== "silent" ? formatTaskBlockedFollowupMessage(task) : null;
+      successful && !deliveryAlreadyObserved && task.notifyPolicy !== "silent"
+        ? formatTaskBlockedFollowupMessage(task)
+        : null;
     const queued = text
       ? prepareClaimedSessionDelivery(
           {
@@ -275,4 +390,98 @@ export function blockSubagentCompletionDelivery(params: {
     });
     return true;
   }, params.databaseOptions);
+}
+
+export type RejectedRequesterSettleWakeBatchEntry = {
+  subagent: SubagentRunRecord;
+  taskId?: string;
+  expectedWake: RequesterSettleWakeState;
+  settleDelivery: boolean;
+  retireAfterSettle: boolean;
+  retireAfterRequesterTurn: boolean;
+};
+
+/** Settles a rejected requester wake without exposing a half-cleared durable batch. */
+export function settleRejectedRequesterSettleWakeBatch(params: {
+  entries: readonly RejectedRequesterSettleWakeBatchEntry[];
+  reason: string;
+  disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): { settled: true } | { settled: false; runId: string } {
+  let rejectedRunId: string | undefined;
+  const ownershipChanged = new Error("requester settle batch ownership changed");
+  try {
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        const batchRunIds = params.entries.map((entry) => entry.subagent.runId).toSorted();
+        for (const expected of params.entries) {
+          const generation = expected.subagent.delivery?.generation ?? 1;
+          let subagent = readSubagentRun(database, expected.subagent.runId);
+          const expectedBatchRunIds = (
+            expected.expectedWake.batchRunIds ?? [expected.subagent.runId]
+          ).toSorted();
+          const deliveryNeedsSettlement =
+            subagent?.expectsCompletionMessage === true &&
+            ["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending");
+          if (
+            !subagent ||
+            subagent.execution.status !== "terminal" ||
+            (expected.settleDelivery && subagent.expectsCompletionMessage !== true) ||
+            (subagent.delivery?.generation ?? 1) !== generation ||
+            deliveryNeedsSettlement !== expected.settleDelivery ||
+            !isDeepStrictEqual(expectedBatchRunIds, batchRunIds) ||
+            !isDeepStrictEqual(subagent.requesterSettleWake, expected.expectedWake)
+          ) {
+            rejectedRunId = expected.subagent.runId;
+            throw ownershipChanged;
+          }
+          if (expected.settleDelivery) {
+            if (
+              !expected.taskId ||
+              !blockSubagentCompletionDelivery({
+                subagent,
+                taskId: expected.taskId,
+                reason: params.reason,
+                disposition: params.disposition,
+                allowMissingHistoricalOutcome: true,
+                terminalizeQueueOwner: true,
+                databaseOptions: { ...params.databaseOptions, database },
+              })
+            ) {
+              rejectedRunId = expected.subagent.runId;
+              throw ownershipChanged;
+            }
+            subagent = readSubagentRun(database, expected.subagent.runId);
+            if (
+              !subagent ||
+              !isDeepStrictEqual(subagent.requesterSettleWake, expected.expectedWake)
+            ) {
+              rejectedRunId = expected.subagent.runId;
+              throw ownershipChanged;
+            }
+          }
+          if (expected.retireAfterSettle) {
+            deleteSubagentRunRowInDatabase(database, subagent.runId);
+            continue;
+          }
+          subagent.requesterSettleWake = undefined;
+          subagent.retireAfterRequesterTurn = expected.retireAfterRequesterTurn
+            ? true
+            : subagent.retireAfterRequesterTurn;
+          upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(subagent));
+          deferSqlitePostCommitPublication(database.db, () =>
+            publishCommittedSubagentRecord(subagent),
+          );
+        }
+      },
+      params.databaseOptions,
+      { operationLabel: "requester settle wake rejection" },
+    );
+  } catch (error) {
+    if (error === ownershipChanged && rejectedRunId) {
+      return { settled: false, runId: rejectedRunId };
+    }
+    throw error;
+  }
+  return { settled: true };
 }

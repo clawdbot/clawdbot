@@ -33,6 +33,7 @@ type HeldModelServer = {
   countRequestsContaining: (marker: string) => number;
   peakRestored: () => number;
   release: (index: number) => void;
+  releaseWithText: (index: number, text: string) => void;
   releaseAll: () => void;
   requestCount: () => number;
   url: string;
@@ -196,9 +197,76 @@ describe("Gateway restored requester settlement", () => {
       await expect(probe).resolves.toMatchObject({ code: 0 });
     },
   );
+
+  it(
+    "does not replay a restored wake after a hidden final settles",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const modelServer = await startHeldModelServer();
+      modelServers.push(modelServer);
+      const instance = await createOpenClawTestInstance({
+        name: "gateway-restored-requester-rejection",
+        config: createTestConfig(modelServer.url),
+        env: {
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        },
+      });
+      instances.push(instance);
+      await seedRestoredRequesters(instance, 1, 2);
+
+      await instance.startGateway();
+      const client = await connectGatewayClient({
+        url: instance.url,
+        token: instance.gatewayToken,
+      });
+      try {
+        await vi.waitFor(
+          () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(1),
+          { interval: 20, timeout: 30_000 },
+        );
+        modelServer.releaseWithText(0, "NO_REPLY");
+        await vi.waitFor(
+          async () => {
+            const sessions = await client.request<SessionsListResult>("sessions.list", {
+              agentId: "main",
+            });
+            expect(sessions.sessions.find((row) => row.key.endsWith("requester-0"))).toMatchObject({
+              status: "done",
+              hasActiveRun: false,
+            });
+          },
+          { interval: 50, timeout: 20_000 },
+        );
+      } finally {
+        await disconnectGatewayClient(client);
+        await instance.stopGateway();
+      }
+
+      try {
+        expect(
+          loadSubagentRegistryFromSqlite().get("run-gateway-restored-settle-0")
+            ?.requesterSettleWake,
+        ).toBeUndefined();
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+      }
+
+      await instance.startGateway();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
+      expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER), instance.logs()).toBe(1);
+      await instance.stopGateway();
+    },
+  );
 });
 
-async function seedRestoredRequesters(instance: OpenClawTestInstance, count: number) {
+async function seedRestoredRequesters(
+  instance: OpenClawTestInstance,
+  count: number,
+  attemptCount = 0,
+) {
   instance.state.applyEnv();
   try {
     const endedAt = Date.now();
@@ -226,7 +294,7 @@ async function seedRestoredRequesters(instance: OpenClawTestInstance, count: num
         cleanupCompletedAt: endedAt,
         requesterSettleWake: {
           status: "pending",
-          attemptCount: 0,
+          attemptCount,
           batchRunIds: [runId],
           requesterYieldBatch: true,
           afterRequesterYield: true,
@@ -298,6 +366,7 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
   const requestBodies: string[] = [];
   const responses: ServerResponse[] = [];
   const requestStartedAt: number[] = [];
+  const responseTexts: Array<string | undefined> = [];
   let active = 0;
   let activeRestored = 0;
   let peakRestored = 0;
@@ -344,7 +413,7 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
     try {
       await release.promise;
       if (!response.destroyed) {
-        writeModelResponse(response, index);
+        writeModelResponse(response, index, responseTexts[index]);
       }
     } finally {
       active -= 1;
@@ -372,6 +441,10 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
       requestBodies.filter((body) => body.includes(marker)).length,
     peakRestored: () => peakRestored,
     release: (index) => releases[index]?.resolve(undefined),
+    releaseWithText: (index, text) => {
+      responseTexts[index] = text;
+      releases[index]?.resolve(undefined);
+    },
     releaseAll,
     requestCount: () => requestCount,
     url: `http://127.0.0.1:${address.port}`,
@@ -385,8 +458,12 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
   };
 }
 
-function writeModelResponse(response: ServerResponse, sequence: number): void {
-  const text = `restored requester response ${sequence}`;
+function writeModelResponse(
+  response: ServerResponse,
+  sequence: number,
+  responseText?: string,
+): void {
+  const text = responseText ?? `restored requester response ${sequence}`;
   const message = {
     type: "message",
     id: `restored-requester-message-${sequence}`,

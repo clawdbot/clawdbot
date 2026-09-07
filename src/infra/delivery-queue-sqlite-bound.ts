@@ -12,6 +12,8 @@ import {
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 type QueueStatus = "pending" | "failed" | "completed";
+const isQueueStatus = (value: string): value is QueueStatus =>
+  value === "pending" || value === "failed" || value === "completed";
 export type DeliveryQueueReadMode = "pending" | "unfinished" | "all";
 type DeliveryQueueTable = OpenClawStateKyselyDatabase["delivery_queue_entries"];
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -46,6 +48,13 @@ type DeliveryQueueSqliteRow = Pick<
   Selectable<DeliveryQueueTable>,
   (typeof deliveryQueueRowColumns)[number]
 >;
+
+export type LoadedDeliveryQueueEntryState = {
+  id: string;
+  entry: DeliveryQueueEntryState;
+  entryJson: string;
+  status: QueueStatus;
+};
 
 type DeliveryQueueRowMetadata = {
   entryKind?: string;
@@ -311,4 +320,43 @@ export function loadDeliveryQueueEntryInDatabase(
   const query = deliveryQueueEntriesQuery(database, [queueName], mode).where("id", "=", id);
   const row = executeSqliteQueryTakeFirstSync(database.db, query);
   return row ? inflateDeliveryQueueRow(row) : null;
+}
+
+/** Reads payload and row status together for owner-fenced cross-table settlement. */
+export function loadDeliveryQueueEntryStateInDatabase(
+  database: OpenClawStateDatabase,
+  queueName: string,
+  id: string,
+): LoadedDeliveryQueueEntryState | null {
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    getNodeSqliteKysely<DeliveryQueueDatabase>(database.db)
+      .selectFrom("delivery_queue_entries")
+      .select([...deliveryQueueRowColumns, "status"])
+      .where("queue_name", "=", queueName)
+      .where("id", "=", id),
+  );
+  if (!row || !isQueueStatus(row.status)) {
+    return null;
+  }
+  const entry = inflateDeliveryQueueRow(row);
+  return entry ? { id: row.id, entry, entryJson: row.entry_json, status: row.status } : null;
+}
+
+/** Lists replayable rows from one queue for owner-fenced cross-table recovery. */
+export function loadUnfinishedDeliveryQueueEntryStatesInDatabase(
+  database: OpenClawStateDatabase,
+  queueName: string,
+): LoadedDeliveryQueueEntryState[] {
+  const rows = executeSqliteQuerySync(
+    database.db,
+    deliveryQueueEntriesQuery(database, [queueName], "unfinished").select("status"),
+  ).rows;
+  return rows.flatMap((row) => {
+    if (!isQueueStatus(row.status)) {
+      return [];
+    }
+    const entry = inflateDeliveryQueueRow(row);
+    return entry ? [{ id: row.id, entry, entryJson: row.entry_json, status: row.status }] : [];
+  });
 }
