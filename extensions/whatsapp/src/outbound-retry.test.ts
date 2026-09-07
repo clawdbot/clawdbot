@@ -34,6 +34,75 @@ describe("sendWhatsAppOutboundWithRetry", () => {
   );
 
   it.each([
+    {
+      name: "an EPIPE socket write (message never left the host)",
+      error: Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+    },
+    {
+      name: "a DNS EAI_AGAIN lookup failure",
+      error: Object.assign(new Error("getaddrinfo EAI_AGAIN web.whatsapp.net"), {
+        code: "EAI_AGAIN",
+      }),
+    },
+    {
+      name: "a baileys 428 whose text mentions none of the retry keywords",
+      error: {
+        output: {
+          statusCode: 428,
+          payload: {
+            statusCode: 428,
+            error: "Precondition Failed",
+            message: "Connection Terminated",
+          },
+        },
+      },
+    },
+    {
+      name: "a baileys 515 restart required",
+      error: { output: { statusCode: 515, payload: { statusCode: 515 } } },
+    },
+  ])("retries a pre-delivery failure: $name", async ({ error }) => {
+    const send = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValue("ok");
+    const onRetry = vi.fn();
+
+    await expect(
+      runWithFakeTimers(() => sendWhatsAppOutboundWithRetry({ send, onRetry })),
+    ).resolves.toBe("ok");
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "baileys 401 logged out",
+      error: { output: { statusCode: 401, payload: { statusCode: 401 } } },
+    },
+    {
+      name: "baileys 408 timeout without retryable text",
+      error: { output: { statusCode: 408, payload: { statusCode: 408 } } },
+    },
+    {
+      name: "an ECONNABORTED send that may have delivered",
+      error: Object.assign(new Error("timeout of 10000ms exceeded"), { code: "ECONNABORTED" }),
+    },
+  ])("does not retry $name", async ({ error }) => {
+    const send = vi.fn<() => Promise<string>>().mockRejectedValue(error);
+    const onRetry = vi.fn();
+
+    const failure = await runWithFakeTimers(() =>
+      sendWhatsAppOutboundWithRetry({ send, onRetry }).catch((caught: unknown) => caught),
+    );
+
+    expect(failure).toBe(error);
+    expect(send).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { name: "a non-retryable direct error", error: new Error("invalid recipient") },
     {
       name: "a retryable signal only in the cause",
