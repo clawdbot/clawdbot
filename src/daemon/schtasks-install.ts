@@ -15,7 +15,7 @@ import {
   buildScheduledTaskXml,
   buildStartupLauncherScript,
   buildTaskScript,
-  encodeWindowsLauncherScript,
+  publishWindowsLauncherScript,
   quoteSchtasksArg,
   readScheduledTaskCommand,
   resolveStartupEntryPath,
@@ -137,13 +137,14 @@ async function writeScheduledTaskScript({
     workingDirectory,
     environment: resolveScheduledTaskScriptEnvironment(taskEnv, environment),
   });
-  await fs.writeFile(scriptPath, encodeWindowsLauncherScript({ format: "cmd", content: script }));
+  await publishWindowsLauncherScript({ filePath: scriptPath, format: "cmd", content: script });
   if (taskLaunchPath !== scriptPath) {
     const launcher = buildHiddenLauncherScript({ description: taskDescription, scriptPath });
-    await fs.writeFile(
-      taskLaunchPath,
-      encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
-    );
+    await publishWindowsLauncherScript({
+      filePath: taskLaunchPath,
+      format: "vbs",
+      content: launcher,
+    });
   }
   return { scriptPath, taskLaunchPath, taskDescription };
 }
@@ -257,13 +258,11 @@ async function activateScheduledTask(params: {
             description: taskDescription,
             scriptPath: params.scriptPath,
           });
-      await fs.writeFile(
-        startupEntryPath,
-        encodeWindowsLauncherScript({
-          format: useHiddenLauncher ? "vbs" : "cmd",
-          content: launcher,
-        }),
-      );
+      await publishWindowsLauncherScript({
+        filePath: startupEntryPath,
+        format: useHiddenLauncher ? "vbs" : "cmd",
+        content: launcher,
+      });
       await launchFallbackTaskScript(params.env);
       writeFormattedLines(
         params.stdout,

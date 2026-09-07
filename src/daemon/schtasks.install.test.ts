@@ -112,6 +112,67 @@ describe("installScheduledTask", () => {
     expect(schtasksCalls[index]).toEqual(["/Run", "/TN", taskName]);
   }
 
+  const priorTaskScript = [
+    "@echo off",
+    "rem Old gateway launcher",
+    "node gateway-old.js < NUL",
+    "",
+  ].join("\r\n");
+
+  async function writePriorLauncher(filePath: string, content: string): Promise<void> {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, content, "utf8");
+  }
+
+  async function expectNoTempLeftovers(dir: string): Promise<void> {
+    expect((await fs.readdir(dir)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  }
+
+  // Fails the staged temp-file write partway through, as a full disk does
+  // (#141002). Staged handles are captured at open time because
+  // replaceFileAtomic publishes via fs.promises.writeFile(handle, content).
+  function failStagedLauncherWrite(params: {
+    targetDir: string;
+    isTargetContent?: (data: unknown) => boolean;
+    partialBytes?: number;
+  }): () => void {
+    const stagedHandles = new Set<unknown>();
+    const originalOpen = fs.open.bind(fs);
+    const originalWriteFile = fs.writeFile.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await originalOpen(filePath, flags, mode);
+      const resolved = path.resolve(String(filePath));
+      if (
+        resolved.startsWith(`${path.resolve(params.targetDir)}${path.sep}`) &&
+        path.basename(resolved).endsWith(".tmp")
+      ) {
+        stagedHandles.add(handle);
+      }
+      return handle;
+    });
+    const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+      const staged = stagedHandles.has(file);
+      const direct =
+        typeof file === "string" &&
+        path.resolve(file).startsWith(`${path.resolve(params.targetDir)}${path.sep}`);
+      if ((staged || direct) && (!params.isTargetContent || params.isTargetContent(data))) {
+        await originalWriteFile(
+          file as never,
+          (data as Buffer).subarray(0, params.partialBytes ?? 11),
+          options as never,
+        );
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+          code: "ENOSPC",
+        });
+      }
+      return originalWriteFile(file as never, data as never, options as never);
+    });
+    return () => {
+      openSpy.mockRestore();
+      writeSpy.mockRestore();
+    };
+  }
+
   it.each(["install", "stage"])(
     "%s redirects stdin from NUL so a hidden service console is never interactive (#112173)",
     async (mode) => {
@@ -662,6 +723,126 @@ describe("installScheduledTask", () => {
       expect(
         audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded),
       ).toBe(true);
+    });
+  });
+
+  it("keeps the prior task script when a staged rewrite fails mid-write (#141002)", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      await writePriorLauncher(scriptPath, priorTaskScript);
+
+      const restore = failStagedLauncherWrite({ targetDir: path.dirname(scriptPath) });
+      try {
+        await expect(
+          stageScheduledTask({
+            env,
+            stdout: new PassThrough(),
+            programArguments: ["node", "gateway.js"],
+            environment: {},
+          }),
+        ).rejects.toMatchObject({ code: "ENOSPC" });
+      } finally {
+        restore();
+      }
+
+      // The prior launcher stays byte-for-byte intact for the existing task entry.
+      expect(await fs.readFile(scriptPath, "utf8")).toBe(priorTaskScript);
+      await expect(readScheduledTaskCommand(env)).resolves.toMatchObject({
+        programArguments: ["node", "gateway-old.js"],
+      });
+      await expectNoTempLeftovers(path.dirname(scriptPath));
+      expect(schtasksCalls).toEqual([]);
+    });
+  });
+
+  it("keeps the prior task script when the install rewrite fails mid-write (#141002)", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      await writePriorLauncher(scriptPath, priorTaskScript);
+
+      const restore = failStagedLauncherWrite({ targetDir: path.dirname(scriptPath) });
+      try {
+        await expect(installDefaultGatewayTask(env)).rejects.toMatchObject({ code: "ENOSPC" });
+      } finally {
+        restore();
+      }
+
+      expect(await fs.readFile(scriptPath, "utf8")).toBe(priorTaskScript);
+      await expect(readScheduledTaskCommand(env)).resolves.toMatchObject({
+        programArguments: ["node", "gateway-old.js"],
+      });
+      await expectNoTempLeftovers(path.dirname(scriptPath));
+      // The failure happens before any Scheduler activation call.
+      expect(schtasksCalls).toEqual([]);
+    });
+  });
+
+  it("keeps the prior hidden launcher when its staged rewrite fails mid-write (#141002)", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
+      await writePriorLauncher(scriptPath, priorTaskScript);
+      const priorHiddenLauncher = Buffer.concat([
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from(
+          `' Old hidden launcher\r\nWScript.Quit CreateObject("WScript.Shell").Run("""C:\\old\\gateway.cmd""", 0, True)\r\n`,
+          "utf16le",
+        ),
+      ]);
+      await fs.writeFile(launcherPath, priorHiddenLauncher);
+
+      // Only the UTF-16 LE VBS staged write fails; the cmd script still publishes.
+      const restore = failStagedLauncherWrite({
+        targetDir: path.dirname(scriptPath),
+        isTargetContent: (data) => (data as Buffer)[0] === 0xff && (data as Buffer)[1] === 0xfe,
+      });
+      try {
+        await expect(
+          installDefaultGatewayTask({ ...env, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" }),
+        ).rejects.toMatchObject({ code: "ENOSPC" });
+      } finally {
+        restore();
+      }
+
+      expect(await fs.readFile(launcherPath)).toEqual(priorHiddenLauncher);
+      await expectNoTempLeftovers(path.dirname(scriptPath));
+      expect(schtasksCalls).toEqual([]);
+    });
+  });
+
+  it("keeps the prior task script bytes, mode, and directory when publication rename fails (#141002)", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      await writePriorLauncher(scriptPath, priorTaskScript);
+      await fs.chmod(scriptPath, 0o755);
+      // Windows chmod only toggles the read-only bit, so the effective mode is
+      // platform-dependent; capture it and compare against it after the failure.
+      const priorMode = (await fs.stat(scriptPath)).mode & 0o777;
+      if (process.platform !== "win32") {
+        expect(priorMode).toBe(0o755);
+      }
+
+      const renameSpy = vi
+        .spyOn(fs, "rename")
+        .mockRejectedValueOnce(
+          Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" }),
+        );
+      try {
+        await expect(installDefaultGatewayTask(env)).rejects.toMatchObject({ code: "EPERM" });
+      } finally {
+        renameSpy.mockRestore();
+      }
+
+      expect(await fs.readFile(scriptPath, "utf8")).toBe(priorTaskScript);
+      expect((await fs.stat(scriptPath)).mode & 0o777).toBe(priorMode);
+      await expectNoTempLeftovers(path.dirname(scriptPath));
+      expect(schtasksCalls).toEqual([]);
+
+      // A later rewrite with the fault cleared republishes successfully.
+      const { scriptPath: republishedPath } = await installDefaultGatewayTask(env);
+      expect(republishedPath).toBe(scriptPath);
+      const script = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
+      expect(script).toContain("node gateway.js < NUL");
     });
   });
 });

@@ -157,6 +157,50 @@ async function writeStartupFallbackEntry(env: Record<string, string>, extension 
   return startupEntryPath;
 }
 
+async function expectNoTempLeftovers(dir: string): Promise<void> {
+  expect((await fs.readdir(dir)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+}
+
+// Fails the staged temp-file write partway through, as a full disk does
+// (#141002). Staged handles are captured at open time because publication
+// goes through fs.promises.writeFile(handle, content) on a temp file.
+function failStagedLauncherWrite(params: {
+  targetDir: string;
+  isTargetContent?: (data: unknown) => boolean;
+}): () => void {
+  const stagedHandles = new Set<unknown>();
+  const originalOpen = fs.open.bind(fs);
+  const originalWriteFile = fs.writeFile.bind(fs);
+  const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+    const handle = await originalOpen(filePath, flags, mode);
+    const resolved = path.resolve(String(filePath));
+    if (
+      resolved.startsWith(`${path.resolve(params.targetDir)}${path.sep}`) &&
+      path.basename(resolved).endsWith(".tmp")
+    ) {
+      stagedHandles.add(handle);
+    }
+    return handle;
+  });
+  const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+    const staged = stagedHandles.has(file);
+    const direct =
+      typeof file === "string" &&
+      path.resolve(file).startsWith(`${path.resolve(params.targetDir)}${path.sep}`);
+    if ((staged || direct) && (!params.isTargetContent || params.isTargetContent(data))) {
+      await originalWriteFile(file as never, (data as Buffer).subarray(0, 11), options as never);
+      throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+        code: "ENOSPC",
+      });
+    }
+    return originalWriteFile(file as never, data as never, options as never);
+  });
+  return () => {
+    openSpy.mockRestore();
+    writeSpy.mockRestore();
+  };
+}
+
 async function writeNodeScript(env: Record<string, string>, port = "18789") {
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
@@ -708,6 +752,65 @@ describe("Windows startup fallback", () => {
         `WScript.Quit CreateObject("WScript.Shell").Run("""${result.scriptPath}""", 0, True)`,
       );
       expectStartupFallbackSpawn();
+    });
+  });
+
+  it("keeps the prior Startup-folder launcher when its rewrite fails mid-write (#141002)", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addMissingTaskInstallResponses([{ code: 5, stdout: "", stderr: "ERROR: Access is denied." }]);
+      const startupEntryPath = resolveStartupEntryPath(env);
+      const priorStartupEntry =
+        '@echo off\r\nstart "" /min cmd.exe /d /c "C:\\old\\gateway.cmd"\r\n';
+      await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
+      await fs.writeFile(startupEntryPath, priorStartupEntry, "utf8");
+
+      // Only the Startup-folder staged write fails; the task script still publishes.
+      const restore = failStagedLauncherWrite({
+        targetDir: path.dirname(startupEntryPath),
+      });
+      try {
+        await expect(installGatewayScheduledTask(env, new PassThrough())).rejects.toMatchObject({
+          code: "ENOSPC",
+        });
+      } finally {
+        restore();
+      }
+
+      expect(await fs.readFile(startupEntryPath, "utf8")).toBe(priorStartupEntry);
+      await expectNoTempLeftovers(path.dirname(startupEntryPath));
+      // The fallback launcher is only launched after its publication succeeds.
+      expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps the prior hidden Startup-folder launcher when its rewrite fails mid-write (#141002)", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addMissingTaskInstallResponses([{ code: 5, stdout: "", stderr: "ERROR: Access is denied." }]);
+      const hiddenEnv = { ...env, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" };
+      const startupEntryPath = resolveStartupEntryPath(hiddenEnv, "vbs");
+      const priorStartupEntry = Buffer.concat([
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from("' Old hidden startup launcher\r\n", "utf16le"),
+      ]);
+      await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
+      await fs.writeFile(startupEntryPath, priorStartupEntry);
+
+      // Only the UTF-16 LE VBS staged write fails; the task script still publishes.
+      const restore = failStagedLauncherWrite({
+        targetDir: path.dirname(startupEntryPath),
+        isTargetContent: (data) => (data as Buffer)[0] === 0xff && (data as Buffer)[1] === 0xfe,
+      });
+      try {
+        await expect(
+          installGatewayScheduledTask(hiddenEnv, new PassThrough()),
+        ).rejects.toMatchObject({ code: "ENOSPC" });
+      } finally {
+        restore();
+      }
+
+      expect(await fs.readFile(startupEntryPath)).toEqual(priorStartupEntry);
+      await expectNoTempLeftovers(path.dirname(startupEntryPath));
+      expect(spawn).not.toHaveBeenCalled();
     });
   });
 
