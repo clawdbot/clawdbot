@@ -6,6 +6,7 @@ import { closeCliResources, getPendingCliDisposers } from "./runtime-cleanup.js"
 const memoryClosed = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/harness/registry.js", () => ({
   listRegisteredAgentHarnesses: () => [],
+  disposeRegisteredAgentHarnesses: async () => {},
 }));
 vi.mock("../plugins/registry-lifecycle.js", () => ({ markPluginRegistryRetired() {} }));
 vi.mock("../agents/provider-runtime-lifecycle.js", () => ({
@@ -46,24 +47,21 @@ it("continues later cleanup when a harness disposer never settles", async () => 
     dispose,
   };
   const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-  let returned = false;
   const closing = closeCliResources({
     harnesses: new Map([[harness, dispose]]),
     registries: new Set(),
-  }).then(() => {
-    returned = true;
   });
   try {
     await entered.promise;
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(returned).toBe(true);
+    await closing;
     expect(memoryClosed).toHaveBeenCalledOnce();
     expect(getPendingCliDisposers()).toEqual(["agent-harness/stalled-fixture"]);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("agent-harness/stalled-fixture"));
   } finally {
     gate.resolve();
     await closing;
-    await gate.promise;
+    await vi.advanceTimersByTimeAsync(0);
   }
   expect(getPendingCliDisposers()).toEqual([]);
 });
