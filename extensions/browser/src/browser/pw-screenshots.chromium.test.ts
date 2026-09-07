@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
+import { getImageMetadata } from "../media/media-services.js";
 import { captureScreenshot } from "./cdp.js";
+import { resolveBrowserConfig } from "./config.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
 import {
@@ -14,6 +17,10 @@ import {
   snapshotRoleViaPlaywright,
 } from "./pw-tools-core.snapshot.js";
 import { setDeviceViaPlaywright } from "./pw-tools-core.state.js";
+import { registerBrowserAgentSnapshotRoutes } from "./routes/agent.snapshot.js";
+import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test-helpers.js";
+import type { AnnotationItem } from "./screenshot-annotate.js";
+import { createBrowserRouteContext, type BrowserServerState } from "./server-context.js";
 import { getFreePort } from "./test-port.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,10 +36,17 @@ const readGeometry = () => ({
   scrollY,
   screen: [screen.width, screen.height, screen.orientation.type],
   touch: navigator.maxTouchPoints,
+  visual: {
+    x: visualViewport!.pageLeft,
+    y: visualViewport!.pageTop,
+    width: visualViewport!.width,
+    height: visualViewport!.height,
+  },
 });
 
 async function withBrowser(
   run: (target: { cdpUrl: string; targetId: string }, page: Page, wsUrl: string) => Promise<void>,
+  deviceScaleFactor?: number,
 ) {
   const port = await getFreePort();
   const cdpUrl = `http://127.0.0.1:${port}`;
@@ -40,7 +54,9 @@ async function withBrowser(
     path.join(tempDirs.make("openclaw-screenshot-geometry-"), "profile"),
     {
       headless: true,
-      viewport: null,
+      ...(deviceScaleFactor
+        ? { viewport: { width: 640, height: 480 }, deviceScaleFactor }
+        : { viewport: null }),
       executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
       args: [`--remote-debugging-port=${port}`],
     },
@@ -87,6 +103,47 @@ async function expectImage(
     { base64: buffer.toString("base64"), points },
   );
   expect(pixels).toEqual(points.map(({ rgb }) => rgb));
+}
+
+async function readLabelBox(page: Page, buffer: Buffer) {
+  return await page.evaluate(async (base64) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${base64}`;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext("2d")!;
+    context.drawImage(image, 0, 0);
+    const { data } = context.getImageData(0, 0, image.width, image.height);
+    let redX = 0,
+      redY = 0,
+      redCount = 0;
+    for (let y = 0; y < image.height; y++) {
+      for (let x = 0; x < image.width; x++) {
+        const i = (y * image.width + x) * 4;
+        if (data[i]! > 170 && data[i + 1]! < 120 && data[i + 2]! < 150) {
+          redX += x;
+          redY += y;
+          redCount++;
+        }
+      }
+    }
+    const centerX = Math.round(redX / redCount),
+      centerY = Math.round(redY / redCount);
+    const yellow = (x: number, y: number) => {
+      const i = (y * image.width + x) * 4;
+      return data[i]! > 200 && data[i + 1]! > 120 && data[i + 2]! < 100;
+    };
+    const xs = Array.from({ length: image.width }, (_, x) => x).filter((x) => yellow(x, centerY));
+    const ys = Array.from({ length: image.height }, (_, y) => y).filter((y) => yellow(centerX, y));
+    return {
+      x: xs[0]!,
+      y: ys[0]!,
+      width: xs.at(-1)! - xs[0]! + 1,
+      height: ys.at(-1)! - ys[0]! + 1,
+    };
+  }, buffer.toString("base64"));
 }
 
 describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
@@ -142,7 +199,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         const { refs } = await snapshotRoleViaPlaywright(target);
         const ref = Object.keys(refs)[0]!;
         for (const mode of ["viewport", "element", "ref", "labels", "fullpage"] as const) {
-          const result =
+          const result: { buffer: Buffer; annotations?: AnnotationItem[] } =
             mode === "labels"
               ? await screenshotWithLabelsViaPlaywright({ ...target, refs })
               : await takeScreenshotViaPlaywright({
@@ -162,6 +219,14 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
                 : { x: 100, y: mode === "fullpage" ? 3000 : 1700, rgb: [51, 78, 104] },
             ],
           );
+          if (result.annotations) {
+            expect(result.annotations[0]?.box).toEqual({
+              x: 99,
+              y: 54,
+              width: 360,
+              height: 180,
+            });
+          }
           expect(await page.evaluate(readGeometry), mode).toEqual(before);
         }
 
@@ -181,5 +246,115 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         expect(await page.evaluate(() => navigator.maxTouchPoints)).toBe(touch);
       });
     }, 30_000);
+
+    it.for([
+      { device: "Native DPR 2", pageScale: 1 },
+      { device: "Desktop Chrome", pageScale: 1 },
+      { device: "iPad Mini", pageScale: 1 },
+      { device: "iPhone 13", pageScale: 1 },
+      { device: "iPhone 13", pageScale: 2 },
+    ])(
+      "returns image-space annotations through routes for $device at page scale $pageScale",
+      { timeout: 60_000 },
+      async ({ device, pageScale }, { annotate }) => {
+        await withBrowser(
+          async (target) => {
+            if (device !== "Native DPR 2") {
+              await setDeviceViaPlaywright({ ...target, name: device });
+            }
+            const page = await getPageForTargetId(target);
+            const zoom = await page.context().newCDPSession(page);
+            await zoom.send("Emulation.setPageScaleFactor", { pageScaleFactor: pageScale });
+            await zoom.detach();
+            const state: BrowserServerState = {
+              port: 0,
+              resolved: resolveBrowserConfig({
+                defaultProfile: "geometry",
+                profiles: {
+                  geometry: { cdpUrl: target.cdpUrl, color: "#123456", attachOnly: true },
+                },
+              }),
+              profiles: new Map(),
+            };
+            const routes = createBrowserRouteApp();
+            registerBrowserAgentSnapshotRoutes(
+              routes.app,
+              createBrowserRouteContext({ getState: () => state }),
+            );
+            for (const mode of ["viewport", "fullpage", "element", "snapshot"] as const) {
+              await page.evaluate(() => scrollTo(0, 420));
+              if (mode === "element") {
+                await page
+                  .locator("section")
+                  .first()
+                  .evaluate((section) => {
+                    section.style.transform = "translate(0.5px, 0.5px)";
+                  });
+              }
+              const before = await page.evaluate(readGeometry);
+              const response = createBrowserRouteResponse();
+              const request = { targetId: target.targetId, labels: true };
+              if (mode === "snapshot") {
+                await routes.getHandlers.get("/snapshot")!(
+                  { params: {}, query: { ...request, format: "ai" } },
+                  response.res,
+                );
+              } else {
+                await routes.postHandlers.get("/screenshot")!(
+                  {
+                    params: {},
+                    query: {},
+                    body: {
+                      ...request,
+                      fullPage: mode === "fullpage",
+                      element: mode === "element" ? "section" : undefined,
+                    },
+                  },
+                  response.res,
+                );
+              }
+              expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
+              const result = response.body as {
+                path?: string;
+                imagePath?: string;
+                annotations: AnnotationItem[];
+              };
+              const imagePath = result.path ?? result.imagePath!;
+              try {
+                const buffer = await fs.readFile(imagePath);
+                await annotate(`${device} ${mode}`, { path: imagePath });
+                const metadata = await getImageMetadata(buffer);
+                const imageWidth = metadata!.width;
+                const imageHeight = metadata!.height;
+                const annotation = result.annotations.find(({ name }) => name === "Target")!;
+                const pixels = await readLabelBox(page, buffer);
+                for (const coordinate of ["x", "y", "width", "height"] as const) {
+                  expect(
+                    Math.abs(annotation.box[coordinate] - pixels[coordinate]),
+                    `${device} ${mode} ${coordinate}: annotation=${annotation.box[coordinate]} pixels=${pixels[coordinate]}`,
+                  ).toBeLessThanOrEqual(1);
+                }
+                expect(Math.max(imageWidth, imageHeight)).toBeLessThanOrEqual(2000);
+                if (device === "iPhone 13" && mode === "fullpage") {
+                  expect(imageHeight).toBe(2000);
+                  expect(imageHeight / 1200).toBeLessThan(before.dpr);
+                }
+              } finally {
+                await fs.rm(imagePath);
+                if (mode === "element") {
+                  await page
+                    .locator("section")
+                    .first()
+                    .evaluate((section) => {
+                      section.style.transform = "";
+                    });
+                }
+              }
+            }
+          },
+          device === "Native DPR 2" ? 2 : undefined,
+        );
+      },
+    );
   },
 );
