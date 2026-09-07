@@ -702,7 +702,7 @@ final class GatewayProcessManager {
         let ns = error as NSError
         let message = ns.localizedDescription.isEmpty ? "unknown error" : ns.localizedDescription
         let lower = message.lowercased()
-        if self.isGatewayAuthFailure(error) {
+        if self.isGatewayTokenAuthFailure(error) {
             return """
             Gateway on port \(port) rejected auth. Set gateway.auth.token to match the running gateway \
             (or clear it on the gateway) and retry.
@@ -718,14 +718,11 @@ final class GatewayProcessManager {
         return "Gateway listener found on port \(port) but health check failed: \(message)"
     }
 
-    private func isGatewayAuthFailure(_ error: Error) -> Bool {
-        if let urlError = error as? URLError, urlError.code == .dataNotAllowed {
-            return true
-        }
-        let ns = error as NSError
-        if ns.domain == "Gateway", ns.code == 1008 { return true }
-        let lower = ns.localizedDescription.lowercased()
-        return lower.contains("unauthorized") || lower.contains("auth")
+    private func isGatewayTokenAuthFailure(_ error: Error) -> Bool {
+        guard let detail = (error as? GatewayConnectAuthError)?.detail else { return false }
+        return detail == .authTokenMissing ||
+            detail == .authTokenMismatch ||
+            detail == .authTokenNotConfigured
     }
 }
 

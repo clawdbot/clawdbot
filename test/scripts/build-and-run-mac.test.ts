@@ -122,8 +122,6 @@ describe("scripts/build-and-run-mac.sh", () => {
         scriptPath,
         "scripts/prepare-apple-mermaid.mjs",
         "scripts/pnpm-runner.mts",
-        "scripts/lib/windows-cmd-helpers-runtime.mts",
-        "scripts/lib/record-shared.mjs",
         "scripts/windows-cmd-helpers.mjs",
       ]) {
         const target = join(root, path);
@@ -137,6 +135,8 @@ describe("scripts/build-and-run-mac.sh", () => {
       mkdirSync(resources, { recursive: true });
       writeFileSync(join(resources, "stale.js"), "stale");
       symlinkSync(process.execPath, join(binDir, "node"));
+      symlinkSync("/bin/bash", join(binDir, "bash"));
+      symlinkSync("/usr/bin/dirname", join(binDir, "dirname"));
       const expectedArgs = ["--dir", "packages/mermaid-renderer", "build"];
       if (runner === "corepack") {
         expectedArgs.unshift("pnpm");
@@ -176,7 +176,7 @@ describe("scripts/build-and-run-mac.sh", () => {
           ...process.env,
           npm_execpath: "",
           OPENCLAW_MAC_RUN_LOG: join(root, "launch.log"),
-          PATH: `${binDir}:/usr/bin:/bin`,
+          PATH: binDir,
         },
       });
 

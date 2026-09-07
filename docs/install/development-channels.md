@@ -16,8 +16,8 @@ OpenClaw ships four update channels:
   foreground-only. It receives read-only update hints when `update.checkOnStart`
   is enabled, including direct final extended-stable package installs, but never
   applies automatically.
-- **beta**: npm dist-tag `beta`. Falls back to `latest` when `beta` is missing
-  or older than the current stable release.
+- **beta**: the newest version by semantic version order from the npm `beta`
+  and `latest` dist-tags. An older beta tag never replaces a newer stable release.
 - **dev**: moving head of `main` (git), including when switching from a package install. `main`
   is for experimentation and active development; it may contain incomplete
   features or breaking changes. Do not run it for production gateways.
@@ -35,8 +35,9 @@ openclaw update --channel beta
 openclaw update --channel dev
 ```
 
-`--channel` persists the choice to `update.channel` in config and drives both
-install paths:
+`--channel` drives the update and persists the choice to `update.channel` in
+config after core update success. A refused or failed core update keeps the
+previous channel. The selected channel drives both install paths:
 
 | Channel           | npm/package installs                                                                                                                                                                   | git installs                                                                                       |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -134,6 +135,10 @@ Switching channels with `openclaw update` also syncs plugin sources:
   the base release cohort for correction versions (for example, `YYYY.M.P-2`
   uses plugin `YYYY.M.P`).
 - npm-installed plugins are updated after the core update completes.
+- `beta` uses the same newest-of-`beta`/`latest` rule for managed npm plugins,
+  including official plugins such as `@openclaw/codex`. Exact version and range
+  pins retain their selector. Startup repair keeps an already-current plugin
+  instead of reinstalling it and requiring another restart.
 
 ## Checking current status
 

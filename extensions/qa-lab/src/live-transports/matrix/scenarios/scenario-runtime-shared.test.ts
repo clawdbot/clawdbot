@@ -1,7 +1,6 @@
 // QA Lab Matrix tests cover scenario runtime shared plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildMatrixNoticeArtifact,
   buildMatrixReplyArtifact,
   resolveMatrixQaNoReplyWindowMs,
   runNoReplyExpectedScenario,
@@ -125,9 +124,6 @@ describe("matrix scenario runtime shared", () => {
     };
     expect(truncateMatrixQaPreview(`${prefix}😀tail`)).toBe(prefix);
     expect(buildMatrixReplyArtifact({ ...event, body: `${prefix}😀tail` }).bodyPreview).toBe(
-      prefix,
-    );
-    expect(buildMatrixNoticeArtifact({ ...event, body: `${prefix}😀tail` }).bodyPreview).toBe(
       prefix,
     );
     expect(buildMatrixReplyArtifact({ ...event, body: " " }).bodyPreview).toBe("");

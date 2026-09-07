@@ -100,6 +100,17 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         for (const catalogId of catalogIds) {
           await page.getByText(`${catalogId} shared transcript`, { exact: true }).click();
+          // Every catalog has the same transcript; wait for the clicked pane before reading it.
+          await page.waitForFunction(
+            (expectedSessionKey) =>
+              [
+                ...document.querySelectorAll("openclaw-chat-pane.chat-pane-cache__pane--visible"),
+              ].some(
+                (pane) =>
+                  (pane as HTMLElement & { sessionKey?: string }).sessionKey === expectedSessionKey,
+              ),
+            `agent:main:catalog:${catalogId}:gateway:shared`,
+          );
           const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
           const message = pane
             .locator(".chat-group.user")

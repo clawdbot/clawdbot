@@ -21,6 +21,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyXaiOAuthConfig, XAI_OAUTH_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildLiveXaiOAuthProvider } from "./provider-catalog.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
@@ -632,6 +633,11 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       ...requestOptions,
     });
     const identity = resolveXaiOAuthIdentity(tokens);
+    const provider = await buildLiveXaiOAuthProvider({
+      discoveryApiKey: tokens.accessToken,
+      signal: ctx.signal,
+      fetchGuard: (params) => fetchWithSsrFGuard({ ...params, beforeRequest: ctx.assertCurrent }),
+    });
     progress.stop("xAI OAuth complete");
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
@@ -642,7 +648,7 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       email: identity.email,
       displayName: identity.displayName,
       profileName: identity.email ?? identity.accountId,
-      configPatch: applyXaiOAuthConfig(ctx.config),
+      configPatch: applyXaiOAuthConfig(ctx.config, provider),
       credentialExtra: {
         tokenEndpoint: discovery.tokenEndpoint,
         deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,

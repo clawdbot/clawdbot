@@ -4,15 +4,23 @@ import Testing
 
 struct DashboardRouteMapTests {
     @Test func `route constants match Control UI paths`() {
+        #expect(DashboardRouteMap.settingsPath == "/settings")
+        #expect(DashboardRouteMap.deviceSettingsPath == "/settings/device")
+        #expect(DashboardRouteMap.devicePermissionsSettingsPath == "/settings/device/permissions")
         #expect(DashboardRouteMap.channelsSettingsPath == "/settings/channels")
-        #expect(DashboardRouteMap.talkSettingsPath == "/settings/talk")
         #expect(DashboardRouteMap.skillsPagePath == "/skills")
-        #expect(DashboardRouteMap.cronJobsPagePath == "/cron")
+        #expect(DashboardRouteMap.cronJobsPagePath == "/automations")
         #expect(DashboardRouteMap.sessionsPagePath == "/sessions")
         #expect(DashboardRouteMap.devicesSettingsPath == "/settings/devices")
     }
 
-    @Test(arguments: ["/settings/channels", "/settings/talk", "/skills", "/cron"])
+    @Test(arguments: [
+        DashboardRouteMap.channelsSettingsPath,
+        DashboardRouteMap.skillsPagePath, DashboardRouteMap.cronJobsPagePath,
+        DashboardRouteMap.activityPagePath, DashboardRouteMap.workboardPagePath,
+        DashboardRouteMap.skillWorkshopPagePath, DashboardRouteMap.devicesSettingsPath,
+        DashboardRouteMap.dreamingPagePath, DashboardRouteMap.usagePagePath,
+    ])
     func `same-app path validation accepts rooted paths`(_ path: String) {
         #expect(DashboardRouteMap.isValidSameAppPath(path))
     }
@@ -36,6 +44,26 @@ struct DashboardRouteMapTests {
             to: baseURL))
 
         #expect(url.absoluteString == "http://127.0.0.1:18789/control/settings/channels#token=test-token")
+    }
+
+    @Test(arguments: [
+        DashboardRouteMap.settingsPath,
+        DashboardRouteMap.deviceSettingsPath,
+        DashboardRouteMap.devicePermissionsSettingsPath,
+        DashboardRouteMap.activityPagePath,
+        DashboardRouteMap.workboardPagePath,
+        DashboardRouteMap.skillWorkshopPagePath,
+        DashboardRouteMap.devicesSettingsPath,
+        DashboardRouteMap.dreamingPagePath,
+        DashboardRouteMap.usagePagePath,
+        DashboardRouteMap.cronJobsPagePath,
+    ])
+    func `device settings routes preserve the Gateway base path and auth fragment`(_ path: String) throws {
+        let baseURL = try #require(URL(string: "https://gateway.example.test/control/#token=test-token"))
+        let url = try #require(DashboardRouteMap.dashboardURL(byAppendingSameAppPath: path, to: baseURL))
+        #expect(url.path == "/control" + path)
+        #expect(url.fragment == "token=test-token")
+        #expect(url.host == "gateway.example.test")
     }
 
     @Test func `Dashboard URL carries a same-app search alongside the token fragment`() throws {

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   parsePackageOpenClawSchemaVersions,
@@ -5,13 +8,112 @@ import {
 } from "../state/openclaw-schema-versions.js";
 import { isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
+import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
+
+function quoteGitConfig(value: string): string {
+  return `"${value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n").replace(/\t/gu, "\\t").replaceAll("\b", "\\b")}"`;
+}
+
+function gitConfigEntry(key: string, value: string): string {
+  const match = /^([a-z][a-z0-9-]*)\.(?:(.*)\.)?([a-z][a-z0-9-]*)$/iu.exec(key);
+  if (!match || /[\r\n]/u.test(match[2] ?? "")) {
+    throw new Error("Could not preserve Git target inspection configuration");
+  }
+  return `[${match[1]}${match[2] === undefined ? "" : ` ${quoteGitConfig(match[2])}`}]\n\t${match[3]} = ${quoteGitConfig(value)}\n`;
+}
+
+/** Fetch and candidate selection must not update the installed repository before admission. */
+export async function withGitTargetInspectionRoot<T>(
+  params: { root: string; runCommand: CommandRunner; timeoutMs: number },
+  inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
+): Promise<T> {
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-admission-"));
+  const inspectionRoot = path.join(temporaryRoot, "repository.git");
+  const command = async (root: string, args: string[], allowMissing = false) => {
+    const result = await params.runCommand(["git", "-C", root, ...args], {
+      cwd: root,
+      timeoutMs: params.timeoutMs,
+    });
+    if (result.code !== 0 && !(allowMissing && result.code === 1)) {
+      // Configuration can contain credentials; never include its output in errors.
+      throw new Error(`Git target inspection ${args[0]} failed (exit ${result.code})`);
+    }
+    return result.stdout;
+  };
+  try {
+    await command(params.root, [
+      "clone",
+      "--mirror",
+      "--shared",
+      "--template=",
+      "--",
+      params.root,
+      inspectionRoot,
+    ]);
+    await command(inspectionRoot, ["config", "--remove-section", "remote.origin"]);
+    const config = await command(
+      params.root,
+      [
+        "config",
+        "--includes",
+        "--null",
+        "--get-regexp",
+        "^((remote|branch|url|http|credential|protocol|filter|fetch|transfer|ssh|user|author|committer|gpg)\\.|commit\\.gpgsign$|core\\.(sshcommand|gitproxy|askpass)$)",
+      ],
+      true,
+    );
+    const entries: string[] = [];
+    for (const entry of config.split("\0").filter(Boolean)) {
+      const separator = entry.indexOf("\n");
+      const key = separator === -1 ? entry : entry.slice(0, separator);
+      const value = separator === -1 ? "true" : entry.slice(separator + 1);
+      entries.push(gitConfigEntry(key, value));
+    }
+    await fs.appendFile(path.join(inspectionRoot, "config"), entries.join(""), { mode: 0o600 });
+    const runInspectionCommand: CommandRunner = (argv, options) =>
+      params.runCommand(
+        argv[0] === "git" && argv[1] === "-C" && argv[2] === inspectionRoot
+          ? // Keep relative remote URLs rooted at the original checkout, but direct
+            // all Git metadata writes to the private mirror's independent Git dir.
+            [
+              "git",
+              "-C",
+              // Publication may move a new checkout after validation. Cleanup
+              // owns only the private Git dir and needs no source-relative transport.
+              argv[3] === "worktree" && (argv[4] === "remove" || argv[4] === "prune")
+                ? inspectionRoot
+                : params.root,
+              `--git-dir=${inspectionRoot}`,
+              ...argv.slice(3),
+            ]
+          : argv,
+        argv[0] === "git"
+          ? {
+              ...options,
+              // Source-context includes and worktree settings were flattened
+              // above. Do not apply globals twice or reselect includes here.
+              env: {
+                ...options.env,
+                GIT_CONFIG_NOSYSTEM: "1",
+                GIT_CONFIG_GLOBAL: os.devNull,
+                GIT_CONFIG_COUNT: "0",
+              },
+            }
+          : options,
+      );
+    return await inspect(inspectionRoot, runInspectionCommand);
+  } finally {
+    // Only this invocation's private inspection clone, never the installed checkout.
+    await fs.rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
 
 type GitTargetSchemaMetadata =
   | { status: "ok"; schemaVersions?: OpenClawSchemaVersions }
   | { status: "unreadable"; reason: string };
 
-async function readGitTargetSchemaVersions(params: {
+export async function readGitTargetSchemaVersions(params: {
   runCommand: CommandRunner;
   root: string;
   revision: string;
@@ -61,6 +163,27 @@ export async function prepareGitMutation(params: {
   return preparation ?? {};
 }
 
+export async function selectGitInspectionTarget(
+  params: Parameters<typeof runGitCandidatePreflight>[0] & {
+    channel: UpdateChannel;
+    beforeCandidate: (revision: string) => Promise<void>;
+  },
+) {
+  const tag =
+    params.channel === "dev"
+      ? undefined
+      : await resolveChannelTag(
+          params.runCommand,
+          params.gitRoot,
+          params.timeoutMs,
+          params.channel,
+        );
+  if (params.channel !== "dev" && !tag) {
+    return { status: "error" as const, reason: "no-release-tag" };
+  }
+  return runGitCandidatePreflight({ ...params, targetRevision: tag ?? undefined });
+}
+
 export async function readBranchName(
   runCommand: CommandRunner,
   root: string,
@@ -91,9 +214,20 @@ export async function resolveChannelTag(
   channel: Exclude<UpdateChannel, "dev">,
 ): Promise<string | null> {
   const tags = await listGitTags(runCommand, root, timeoutMs);
+  return selectChannelTag(tags, channel);
+}
+
+export function selectChannelTag(
+  tags: readonly string[],
+  channel: Exclude<UpdateChannel, "dev">,
+): string | null {
+  const orderedTags = normalizeStringEntries(tags).toSorted((left, right) => {
+    const comparison = compareSemverStrings(left, right);
+    return comparison == null ? right.localeCompare(left) : -comparison;
+  });
   if (channel === "beta") {
-    const betaTag = tags.find((tag) => isBetaTag(tag)) ?? null;
-    const stableTag = tags.find((tag) => isStableTag(tag)) ?? null;
+    const betaTag = orderedTags.find((tag) => isBetaTag(tag)) ?? null;
+    const stableTag = orderedTags.find((tag) => isStableTag(tag)) ?? null;
     if (!betaTag) {
       return stableTag;
     }
@@ -103,5 +237,5 @@ export async function resolveChannelTag(
     const comparison = compareSemverStrings(betaTag, stableTag);
     return comparison != null && comparison < 0 ? stableTag : betaTag;
   }
-  return tags.find((tag) => isStableTag(tag)) ?? null;
+  return orderedTags.find((tag) => isStableTag(tag)) ?? null;
 }

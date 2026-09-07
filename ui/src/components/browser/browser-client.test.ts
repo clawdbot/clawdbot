@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
-import { fetchBrowserScreenshotDataUrl } from "./browser-client.ts";
+import {
+  fetchBrowserScreenshotDataUrl,
+  requestBrowserScreencast,
+  isBrowserScreencastUnsupportedError,
+} from "./browser-client.ts";
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -196,5 +201,69 @@ describe("fetchBrowserScreenshotDataUrl", () => {
         path: "/tmp/missing.png",
       }),
     ).rejects.toThrow("Falha ao buscar captura de tela (503).");
+  });
+});
+
+describe("browser screencast requests", () => {
+  it.each([
+    null,
+    {},
+    { token: "", wsPath: "/browser/screencast" },
+    { token: 123, wsPath: "/browser/screencast" },
+    { token: "token" },
+    { token: "token", wsPath: "" },
+    { token: "token", wsPath: 123 },
+  ])("rejects a malformed mint response (%j)", async (response) => {
+    await expect(
+      requestBrowserScreencast(
+        { request: vi.fn().mockResolvedValue(response) },
+        { targetId: "tab-a", maxWidth: 1280, maxHeight: 1600 },
+      ),
+    ).rejects.toThrow("browser screencast response is malformed");
+  });
+
+  it("normalizes absent or invalid optional metadata to empty strings", async () => {
+    const response = { token: "token", wsPath: "/browser/screencast?token=token", url: 123 };
+    await expect(
+      requestBrowserScreencast(
+        { request: vi.fn().mockResolvedValue(response) },
+        { targetId: "tab-a", maxWidth: 1280, maxHeight: 1600 },
+      ),
+    ).resolves.toEqual({ ...response, targetId: "", url: "" });
+  });
+
+  it("mints an HTTP-shaped request with the requested target and size", async () => {
+    const response = {
+      token: "token",
+      wsPath: "/browser/screencast?token=token",
+      targetId: "raw-a",
+      url: "https://example.test",
+    };
+    const request = vi.fn().mockResolvedValue(response);
+    await expect(
+      requestBrowserScreencast({ request }, { targetId: "tab-a", maxWidth: 1280, maxHeight: 1600 }),
+    ).resolves.toEqual(response);
+    expect(request).toHaveBeenCalledWith("browser.request", {
+      method: "POST",
+      path: "/screencast",
+      body: { targetId: "tab-a", maxWidth: 1280, maxHeight: 1600 },
+    });
+  });
+
+  it.each([
+    [
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Unsupported",
+        details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
+      }),
+      true,
+    ],
+    [{ body: { code: "SCREENCAST_UNSUPPORTED" } }, true],
+    [{ details: { body: { code: "SCREENCAST_UNSUPPORTED" } } }, true],
+    [new Error("SCREENCAST_UNSUPPORTED"), false],
+    [{ details: { code: "OTHER" } }, false],
+  ])("recognizes structured unsupported failures (%s)", (error, expected) => {
+    expect(isBrowserScreencastUnsupportedError(error)).toBe(expected);
   });
 });

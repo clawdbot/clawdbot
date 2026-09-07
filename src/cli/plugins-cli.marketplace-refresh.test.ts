@@ -40,7 +40,7 @@ vi.mock("../plugins/official-external-plugin-catalog.js", () => ({
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries,
 }));
 
-vi.mock("../plugins/management-service.js", () => ({
+vi.mock("../plugins/management-catalog.js", () => ({
   clearManagedPluginOfficialCatalogCache: mocks.clearManagedPluginOfficialCatalogCache,
 }));
 

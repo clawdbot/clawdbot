@@ -151,29 +151,6 @@ struct AppProfileTests {
         return root
     }
 
-    @Test func `profile launch at login reason outranks bundle location`() {
-        let profiled = LaunchAtLoginPresentation.resolve(
-            profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]),
-            bundleLocationAllowsPersistentIntegration: false,
-            isEnabled: false)
-        #expect(profiled.subtitle == "Launch at login is unavailable while an app profile is active.")
-        #expect(profiled.isDisabled)
-
-        let defaultUnavailable = LaunchAtLoginPresentation.resolve(
-            profile: AppProfile(environment: [:]),
-            bundleLocationAllowsPersistentIntegration: false,
-            isEnabled: false)
-        #expect(defaultUnavailable.subtitle == "Move OpenClaw to Applications before enabling launch at login.")
-        #expect(defaultUnavailable.isDisabled)
-
-        let defaultAvailable = LaunchAtLoginPresentation.resolve(
-            profile: AppProfile(environment: [:]),
-            bundleLocationAllowsPersistentIntegration: true,
-            isEnabled: false)
-        #expect(defaultAvailable.subtitle == "Automatically start OpenClaw after you sign in.")
-        #expect(!defaultAvailable.isDisabled)
-    }
-
     @MainActor @Test func `profile lock excludes only the same profile`() throws {
         #expect(AppDelegate.processExitCode(for: .busy) == 0)
         #expect(AppDelegate.processExitCode(for: .failed("test")) == nil)

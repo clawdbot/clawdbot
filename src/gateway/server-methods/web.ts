@@ -13,7 +13,7 @@ import { listLoadedChannelPluginsForRegistry } from "../../channels/plugins/regi
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { formatForLog } from "../ws-log.js";
+import { respondUnavailable } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -107,10 +107,6 @@ function respondProviderUnsupported(respond: RespondFn, providerId: string) {
     undefined,
     errorShape(ErrorCodes.INVALID_REQUEST, `web login is not supported by provider ${providerId}`),
   );
-}
-
-function respondWebLoginUnavailable(respond: RespondFn, err: unknown) {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
 }
 
 /** Resolves a concrete provider gateway login method or sends the public error. */
@@ -211,7 +207,7 @@ export const webHandlers: GatewayRequestHandlers = {
       }
       respond(true, result, undefined);
     } catch (err) {
-      respondWebLoginUnavailable(respond, err);
+      respondUnavailable(respond, err);
     }
   },
   "web.login.wait": async ({ params, respond, context }) => {
@@ -241,7 +237,7 @@ export const webHandlers: GatewayRequestHandlers = {
       }
       respond(true, result, undefined);
     } catch (err) {
-      respondWebLoginUnavailable(respond, err);
+      respondUnavailable(respond, err);
     }
   },
 };

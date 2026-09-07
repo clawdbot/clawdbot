@@ -63,7 +63,6 @@ async function loadWorkboardInternal(
     !params.client ||
     state.dispatching ||
     workboardHasActiveWrites(state) ||
-    (catalogOnly && shouldDeferWorkboardLiveRefresh(state)) ||
     (!params.force && (state.loaded || state.loadAttempted))
   ) {
     return false;
@@ -132,13 +131,13 @@ async function loadWorkboardInternal(
         return false;
       }
       if (catalogOnly) {
-        if (shouldDeferWorkboardLiveRefresh(state)) {
-          return false;
-        }
-        // Navigation and session links share card data, but this read does not
-        // establish the page's task freshness or authorize stale edit drafts.
-        state.cards = normalized.cards;
         state.boards = normalized.boards;
+        // Keep navigation current without replacing cards beneath an unfinished draft.
+        if (shouldDeferWorkboardLiveRefresh(state)) {
+          return true;
+        }
+        // Catalog hydration never establishes task freshness or authorizes stale edits.
+        state.cards = normalized.cards;
         state.statuses = normalized.statuses;
         state.tasksByCardId = new Map(
           state.cards.flatMap((card) => {

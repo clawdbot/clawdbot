@@ -14,7 +14,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { parseCLI } from "vitest/node";
 import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
@@ -25,6 +26,7 @@ import {
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
   listExtensionTestFilesForRoots,
+  listTrackedTestPlanFiles,
   resolveExtensionBatchPlan,
   resolveExtensionTestConfig,
   resolveExtensionTestPlan,
@@ -39,11 +41,13 @@ import {
 } from "../../scripts/test-extension-batch.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { waitForPidFile } from "../helpers/process-wait.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mts");
 const posixIt = process.platform === "win32" ? it.skip : it;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type RunGroupParams = VitestBatchRunParams;
 
@@ -228,6 +232,22 @@ describe("scripts/test-extension.mts", () => {
     }
   });
 
+  posixIt("preserves newline and leading-space tokens in the tracked Git inventory", () => {
+    const root = tempDirs.make("openclaw-extension-git-paths-");
+    const trackedPaths = [" extensions/example.test.ts", "extensions/example\npath.test.ts"];
+    expect(spawnSync("git", ["init", "-q", "--initial-branch=main"], { cwd: root }).status).toBe(0);
+    for (const trackedPath of trackedPaths) {
+      const absolutePath = path.join(root, trackedPath);
+      mkdirSync(path.dirname(absolutePath), { recursive: true });
+      writeFileSync(absolutePath, "export {};\n");
+    }
+    expect(spawnSync("git", ["add", "--", ...trackedPaths], { cwd: root }).status).toBe(0);
+
+    expect(listTrackedTestPlanFiles(root, [":(glob)**/*.test.ts"])?.toSorted()).toEqual(
+      trackedPaths.toSorted(),
+    );
+  });
+
   it.each([
     ["watch", ["--watch"]],
     ["short watch", ["-w"]],
@@ -235,10 +255,16 @@ describe("scripts/test-extension.mts", () => {
     ["reporter", ["--reporter=json"]],
     ["output file", ["--outputFile=results.json"]],
     ["shard", ["--shard=1/2"]],
+    ["retry with shard", ["--retry=1", "--shard=1/2"]],
+    ["retry with report", ["--retry=1", "--reporter=json"]],
+    ["missing retry value", ["--retry"]],
+    ["invalid retry value", ["--retry=invalid"]],
+    ["missing exclude value", ["--exclude"]],
     ["bail", ["--bail=2"]],
     ["changed", ["--changed=origin/main"]],
     ["exclude", ["--exclude=extensions/matrix/src/**"]],
-    ["retry", ["--retry=1"]],
+    ["one-or-more extglob exclude", ["--exclude=extensions/matrix/src/+(a).test.ts"]],
+    ["exactly-one extglob exclude", ["--exclude=extensions/matrix/src/@(a).test.ts"]],
   ])("keeps Matrix %s runs in one process", (_name, vitestArgs) => {
     const root = bundledPluginRoot("matrix");
 
@@ -301,6 +327,16 @@ describe("scripts/test-extension.mts", () => {
     ]);
 
     expect(extensionIds).toEqual(["firecrawl", "line", "slack"]);
+  });
+
+  it("does not normalize extension path lookalikes", () => {
+    expect(
+      detectChangedExtensionIds([
+        " extensions/slack/src/channel.ts",
+        String.raw`extensions\slack\src\channel.ts`,
+        " src/line/message.test.ts",
+      ]),
+    ).toEqual([]);
   });
 
   it("lists available extension ids", () => {
@@ -726,12 +762,12 @@ describe("scripts/test-extension.mts", () => {
         config,
         `import assert from 'node:assert/strict';
 assert.equal(process.execArgv.includes('--no-maglev'), ${!enableMaglev}, 'batch Node defaults');
-export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,experimental:{fsModuleCache:false}}};`,
+export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
       );
       const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
       writeFileSync(
         path.join(root, "selected.test.mjs"),
-        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';test('selected native case',()=>{expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
       );
       for (const name of ["excluded", "unrelated"]) {
         writeFileSync(
@@ -744,6 +780,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
         homeMode: realHomeReplay ? "live-aware" : undefined,
         args: [
           "--configLoader=native",
+          "--retry=1",
           "--reporter=verbose",
           "--reporter=json",
           `--outputFile=${report}`,
@@ -807,6 +844,8 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
         "-r",
         ".",
         "--exclude=extensions/codex/src/app-server/client.test.ts",
+        "--exclude=",
+        "extensions/codex/src/app-server/stream.test.ts",
         "extensions/codex/src/app-server/models.test.ts",
         "--reporter=dot",
       ]),
@@ -820,28 +859,62 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
       "-r",
       ".",
       "--exclude=codex/src/app-server/client.test.ts",
+      "--exclude=",
+      "codex/src/app-server/stream.test.ts",
       "codex/src/app-server/models.test.ts",
       "--reporter=dot",
     ]);
   });
 
-  it("relativizes absolute Vitest paths from extension cwd", () => {
-    const extensionCwd = path.join(process.cwd(), "extensions", "codex");
-    expect(
-      relativizeExtensionVitestArgs(
-        [
-          "--exclude",
-          path.join(extensionCwd, "src", "app-server", "run-attempt.test.ts"),
-          path.join(extensionCwd, "src", "app-server", "client.test.ts"),
-        ],
-        extensionCwd,
-      ),
-    ).toEqual([
-      "--exclude",
-      "codex/src/app-server/run-attempt.test.ts",
-      "codex/src/app-server/client.test.ts",
-    ]);
+  it.each([
+    ["--tagsFilter", "slow"],
+    ["--tagsFilter=", "slow"],
+    ["--fsModuleCachePath", "extensions/cache"],
+    ["--attachmentsDir", "extensions/artifacts"],
+    ["--max-workers", "2"],
+    ["--watch", "false"],
+    ["--no-file-parallelism"],
+    ["--retry.delay", "100"],
+  ])("preserves native Vitest option operands from a plugin cwd: %j", (...flags) => {
+    const target = "extensions/browser/src/example.test.ts";
+    const args = relativizeExtensionVitestArgs(
+      [...flags, target],
+      path.join(process.cwd(), "extensions/browser"),
+    );
+    expect(parseCLI(["vitest", "run", ...args])).toEqual(
+      parseCLI(["vitest", "run", ...flags, "browser/src/example.test.ts"]),
+    );
   });
+
+  it("preserves native separator tails without interpreting them as plugin paths", () => {
+    const tail = ["--", "extensions/browser/src/literal.test.ts", "--exclude="];
+    const args = relativizeExtensionVitestArgs(
+      tail,
+      path.join(process.cwd(), "extensions/browser"),
+    );
+    expect(parseCLI(["vitest", "run", ...args])).toEqual(parseCLI(["vitest", "run", ...tail]));
+  });
+
+  it.each(["--exclude", "--exclude="])(
+    "relativizes absolute %s paths from extension cwd",
+    (flag) => {
+      const extensionCwd = path.join(process.cwd(), "extensions", "codex");
+      expect(
+        relativizeExtensionVitestArgs(
+          [
+            flag,
+            path.join(extensionCwd, "src", "app-server", "run-attempt.test.ts"),
+            path.join(extensionCwd, "src", "app-server", "client.test.ts"),
+          ],
+          extensionCwd,
+        ),
+      ).toEqual([
+        flag,
+        "codex/src/app-server/run-attempt.test.ts",
+        "codex/src/app-server/client.test.ts",
+      ]);
+    },
+  );
 
   posixIt(
     "preserves wrapper termination when native Vitest exits cleanly after SIGTERM",
@@ -935,6 +1008,34 @@ await new Promise(()=>{});export default {};`,
     expect(runParams.targets).toContain("codex/src/app-server/client.test.ts");
   });
 
+  it.each([
+    ["--retry=1", "--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"],
+    ["--retry", "1", "--exclude=extensions/codex/src/app-server/run-attempt.test.ts"],
+  ])("preserves Codex process bounds with release options %j", async (...vitestArgs) => {
+    const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+    const excluded = "extensions/codex/src/app-server/run-attempt.test.ts";
+    const expectedFiles = listExtensionTestFilesForRoots([bundledPluginRoot("codex")])
+      .filter((file) => file !== excluded)
+      .map((file) => file.replace(/^extensions\//u, ""));
+
+    const result = await runExtensionBatchPlan(
+      resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["codex"] }),
+      { runGroup, vitestArgs },
+    );
+
+    expect(result).toBe(0);
+    const calls = runGroup.mock.calls.map(([params]) => params);
+    expect(calls).toHaveLength(Math.ceil(expectedFiles.length / 12));
+    expect(calls.every((call) => call.targets.length <= 12)).toBe(true);
+    expect(calls.flatMap((call) => call.targets)).toEqual(expectedFiles);
+    for (const call of calls) {
+      expect(parseCLI(["vitest", "run", ...call.args]).options).toMatchObject({
+        retry: 1,
+        exclude: ["codex/src/app-server/run-attempt.test.ts"],
+      });
+    }
+  });
+
   it("runs Matrix extension batches in bounded sequential processes", async () => {
     const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
     const expectedFiles = listExtensionTestFilesForRoots([bundledPluginRoot("matrix")]).map(
@@ -976,7 +1077,6 @@ await new Promise(()=>{});export default {};`,
     ["--bail=2"],
     ["--changed=origin/main"],
     ["--exclude=extensions/matrix/src/**"],
-    ["--retry=1"],
   ])("keeps Matrix extension batch mode %s in one process", async (vitestArg) => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
 

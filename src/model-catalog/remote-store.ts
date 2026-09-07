@@ -1,4 +1,5 @@
-import { readConfigMachineState, updateConfigMachineState } from "../state/config-machine-state.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 
 type RemoteModelCatalogStoreRow = {

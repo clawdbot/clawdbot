@@ -52,7 +52,7 @@ let state: OpenClawTestState;
 describe("prepared reply fallback ownership", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
     vi.clearAllMocks();
     const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
     vi.spyOn(agentScope, "resolveAgentConfig").mockImplementation(actual.resolveAgentConfig);

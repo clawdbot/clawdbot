@@ -2,6 +2,7 @@
  * Top-level CLI-backed agent runner orchestration.
  */
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -28,6 +29,7 @@ import {
   markAuthProfileSuccess,
 } from "./auth-profiles.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
+import { runCliCleanup } from "./cli-runner/cleanup.js";
 import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
 import {
   resolveCliSessionId,
@@ -74,7 +76,6 @@ import {
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
-import { waitForDeferredTurnMaintenanceForSession } from "./embedded-agent-runner/context-engine-maintenance.js";
 import { bootstrapHarnessContextEngine } from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
@@ -246,6 +247,14 @@ export async function runPreparedCliAgent(
   context: PreparedCliRunContext,
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
+  const run = () => runPreparedCliAgentOwned(context, diagnosticLifecycle);
+  return await runWithCliHistoryWriter(context.cliHistoryWriter, run);
+}
+
+async function runPreparedCliAgentOwned(
+  context: PreparedCliRunContext,
+  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
+): Promise<EmbeddedAgentRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
   const cliFailoverContext = {
@@ -271,11 +280,6 @@ export async function runPreparedCliAgent(
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
   const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
-  // Durable reads must observe prior deferred rewrites. Caller-owned memory is
-  // independent of durable work sharing its correlation key.
-  if (!turnSideEffectsDisabled && !params.sessionManager) {
-    await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
-  }
   const historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
   const promptForHooks = context.promptForHooks ?? params.prompt;
   const llmInputEvent = {
@@ -713,7 +717,9 @@ export async function runPreparedCliAgent(
   }
   let cleanupError: Error | undefined;
   try {
-    await context.preparedBackend.cleanup?.();
+    await runCliCleanup(params, "cli-backend-release", async () => {
+      await context.preparedBackend.cleanup?.();
+    });
   } catch (error) {
     cleanupError = error as Error;
   }

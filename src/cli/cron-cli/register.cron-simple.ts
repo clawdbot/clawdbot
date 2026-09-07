@@ -4,6 +4,7 @@ import {
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { resolveCronCompletionStatus } from "../../cron/completion-status.js";
 import type { CronRunLogEntry } from "../../cron/run-log-types.js";
@@ -195,16 +196,25 @@ export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
     createCronOutputCommand(cron, "runs")
       .description("Show automation run history")
-      .requiredOption("--id <id>", "Job id")
+      .argument("[id]", "Job id")
+      .option("--id <id>", "Job id (alternative to positional argument)")
       .option("--run-id <runId>", "Filter by cron run id")
       .option("--limit <n>", "Max entries (default 50)", "50")
-      .action(async (opts) => {
+      .action(async (idArg, opts) => {
         try {
+          const argId = normalizeOptionalString(idArg);
+          const flagId = normalizeOptionalString(opts.id);
+          if (argId && flagId && argId !== flagId) {
+            throw new Error(`Conflicting job ids: positional "${argId}" and --id "${flagId}".`);
+          }
+          const id = argId ?? flagId;
+          if (!id) {
+            throw new Error("Missing job id. Pass it positionally or with --id.");
+          }
           const limit = parseStrictPositiveInteger(opts.limit ?? "50");
           if (limit === undefined) {
             throw new Error("Invalid --limit (must be a positive integer).");
           }
-          const id = String(opts.id);
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
             throw new Error("--run-id must not be blank");
           }

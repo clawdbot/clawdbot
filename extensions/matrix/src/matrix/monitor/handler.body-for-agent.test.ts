@@ -371,52 +371,59 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     expect(getMemberDisplayName).toHaveBeenCalledTimes(2);
   });
 
-  it("drops thread and reply context fetched from non-allowlisted room senders", async () => {
-    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
-      client: {
-        getEvent: async () =>
-          createMatrixTextMessageEvent({
-            eventId: "$thread-root",
-            sender: "@mallory:example.org",
-            body: "Malicious root topic",
-          }),
-      },
-      isDirectMessage: false,
-      cfg: {
-        channels: {
-          matrix: {
-            contextVisibility: "allowlist",
-            groupAllowFrom: ["@alice:example.org"],
+  it.each(["allowlist", "allowlist_quote"] as const)(
+    "filters disallowed thread context while applying %s quote visibility",
+    async (contextVisibility) => {
+      const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+        client: {
+          getEvent: async () =>
+            createMatrixTextMessageEvent({
+              eventId: "$thread-root",
+              sender: "@mallory:example.org",
+              body: "Malicious root topic",
+            }),
+        },
+        isDirectMessage: false,
+        cfg: {
+          channels: {
+            matrix: {
+              contextVisibility,
+              groupAllowFrom: ["@alice:example.org"],
+            },
           },
         },
-      },
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["@alice:example.org"],
-      roomsConfig: { "*": {} },
-      getMemberDisplayName: async (_roomId, userId) =>
-        userId === "@alice:example.org" ? "Alice" : "Mallory",
-    });
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["@alice:example.org"],
+        roomsConfig: { "*": {} },
+        getMemberDisplayName: async (_roomId, userId) =>
+          userId === "@alice:example.org" ? "Alice" : "Mallory",
+      });
 
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$reply1",
-        sender: "@alice:example.org",
-        body: "@room follow up",
-        relatesTo: {
-          rel_type: "m.thread",
-          event_id: "$thread-root",
-          "m.in_reply_to": { event_id: "$thread-root" },
-        },
-        mentions: { room: true },
-      }),
-    );
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$reply1",
+          sender: "@alice:example.org",
+          body: "@room follow up",
+          relatesTo: {
+            rel_type: "m.thread",
+            event_id: "$thread-root",
+            "m.in_reply_to": { event_id: "$thread-root" },
+          },
+          mentions: { room: true },
+        }),
+      );
 
-    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
-    expect(finalized.ThreadStarterBody).toBeUndefined();
-    expect(finalized.ReplyToBody).toBeUndefined();
-    expect(finalized.ReplyToSender).toBeUndefined();
-  });
+      const finalized = latestFinalizedReplyContext(finalizeInboundContext);
+      expect(finalized.ThreadStarterBody).toBeUndefined();
+      expect(finalized.ReplyToBody).toBe(
+        contextVisibility === "allowlist_quote" ? "Malicious root topic" : undefined,
+      );
+      expect(finalized.ReplyToSender).toBe(
+        contextVisibility === "allowlist_quote" ? "Mallory" : undefined,
+      );
+    },
+  );
 
   it("drops quoted reply context fetched from non-allowlisted room senders", async () => {
     const { handler, finalizeInboundContext } = createQuotedReplyVisibilityHarness("allowlist");

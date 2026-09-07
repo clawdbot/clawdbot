@@ -423,6 +423,26 @@ describe("WhatsApp approval reactions", () => {
     ).resolves.toBeNull();
   });
 
+  it("retains the target and propagates transient failures for durable replay", async () => {
+    registerExecApprovalTarget({ remoteJid: "15551230000@s.whatsapp.net" });
+    const gatewayError = new Error("Gateway 503 Service Unavailable");
+    resolverMocks.resolveWhatsAppApproval.mockRejectedValueOnce(gatewayError);
+    const reaction = {
+      cfg: approvalConfig(["+15551230000"]),
+      accountId: "default",
+      msg: buildReactionMessage({ remoteJid: "15551230000@s.whatsapp.net" }),
+      resolveInboundJid: async () => "+15551230000",
+    };
+
+    await expect(maybeResolveWhatsAppApprovalReaction(reaction)).rejects.toBe(gatewayError);
+    await expect(maybeResolveWhatsAppApprovalReaction(reaction)).resolves.toBe(true);
+    expect(resolverMocks.resolveWhatsAppApproval).toHaveBeenCalledTimes(2);
+    expect(resolverMocks.resolveWhatsAppApproval.mock.calls[1]).toEqual(
+      resolverMocks.resolveWhatsAppApproval.mock.calls[0],
+    );
+    await expect(maybeResolveWhatsAppApprovalReaction(reaction)).resolves.toBe(false);
+  });
+
   it("does not attribute a peer DM fromMe reaction to the peer", async () => {
     registerWhatsAppApprovalReactionTarget({
       accountId: "default",

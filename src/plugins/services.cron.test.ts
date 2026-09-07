@@ -110,7 +110,7 @@ describe("plugin service scheduler ownership", () => {
     ]);
   });
 
-  it.each(["service stop", "scheduler replacement"] as const)(
+  it.each(["service stop", "service reload", "scheduler replacement"] as const)(
     "rejects reads and writes queued before %s without changing stored rows",
     async (retirement) => {
       const original = await createScheduler();
@@ -142,6 +142,8 @@ describe("plugin service scheduler ownership", () => {
       try {
         if (retirement === "service stop") {
           await handle.stop();
+        } else if (retirement === "service reload") {
+          await handle.reload({}, new Set(["maintenance"]));
         } else {
           current = replacement.cron;
           expect(context.getCron?.()).not.toBe(service);

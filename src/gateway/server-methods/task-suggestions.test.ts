@@ -441,28 +441,6 @@ describe("task suggestion gateway methods", () => {
     expect(createSession).toHaveBeenCalledTimes(1);
   });
 
-  it("starts local acceptance in the suggestion cwd without a worktree", async () => {
-    const taskId = await createSourceSuggestion();
-    const createSession = vi
-      .spyOn(sessionCreateHandlers, "sessions.create")
-      .mockImplementation(async ({ params, respond }) => {
-        expect(params).toMatchObject({
-          agentId: "main",
-          parentSessionKey: SOURCE_SESSION_KEY,
-          label: "Fix the source session",
-          task: "Apply the focused fix in this session.",
-          cwd: GIT_CWD,
-        });
-        expect(params).not.toHaveProperty("worktree");
-        respond(true, { key: (params as { key: string }).key, runStarted: true }, undefined);
-      });
-
-    const accepted = await call("taskSuggestions.accept", { taskId, mode: "local" });
-
-    expect(accepted.response?.[0]).toBe(true);
-    expect(createSession).toHaveBeenCalledTimes(1);
-  });
-
   it("rolls back a local session when its initial task does not start", async () => {
     const taskId = await createSourceSuggestion();
     let sessionKey = "";
@@ -667,7 +645,7 @@ describe("task suggestion gateway methods", () => {
       expect(accepted.response?.[0]).toBe(false);
       expect(accepted.response?.[2]).toMatchObject({
         code: "INVALID_REQUEST",
-        message: "source session no longer exists; start it in a worktree instead",
+        message: "source session no longer exists; start it in a new session instead",
       });
       expect(deleteSession).not.toHaveBeenCalled();
       expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
@@ -839,19 +817,19 @@ describe("task suggestion gateway methods", () => {
     expect(listed.response?.[1]).toEqual({ suggestions: [] });
   });
 
-  it.each([
-    ["relative/repo", "task suggestion cwd must be absolute"],
-    ["/not-a-git-checkout", "task suggestion cwd must be inside a git checkout"],
-  ])("rejects an invalid cwd %s before recording or broadcasting", async (cwd, message) => {
+  it("rejects a relative cwd before recording or broadcasting", async () => {
     const result = await call("taskSuggestions.create", {
       title: "Add coverage",
       prompt: "Add the missing regression test.",
       tldr: "The edge case is untested.",
-      cwd,
+      cwd: "relative/folder",
       sessionKey: "agent:main:main",
     });
     expect(result.response?.[0]).toBe(false);
-    expect(result.response?.[2]).toMatchObject({ code: "INVALID_REQUEST", message });
+    expect(result.response?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "task suggestion cwd must be absolute",
+    });
     expect(result.broadcast).not.toHaveBeenCalled();
   });
 

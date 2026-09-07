@@ -3,7 +3,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatMatrixMessageText, resolveBundledMatrixReplacementContent } from "../media-text.js";
+import { formatMatrixMessageText, resolveMatrixReplacementContent } from "../media-text.js";
 import {
   formatPollAsText,
   isPollStartType,
@@ -20,13 +20,11 @@ export function summarizeMatrixMessageContextEvent(event: MatrixRawEvent): strin
     }
   }
 
-  // Thread roots do not reject redacted originals before projection; never
-  // restore their content from a replacement bundled by the homeserver.
-  const content = (
-    event.unsigned?.redacted_because
-      ? event.content
-      : (resolveBundledMatrixReplacementContent(event) ?? event.content)
-  ) as { body?: unknown; filename?: unknown; msgtype?: unknown };
+  const content = (resolveMatrixReplacementContent(event) ?? event.content) as {
+    body?: unknown;
+    filename?: unknown;
+    msgtype?: unknown;
+  };
   return formatMatrixMessageText({
     body: readStringValue(content.body),
     filename: readStringValue(content.filename),

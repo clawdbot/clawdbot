@@ -32,6 +32,7 @@ import type {
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
+  PluginManifestNativeSessionCatalogSetup,
 } from "./manifest-types.js";
 import type {
   PluginManifestContracts,
@@ -126,6 +127,8 @@ type PluginCliRegistration = {
 
 /** Gateway HTTP route registered by a plugin runtime. */
 export type PluginHttpRouteRegistration = {
+  /** Retired ingress awaiting a lifecycle replacement; responds with Retry-After. */
+  handoff?: true;
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
@@ -463,6 +466,7 @@ type PluginConversationBindingResolvedHandlerRegistration = {
 
 export type PluginRecord = {
   id: string;
+  nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
   name: string;
   packageVersion?: string;
   version?: string;
@@ -478,6 +482,7 @@ export type PluginRecord = {
   origin: PluginOrigin;
   workspaceDir?: string;
   trustedOfficialInstall?: boolean;
+  trust?: import("./plugin-trust.js").PluginTrust;
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;
@@ -604,6 +609,8 @@ export type PluginRegistryParams = {
   coreGatewayHandlers?: GatewayRequestHandlers;
   coreGatewayMethodNames?: readonly string[];
   runtime: PluginRuntime;
+  /** Synchronous factory binding supplied by loaders or direct registry composition roots. */
+  resolveCapabilityCatalogContext?: () => import("./capability-catalog-context.types.js").PluginCapabilityCatalogContext;
   /** Process-owner policy for registering catalogs that may fall back to HOME. */
   allowProcessHomeSessionCatalogs?: boolean;
   hostServices?: {

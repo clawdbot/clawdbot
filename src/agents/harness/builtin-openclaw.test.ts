@@ -6,7 +6,7 @@ const runEmbeddedAttempt = vi.hoisted(() => vi.fn());
 const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
 
 vi.mock("../embedded-agent-runner/run/attempt.js", () => ({ runEmbeddedAttempt }));
-vi.mock("../simple-completion-runtime.js", () => ({ completeWithPreparedSimpleCompletionModel }));
+vi.mock("../simple-completion-execution.js", () => ({ completeWithPreparedSimpleCompletionModel }));
 
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 

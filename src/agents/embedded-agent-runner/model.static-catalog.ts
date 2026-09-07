@@ -28,6 +28,8 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildInlineProviderModels, type InlineModelEntry } from "./model.inline-provider.js";
 import type { BundledStaticCatalogState } from "./model.static-catalog.types.js";
@@ -437,9 +439,11 @@ async function loadBundledProviderStaticCatalogModels(params: {
   return modelsByProvider;
 }
 
-/** Loads all enabled bundled provider static-catalog rows without live discovery or writes. */
+/** Reads static rows from discovery entries and captured owners without activating runtimes. */
 export async function loadBundledProviderStaticCatalogContextModels(
-  params: BundledProviderStaticCatalogResolverParams = {},
+  params: BundledProviderStaticCatalogResolverParams & {
+    registeredProviders?: Readonly<PluginRegistry["providers"]>;
+  } = {},
 ): Promise<ProviderRuntimeModel[]> {
   const env = params.env ?? process.env;
   const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot({
@@ -448,7 +452,19 @@ export async function loadBundledProviderStaticCatalogContextModels(
     ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     workspaceDir: params.workspaceDir,
   });
-  const discoveryEntryPluginIds = new Set(
+  const preparedStaticProviderCatalog = {
+    providers: dedupeByKey(
+      [
+        ...(params.preparedStaticProviderCatalog?.providers ?? []),
+        ...(params.registeredProviders ?? []).map(({ pluginId, provider }) =>
+          Object.assign({}, provider, { pluginId }),
+        ),
+      ],
+      (provider) => `${provider.pluginId}\0${provider.id}`,
+    ),
+    entries: params.preparedStaticProviderCatalog?.entries ?? [],
+  };
+  const staticCatalogPluginIds = new Set(
     (
       metadataSnapshot?.manifestRegistry?.plugins ??
       loadPluginManifestRegistryCore({
@@ -460,6 +476,11 @@ export async function loadBundledProviderStaticCatalogContextModels(
       plugin.origin === "bundled" && plugin.providerDiscoverySource ? [plugin.id] : [],
     ),
   );
+  for (const provider of preparedStaticProviderCatalog.providers) {
+    if (provider.pluginId && provider.staticCatalog) {
+      staticCatalogPluginIds.add(provider.pluginId);
+    }
+  }
   const providerScopedPluginIds = params.providerIds?.flatMap((provider) =>
     resolveBundledProviderStaticCatalogPluginIds({
       provider,
@@ -479,7 +500,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
         })
       : providerScopedPluginIds;
   const pluginIds = [...new Set(candidatePluginIds)]
-    .filter((pluginId) => discoveryEntryPluginIds.has(pluginId))
+    .filter((pluginId) => staticCatalogPluginIds.has(pluginId))
     .toSorted((left, right) => left.localeCompare(right));
   if (pluginIds.length === 0) {
     return [];
@@ -492,9 +513,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
           cfg: params.cfg,
           workspaceDir: params.workspaceDir,
           env,
-          ...(params.preparedStaticProviderCatalog
-            ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
-            : {}),
+          preparedStaticProviderCatalog,
           ...(metadataSnapshot ? { providerMetadataOwners: metadataSnapshot.owners } : {}),
           ...(metadataSnapshot ? { pluginMetadataSnapshot: metadataSnapshot } : {}),
         }),

@@ -280,10 +280,13 @@ describe("archive utils", () => {
           lstatSpy.mockRestore();
         }
 
-        // The raced alias points at attacker-supplied archive bytes. Cleanup unlinks the owned
-        // destination; truncating the inode would instead mutate a path outside that boundary.
+        // The raced alias points at attacker-supplied archive bytes. The rejected
+        // extraction preserves the published destination rather than unlinking an
+        // entry it can no longer prove it owns; truncating the inode would instead
+        // mutate a path outside that boundary.
         await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("owned");
-        await expectPathMissing(extractedPath);
+        await expect(fs.readFile(extractedPath, "utf8")).resolves.toBe("owned");
+        expect((await fs.stat(extractedPath)).nlink).toBe(2);
       });
     },
   );
@@ -295,14 +298,18 @@ describe("archive utils", () => {
       await fs.writeFile(path.join(workDir, "outside.txt"), "pwnd");
 
       await tar.c({ cwd: insideDir, file: archivePath }, ["../outside.txt"]);
+      await fs.writeFile(path.join(workDir, "outside.txt"), "outside sentinel");
 
-      await expect(
+      await expectRejectedCode(
         extractArchive({
           archivePath,
           destDir: extractDir,
           timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
         }),
-      ).rejects.toThrow(/escapes destination/i);
+        "entry-path",
+      );
+      expect(await fs.readdir(extractDir)).toEqual([]);
+      expect(await fs.readFile(path.join(workDir, "outside.txt"), "utf8")).toBe("outside sentinel");
     });
   });
 
@@ -402,14 +409,18 @@ describe("archive utils", () => {
       await fs.mkdir(inputDir, { recursive: true });
       await fs.writeFile(outsideFile, "owned");
       await tar.c({ file: archivePath, preservePaths: true }, [outsideFile]);
+      await fs.writeFile(outsideFile, "outside sentinel");
 
-      await expect(
+      await expectRejectedCode(
         extractArchive({
           archivePath,
           destDir: extractDir,
           timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
         }),
-      ).rejects.toThrow(/absolute|drive path|escapes destination/i);
+        "entry-path",
+      );
+      expect(await fs.readdir(extractDir)).toEqual([]);
+      expect(await fs.readFile(outsideFile, "utf8")).toBe("outside sentinel");
     });
   });
 });

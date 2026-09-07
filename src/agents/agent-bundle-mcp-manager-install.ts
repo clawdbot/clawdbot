@@ -1,11 +1,16 @@
-import type { SessionToolOverrides } from "../config/sessions/types.js";
 /** Session MCP runtime manager install path: static get-or-create + requester resolve/install. */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { SessionMcpRuntimeManagerLifecycle } from "./agent-bundle-mcp-manager-lifecycle.js";
+import type {
+  SessionMcpConfigPublication,
+  SessionMcpRuntimeManagerLifecycle,
+} from "./agent-bundle-mcp-manager-lifecycle.js";
 import { createRequesterMcpConnect } from "./agent-bundle-mcp-requester-connect.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
+import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
+import {
+  resolveSessionMcpRuntimeIdleTtlMs,
+  type CreateSessionMcpRuntime,
+} from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   RequesterMcpConnect,
   SessionMcpRequesterScope,
@@ -13,63 +18,38 @@ import type {
 } from "./agent-bundle-mcp-types.js";
 import { allowMcpAppModelContext, revokeMcpAppModelContext } from "./mcp-app-model-context.js";
 import {
+  MCP_CONNECTION_REVALIDATE_MS,
   hashMcpResolvedConnections,
-  resolveMcpConnectionRevalidateMs,
   resolveRequesterScopedMcpConnections,
   type McpServerConnectionResolved,
 } from "./mcp-connection-resolver.js";
 
-type RuntimeEntryParams = {
+type RuntimeEntryParams = Omit<Parameters<CreateSessionMcpRuntime>[0], "configFingerprint"> & {
+  configReloadAtAdmission?: SessionMcpConfigPublication;
   runtimeKey: string;
-  sessionId: string;
-  sessionKey?: string;
-  workspaceDir: string;
-  agentDir?: string;
-  cfg?: OpenClawConfig;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  includeServerNames?: ReadonlySet<string>;
-  excludeServerNames?: ReadonlySet<string>;
-  safeServerNamesByServer?: ReadonlyMap<string, string>;
-  connectionOverrides?: ReadonlyMap<string, McpServerConnectionResolved>;
-  redactConnectionServerNames?: ReadonlySet<string>;
-  requesterScope?: SessionMcpRequesterScope;
-  requesterConnect?: RequesterMcpConnect;
-  configFingerprint?: string;
-  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 };
 
-type SessionMcpRuntimeManagerInstall = {
-  getOrCreateRuntimeEntry: (params: RuntimeEntryParams) => Promise<SessionMcpRuntime>;
-  resolveAndInstallRequesterRuntime: (params: {
-    runtimeKey: string;
-    sessionId: string;
-    sessionKey?: string;
-    workspaceDir: string;
-    agentDir?: string;
-    cfg?: OpenClawConfig;
-    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    oauthRequesterNameSet: ReadonlySet<string>;
-    mcpServers: Record<string, BundleMcpServerConfig>;
-    resolverRequesterServerNames: readonly string[];
-    safeServerNamesByServer: ReadonlyMap<string, string>;
-    fullScopedFingerprint: string;
-    requesterSenderId: string;
-    agentAccountId?: string | null;
-    messageChannel?: string | null;
-    requesterScope: SessionMcpRequesterScope;
-    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-  }) => Promise<SessionMcpRuntime | undefined>;
+type RequesterRuntimeParams = RuntimeEntryParams & {
+  oauthRequesterNameSet: ReadonlySet<string>;
+  mcpServers: Record<string, BundleMcpServerConfig>;
+  resolverRequesterServerNames: readonly string[];
+  safeServerNamesByServer: ReadonlyMap<string, string>;
+  fullScopedFingerprint: string;
+  requesterSenderId: string;
+  agentAccountId?: string | null;
+  messageChannel?: string | null;
+  requesterScope: SessionMcpRequesterScope;
 };
 
-const matchesStaticReuse = (params: {
-  workspaceDir: string;
-  agentDir?: string;
-  configFingerprint: string;
-  candidate: { workspaceDir: string; agentDir?: string; configFingerprint: string };
-}): boolean =>
-  params.candidate.workspaceDir === params.workspaceDir &&
-  params.candidate.agentDir === params.agentDir &&
-  params.candidate.configFingerprint === params.configFingerprint;
+const matchesRuntime = (
+  runtime: SessionMcpRuntime,
+  params: Pick<RuntimeEntryParams, "workspaceDir" | "agentDir">,
+  fingerprint: string,
+): boolean =>
+  sessionMcpRuntimeOwners.get(runtime)?.isCurrent() !== false &&
+  runtime.workspaceDir === params.workspaceDir &&
+  runtime.agentDir === params.agentDir &&
+  runtime.configFingerprint === fingerprint;
 
 function requesterRuntimeFingerprint(
   configFingerprint: string,
@@ -82,9 +62,15 @@ function requesterRuntimeFingerprint(
 
 export function createSessionMcpRuntimeManagerInstall(
   lifecycle: SessionMcpRuntimeManagerLifecycle,
-): SessionMcpRuntimeManagerInstall {
+) {
   const { store } = lifecycle;
-  const reconcileReusableRetirement = (sessionId: string, runtime: SessionMcpRuntime) => {
+  const reconcileReusableRetirement = (params: RuntimeEntryParams, runtime: SessionMcpRuntime) => {
+    const { sessionId } = params;
+    const slot = store.runtimeSlots.get(runtime);
+    if (slot) {
+      slot.idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(store.configReload?.cfg ?? params.cfg);
+    }
+    lifecycle.ensureIdleSweepTimer();
     if (store.requiredRetirementSessionIds.has(sessionId)) {
       // Reset/delete retirement deliberately survives late creation and reuse;
       // otherwise a racing run could escape the required session teardown.
@@ -96,149 +82,96 @@ export function createSessionMcpRuntimeManagerInstall(
     allowMcpAppModelContext(runtime);
   };
 
-  /** Static/session runtime get-or-create (createInFlight dedup for bare keys only). */
+  /** Install under the runtime-key queue shared by acquisition and disposal. */
   const getOrCreateRuntimeEntry = async (
     params: RuntimeEntryParams,
   ): Promise<SessionMcpRuntime> => {
-    const nextFingerprint =
-      params.configFingerprint ??
-      loadSessionMcpConfig({
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        logDiagnostics: false,
-        manifestRegistry: params.manifestRegistry,
-        includeServerNames: params.includeServerNames,
-        excludeServerNames: params.excludeServerNames,
-        redactConnectionServerNames: params.redactConnectionServerNames,
-        safeServerNamesByServer: params.safeServerNamesByServer,
-        toolOverrides: params.toolOverrides,
-      }).fingerprint;
-    const { runtimeKey, ...runtimeParams } = params;
-    const identity = {
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      configFingerprint: nextFingerprint,
-    };
-    const inFlight = store.createInFlight.get(runtimeKey);
-    if (inFlight && matchesStaticReuse({ ...identity, candidate: inFlight })) {
-      return inFlight.promise;
-    }
+    const config = loadSessionMcpConfig({ ...params, logDiagnostics: false });
+    const nextFingerprint = requesterRuntimeFingerprint(
+      config.fingerprint,
+      params.requesterConnect,
+    );
+    const hasServers = Object.keys(config.loaded.mcpServers).length > 0;
+    const { runtimeKey, configReloadAtAdmission, ...runtimeParams } = params;
     const existing = store.runtimesBySessionId.get(runtimeKey);
-    if (!inFlight && existing && matchesStaticReuse({ ...identity, candidate: existing })) {
-      reconcileReusableRetirement(params.sessionId, existing);
+    const connectionMatches =
+      !params.connectionOverrides ||
+      store.connectionMetaByRuntimeKey.get(runtimeKey)?.connectionHash ===
+        hashMcpResolvedConnections(params.connectionOverrides);
+    if (existing && connectionMatches && matchesRuntime(existing, params, nextFingerprint)) {
+      reconcileReusableRetirement(params, existing);
       existing.markUsed();
       return existing;
     }
-    store.runtimesBySessionId.delete(runtimeKey);
+    const slot = lifecycle.reserveRuntimeSlot(existing, hasServers);
     store.connectionMetaByRuntimeKey.delete(runtimeKey);
-    const isCurrent = (): boolean => store.createInFlight.get(runtimeKey)?.promise === created;
-    const superseded = () =>
-      new Error(`MCP runtime creation superseded for session ${params.sessionId}`);
-    // Claim replacement before awaiting cleanup or imports. Its producer owns late
-    // disposal; an obsolete producer must never publish or clear its successor.
-    const created: Promise<SessionMcpRuntime> = Promise.resolve().then(async () => {
-      await existing?.dispose();
-      await inFlight?.promise.catch(() => undefined);
-      if (!isCurrent()) {
-        throw superseded();
+    let runtime: SessionMcpRuntime | undefined;
+    let previousCleanup: Promise<void> | undefined;
+    try {
+      runtime =
+        existing &&
+        sessionMcpRuntimeOwners.get(existing)?.replace({
+          ...runtimeParams,
+          configFingerprint: nextFingerprint,
+        });
+      // Transfer ownership before cleanup yields so publication can immediately
+      // revoke changed servers, including calls still using the previous facade.
+      store.runtimesBySessionId.delete(runtimeKey);
+      if (runtime) {
+        store.runtimesBySessionId.set(runtimeKey, runtime);
       }
-      const runtime = await store.createRuntime({
+      if (existing) {
+        previousCleanup = lifecycle.disposeRuntime(existing, false);
+        await previousCleanup;
+      }
+      runtime ??= await store.createRuntime({
         ...runtimeParams,
         configFingerprint: nextFingerprint,
       });
-      if (!isCurrent()) {
-        await runtime.dispose();
-        throw superseded();
-      }
-      reconcileReusableRetirement(params.sessionId, runtime);
-      runtime.markUsed();
+      store.runtimeSlots.set(runtime, slot);
       store.runtimesBySessionId.set(runtimeKey, runtime);
-      return runtime;
-    });
-    store.createInFlight.set(runtimeKey, { ...identity, promise: created });
-    try {
-      return await created;
-    } finally {
-      if (isCurrent()) {
-        store.createInFlight.delete(runtimeKey);
+      let publication = configReloadAtAdmission;
+      // Keep explicit run snapshots, but fence any publish crossed by acquisition.
+      // Plugin epochs survive subsequent ordinary config publishes.
+      while (store.configReload && store.configReload !== publication) {
+        const next = store.configReload;
+        await sessionMcpRuntimeOwners.get(runtime)?.reload({
+          ...next,
+          reloadPlugins: next.pluginGeneration !== (publication?.pluginGeneration ?? 0),
+        });
+        publication = next;
       }
+      if (!(sessionMcpRuntimeOwners.get(runtime)?.hasServers() ?? hasServers)) {
+        await lifecycle.releaseEmptyRuntimeSlot(runtimeKey, runtime);
+      }
+      reconcileReusableRetirement(params, runtime);
+      runtime.markUsed();
+      return runtime;
+    } catch (error) {
+      store.runtimesBySessionId.delete(runtimeKey);
+      // A transferred slot covers both owners until every cleanup is confirmed.
+      const cleanup = await Promise.allSettled([
+        previousCleanup ?? (existing && lifecycle.disposeRuntime(existing, false)),
+        runtime && lifecycle.disposeRuntime(runtime, false),
+      ]);
+      const failed = cleanup.find((result) => result.status === "rejected");
+      if (failed) {
+        throw failed.reason;
+      }
+      store.liveRuntimeSlots.delete(slot);
+      lifecycle.ensureIdleSweepTimer();
+      throw error;
     }
   };
 
   /** Install or reuse one requester runtime. Must run under its runtime-key lock. */
-  const installRequesterRuntime = async (params: {
-    runtimeKey: string;
-    sessionId: string;
-    sessionKey?: string;
-    workspaceDir: string;
-    agentDir?: string;
-    cfg?: OpenClawConfig;
-    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    safeServerNamesByServer: ReadonlyMap<string, string>;
-    includeServerNames: ReadonlySet<string>;
-    requesterConnect?: RequesterMcpConnect;
-    connectionOverrides: Map<string, McpServerConnectionResolved>;
-    redactConnectionServerNames: ReadonlySet<string>;
-    requesterScope: SessionMcpRequesterScope;
-    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-  }): Promise<SessionMcpRuntime> => {
-    const { fingerprint: resolvedFingerprint } = loadSessionMcpConfig({
-      workspaceDir: params.workspaceDir,
-      cfg: params.cfg,
-      logDiagnostics: false,
-      manifestRegistry: params.manifestRegistry,
-      includeServerNames: params.includeServerNames,
-      redactConnectionServerNames: params.redactConnectionServerNames,
-      safeServerNamesByServer: params.safeServerNamesByServer,
-      toolOverrides: params.toolOverrides,
-    });
-    const runtimeFingerprint = requesterRuntimeFingerprint(
-      resolvedFingerprint,
-      params.requesterConnect,
-    );
+  const installRequesterRuntime = async (
+    params: RuntimeEntryParams & {
+      connectionOverrides: Map<string, McpServerConnectionResolved>;
+    },
+  ): Promise<SessionMcpRuntime> => {
     const connectionHash = hashMcpResolvedConnections(params.connectionOverrides);
-    const existing = store.runtimesBySessionId.get(params.runtimeKey);
-    const meta = store.connectionMetaByRuntimeKey.get(params.runtimeKey);
-    if (
-      existing &&
-      meta?.connectionHash === connectionHash &&
-      matchesStaticReuse({
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        configFingerprint: runtimeFingerprint,
-        candidate: existing,
-      })
-    ) {
-      reconcileReusableRetirement(params.sessionId, existing);
-      existing.markUsed();
-      store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
-        connectionHash,
-        resolvedAt: store.now(),
-      });
-      return existing;
-    }
-    if (existing) {
-      store.runtimesBySessionId.delete(params.runtimeKey);
-      store.connectionMetaByRuntimeKey.delete(params.runtimeKey);
-      await existing.dispose();
-    }
-    const runtime = await getOrCreateRuntimeEntry({
-      runtimeKey: params.runtimeKey,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      cfg: params.cfg,
-      manifestRegistry: params.manifestRegistry,
-      includeServerNames: params.includeServerNames,
-      safeServerNamesByServer: params.safeServerNamesByServer,
-      connectionOverrides: params.connectionOverrides,
-      redactConnectionServerNames: params.redactConnectionServerNames,
-      requesterScope: params.requesterScope,
-      requesterConnect: params.requesterConnect,
-      configFingerprint: runtimeFingerprint,
-      toolOverrides: params.toolOverrides,
-    });
+    const runtime = await getOrCreateRuntimeEntry(params);
     store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
       connectionHash,
       resolvedAt: store.now(),
@@ -246,34 +179,13 @@ export function createSessionMcpRuntimeManagerInstall(
     return runtime;
   };
 
-  /** Revoke cached scoped runtime (empty re-resolution). Auth boundary: leases do not block. */
-  const revokeRequesterRuntime = async (runtimeKey: string): Promise<void> => {
-    await lifecycle.disposeRuntimeKeyNow(runtimeKey);
-  };
-
   /**
    * Full requester section for one runtimeKey: reuse / resolve / install / revoke.
    * Always invoked under runExclusiveOnRuntimeKey.
    */
-  const resolveAndInstallRequesterRuntime = async (params: {
-    runtimeKey: string;
-    sessionId: string;
-    sessionKey?: string;
-    workspaceDir: string;
-    agentDir?: string;
-    cfg?: OpenClawConfig;
-    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    oauthRequesterNameSet: ReadonlySet<string>;
-    mcpServers: Record<string, BundleMcpServerConfig>;
-    resolverRequesterServerNames: readonly string[];
-    safeServerNamesByServer: ReadonlyMap<string, string>;
-    fullScopedFingerprint: string;
-    requesterSenderId: string;
-    agentAccountId?: string | null;
-    messageChannel?: string | null;
-    requesterScope: SessionMcpRequesterScope;
-    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-  }): Promise<SessionMcpRuntime | undefined> => {
+  const resolveAndInstallRequesterRuntime = async (
+    params: RequesterRuntimeParams,
+  ): Promise<SessionMcpRuntime | undefined> => {
     const requesterConnect = await createRequesterMcpConnect({
       serverNames: params.oauthRequesterNameSet,
       mcpServers: params.mcpServers,
@@ -287,14 +199,10 @@ export function createSessionMcpRuntimeManagerInstall(
       ...params.resolverRequesterServerNames,
     ]);
     const { fingerprint: expectedLiveFingerprint } = loadSessionMcpConfig({
-      workspaceDir: params.workspaceDir,
-      cfg: params.cfg,
+      ...params,
       logDiagnostics: false,
-      manifestRegistry: params.manifestRegistry,
       includeServerNames: expectedLiveNameSet,
       redactConnectionServerNames: new Set(params.resolverRequesterServerNames),
-      safeServerNamesByServer: params.safeServerNamesByServer,
-      toolOverrides: params.toolOverrides,
     });
     const scopedFingerprint = requesterRuntimeFingerprint(
       expectedLiveFingerprint,
@@ -302,23 +210,13 @@ export function createSessionMcpRuntimeManagerInstall(
     );
     const existing = store.runtimesBySessionId.get(params.runtimeKey);
     const meta = store.connectionMetaByRuntimeKey.get(params.runtimeKey);
-    const revalidateMs = resolveMcpConnectionRevalidateMs();
     // Full-set + within revalidation window: skip resolver I/O.
     // Revocation/rotation takes effect within MCP_CONNECTION_REVALIDATE_MS even for
     // continuously active requesters (markUsed does not extend this clock alone).
     const withinRevalidateWindow =
-      meta !== undefined && store.now() - meta.resolvedAt < revalidateMs;
-    if (
-      withinRevalidateWindow &&
-      existing &&
-      matchesStaticReuse({
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        configFingerprint: scopedFingerprint,
-        candidate: existing,
-      })
-    ) {
-      reconcileReusableRetirement(params.sessionId, existing);
+      meta !== undefined && store.now() - meta.resolvedAt < MCP_CONNECTION_REVALIDATE_MS;
+    if (withinRevalidateWindow && existing && matchesRuntime(existing, params, scopedFingerprint)) {
+      reconcileReusableRetirement(params, existing);
       existing.markUsed();
       return existing;
     }
@@ -336,16 +234,14 @@ export function createSessionMcpRuntimeManagerInstall(
     if (activeNameSet.size === 0 && !requesterConnect) {
       // Empty re-resolution revokes cached scoped credentials.
       // Leases do not block: this is an authorization boundary.
-      if (
-        store.runtimesBySessionId.has(params.runtimeKey) ||
-        store.createInFlight.has(params.runtimeKey)
-      ) {
-        await revokeRequesterRuntime(params.runtimeKey);
+      if (store.runtimesBySessionId.has(params.runtimeKey)) {
+        await lifecycle.disposeRuntimeKeyNow(params.runtimeKey);
       }
       return undefined;
     }
     return await installRequesterRuntime({
       runtimeKey: params.runtimeKey,
+      configReloadAtAdmission: params.configReloadAtAdmission,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       workspaceDir: params.workspaceDir,

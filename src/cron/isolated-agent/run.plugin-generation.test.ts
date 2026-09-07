@@ -1,14 +1,19 @@
 // Proves isolated cron/hook runs carry the published Gateway plugin generation
 // into embedded execution instead of rebuilding metadata per run (#125596 family).
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   getPreparedModelRuntimeBorrowedSnapshot,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -19,6 +24,8 @@ import {
   loadPublishedReplyDispatchRuntimeMock,
   loadModelCatalogOwnerMock,
   resolveAgentConfigMock,
+  makeCronSession,
+  resolveCronSessionMock,
 } from "./run.test-harness.js";
 
 const preparedRuntimeMocks = {
@@ -31,6 +38,7 @@ const { PreparedModelRuntimeOwnerNotPublishedError } = await vi.importActual<
 >("../../agents/prepared-model-runtime.errors.js");
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -141,6 +149,68 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     expect(embeddedRunGeneration).toBeDefined();
   });
 
+  it("keeps the execution owner's model pricing through finalization", async () => {
+    const config = {
+      models: {
+        providers: {
+          fixture: {
+            baseUrl: "https://fixture.invalid/v1",
+            models: [
+              {
+                id: "alias",
+                name: "Alias",
+                cost: { input: 3, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const snapshot = (model: string) =>
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "fixture",
+            providers: ["fixture"],
+            modelIdNormalization: { providers: { fixture: { aliases: { alias: model } } } },
+          },
+        ],
+      });
+    const selected = snapshot("selected");
+    const ambient = snapshot("other");
+    const cronSession = makeCronSession();
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    acquirePreparedModelRuntimeMock.mockImplementation(async (input) => ({
+      snapshot: {
+        ...input,
+        metadataSnapshot: selected,
+        pluginRegistry: createEmptyPluginRegistry(),
+      },
+      pluginGeneration: {
+        pluginMetadataSnapshot: selected,
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
+      },
+      release: vi.fn(),
+    }));
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          provider: "fixture",
+          model: "selected",
+          usage: { input: 1_000_000, output: 0 },
+        },
+      },
+    });
+    const result = await withPluginRuntimeGenerationScope({ metadataSnapshot: ambient }, () =>
+      runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ cfg: config })),
+    );
+    expect(result.status).toBe("ok");
+    expect(cronSession.sessionEntry.estimatedCostUsd).toBe(3);
+  });
+
   it("rejects preparation when the published owner is unavailable", async () => {
     preparedRuntimeMocks.loadDispatchRuntime.mockRejectedValue(
       new PreparedModelRuntimeOwnerNotPublishedError("owner not published"),
@@ -150,6 +220,56 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       "owner not published",
     );
     expect(preparedRuntimeMocks.acquireRuntime).not.toHaveBeenCalled();
+  });
+
+  it("estimates token-only usage from the selected agent's local model prices", async () => {
+    const root = tempDirs.make("cron-owner-pricing-");
+    const agentDir = path.join(root, "worker");
+    const mainDir = path.join(root, "main");
+    for (const [dir, input] of [
+      [agentDir, 3],
+      [mainDir, 1],
+    ] as const) {
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "models.json"),
+        JSON.stringify({
+          providers: {
+            fixture: {
+              models: [{ id: "priced", cost: { input, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+            },
+          },
+        }),
+      );
+    }
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: { main: { agentDir: mainDir }, worker: { agentDir } },
+      },
+    };
+    loadModelCatalogOwnerMock.mockResolvedValue({
+      config,
+      agentId: "worker",
+      agentDir,
+      workspaceDir: root,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      modelCatalog: { entries: [], routeVariants: [] },
+    });
+    const cronSession = makeCronSession();
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: { provider: "fixture", model: "priced", usage: { input: 1_000_000, output: 0 } },
+      },
+    });
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({ cfg: config, agentId: "worker" }),
+    );
+    expect(result.status).toBe("ok");
+    expect(cronSession.sessionEntry.estimatedCostUsd).toBe(3);
   });
 
   it("releases the prepared lease when continuation initialization fails", async () => {

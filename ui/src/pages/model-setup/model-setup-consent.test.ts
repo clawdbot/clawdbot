@@ -5,10 +5,12 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   candidate,
+  clickCandidate,
   createFirstRunContext,
   detection,
   mountPage,
 } from "./model-setup-first-run.test-support.ts";
+import { MODEL_SETUP_AUTH_START_TIMEOUT_MS } from "./state.ts";
 
 describe("ModelSetupPage activation consent", () => {
   beforeEach(async () => {
@@ -91,6 +93,8 @@ describe("ModelSetupPage activation consent", () => {
         client,
         firstRun: true,
       });
+      expect(request).not.toHaveBeenCalled();
+      await clickCandidate(page, "openai-api-key");
       await waitForFast(() => expect(page.textContent).toContain("Review model setup"));
       expect(context.navigate).not.toHaveBeenCalled();
       const button = (label: string) =>
@@ -115,7 +119,11 @@ describe("ModelSetupPage activation consent", () => {
         if (decision === "decline") {
           expect(answers.at(-1)).toEqual({ stepId: "consent", value: false });
         } else {
-          expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: activeSession });
+          expect(request).toHaveBeenCalledWith(
+            "wizard.cancel",
+            { sessionId: activeSession },
+            { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
+          );
         }
       }
       expect(

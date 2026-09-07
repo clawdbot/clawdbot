@@ -2,10 +2,13 @@
 summary: "Extract text and fallback page images from local document attachments."
 read_when:
   - You are installing, configuring, or auditing the document-extract plugin
-title: "Document Extract plugin"
+title: "Document Extract plugin reference"
 ---
 
-# Document Extract plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Extract text and fallback page images from local document attachments.
 
@@ -16,7 +19,7 @@ Extract text and fallback page images from local document attachments.
 
 ## Surface
 
-contracts: `documentExtractors`
+- Contracts: `documentExtractors`
 
 ## Related docs
 

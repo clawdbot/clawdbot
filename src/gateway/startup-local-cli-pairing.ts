@@ -9,6 +9,7 @@ import {
 } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
+import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 
@@ -60,7 +61,7 @@ export async function ensureStartupLocalCliPairing(): Promise<StartupLocalCliPai
     deviceId: identity.deviceId,
     publicKey,
     displayName: "OpenClaw CLI",
-    platform: process.platform,
+    ...resolveGatewayClientPlatformIdentity(process.platform),
     clientId: GATEWAY_CLIENT_NAMES.CLI,
     clientMode: GATEWAY_CLIENT_MODES.CLI,
     role: "operator",

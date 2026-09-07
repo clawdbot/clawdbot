@@ -27,7 +27,7 @@ import {
   selectSkillLibraryRow,
   projectSkillLibraryEntry,
   requireSkillLibraryEntry,
-  selectSkillLibraryRevision,
+  selectSkillLibraryRevisionMetadata,
   type SkillLibraryAuthority,
 } from "../../skills/library/store.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
@@ -98,7 +98,7 @@ export async function activateLibrarySelection(
             continue;
           }
           const entry = requireSkillLibraryEntry(db, pin.skillId, authority);
-          if (entry.removed || !selectSkillLibraryRevision(db, pin.skillId, pin.revision)) {
+          if (entry.removed || !selectSkillLibraryRevisionMetadata(db, pin.skillId, pin.revision)) {
             throw new SkillLibraryError(
               "CONFLICT",
               "Skill access changed during activation. Refresh the library and retry.",

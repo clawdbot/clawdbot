@@ -19,6 +19,7 @@ import {
   waitForHotReloadFact,
   type HotReloadConnection,
 } from "./gateway-config-hot-reload-fixtures.js";
+import { proveHotReloadIrcAccounts } from "./gateway-config-hot-reload-irc.js";
 import { proveHotReloadChannelPolicy } from "./gateway-config-hot-reload-policy.js";
 
 const CHANNEL = "qa-channel";
@@ -328,6 +329,10 @@ export async function proveHotReloadChannels({
         );
         observations.push({ manuallyResumed: { inboundId: parkedMessage.id, reply: resumed } });
       }
+      const irc = await proveHotReloadIrcAccounts({ repoRoot, outputDir, appendLog });
+      evidence.push(...irc.evidence);
+      failures.push(...irc.failures);
+      observations.push(...irc.observations);
     },
     () => connection?.client.stopAndWait(),
     () => stopQaGatewayFixture(owner, { preserveToDir: path.join(outputDir, "channels-gateway") }),

@@ -14,7 +14,7 @@ import {
   publishChatSessionProjection,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
-import { appendChatDraftText, handleChatDraftChange } from "./input-history.ts";
+import { handleChatDraftChange } from "./input-history.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
@@ -71,30 +71,6 @@ function activeHistory(runId: string): ChatHistoryResult {
   } satisfies ChatHistoryResult;
 }
 
-describe("appendChatDraftText", () => {
-  it("appends an inline command without changing an existing mention", () => {
-    const state = createState({ messages: [] }) as TestState &
-      Parameters<typeof handleChatDraftChange>[0] & {
-        handleChatDraftChange: (
-          next: string,
-          mentions?: readonly { profileId: string; start: number; end: number }[],
-        ) => void;
-      };
-    const mention = { profileId: "alex-profile", start: 7, end: 12 };
-    state.chatMessage = "Review @Alex";
-    state.chatMentions = [mention];
-    const handleDraftChange = vi.fn((next: string, mentions?: ChatState["chatMentions"]) =>
-      handleChatDraftChange(state, next, mentions),
-    );
-    state.handleChatDraftChange = handleDraftChange;
-
-    expect(appendChatDraftText(state, "/dashboard ")).toBe("Review @Alex /dashboard ");
-    expect(state.chatMessage).toBe("Review @Alex /dashboard ");
-    expect(state.chatMentions).toEqual([mention]);
-    expect(handleDraftChange).toHaveBeenCalledWith("Review @Alex /dashboard ", state.chatMentions);
-  });
-});
-
 it.each(["main", "workspace"])(
   "requests the configured default agent for global main alias %s",
   async (sessionKey) => {
@@ -107,7 +83,8 @@ it.each(["main", "workspace"])(
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey,
       agentId: "main",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
   },
 );

@@ -11,7 +11,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../../config/agent-limits.js";
+import {
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  isSubagentSpawnDepthAllowed,
+} from "../../../config/agent-limits.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -182,7 +185,7 @@ function resolveSubagentRoleForDepth(params: {
   if (depth <= 0) {
     return "main";
   }
-  return depth < maxSpawnDepth ? "orchestrator" : "leaf";
+  return isSubagentSpawnDepthAllowed(depth, maxSpawnDepth) ? "orchestrator" : "leaf";
 }
 
 function resolveSubagentControlScopeForRole(role: SubagentSessionRole): SubagentControlScope {
@@ -395,18 +398,10 @@ export function resolveStoredSubagentCapabilities(
   if (!isSubagentEnvelopeSession(normalizedSessionKey, { ...opts, store, entry })) {
     return resolveSubagentCapabilities({ depth, maxSpawnDepth });
   }
-  const storedRole = normalizeSubagentRole(entry?.subagentRole);
-  const storedControlScope = normalizeSubagentControlScope(entry?.subagentControlScope);
-  const fallback = resolveSubagentCapabilities({ depth, maxSpawnDepth });
-  const role = storedRole ?? fallback.role;
-  const controlScope = storedControlScope ?? resolveSubagentControlScopeForRole(role);
-  return {
-    depth,
-    role,
-    controlScope,
-    canSpawn: role === "main" || role === "orchestrator",
-    canControlChildren: controlScope === "children",
-  };
+  // Current policy is authoritative. Persisted role/scope describe the policy
+  // at creation time and must not leave existing sessions permanently stale
+  // after an operator changes the depth cap or upgrades to a new default.
+  return resolveSubagentCapabilities({ depth, maxSpawnDepth });
 }
 
 /** Resolve inherited tool deny rules stored on a subagent envelope. */

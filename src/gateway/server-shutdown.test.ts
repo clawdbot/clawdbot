@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { finishGatewayRestartTrace, startGatewayRestartTrace } from "./restart-trace.js";
-import { runGatewayShutdownSteps } from "./server-shutdown.js";
+import { resolveGatewayShutdownNotice, runGatewayShutdownSteps } from "./server-shutdown.js";
 
 const logInfo = vi.hoisted(() => vi.fn());
 vi.mock("../logging/subsystem.js", () => ({
@@ -12,6 +12,20 @@ afterEach(() => {
   finishGatewayRestartTrace("test.finish");
   vi.unstubAllEnvs();
   logInfo.mockClear();
+});
+
+describe("gateway shutdown notice", () => {
+  it("omits invalid restart metadata and normalizes the reason", () => {
+    expect(
+      resolveGatewayShutdownNotice({ reason: "  upgrade  ", restartExpectedMs: Number.NaN }),
+    ).toEqual({
+      reason: "upgrade",
+    });
+    expect(resolveGatewayShutdownNotice({ restartExpectedMs: -2 })).toEqual({
+      reason: "gateway stopping",
+      restartExpectedMs: 0,
+    });
+  });
 });
 
 describe("gateway shutdown steps", () => {
@@ -61,6 +75,55 @@ describe("gateway shutdown steps", () => {
     },
   );
 
+  it.each([false, true])(
+    "retains prior failures and respects a required join (failure: %s)",
+    async (joinFails) => {
+      const stopError = new Error("optional sidecar stop failed");
+      const drainError = new Error("connection cleanup failed");
+      const closeDependencies = vi.fn();
+      const drain = vi.fn(async () => {
+        if (joinFails) {
+          throw drainError;
+        }
+      });
+      const onError = vi.fn();
+      await expect(
+        runGatewayShutdownSteps({
+          steps: [
+            {
+              name: "optional sidecars",
+              run: () => {
+                throw stopError;
+              },
+            },
+            { name: "received connection work", run: drain, required: true },
+            { name: "state dependencies", run: closeDependencies },
+          ],
+          onError,
+        }),
+      ).rejects.toMatchObject({
+        errors: [
+          {
+            message: "shutdown step failed (optional sidecars): optional sidecar stop failed",
+            cause: stopError,
+          },
+          ...(joinFails
+            ? [
+                {
+                  message:
+                    "shutdown step failed (received connection work): connection cleanup failed",
+                  cause: drainError,
+                },
+              ]
+            : []),
+        ],
+      });
+      expect(drain).toHaveBeenCalledOnce();
+      expect(closeDependencies).toHaveBeenCalledTimes(joinFails ? 0 : 1);
+      expect(onError).toHaveBeenCalledTimes(joinFails ? 2 : 1);
+    },
+  );
+
   it("names an unavailable module step and continues the remaining shutdown", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_RESTART_TRACE", "1");
     startGatewayRestartTrace("stop.signal.received");
@@ -73,12 +136,17 @@ describe("gateway shutdown steps", () => {
     const closeGateway = vi.fn(async () => {});
     const messages: string[] = [];
 
-    await runGatewayShutdownSteps({
-      steps: [
-        { name: "gateway lifetime sidecars", run: loadStopModule },
-        { name: "gateway close", run: closeGateway },
-      ],
-      onError: (message) => messages.push(message),
+    await expect(
+      runGatewayShutdownSteps({
+        steps: [
+          { name: "gateway lifetime sidecars", run: loadStopModule },
+          { name: "gateway close", run: closeGateway },
+        ],
+        onError: (message) => messages.push(message),
+      }),
+    ).rejects.toMatchObject({
+      message: "Gateway shutdown did not complete cleanly",
+      errors: [expect.objectContaining({ cause: missingModule })],
     });
 
     expect(closeGateway).toHaveBeenCalledOnce();

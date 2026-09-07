@@ -25,12 +25,7 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import { withSetupMigrationTargetLock } from "../wizard/setup.migration-snapshot.js";
-import {
-  formatDeprecatedNonInteractiveAuthChoiceError,
-  isDeprecatedAuthChoice,
-  normalizeLegacyOnboardAuthChoice,
-  resolveDeprecatedAuthChoiceReplacement,
-} from "./auth-choice-legacy.js";
+import { resolveLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
 import { GENERIC_PROVIDER_AUTH_CHOICES } from "./auth-choice-options.static.js";
 import { isGatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -543,26 +538,18 @@ export async function setupWizardCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   assertSupportedRuntime(runtime);
-  const originalAuthChoice = opts.authChoice;
-  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice, {
-    env: process.env,
-  });
-  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
+  const { authChoice: normalizedAuthChoice, deprecated } = resolveLegacyOnboardAuthChoice(
+    opts.authChoice,
+    { env: process.env },
+  );
+  if (opts.nonInteractive && deprecated) {
     // Non-interactive output must be deterministic; reject deprecated aliases
     // instead of printing prompts or compatibility guidance mid-flow.
-    rejectOption(
-      opts,
-      runtime,
-      formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice, {
-        env: process.env,
-      })!,
-    );
+    rejectOption(opts, runtime, deprecated.nonInteractiveError);
     return;
   }
-  if (isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
-    runtime.log(
-      resolveDeprecatedAuthChoiceReplacement(originalAuthChoice, { env: process.env })!.message,
-    );
+  if (deprecated) {
+    runtime.log(deprecated.message);
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =

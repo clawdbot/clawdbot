@@ -65,6 +65,18 @@ IRC does not provide a replayable delivery ID or resend messages missed by a dis
 
 Named accounts inherit the channel-wide reply mode; override it with `channels.irc.accounts.<id>.replyToMode`.
 
+In the default `hybrid` reload mode, adding or editing a non-default named account
+restarts only that IRC account. Other account connections and the Gateway stay
+running, and manually stopped accounts stay stopped. Shared IRC settings,
+`accounts.default`, and account removal restart the whole IRC channel because
+they can affect inheritance or account selection.
+
+An account restart finishes accepted message admissions before closing its
+ingress queue; the replacement monitor recovers pending channel messages from
+that same queue. Messages missed while disconnected cannot be recovered, and
+pending DMs from an earlier connection are discarded because IRC nicknames can
+change owners.
+
 ## Outbound text
 
 IRC sends Markdown as plain text, preserving code contents and link destinations.

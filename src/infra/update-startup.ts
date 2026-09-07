@@ -18,7 +18,8 @@ import {
   REMOTE_MODEL_CATALOG_TTL_MS,
 } from "../model-catalog/remote-refresh.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome.js";
-import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
@@ -35,11 +36,7 @@ import {
   writeRestartSentinelIfUnchanged,
   type VerifiedGitUpdateReceipt,
 } from "./restart-sentinel.js";
-import {
-  normalizeGatewayRestartDelayMs,
-  resolveGatewayRestartDeferralTimeoutMs,
-  scheduleGatewaySigusr1Restart,
-} from "./restart.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
 import { gatewayUpdateCampaign, type UpdateCampaignController } from "./update-campaign.js";
@@ -65,8 +62,16 @@ import {
   cancelManagedServiceUpdateHandoff,
   formatManagedServiceUpdateCommand,
   startManagedServiceUpdateHandoff,
+  transferManagedServiceUpdateHandoff,
 } from "./update-managed-service-handoff.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+} from "./update-run-ledger.js";
+import { summarizeUpdateStepFailure } from "./update-run-record.js";
 import { runGatewayUpdatePreflight, type UpdateRunResult } from "./update-runner.js";
 
 type UpdateCheckState = {
@@ -86,9 +91,10 @@ type UpdateCheckState = {
 
 type AutoUpdateRunResult =
   | { status: "handoff"; command?: string; logPath?: string }
-  | { status: "failed"; result: UpdateRunResult; message: string };
+  | { status: "failed" | "skipped"; result: UpdateRunResult; message: string };
 
 type AutoUpdateRunParams = {
+  runId: string;
   channel: "stable" | "beta" | "dev";
   mode: UpdateRunResult["mode"];
   timeoutMs: number;
@@ -465,6 +471,13 @@ async function runAutoUpdateCommand(
       );
       params.signal?.throwIfAborted();
       if (result) {
+        if (classifyUpdateOutcome(result) === "noop") {
+          return {
+            status: "skipped",
+            result,
+            message: "Automatic update skipped: the selected version is already current.",
+          };
+        }
         return {
           status: "failed",
           result,
@@ -475,7 +488,6 @@ async function runAutoUpdateCommand(
     if (!params.root?.trim()) {
       throw new Error("managed auto-update install root is unavailable");
     }
-    const restartDelayMs = normalizeGatewayRestartDelayMs(supervisor === "systemd" ? undefined : 0);
     const handoffId = randomUUID();
     const started = await startManagedServiceUpdateHandoff({
       root: params.root,
@@ -485,11 +497,10 @@ async function runAutoUpdateCommand(
         resolveGatewayRestartDeferralTimeoutMs(),
       channel: params.channel,
       ...(params.packageTargetVersion ? { tag: params.packageTargetVersion } : {}),
-      restartDelayMs,
       supervisor,
       handoffId,
       ...(params.devTarget ? { devTarget: params.devTarget } : {}),
-      meta: { handoffId, note: "background auto-update" },
+      meta: { runId: params.runId, handoffId, note: "background auto-update" },
     });
     if (started.status === "started") {
       const successorOwner = {
@@ -508,14 +519,22 @@ async function runAutoUpdateCommand(
         }
         params.signal.throwIfAborted();
       }
-      // Pair owned helper creation with restart scheduling before persistence;
-      // a joined helper belongs to its original caller, including cancellation.
-      scheduleGatewaySigusr1Restart({
-        delayMs: restartDelayMs,
-        reason: "update.auto",
-        successorOwner,
-        skipCooldown: true,
-        skipDeferral: true,
+      // Transfer starts validation while this generation remains available. Only
+      // the orchestrator's activation request may park the managed service.
+      try {
+        if (!(await transferManagedServiceUpdateHandoff(successorOwner))) {
+          throw new Error("managed update ownership transfer failed");
+        }
+        params.signal?.throwIfAborted();
+      } catch (error) {
+        await cancelManagedServiceUpdateHandoff(successorOwner);
+        throw error;
+      }
+    } else {
+      // A joined helper owns another run; it cannot complete this campaign's admission.
+      finishUpdateRun(params.runId, {
+        status: "skipped",
+        reason: "managed-service-handoff-already-running",
       });
     }
     return {
@@ -757,8 +776,9 @@ async function runCampaignUpdate(params: {
   runAuto: AutoUpdateRunner;
   canApply: () => boolean;
   campaign: UpdateCampaignController;
+  onUpdateRunCreated?: () => void;
   signal?: AbortSignal;
-}): Promise<"handoff" | "failed"> {
+}): Promise<"handoff" | "applied" | "failed"> {
   const campaignId = params.campaign.getState()?.id;
   const isCurrent = () =>
     campaignId !== undefined &&
@@ -769,87 +789,149 @@ async function runCampaignUpdate(params: {
   if (!isCurrent() || !params.canApply()) {
     return "failed";
   }
-  // Capture recovery code before the updater can replace the running installation.
-  const { runUpdateFailureTriage } = await import("./update-triage.js");
-  const { sentinel, revision } = await readRestartSentinelSnapshot();
-  if (!isCurrent()) {
-    return "failed";
-  }
-  const attemptAt = resolveUpdateCheckNowMs(Date.now());
-  const attemptState = readState();
-  attemptState.autoLastAttemptVersion = params.version;
-  attemptState.autoLastAttemptAt = resolveUpdateCheckTimestamp(attemptAt);
-  writeState(attemptState);
-
-  const outcome = await params.runAuto({
-    channel: params.channel,
-    mode: params.mode,
-    timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
-    restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
-    ...(params.root ? { root: params.root } : {}),
-    ...(params.channel === "dev" ? {} : { packageTargetVersion: params.version }),
-    ...(params.devTarget ? { devTarget: params.devTarget } : {}),
-    ...(params.signal ? { signal: params.signal } : {}),
+  const { runId } = createUpdateRun({
+    trigger: "campaign",
+    origin: { campaignId },
+    target: {
+      channel: params.channel,
+      tag: params.tag,
+      kind: params.mode === "git" ? "git" : "package",
+      ...(params.mode === "git" ? { sha: params.version } : { version: params.version }),
+    },
+    before: { version: VERSION },
   });
-  if (!isCurrent()) {
-    return "failed";
-  }
-  if (outcome.status === "handoff") {
-    params.log.info("auto-update handoff started", {
+  params.onUpdateRunCreated?.();
+  let terminal: Parameters<typeof finishUpdateRun>[1] | undefined = {
+    status: "failed",
+    reason: "unexpected-error",
+  };
+  try {
+    // Capture recovery code before the updater can replace the running installation.
+    const { runUpdateFailureTriage } = await import("./update-triage.js");
+    const { sentinel, revision } = await readRestartSentinelSnapshot();
+    if (!isCurrent()) {
+      return "failed";
+    }
+    const attemptAt = resolveUpdateCheckNowMs(Date.now());
+    const attemptState = readState();
+    attemptState.autoLastAttemptVersion = params.version;
+    attemptState.autoLastAttemptAt = resolveUpdateCheckTimestamp(attemptAt);
+    writeState(attemptState);
+
+    const outcome = await params.runAuto({
+      runId,
+      channel: params.channel,
+      mode: params.mode,
+      timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
+      restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
+      ...(params.root ? { root: params.root } : {}),
+      ...(params.channel === "dev" ? {} : { packageTargetVersion: params.version }),
+      ...(params.devTarget ? { devTarget: params.devTarget } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+    if (outcome.status === "handoff") {
+      terminal = undefined;
+      recordUpdateRunStep(runId, {
+        step: "managed-service update handoff",
+        status: "completed",
+        endedAtMs: Date.now(),
+      });
+    } else {
+      terminal = {
+        status: outcome.result.status === "skipped" ? "skipped" : "failed",
+        reason: outcome.result.reason,
+        after: outcome.result.after,
+      };
+      recordUpdateRunPhase(runId, "requested", {
+        before: outcome.result.before,
+        origin: { nextAction: outcome.message },
+      });
+      for (const step of outcome.result.steps) {
+        recordUpdateRunStep(runId, {
+          step: step.name,
+          status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
+          endedAtMs: Date.now(),
+          detail:
+            step.exitCode === 0
+              ? undefined
+              : (step.advisory?.message ?? summarizeUpdateStepFailure(step)),
+        });
+      }
+    }
+    if (!isCurrent()) {
+      return "failed";
+    }
+    if (outcome.status === "handoff") {
+      params.log.info("auto-update handoff started", {
+        channel: params.channel,
+        version: params.version,
+        tag: params.tag,
+        forced: params.forced,
+        ...(outcome.command ? { command: outcome.command } : {}),
+        ...(outcome.logPath ? { logPath: outcome.logPath } : {}),
+      });
+      return "handoff";
+    }
+    let triageHint: string | undefined;
+    if (classifyUpdateOutcome(outcome.result) === "failed") {
+      const triage = await runUpdateFailureTriage({
+        failure: { result: outcome.result, error: outcome.message },
+        target: { root: params.root, env: process.env },
+        mode: "json",
+        runtime: {
+          log: (message) => params.log.info(message),
+          error: (message) => params.log.info(message),
+        },
+        signal: params.signal,
+        isCurrent,
+      });
+      if (triage.status !== "cancelled") {
+        triageHint = triage.hint;
+        recordUpdateRunPhase(runId, "requested", { origin: { doctorHint: triageHint } });
+      }
+    }
+    if (!isCurrent()) {
+      return "failed";
+    }
+    // Publish before campaign-ended observers refresh status. A concurrent restart
+    // or update keeps its notification; this attempt may replace only its snapshot.
+    if (!sentinel || !isPendingControlPlaneUpdateRestartSentinel(sentinel.payload)) {
+      await writeRestartSentinelIfUnchanged({
+        payload: {
+          ...buildUpdateRestartSentinelPayload({
+            result: outcome.result,
+            meta: { runId, root: params.root, note: outcome.message },
+          }),
+          ...(triageHint ? { doctorHint: triageHint } : {}),
+        },
+        expectedRevision: revision,
+        isCurrent,
+      });
+    }
+    const skipped = classifyUpdateOutcome(outcome.result) === "noop";
+    params.log.info(skipped ? "auto-update attempt skipped" : "auto-update attempt failed", {
       channel: params.channel,
       version: params.version,
       tag: params.tag,
       forced: params.forced,
-      ...(outcome.command ? { command: outcome.command } : {}),
-      ...(outcome.logPath ? { logPath: outcome.logPath } : {}),
+      reason: outcome.result.reason,
+      message: outcome.message,
+      ...(triageHint ? { triage: triageHint } : {}),
     });
-    return "handoff";
-  }
-  let triageHint: string | undefined;
-  if (classifyUpdateOutcome(outcome.result) === "failed") {
-    const triage = await runUpdateFailureTriage({
-      failure: { result: outcome.result, error: outcome.message },
-      target: { root: params.root, env: process.env },
-      mode: "json",
-      runtime: {
-        log: (message) => params.log.info(message),
-        error: (message) => params.log.info(message),
-      },
-      signal: params.signal,
-      isCurrent,
-    });
-    if (triage.status !== "cancelled") {
-      triageHint = triage.hint;
+    if (skipped) {
+      if (terminal) {
+        finishUpdateRun(runId, terminal);
+      }
+      terminal = undefined;
+      params.campaign.clear();
+      return "applied";
+    }
+    return "failed";
+  } finally {
+    if (terminal) {
+      finishUpdateRun(runId, terminal);
     }
   }
-  if (!isCurrent()) {
-    return "failed";
-  }
-  // Publish before campaign-ended observers refresh status. A concurrent restart
-  // or update keeps its notification; this attempt may replace only its snapshot.
-  if (!sentinel || !isPendingControlPlaneUpdateRestartSentinel(sentinel.payload)) {
-    await writeRestartSentinelIfUnchanged({
-      payload: {
-        ...buildUpdateRestartSentinelPayload({
-          result: outcome.result,
-          meta: { root: params.root, note: outcome.message },
-        }),
-        ...(triageHint ? { doctorHint: triageHint } : {}),
-      },
-      expectedRevision: revision,
-      isCurrent,
-    });
-  }
-  params.log.info("auto-update attempt failed", {
-    channel: params.channel,
-    version: params.version,
-    tag: params.tag,
-    forced: params.forced,
-    reason: outcome.result.reason,
-    message: outcome.message,
-    ...(triageHint ? { triage: triageHint } : {}),
-  });
-  return "failed";
 }
 
 export async function runGatewayUpdateCheck(
@@ -860,6 +942,7 @@ export async function runGatewayUpdateCheck(
     allowInTests?: boolean;
     onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
     onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
+    onUpdateRunCreated?: () => void;
     activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
     updateCampaign?: UpdateCampaignController;
     runAutoUpdate?: AutoUpdateRunner;
@@ -1205,6 +1288,7 @@ async function runGatewayUpdateCheckOwned(
                 runAuto,
                 canApply,
                 campaign: updateCampaign,
+                onUpdateRunCreated: params.onUpdateRunCreated,
                 signal: params.signal,
               }),
             ),
@@ -1355,6 +1439,7 @@ async function runGatewayUpdateCheckOwned(
                 runAuto,
                 canApply,
                 campaign: updateCampaign,
+                onUpdateRunCreated: params.onUpdateRunCreated,
                 signal: params.signal,
               }),
             ),
@@ -1388,6 +1473,7 @@ export function createGatewayUpdateCheck(params: {
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
   onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
+  onUpdateRunCreated?: () => void;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
 }): {
   initialize: () => ReturnType<typeof resolveStartupInstallStatus>;
@@ -1425,7 +1511,7 @@ export function createGatewayUpdateCheck(params: {
           if (result.status === "error") {
             params.log.info("remote model catalog refresh failed", { error: result.error });
           } else if (result.status === "updated") {
-            params.log.info("remote model catalog updated; restart the Gateway to apply it", {
+            params.log.info("remote model catalog downloaded; restart the Gateway to apply it", {
               providers: result.providers,
               models: result.models,
               generatedAt: result.generatedAt,

@@ -226,7 +226,12 @@ describe("createAccountListHelpers", () => {
       },
       {
         name: 'returns "default" when present',
-        input: cfg({ default: {}, other: {} }),
+        input: cfg({ alpha: {}, default: {}, other: {} }),
+        expected: "default",
+      },
+      {
+        name: "falls back to the listed default when configured defaultAccount is missing",
+        input: cfg({ alpha: {}, default: {} }, "missing"),
         expected: "default",
       },
       {

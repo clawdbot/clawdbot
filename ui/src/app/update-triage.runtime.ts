@@ -8,7 +8,6 @@ import { clampText } from "../lib/format.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { custodianAlertStore } from "../pages/custodian/custodian-alert-store.ts";
 import type { ApplicationContext } from "./context.ts";
-import { closeFailedUpdateDialog } from "./update-confirmation.runtime.ts";
 import type { UpdateFailureTriage, UpdateTriageAdmission } from "./update-overlay-helpers.ts";
 
 registerSettingsEnglish();
@@ -27,20 +26,11 @@ export function presentUpdateFailureTriage(
     return;
   }
   const attempt = failure.attempt;
-  const verification = failure.verification;
   const record = failure.reconciledRecord;
   // Git updates may keep their version. Preserve commits and correlation before log text.
   const identity = (version: string | null, sha: string | null) =>
     [sha, version].filter(Boolean).join(" · ") || t("common.unknown");
   const details = [
-    ...(verification?.expectedVersion || verification?.expectedSha
-      ? [
-          `${t("updates.triage.expectedTarget")}: ${identity(verification.expectedVersion, verification.expectedSha)}`,
-        ]
-      : []),
-    ...(verification?.handoffId
-      ? [`${t("updates.triage.handoff")}: ${verification.handoffId}`]
-      : []),
     ...(record
       ? [
           `${t("updates.triage.observedRecord")}: ${record.id ?? t("common.unknown")} · ${record.timestampMs === null ? t("common.unknown") : new Date(record.timestampMs).toISOString()}`,
@@ -79,5 +69,4 @@ export function presentUpdateFailureTriage(
     admission,
   );
   window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
-  closeFailedUpdateDialog();
 }

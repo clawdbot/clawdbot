@@ -13,6 +13,12 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
+import {
+  inspectUpdateRunAbandonment,
+  staleUpdateRunGuidance,
+} from "../../infra/update-run-activity.js";
+import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
@@ -52,6 +58,11 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const updateAvailability = resolveUpdateAvailability(update);
 
+  const activeRun = findActiveUpdateRun();
+  const lastRun = listUpdateRuns({ limit: 1 })[0];
+  const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
+  const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
+
   if (opts.json) {
     defaultRuntime.writeJson({
       update,
@@ -62,6 +73,14 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(activeRun ? { activeRun } : {}),
+      ...(lastRun ? { lastRun } : {}),
+      ...(staleGuidance && activeRun
+        ? { staleRun: { runId: activeRun.runId, guidance: staleGuidance } }
+        : {}),
+      ...(abandonment && activeRun
+        ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
+        : {}),
     });
     return;
   }
@@ -99,6 +118,26 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     }).trimEnd(),
   );
   defaultRuntime.log("");
+
+  const run = activeRun ?? lastRun;
+  if (run) {
+    if (staleGuidance) {
+      defaultRuntime.log(`Update ${run.runId}: ${staleGuidance}`);
+    }
+    if (abandonment) {
+      defaultRuntime.log(
+        "Abandoned update detected; the Gateway will reconcile its recorded outcome. Run openclaw update repair to reconcile it now.",
+      );
+    }
+    const report = renderUpdateRunReport(run);
+    if (!abandonment && !staleGuidance) {
+      defaultRuntime.log(report.headline);
+    }
+    for (const line of report.lines) {
+      defaultRuntime.log(line);
+    }
+    defaultRuntime.log("");
+  }
 
   const updateHint = formatUpdateAvailableHint(update);
   if (updateHint) {

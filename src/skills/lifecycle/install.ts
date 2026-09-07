@@ -25,6 +25,7 @@ import type { SkillInstallResult, SkillInstallSkipReason } from "./install-types
 
 type SkillInstallRequest = {
   workspaceDir: string;
+  agentId?: string;
   skillName: string;
   installId: string;
   timeoutMs?: number;
@@ -681,7 +682,12 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
   const workspaceDir = resolveUserPath(params.workspaceDir);
   const deps = getSkillsInstallDeps();
-  const entries = deps.loadWorkspaceSkills(workspaceDir);
+  // Match status inventory: operators can install dependencies for hidden skills.
+  const entries = deps.loadWorkspaceSkills(workspaceDir, {
+    config: params.config,
+    agentId: params.agentId,
+    agentSkillFilter: "ignore",
+  });
   const entry = entries.find((item) => item.skill.name === params.skillName);
   if (!entry) {
     return {

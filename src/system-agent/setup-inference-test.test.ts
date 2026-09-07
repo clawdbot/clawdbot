@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { prepareEmbeddedAttemptBootstrap } from "../agents/embedded-agent-runner/run/attempt-bootstrap-prepare.js";
+import { createAttemptSetupFixture } from "../agents/embedded-agent-runner/run/attempt-setup.test-support.js";
+import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
@@ -78,10 +82,11 @@ async function probe(
     verifyAgentTools?: boolean;
     prompt?: string;
     signal?: AbortSignal;
+    plan?: SetupInferenceTestPlan;
   },
 ) {
   const tempDir = await tempRoots.make("case");
-  const selectedPlan = plan(input?.managed, input?.supportsTools);
+  const selectedPlan = input?.plan ?? plan(input?.managed, input?.supportsTools);
   selectedPlan.agentDir = path.join(tempDir, "agent");
   return await runSetupInferenceTest({
     plan: selectedPlan,
@@ -97,7 +102,29 @@ async function probe(
 
 describe("managed local model setup verification", () => {
   it("requires a real read result and final answer on the selected isolated runtime", async () => {
+    const ambientWorkspace = await tempRoots.make("ambient-workspace");
+    await fs.writeFile(path.join(ambientWorkspace, "AGENTS.md"), "Ambient agent instructions");
+    const selectedPlan = plan();
+    selectedPlan.config.agents = {
+      defaults: { contextInjection: "never" },
+      entries: {
+        other: { workspace: "/other/workspace" },
+        main: {
+          workspace: ambientWorkspace,
+          contextInjection: "always",
+          model: selectedPlan.modelRef,
+          params: { temperature: 0.2 },
+          tools: { profile: "coding" },
+          experimental: { localModelLean: false },
+        },
+      },
+    };
+    selectedPlan.executionConfig = { ...selectedPlan.config, tools: { allow: ["read"] } };
+    const originalConfig = structuredClone(selectedPlan.executionConfig);
     let workspace: string | undefined;
+    let bootstrapWorkspace: string | undefined;
+    let bootstrap: Awaited<ReturnType<typeof prepareEmbeddedAttemptBootstrap>> | undefined;
+    let toolRunConfig: RunParams["config"];
     const run = vi.fn<RunEmbeddedAgent>(async (input) => {
       input.onSuccessfulAuthBinding?.(auth);
       if (input.disableTools) {
@@ -113,6 +140,26 @@ describe("managed local model setup verification", () => {
       expect(input.permissionMode).toBe("read-only");
       expect(input.sessionRoot).toBe(workspace);
       expect(input.agentDir?.startsWith(`${workspace}${path.sep}`)).toBe(false);
+      toolRunConfig = input.config;
+      bootstrapWorkspace = resolveAgentWorkspaceDir(input.config!, input.agentId!);
+      bootstrap = await prepareEmbeddedAttemptBootstrap({
+        attempt: {
+          sessionId: input.sessionId,
+          sessionKey: input.sessionKey,
+          trigger: "manual",
+          isCanonicalWorkspace: bootstrapWorkspace === workspace,
+          config: input.config,
+          bootstrapWorkspaceDir: bootstrapWorkspace,
+        } as EmbeddedRunAttemptParams,
+        setup: createAttemptSetupFixture({
+          effectiveCwd: workspace,
+          effectiveWorkspace: workspace,
+          resolvedWorkspace: workspace,
+          sessionAgentId: input.agentId!,
+        }),
+        hasReadTool: true,
+        isRawModelRun: false,
+      });
       const nonce = await readFixture(input);
       input.onAgentToolResult?.({
         toolName: "read",
@@ -121,7 +168,24 @@ describe("managed local model setup verification", () => {
       });
       return reply(`The file contains: ${nonce}`);
     });
-    expect(await probe(run)).toMatchObject({ ok: true, auth });
+    expect(await probe(run, { plan: selectedPlan })).toMatchObject({ ok: true, auth });
+    expect(bootstrap?.contextFiles).toEqual([]);
+    expect(bootstrapWorkspace).toBe(workspace);
+    expect(toolRunConfig).toEqual({
+      ...originalConfig,
+      agents: {
+        ...originalConfig.agents,
+        entries: {
+          ...originalConfig.agents?.entries,
+          main: {
+            ...originalConfig.agents?.entries?.main,
+            workspace,
+            contextInjection: "never",
+          },
+        },
+      },
+    });
+    expect(selectedPlan.executionConfig).toEqual(originalConfig);
     expect(run).toHaveBeenCalledTimes(2);
     await expect(fs.stat(workspace!)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -155,6 +219,35 @@ describe("managed local model setup verification", () => {
         status: failure === "changed owner" ? "auth" : "format",
       });
       await expect(fs.stat(workspace!)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each([
+    { phase: "response", failConnection: true },
+    { phase: "tool-use", failConnection: false },
+  ])(
+    "reports the failed $phase check without suggesting an unrelated timeout setting",
+    async ({ phase, failConnection }) => {
+      const run = vi.fn<RunEmbeddedAgent>(async (input) => {
+        input.onSuccessfulAuthBinding?.(auth);
+        if (input.disableTools && !failConnection) {
+          return reply("OK");
+        }
+        return {
+          payloads: [
+            {
+              text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+              isError: true,
+            },
+          ],
+          meta: { durationMs: 90_000 },
+        };
+      });
+      expect(await probe(run)).toEqual({
+        ok: false,
+        status: "timeout",
+        error: `The setup ${phase} check timed out. Retry setup, or choose another model or runtime. No default model was changed.`,
+      });
     },
   );
 

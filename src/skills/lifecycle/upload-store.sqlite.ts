@@ -1,15 +1,12 @@
 // SQLite ownership helpers for Gateway skill-upload staging.
 import type { DatabaseSync } from "node:sqlite";
-import type { Kysely, Selectable } from "kysely";
+import type { InferResult, Kysely } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type {
-  DB as OpenClawStateDatabase,
-  SkillUploads,
-} from "../../state/openclaw-state-db.generated.js";
+import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -22,7 +19,29 @@ export type SkillUploadDatabase = Pick<
   OpenClawStateDatabase,
   "skill_upload_chunks" | "skill_uploads" | "state_leases"
 >;
-export type SkillUploadRow = Selectable<SkillUploads>;
+// Archive bytes belong to the authoritative install claim, not metadata retries.
+export function selectSkillUploadMetadata(kysely: Kysely<SkillUploadDatabase>) {
+  return kysely
+    .selectFrom("skill_uploads")
+    .select([
+      "upload_id",
+      "kind",
+      "slug",
+      "force",
+      "size_bytes",
+      "sha256",
+      "actual_sha256",
+      "received_bytes",
+      "created_at",
+      "expires_at",
+      "committed",
+      "committed_at",
+      "idempotency_key_hash",
+    ]);
+}
+export type SkillUploadMetadataRow = InferResult<
+  ReturnType<typeof selectSkillUploadMetadata>
+>[number];
 
 export function resolveSkillUploadDatabaseOptions(options: {
   env?: NodeJS.ProcessEnv;
@@ -42,14 +61,14 @@ export function openSkillUploadDatabase(options: OpenClawStateDatabaseOptions) {
   };
 }
 
-export function readSkillUploadRow(
+export function readSkillUploadMetadata(
   uploadId: string,
   options: OpenClawStateDatabaseOptions,
-): SkillUploadRow | undefined {
+): SkillUploadMetadataRow | undefined {
   const { database, kysely } = openSkillUploadDatabase(options);
   return executeSqliteQueryTakeFirstSync(
     database.db,
-    kysely.selectFrom("skill_uploads").selectAll().where("upload_id", "=", uploadId),
+    selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
   );
 }
 

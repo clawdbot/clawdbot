@@ -61,9 +61,6 @@ export function registerBrowserAgentActHookRoutes(
           if (element) {
             return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.uploadElement);
           }
-          if (resolvedPaths.length !== 1) {
-            return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.uploadSingleFile);
-          }
           const uid = inputRef || ref;
           if (!uid) {
             return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.uploadRefRequired);
@@ -73,7 +70,7 @@ export function registerBrowserAgentActHookRoutes(
             profile: profileCtx.profile,
             targetId: tab.targetId,
             uid,
-            filePath: resolvedPaths[0] ?? "",
+            filePaths: resolvedPaths,
             timeoutMs: timeoutMs ?? ctx.state().resolved.actionTimeoutMs,
             signal,
           });

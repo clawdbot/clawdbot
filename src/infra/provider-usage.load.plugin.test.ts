@@ -1,38 +1,31 @@
 // Tests provider usage loading from plugin-provided sources.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.fn();
-const { EnvHttpProxyAgent, envAgentSpy, loadUndiciRuntimeDeps, undiciFetch } = vi.hoisted(() => {
-  const envAgentSpyLocal = vi.fn();
-  const undiciFetchLocal = vi.fn();
-  class EnvHttpProxyAgentLocal {
-    static lastCreated: EnvHttpProxyAgentLocal | undefined;
+const { envDispatcher, createHttp1EnvHttpProxyAgent, loadUndiciRuntimeDeps, undiciFetch } =
+  vi.hoisted(() => {
+    const envDispatcherLocal = { dispatch: () => true };
+    const undiciFetchLocal = vi.fn();
+    const loadUndiciRuntimeDepsLocal = vi.fn(() => ({
+      FormData: globalThis.FormData,
+      fetch: undiciFetchLocal,
+    }));
 
-    constructor(public readonly options?: Record<string, unknown>) {
-      EnvHttpProxyAgentLocal.lastCreated = this;
-      envAgentSpyLocal(options);
-    }
-  }
-  const loadUndiciRuntimeDepsLocal = vi.fn(() => ({
-    EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
-    FormData: globalThis.FormData,
-    fetch: undiciFetchLocal,
-  }));
-
-  return {
-    EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
-    envAgentSpy: envAgentSpyLocal,
-    loadUndiciRuntimeDeps: loadUndiciRuntimeDepsLocal,
-    undiciFetch: undiciFetchLocal,
-  };
-});
+    return {
+      envDispatcher: envDispatcherLocal,
+      createHttp1EnvHttpProxyAgent: vi.fn(() => envDispatcherLocal),
+      loadUndiciRuntimeDeps: loadUndiciRuntimeDepsLocal,
+      undiciFetch: undiciFetchLocal,
+    };
+  });
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
 }));
 
 vi.mock("./net/undici-runtime.js", () => ({
+  createHttp1EnvHttpProxyAgent,
   loadUndiciRuntimeDeps,
 }));
 
@@ -102,12 +95,22 @@ describe("provider-usage.load plugin boundary", () => {
   });
 
   beforeEach(() => {
-    envAgentSpy.mockClear();
+    createHttp1EnvHttpProxyAgent.mockClear();
     loadUndiciRuntimeDeps.mockClear();
     undiciFetch.mockReset();
-    EnvHttpProxyAgent.lastCreated = undefined;
     resolveProviderUsageSnapshotWithPluginMock.mockReset();
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
+    // Missing proxy mocks must fail locally, not fall through to a provider request.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        throw new Error("unexpected global fetch");
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("prefers plugin-owned usage snapshots", async () => {
@@ -186,6 +189,7 @@ describe("provider-usage.load plugin boundary", () => {
   });
 
   it("passes an env proxy fetch into plugin usage context when no explicit fetch is supplied", async () => {
+    const env = { HTTP_PROXY: "", HTTPS_PROXY: "http://proxy.test:8080" };
     undiciFetch.mockResolvedValueOnce(new Response("{}", { status: 200 }));
     resolveProviderUsageSnapshotWithPluginMock.mockImplementationOnce(async (params: unknown) => {
       if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -204,10 +208,7 @@ describe("provider-usage.load plugin boundary", () => {
       loadProviderUsageSummary({
         now: usageNow,
         auth: [{ provider: "openai", token: "codex-token", accountId: "acc-1" }],
-        env: {
-          HTTP_PROXY: "",
-          HTTPS_PROXY: "http://proxy.test:8080",
-        },
+        env,
       }),
     ).resolves.toEqual({
       updatedAt: usageNow,
@@ -220,14 +221,15 @@ describe("provider-usage.load plugin boundary", () => {
       ],
     });
 
-    expect(envAgentSpy).toHaveBeenCalledOnce();
-    expect(envAgentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ httpsProxy: "http://proxy.test:8080" }),
+    expect(createHttp1EnvHttpProxyAgent).toHaveBeenCalledExactlyOnceWith(
+      { httpsProxy: "http://proxy.test:8080" },
+      undefined,
+      env,
     );
     expect(undiciFetch).toHaveBeenCalledOnce();
     const [input] = undiciFetch.mock.calls[0] ?? [];
     expect(input).toBe("https://chatgpt.com/backend-api/wham/usage");
-    expect(requireUndiciFetchInit().dispatcher).toBe(EnvHttpProxyAgent.lastCreated);
+    expect(requireUndiciFetchInit().dispatcher).toBe(envDispatcher);
   });
 
   it("keeps an explicit fetch ahead of proxy env for plugin usage context", async () => {
@@ -268,7 +270,7 @@ describe("provider-usage.load plugin boundary", () => {
 
     expect(explicitFetch).toHaveBeenCalledOnce();
     expect(loadUndiciRuntimeDeps).not.toHaveBeenCalled();
-    expect(envAgentSpy).not.toHaveBeenCalled();
+    expect(createHttp1EnvHttpProxyAgent).not.toHaveBeenCalled();
     expect(undiciFetch).not.toHaveBeenCalled();
   });
 });

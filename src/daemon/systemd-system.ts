@@ -103,9 +103,9 @@ async function inspectSystemSystemdOwnership(
     return { status: "absent", unitName };
   }
 
-  const deadlineAt = timeoutMs && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
-  const run = (args: string[]) =>
-    execSystemctl(args, undefined, deadlineAt ? Math.max(1, deadlineAt - Date.now()) : undefined);
+  const deadline = timeoutMs && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
+  const remaining = () => (deadline ? Math.max(1, deadline - performance.now()) : undefined);
+  const run = (args: string[]) => execSystemctl(args, undefined, remaining());
   const initialQuery = await querySystemManager(unitName, run);
   if (initialQuery.status !== "absent") {
     return initialQuery;

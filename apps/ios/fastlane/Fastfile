@@ -444,21 +444,12 @@ def normalize_watch_screenshot_status_bar(path)
   end
 end
 
-def capture_watch_screenshot
-  device = resolve_simulator_device(watch_snapshot_device)
-  device_name = device.fetch("name")
-  udid = device.fetch("udid")
-  output_dir = File.join(ios_root, "fastlane", "screenshots", "en-US")
-  output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
+def build_watch_screenshot_app
   derived_data_path = File.join(ios_root, "build", "WatchScreenshotDerivedData")
   app_path = File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
-
-  FileUtils.mkdir_p(output_dir)
-  Dir[File.join(output_dir, "Apple Watch*-*.png")].each { |path| FileUtils.rm_f(path) }
   FileUtils.rm_rf(derived_data_path)
 
   # Single-target watch apps only expose generic simulator build destinations in Xcode.
-  # Keep the selected UDID for install/launch/screenshot below.
   sh(
     xcodebuild_shell_join([
       "xcodebuild",
@@ -475,7 +466,21 @@ def capture_watch_screenshot
       "build",
     ])
   )
+  app_path
+end
 
+def capture_watch_screenshot
+  device = resolve_simulator_device(watch_snapshot_device)
+  device_name = device.fetch("name")
+  udid = device.fetch("udid")
+  output_dir = File.join(ios_root, "fastlane", "screenshots", "en-US")
+  output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
+
+  FileUtils.mkdir_p(output_dir)
+  Dir[File.join(output_dir, "Apple Watch*-*.png")].each { |path| FileUtils.rm_f(path) }
+
+  # Clear old evidence before a standalone build can fail.
+  app_path = yield
   UI.user_error!("Watch screenshot build did not produce #{app_path}.") unless File.exist?(app_path)
   watch_app_identifier = bundle_identifier_for_product(app_path)
   screenshot_mode_bundle_identifiers = [watch_app_identifier]
@@ -2421,11 +2426,11 @@ platform :ios do
     FileUtils.rm_rf(File.join(output_directory, "test_output"))
 
     unless ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
-      watch_screenshot(
-        release_version: release_version,
-        app_store_revision: app_store_revision,
-        build_number: build_number
-      )
+      # The fresh OpenClawUITests build also compiles its Watch app dependency.
+      # Keep this product in the same invocation; standalone capture builds separately.
+      capture_watch_screenshot do
+        File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+      end
     end
   end
 
@@ -2443,7 +2448,7 @@ platform :ios do
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
     sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
-    capture_watch_screenshot
+    capture_watch_screenshot { build_watch_screenshot_app }
   end
 
   desc "Validate App Store Connect API auth"

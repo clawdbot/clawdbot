@@ -5,7 +5,11 @@ import {
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
-import { renderSettingsPage, renderSettingsSection } from "../../components/settings-ui.ts";
+import {
+  renderSettingsPage,
+  renderSettingsSection,
+  renderSettingsSegmented,
+} from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
@@ -28,6 +32,7 @@ import {
   buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
+  buildUsageFilterOptions,
   normalizeQueryText,
   removeQueryToken,
   setQueryTokensForKey,
@@ -168,7 +173,7 @@ export function renderUsage(props: UsageProps) {
   const selectedSessionSet = new Set(filters.selectedSessions);
 
   // Sort sessions by tokens or cost depending on mode
-  const sortedSessions = [...data.sessions].toSorted((a, b) => {
+  const sortedSessions = data.sessions.toSorted((a, b) => {
     const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
     const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
     return valB - valA;
@@ -200,11 +205,8 @@ export function renderUsage(props: UsageProps) {
   };
   const filteredSessions = queryResult.sessions.filter(matchesSelectedDays);
   const queryWarnings = queryResult.warnings;
-  const querySuggestions = buildQuerySuggestions(
-    filters.queryDraft,
-    agentScopedSessions,
-    data.aggregates,
-  );
+  const filterOptions = buildUsageFilterOptions(agentScopedSessions, data.aggregates);
+  const querySuggestions = buildQuerySuggestions(filters.queryDraft, filterOptions);
   const queryTerms = extractQueryTerms(filters.queryDraft);
   const selectedValuesFor = (key: string): string[] => {
     const normalized = normalizeQueryText(key);
@@ -213,29 +215,6 @@ export function renderUsage(props: UsageProps) {
       .map((term) => term.value)
       .filter(Boolean);
   };
-  const unique = (items: Array<string | undefined>) => {
-    const set = new Set<string>();
-    for (const item of items) {
-      if (item) {
-        set.add(item);
-      }
-    }
-    return Array.from(set);
-  };
-  const channelOptions = unique(agentScopedSessions.map((s) => s.channel)).slice(0, 12);
-  const providerOptions = unique([
-    ...agentScopedSessions.map((s) => s.modelProvider),
-    ...agentScopedSessions.map((s) => s.providerOverride),
-    ...(data.aggregates?.byProvider.map((entry) => entry.provider) ?? []),
-  ]).slice(0, 12);
-  const modelOptions = unique([
-    ...agentScopedSessions.map((s) => s.model),
-    ...(data.aggregates?.byModel.map((entry) => entry.model) ?? []),
-  ]).slice(0, 12);
-  const toolOptions = unique(data.aggregates?.tools.tools.map((tool) => tool.name) ?? []).slice(
-    0,
-    12,
-  );
 
   // Get first selected session for detail view (timeseries, logs)
   const primarySelectedEntry =
@@ -580,36 +559,38 @@ export function renderUsage(props: UsageProps) {
                   <option value="local">${t("usage.filters.timeZoneLocal")}</option>
                   <option value="utc">${t("usage.filters.timeZoneUtc")}</option>
                 </select>
-                <div class="chart-toggle">
-                  <button
-                    class="btn btn--sm toggle-btn ${filters.scope === "instance" ? "active" : ""}"
-                    title=${t("usage.scope.instanceHint")}
-                    @click=${() => filterActions.onScopeChange("instance")}
-                  >
-                    ${t("usage.scope.instance")}
-                  </button>
-                  <button
-                    class="btn btn--sm toggle-btn ${filters.scope === "family" ? "active" : ""}"
-                    title=${t("usage.scope.familyHint")}
-                    @click=${() => filterActions.onScopeChange("family")}
-                  >
-                    ${t("usage.scope.family")}
-                  </button>
-                </div>
-                <div class="chart-toggle">
-                  <button
-                    class="btn btn--sm toggle-btn ${isTokenMode ? "active" : ""}"
-                    @click=${() => displayActions.onChartModeChange("tokens")}
-                  >
-                    ${t("usage.metrics.tokens")}
-                  </button>
-                  <button
-                    class="btn btn--sm toggle-btn ${!isTokenMode ? "active" : ""}"
-                    @click=${() => displayActions.onChartModeChange("cost")}
-                  >
-                    ${t("usage.metrics.cost")}
-                  </button>
-                </div>
+                ${renderSettingsSegmented({
+                  mode: "buttons",
+                  variant: "accent",
+                  ariaPressed: false,
+                  value: filters.scope,
+                  onChange: filterActions.onScopeChange,
+                  onReselect: filterActions.onScopeChange,
+                  options: [
+                    {
+                      value: "instance",
+                      label: t("usage.scope.instance"),
+                      title: t("usage.scope.instanceHint"),
+                    },
+                    {
+                      value: "family",
+                      label: t("usage.scope.family"),
+                      title: t("usage.scope.familyHint"),
+                    },
+                  ],
+                })}
+                ${renderSettingsSegmented({
+                  mode: "buttons",
+                  variant: "accent",
+                  ariaPressed: false,
+                  value: isTokenMode ? "tokens" : "cost",
+                  onChange: displayActions.onChartModeChange,
+                  onReselect: displayActions.onChartModeChange,
+                  options: [
+                    { value: "tokens", label: t("usage.metrics.tokens") },
+                    { value: "cost", label: t("usage.metrics.cost") },
+                  ],
+                })}
                 <button
                   class="btn btn--sm primary"
                   @click=${filterActions.onRefresh}
@@ -666,10 +647,10 @@ export function renderUsage(props: UsageProps) {
                 </div>
               </div>
               <div class="usage-filter-row">
-                ${renderFilterSelect("channel", t("usage.filters.channel"), channelOptions)}
-                ${renderFilterSelect("provider", t("usage.filters.provider"), providerOptions)}
-                ${renderFilterSelect("model", t("usage.filters.model"), modelOptions)}
-                ${renderFilterSelect("tool", t("usage.filters.tool"), toolOptions)}
+                ${renderFilterSelect("channel", t("usage.filters.channel"), filterOptions.channel)}
+                ${renderFilterSelect("provider", t("usage.filters.provider"), filterOptions.provider)}
+                ${renderFilterSelect("model", t("usage.filters.model"), filterOptions.model)}
+                ${renderFilterSelect("tool", t("usage.filters.tool"), filterOptions.tool)}
                 <span class="usage-query-hint">${t("usage.query.tip")}</span>
               </div>
               ${
@@ -838,7 +819,6 @@ export function renderUsage(props: UsageProps) {
                             detail.timeSeries,
                             detail.timeSeriesLoading,
                             detail.timeSeriesStatus,
-                            detailActions.onRetryTimeSeries,
                             detail.timeSeriesMode,
                             detailActions.onTimeSeriesModeChange,
                             detail.timeSeriesBreakdownMode,
@@ -853,7 +833,6 @@ export function renderUsage(props: UsageProps) {
                             detail.sessionLogs,
                             detail.sessionLogsLoading,
                             detail.sessionLogsStatus,
-                            detailActions.onRetrySessionLogs,
                             detail.sessionLogsExpanded,
                             detailActions.onToggleSessionLogsExpanded,
                             detail.logFilters,
@@ -863,7 +842,6 @@ export function renderUsage(props: UsageProps) {
                             detailActions.onLogFilterQueryChange,
                             detailActions.onLogFilterClear,
                             detail.context,
-                            detailActions.onRetryContextWeight,
                             display.contextExpanded,
                             detailActions.onToggleContextExpanded,
                             filterActions.onClearSessions,

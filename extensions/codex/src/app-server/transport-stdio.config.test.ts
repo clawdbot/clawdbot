@@ -189,7 +189,7 @@ async function readNativeConfig(startOptions: CodexAppServerStartOptions, env: N
     });
   } finally {
     lines.close();
-    expect(await closeCodexAppServerTransportAndWait(child)).toBe(true);
+    expect(await closeCodexAppServerTransportAndWait(child)).toMatchObject({ exited: true });
     await closed;
   }
 }

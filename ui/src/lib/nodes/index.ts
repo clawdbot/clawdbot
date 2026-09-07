@@ -4,6 +4,11 @@
 import { getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type {
+  ExecApprovalsNodeSnapshot as GatewayExecApprovalsNodeSnapshot,
+  ExecApprovalsSnapshot as GatewayExecApprovalsSnapshot,
+} from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
+import type { DevicePairingList } from "../../../../src/gateway/device-pairing-list.types.js";
 import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
@@ -14,6 +19,13 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
 import { formatUiError } from "../format-error.ts";
+
+export type {
+  DevicePairingList,
+  DeviceTokenSummary,
+  PairedDevice,
+  PendingDevice,
+} from "../../../../src/gateway/device-pairing-list.types.js";
 
 // @noble/ed25519 defaults its SHA-512 to crypto.subtle, which browsers gate to
 // secure contexts. On plain-HTTP origins the pure-JS digests load lazily so
@@ -37,110 +49,40 @@ type NodesGatewaySnapshot = {
   connected: boolean;
 };
 
-export type DeviceTokenSummary = {
-  role: string;
-  scopes?: string[];
-  createdAtMs?: number;
-  rotatedAtMs?: number;
-  revokedAtMs?: number;
-  lastUsedAtMs?: number;
-};
+type WireExecApprovalsFile = GatewayExecApprovalsSnapshot["file"];
+type WireExecApprovalsAgent = NonNullable<WireExecApprovalsFile["agents"]>[string];
 
-export type PendingDevice = {
-  requestId: string;
-  deviceId: string;
-  publicKey?: string;
-  displayName?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  isRepair?: boolean;
-  ts?: number;
-};
+export type ExecApprovalsResolvedDefaults = NonNullable<
+  GatewayExecApprovalsSnapshot["resolvedDefaults"]
+>;
+export type ExecSecurity = ExecApprovalsResolvedDefaults["security"];
+export type ExecAsk = ExecApprovalsResolvedDefaults["ask"];
+// Editor choices stay closed even though the wire accepts policy strings for host normalization.
+type ExecApprovalsDefaults = Partial<ExecApprovalsResolvedDefaults>;
 
-export type PairedDevice = {
-  deviceId: string;
-  publicKey?: string;
-  displayName?: string;
-  /** Operator-assigned label; preferred over client displayName when rendering. */
-  operatorLabel?: string;
-  platform?: string;
-  clientId?: string;
-  clientMode?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  tokens?: DeviceTokenSummary[];
-  approvedVia?: "owner" | "silent" | "trusted-cidr" | "ssh-verified" | "bootstrap";
-  /** Server-computed: the device currently holds a live gateway connection. */
-  connected?: boolean;
-  createdAtMs?: number;
-  approvedAtMs?: number;
-  lastSeenAtMs?: number;
-};
+export type ExecApprovalsAllowlistEntry = NonNullable<WireExecApprovalsAgent["allowlist"]>[number];
 
-export type DevicePairingList = {
-  pending: PendingDevice[];
-  paired: PairedDevice[];
-};
-
-export type ExecSecurity = "deny" | "allowlist" | "full";
-export type ExecAsk = "off" | "on-miss" | "always";
-type ExecApprovalsDefaults = {
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  askFallback?: ExecSecurity;
-  autoAllowSkills?: boolean;
-};
-
-export type ExecApprovalsResolvedDefaults = Required<ExecApprovalsDefaults>;
-
-export type ExecApprovalsAllowlistEntry = {
-  id?: string;
-  pattern: string;
-  source?: "allow-always";
-  commandText?: string;
-  argPattern?: string;
-  lastUsedAt?: number;
-  lastUsedCommand?: string;
-  lastResolvedPath?: string;
-};
-
-type ExecApprovalsAgent = ExecApprovalsDefaults & {
-  allowlist?: ExecApprovalsAllowlistEntry[];
-};
+type ExecApprovalsAgent = ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">;
 
 export type ExecApprovalsFile = {
   version?: number;
-  socket?: { path?: string };
+  socket?: Pick<NonNullable<WireExecApprovalsFile["socket"]>, "path">;
   defaults?: ExecApprovalsDefaults;
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
-type FileExecApprovalsSnapshot = {
-  path: string;
-  exists: boolean;
-  hash: string;
+type FileExecApprovalsSnapshot = Omit<GatewayExecApprovalsSnapshot, "file"> & {
   file: ExecApprovalsFile;
-  resolvedDefaults?: ExecApprovalsResolvedDefaults;
 };
 
-type NativeExecApprovalRule = {
-  pattern: string;
-  action: "allow" | "deny" | "prompt";
-  shells?: string[];
-  description?: string;
-  enabled?: boolean;
-};
+type NativeExecApprovalRule = NonNullable<GatewayExecApprovalsNodeSnapshot["rules"]>[number];
 
 export type NativeExecApprovalsSnapshot =
   | {
       enabled: true;
       hash: string;
       baseHash?: string;
-      defaultAction: "allow" | "deny" | "prompt";
+      defaultAction: NativeExecApprovalRule["action"];
       rules: NativeExecApprovalRule[];
       constraints?: Record<string, boolean>;
     }
@@ -293,10 +235,7 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
   }
   const generation = state.requestGeneration;
   try {
-    const res = await client.request<{
-      pending?: Array<PendingDevice>;
-      paired?: Array<PairedDevice>;
-    }>("device.pair.list", {});
+    const res = await client.request<Partial<DevicePairingList>>("device.pair.list", {});
     if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesList = {
         pending: Array.isArray(res?.pending) ? res.pending : [],
@@ -427,6 +366,39 @@ export async function removeStaleInventoryEntries(
         }
       : undefined,
   );
+}
+
+/**
+ * Renames one paired device through the shared operator-alias RPC. Returns
+ * `null` when the alias landed (the caller's dialog closes) and a displayable
+ * message when it did not, so a rejected attempt stays visible and retryable.
+ * Successful renames refresh the captured request scope; rejected attempts
+ * remain visible in the dialog and in `devicesError`.
+ */
+export async function renameDevice(
+  state: DevicesState,
+  params: { deviceId: string; label: string },
+): Promise<string | null> {
+  const client = state.client;
+  if (!client || !state.connected) {
+    const message = formatUiError(new Error("The Gateway connection is not available."));
+    state.devicesError = message;
+    return message;
+  }
+  const generation = state.requestGeneration;
+  try {
+    await client.request("device.pair.rename", params);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      await loadDevices(state);
+    }
+    return null;
+  } catch (err) {
+    const message = formatUiError(err);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      state.devicesError = message;
+    }
+    return message;
+  }
 }
 
 export async function approveNodePairingRequest(state: InventoryState, requestId: string) {

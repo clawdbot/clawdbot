@@ -31,6 +31,7 @@ import {
   canResolveOperatorApproval,
   canReviewOperatorApproval,
 } from "../operator-approval-authorization.js";
+import { projectOperatorApprovalSnapshot } from "../operator-approval-snapshot.js";
 import {
   getOperatorApprovalDetailed,
   listTerminalOperatorApprovals,
@@ -61,24 +62,13 @@ function buildApprovalSnapshot(
   record: OperatorApprovalRecord,
   controlUiBasePath: string,
 ): ApprovalSnapshot | null {
-  const common = {
-    id: record.id,
-    status: record.status,
-    presentation: record.presentation,
-    urlPath: `${controlUiBasePath}/approve/${encodeURIComponent(record.id)}`,
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-  };
-  if (record.status === "pending") {
-    return common as ApprovalSnapshot;
+  const snapshot = projectOperatorApprovalSnapshot(record, controlUiBasePath);
+  if (!snapshot || snapshot.status === "pending") {
+    return snapshot;
   }
-  if (record.resolvedAtMs === null || record.terminalReason === null) {
-    return null;
-  }
-  const terminal = {
-    ...common,
-    resolvedAtMs: record.resolvedAtMs,
-    reason: record.terminalReason,
+  // Terminal attribution belongs to RPC readers; session events omit it.
+  return {
+    ...snapshot,
     source: {
       ...(record.source.agentId ? { agentId: record.source.agentId } : {}),
       ...(record.source.sessionKey ? { sessionKey: record.source.sessionKey } : {}),
@@ -92,16 +82,6 @@ function buildApprovalSnapshot(
         }
       : {}),
   };
-  if (record.status === "allowed") {
-    if (record.decision !== "allow-once" && record.decision !== "allow-always") {
-      return null;
-    }
-    return { ...terminal, decision: record.decision } as ApprovalSnapshot;
-  }
-  if (record.status === "denied") {
-    return { ...terminal, decision: "deny" } as ApprovalSnapshot;
-  }
-  return terminal as ApprovalSnapshot;
 }
 
 function resolveApprovalResolver(client: GatewayClient | null): OperatorApprovalResolver {

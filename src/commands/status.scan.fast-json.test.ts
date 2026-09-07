@@ -89,7 +89,6 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(
       createStatusMemorySearchConfig(),
       process.env,
-      { includeChannelTargets: false },
     );
     expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
@@ -147,6 +146,18 @@ describe("scanStatusJsonFast", () => {
 
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalled();
+  });
+
+  it.each([
+    { opts: {}, expected: 1000 },
+    { opts: { timeoutMs: 1500 }, expected: 1500 },
+    { opts: { all: true }, expected: 5000 },
+    { opts: { all: true, timeoutMs: 700 }, expected: 700 },
+  ])("bounds gateway secret resolution to $expected ms for $opts", async ({ opts, expected }) => {
+    await scanStatusJsonFast(opts, {} as never);
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewaySecretResolveTimeoutMs: expected }),
+    );
   });
 
   it("skips plugin compatibility loading even when configured channels are present", async () => {
@@ -293,6 +304,46 @@ describe("scanStatusJsonFast", () => {
 
     expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
     expect(mocks.probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("keeps status --json on read-only channel metadata when channel config exists", async () => {
+    const resolvedConfig = {
+      marker: "resolved-preload",
+      plugins: { enabled: false },
+      channels: { telegram: { enabled: false } },
+    };
+    applyStatusScanDefaults(mocks, {
+      hasConfiguredChannels: true,
+      sourceConfig: {
+        marker: "source-preload",
+        plugins: { enabled: false },
+        channels: { telegram: { enabled: false } },
+      } as never,
+      resolvedConfig: resolvedConfig as never,
+      summary: createStatusSummary({ linkChannel: { linked: false } }),
+    });
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(loggingStateRef.forceConsoleToStderr).toBe(false);
+    expect(mocks.probeGateway).toHaveBeenCalledOnce();
+    const probeArgs = firstCallArg(mocks.probeGateway, "probeGateway args") as {
+      env?: NodeJS.ProcessEnv;
+    };
+    expect(probeArgs).toMatchObject({
+      url: "ws://127.0.0.1:18789",
+      config: resolvedConfig,
+      auth: {},
+      timeoutMs: 1000,
+      detailLevel: "presence",
+    });
+    expect(probeArgs.env).toBe(process.env);
+    expect(
+      mocks.callGateway.mock.calls.some(([call]) => {
+        return (call as { method?: unknown } | undefined)?.method === "channels.status";
+      }),
+    ).toBe(false);
   });
 
   it("keeps cold-start gateway probes with local-only updates when a channel is configured from manifest env vars", async () => {

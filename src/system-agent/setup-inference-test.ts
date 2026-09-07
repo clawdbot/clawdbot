@@ -157,17 +157,28 @@ async function runSetupInferenceProbe(
   const sessionKey = `agent:${effectiveAgentId}:setup-inference:incognito-${runId}`;
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
+  const phase = agentProbe ? "tool-use" : "response";
   const failed = (status: SetupInferenceFailureStatus, error: string) => {
     setupInferenceLog.warn("Inference setup probe failed.", {
       event: "setup_inference_probe_failed",
       provider: plan.provider,
       model: plan.model,
       runner: plan.runner,
+      runId,
+      phase,
       status,
       timeoutMs,
       durationMs: Date.now() - started,
     });
-    return { ok: false as const, status, error };
+    // Setup owns this deadline; changing the ordinary agent timeout cannot extend it.
+    return {
+      ok: false as const,
+      status,
+      error:
+        status === "timeout"
+          ? `The setup ${phase} check timed out. Retry setup, or choose another model or runtime. No default model was changed.`
+          : error,
+    };
   };
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
     plan.config,
@@ -225,6 +236,7 @@ async function runSetupInferenceProbe(
     } else {
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
+      const executionConfig = plan.executionConfig ?? plan.config;
       result = await runEmbedded({
         preparedRunAdmission,
         sessionId,
@@ -237,7 +249,24 @@ async function runSetupInferenceProbe(
         sessionFile,
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.executionConfig ?? plan.config,
+        // Bootstrap follows the configured agent workspace, independently of workspaceDir.
+        // Keep this private check from importing the selected agent's ambient instructions.
+        config: agentProbe
+          ? {
+              ...executionConfig,
+              agents: {
+                ...executionConfig.agents,
+                entries: {
+                  ...executionConfig.agents?.entries,
+                  [effectiveAgentId]: {
+                    ...executionConfig.agents?.entries?.[effectiveAgentId],
+                    workspace: tempDir,
+                    contextInjection: "never",
+                  },
+                },
+              },
+            }
+          : executionConfig,
         prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,

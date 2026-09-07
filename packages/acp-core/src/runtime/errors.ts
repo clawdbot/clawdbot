@@ -1,4 +1,3 @@
-// ACP Core module implements errors behavior.
 import { redactSensitiveText, stringifyNonErrorCause } from "../error-format.js";
 
 export const ACP_ERROR_CODES = [

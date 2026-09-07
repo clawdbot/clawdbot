@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "../plugins/discovery.js";
+import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   applyPluginAutoEnable,
@@ -94,6 +95,38 @@ afterEach(() => {
 });
 
 describe("applyPluginAutoEnable core", () => {
+  it("keeps first-write catalog opt-outs outside an existing restrictive plugin allowlist", () => {
+    const config = initializeNativeSessionCatalogPreferences({
+      plugins: { allow: ["existing"] },
+    });
+    const result = applyPluginAutoEnable({
+      config,
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "anthropic", channels: [] },
+        { id: "codex", channels: [] },
+      ]),
+    });
+    expect(result.config).toEqual(config);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("retains explicit plugin selection alongside a first-write catalog opt-out", () => {
+    const config = initializeNativeSessionCatalogPreferences({
+      plugins: { allow: ["existing"], entries: { codex: { enabled: true } } },
+    });
+    const result = applyPluginAutoEnable({
+      config,
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "anthropic", channels: [] },
+        { id: "codex", channels: [] },
+      ]),
+    });
+    expect(result.config.plugins?.allow).toEqual(["existing", "codex"]);
+    expect(result.config.plugins?.entries).toEqual(config.plugins?.entries);
+  });
+
   it("detects typed channel-configured candidates", () => {
     const candidates = detectPluginAutoEnableCandidates({
       config: {

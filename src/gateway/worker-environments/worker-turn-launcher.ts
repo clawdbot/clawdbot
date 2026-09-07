@@ -15,6 +15,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import {
   claimWorkerTurn,
@@ -43,7 +44,9 @@ type ReclaimedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "
 type WorkerTurnLauncherOptions = {
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
-  resolveWorkspacePath: (identity: ReturnType<typeof resolvePlacementIdentity>) => Promise<string>;
+  resolveWorkspace: (
+    identity: ReturnType<typeof resolvePlacementIdentity>,
+  ) => Promise<WorkerSessionWorkspace>;
   reconcileActivePlacement: (environmentId: string) => Promise<void>;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
@@ -100,7 +103,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           throw new Error(`Remote-exec placement changed while preparing its ${phase}`);
         }
       };
-      const localWorkspaceDir = await options.resolveWorkspacePath({
+      const workspace = await options.resolveWorkspace({
         sessionId: placement.sessionId,
         agentId: placement.agentId,
         sessionKey: placement.sessionKey,
@@ -109,7 +112,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       const sandbox = await createRemoteExecPlacementSandbox({
         config: params.config,
         environments: options.environments,
-        localWorkspaceDir,
+        workspaceDir: workspace.kind === "local" ? workspace.path : placement.remoteWorkspaceDir,
         placement,
       });
       assertCurrentPlacement("sandbox");
@@ -121,7 +124,6 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         currentEnvironment.attachedSessionIds.length !== 1 ||
         currentEnvironment.attachedSessionIds[0] !== placement.sessionId ||
         (sandbox.backendId === "node" &&
-          "placementNodeId" in sandbox &&
           currentEnvironment.nodeDeviceId !== sandbox.placementNodeId)
       ) {
         throw new Error("Remote-exec environment changed while preparing its sandbox");
@@ -168,9 +170,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         });
       }
       let placement = requireActivePlacement(routablePlacement);
-      // The placement owns the managed worktree. Callers can carry a default or stale
-      // workspace path, but remote results must only reconcile into that canonical root.
-      const localWorkspaceDir = await options.resolveWorkspacePath(identity);
+      // Placement and session storage own the workspace; caller paths may be stale.
+      const workspace = await options.resolveWorkspace(identity);
       const remoteExec = placement.executionMode === "remote-exec";
       let turnClaim: WorkerSessionTurnClaim;
       if (remoteExec) {
@@ -236,7 +237,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           },
           placement,
           placements: options.placements,
-          localWorkspaceDir,
+          workspace,
           ...(options.prepareAcceptedWorkspacePublication
             ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
             : {}),
@@ -335,6 +336,5 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       }
     },
   };
-  provider satisfies SessionPlacementAdmissionProvider;
   return provider;
 }

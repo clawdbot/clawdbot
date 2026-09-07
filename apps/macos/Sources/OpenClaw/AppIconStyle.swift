@@ -1,16 +1,12 @@
 import AppKit
 
-enum AppIconStyle: String, CaseIterable, Identifiable {
+enum AppIconStyle: String, CaseIterable {
     case paper
     case heritage
     case clawmark
     case origami
     case pincer
     case openC
-
-    var id: String {
-        rawValue
-    }
 
     var title: String {
         switch self {
@@ -42,13 +38,6 @@ enum AppIconAppearance: String, CaseIterable {
     init(_ appearance: NSAppearance) {
         self = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
     }
-
-    var title: String {
-        switch self {
-        case .light: String(localized: "Light")
-        case .dark: String(localized: "Dark")
-        }
-    }
 }
 
 @MainActor
@@ -70,5 +59,9 @@ enum AppIconArtwork {
 
     static func image(for style: AppIconStyle, appearance: AppIconAppearance) -> NSImage? {
         self.images[style.resourceName(for: appearance)]
+    }
+
+    static func isAvailable(_ style: AppIconStyle) -> Bool {
+        AppIconAppearance.allCases.allSatisfy { self.image(for: style, appearance: $0) != nil }
     }
 }

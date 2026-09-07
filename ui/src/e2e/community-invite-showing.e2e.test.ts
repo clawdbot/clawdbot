@@ -11,7 +11,10 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -331,6 +334,10 @@ suite.define(() => {
                 await menu.click();
               }
               await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
+              await page.locator("openclaw-session-menu wa-dropdown-item:focus").waitFor();
+              // A background render must not admit new geometry while a popover owns focus.
+              await gateway.emitGatewayEvent("presence", { presence: [] });
+              await settleSidebarIdleWork(page);
               expect(await card.count()).toBe(0);
               await page.screenshot({
                 animations: "disabled",
@@ -479,11 +486,7 @@ suite.define(() => {
   });
 
   it("shows immediately, survives Join, and stays dismissed across gateway connections on one origin", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page);
 
@@ -531,7 +534,9 @@ suite.define(() => {
       await otherGatewayPage.goto(otherGatewayUrl.href);
       const confirmation = otherGatewayPage.locator("openclaw-gateway-url-confirmation");
       await confirmation.waitFor({ state: "visible" });
-      await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+      await confirmation
+        .getByRole("button", { name: "Switch to 127.0.0.1:29991", exact: true })
+        .click();
       await otherGatewayPage.locator("openclaw-app-sidebar").waitFor();
       expect(await otherGatewayPage.locator(".community-invite-card").count()).toBe(0);
     } finally {
@@ -540,11 +545,7 @@ suite.define(() => {
   });
 
   it("does not mount the workspace invite in Settings", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page);
 
@@ -608,11 +609,7 @@ suite.define(() => {
   });
 
   it("hides after a malformed cross-tab state update", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page);
 

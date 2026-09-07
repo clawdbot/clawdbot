@@ -1,17 +1,11 @@
 import { getRuntimeConfig } from "../config/io.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import type { GatewayHostLifecycle } from "./server-public.js";
-import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
-import {
-  getHealthCache,
-  getHealthVersion,
-  incrementPresenceVersion,
-} from "./server/health-state.js";
 
 type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -26,85 +20,14 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const { coreRuntime: runtime, log, logHealth } = params;
   const {
     minimalTestGateway,
-    deps,
     runtimeState,
-    unavailableGatewayMethods,
-    sessionCompanion,
-    sessionObserver,
-    mentionInbox,
-    getMcpAppSandboxPort,
-    ensureSandboxHostPort,
-    getPortalService,
-    terminalLaunchPolicy,
-    execApprovalManager,
-    questionManager,
-    cancelRunBoundApprovals,
-    forwardPluginApprovalRequest,
-    approvalWebPushDelivery,
-    pluginApprovalIosPushDelivery,
-    pluginApprovalManager,
-    placementStandingGrants,
-    systemAgentApprovalManager,
     bindApprovalPublicationContext,
-    validateAgentRuntimeApprovalAuthority,
-    approvalSessionEvents,
     startupTrace,
-    loadGatewayModelCatalog,
-    loadGatewayModelCatalogSnapshot,
-    readPreparedGatewayModelCatalog,
-    refreshGatewayHealthSnapshotWithRuntime,
-    getRuntimeSnapshot,
-    broadcast,
-    broadcastToConnIds,
-    nodeSendToSession,
-    nodeSendToAllSubscribed,
-    nodeSubscribe,
-    nodeUnsubscribe,
-    nodeUnsubscribeAll,
-    hasTalkNodeConnected,
-    clients,
-    isConnectionActive,
-    watchNodeHttpRuntime,
-    sharedGatewaySessionGenerationState,
-    resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
-    nodeRegistry,
-    nodeDesktopService,
-    workerEnvironmentService,
-    hostDesktopService,
-    workerEnvironmentStartup,
     workerPlacementRuntime,
-    workerPlacementControlAvailable,
     githubPublicationRuntime,
-    githubPublicationService,
-    terminalSessions,
-    agentRunSeq,
-    chatAbortControllers,
-    chatQueuedTurns,
-    chatRunState,
-    addChatRun,
-    removeChatRun,
-    subscribeSessionMessageEvents,
-    unsubscribeSessionMessageEvents,
-    sessionEventSubscribers,
-    sessionMessageSubscribers,
-    toolEventRecipients,
-    dedupe,
-    wizardSessions,
-    systemAgentSessions,
-    findRunningWizard,
-    purgeWizardSession,
-    readinessEventLoopHealth,
-    startChannel,
-    stopChannel,
-    markChannelLoggedOut,
-    wizardRunner,
-    channelWizardRunner,
-    broadcastVoiceWakeChanged,
-    broadcastVoiceWakeRoutingChanged,
     pluginGatewayContext,
     getAttachedGatewayMethodRegistry,
     gatewayInstanceRuntimeRef,
-    gatewayTls,
     lifecycle,
     startupState,
     kernel,
@@ -125,117 +48,20 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const gatewayRequestContext = await startupTrace.measure("gateway.request-context", async () => {
     const { createGatewayRequestContext } = await import("./server-request-context.js");
     return createGatewayRequestContext({
-      deps,
+      runtime,
       configRevisionProjector,
-      runtimeState,
-      sessionCompanion,
-      getRuntimeConfig,
-      isConfigReloadSettled: () =>
-        !lifecycle.closePreludeStarted && runtimeState.configReloader.isConfigReloadSettled(),
-      getGatewayMethodRegistry: getAttachedGatewayMethodRegistry,
-      gatewayTlsFingerprint: gatewayTls.enabled ? gatewayTls.fingerprintSha256 : undefined,
-      sessionObserver,
-      mentionInbox,
-      getMcpAppSandboxPort,
-      ensureSandboxHostPort,
-      getPortalService,
-      resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
-      isTerminalEnabled: terminalLaunchPolicy.isEnabled,
-      execApprovalManager,
-      questionManager,
-      cancelRunBoundApprovals,
-      forwardPluginApprovalRequest,
-      approvalWebPushDelivery,
-      pluginApprovalIosPushDelivery,
-      pluginApprovalManager,
-      placementStandingGrants,
-      systemAgentApprovalManager,
-      listSessionPendingApprovals: approvalSessionEvents.replay,
-      loadGatewayModelCatalog,
-      loadGatewayModelCatalogSnapshot,
-      readPreparedGatewayModelCatalog,
-      readChatMetadata: chatMetadataLifecycle.read,
-      readChatStartupProjection: chatMetadataLifecycle.readStartup,
-      getHealthCache,
-      refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
+      chatMetadataLifecycle,
+      log,
       logHealth,
-      logGateway: log,
-      incrementPresenceVersion,
-      getHealthVersion,
-      broadcast,
-      broadcastToConnIds,
-      nodeSendToSession,
-      nodeSendToAllSubscribed,
-      nodeSubscribe,
-      nodeUnsubscribe,
-      nodeUnsubscribeAll,
-      hasConnectedTalkNode: hasTalkNodeConnected,
-      clients,
-      isConnectionActive,
-      invalidateDeviceTransports: watchNodeHttpRuntime.invalidateSessionsForDevice,
-      disconnectDeviceTransports: watchNodeHttpRuntime.disconnectSessionsForDevice,
-      enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => {
-        enforceSharedGatewaySessionGenerationForConfigWrite({
-          state: sharedGatewaySessionGenerationState,
-          nextConfig,
-          resolveRuntimeSnapshotGeneration: resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
-          clients,
-        });
-      },
-      nodeRegistry,
-      ...(nodeDesktopService ? { nodeDesktopService } : {}),
-      ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
-      ...(hostDesktopService ? { hostDesktopService } : {}),
-      ...(workerEnvironmentStartup
-        ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
-        : {}),
-      ...(workerPlacementRuntime
-        ? {
-            workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace,
-            workerPlacementRunnerAvailabilityReader: workerPlacementRuntime.runnerAvailability,
-          }
-        : {}),
-      ...(workerPlacementControlAvailable
-        ? { workerPlacementDispatchService: workerPlacementControlAvailable }
-        : {}),
-      ...(githubPublicationService ? { githubPublicationService } : {}),
-      validateAgentRuntimeApprovalAuthority,
-      terminalSessions,
-      agentRunSeq,
-      chatAbortControllers,
-      chatQueuedTurns,
-      chatRunState,
-      addChatRun,
-      removeChatRun,
-      subscribeSessionEvents: sessionEventSubscribers.subscribe,
-      unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
-      subscribeSessionMessageEvents,
-      unsubscribeSessionMessageEvents,
-      unsubscribeAllSessionEvents: (connId: string) => {
-        sessionEventSubscribers.unsubscribe(connId);
-        sessionMessageSubscribers.unsubscribeAll(connId);
-        sessionObserver.removeConnection(connId);
-      },
-      getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
-      registerToolEventRecipient: toolEventRecipients.add,
-      dedupe,
-      wizardSessions,
-      systemAgentSessions,
-      findRunningWizard,
-      purgeWizardSession,
-      getRuntimeSnapshot,
-      getEventLoopHealth: readinessEventLoopHealth.snapshot,
-      startChannel,
-      stopChannel,
-      markChannelLoggedOut,
-      wizardRunner,
-      channelWizardRunner,
-      broadcastVoiceWakeChanged,
-      unavailableGatewayMethods,
-      broadcastVoiceWakeRoutingChanged,
-      notifyPluginMetadataChanged: kernel.notifyPluginMetadataChanged,
-      getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
     });
+  });
+  kernel.addGatewayLifetimeSidecar({
+    stop: async () => {
+      // Received mutations and their finalizers join before lifetime sidecars stop.
+      // Retire this exact context too when no request ever bound its coordinator.
+      retireQuestionChannelGateway(runtime.connectionWork.signal);
+      await gatewayRequestContext.scopeUpgradeCoordinator?.close();
+    },
   });
   gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);
@@ -277,6 +103,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const hostLifecycle = params.hostLifecycle;
   if (hostLifecycle) {
     gatewayRequestContext.hostLifecycle = {
+      externalRestart: hostLifecycle.externalRestart,
       request: (action, assertCaller) =>
         hostLifecycle.request(action, () => {
           if (!gatewayInstanceRuntime.isAvailable()) {
@@ -290,6 +117,10 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   }
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
+  bindGatewayContextResolver(
+    gatewayInstanceRuntime.recovery,
+    gatewayRequestContext.resolveGatewayContext,
+  );
   gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;
   return { ...runtime, chatMetadataLifecycle, gatewayRequestContext, gatewayInstanceRuntime };
 }

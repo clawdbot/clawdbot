@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { setVerbose } from "../global-state.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
@@ -34,6 +35,7 @@ afterEach(async () => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+  setVerbose(false);
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -146,6 +148,28 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["agent/embedded", true],
+    ["model-fallback/decision", true],
+    ["  agent/embedded/failover  ", true],
+    ["agent/embeddedness", false],
+    ["model-fallback-other", false],
+    ["Agent/Embedded", false],
+  ] as const)("keeps probe policy dynamic for retained %s loggers", (subsystem, suppressed) => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const sink = vi.fn();
+    loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
+    const log = createSubsystemLogger(subsystem);
+
+    for (const verbose of [false, true, false]) {
+      setVerbose(verbose);
+      sink.mockClear();
+      log.warn("runId=probe-retained warning");
+      log.raw("runId=probe-retained raw");
+      expect(sink).toHaveBeenCalledTimes(suppressed && !verbose ? 0 : 2);
+    }
   });
 
   it("keeps setup-inference probe warnings in the file log while suppressing console", async () => {

@@ -24,7 +24,9 @@ private final class DashboardWindow: NSWindow {
     override func toggleToolbarShown(_: Any?) {}
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
-        if item.action == #selector(NSWindow.toggleToolbarShown(_:)) { return false }
+        if item.action == #selector(NSWindow.toggleToolbarShown(_:)) {
+            return false
+        }
         return super.validateUserInterfaceItem(item)
     }
 }
@@ -34,22 +36,6 @@ final class DashboardGatewaySwitchIntent {
 
     init(target: DashboardGatewayTarget) {
         self.target = target
-    }
-}
-
-private final class DashboardLinkSplitView: NSSplitView {
-    var onDividerDragEnded: (() -> Void)?
-
-    override func mouseDown(with event: NSEvent) {
-        let originalPosition = self.subviews.first?.frame.maxX
-        // AppKit tracks a divider drag inside this call. Persist after it ends;
-        // resize notifications also cover automatic layout and would lose the preference.
-        super.mouseDown(with: event)
-        guard DashboardWindowLayout.dividerMoved(
-            from: originalPosition,
-            to: self.subviews.first?.frame.maxX)
-        else { return }
-        self.onDividerDragEnded?()
     }
 }
 
@@ -97,10 +83,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private static let commandsMessageHandlerName = "openclawCommands"
 
     let webView: DashboardWebView
-    private let linkBrowser: DashboardLinkBrowserView
-    private let linkBrowserItem: NSSplitViewItem
-    private let splitViewController: NSSplitViewController
+    let nativeBrowser: DashboardNativeBrowserHost
     private let updateMessageHandler: DashboardUpdateMessageHandler
+    let deviceSettingsMessageHandler: DashboardDeviceSettingsMessageHandler
     private(set) var currentURL: URL
     var auth: DashboardWindowAuth
     var gatewaySnapshot: DashboardGatewaySnapshot?
@@ -109,8 +94,24 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private(set) var notificationSourceID = UUID().uuidString
     var onBackgroundSessionOpen: ((DashboardBackgroundSessionCompletion, URL) -> Void)?
     let tlsParams: GatewayTLSParams?
+    private let browserSessionLease: DashboardBrowserSessionStore.Lease?
+    var browserSession: GatewayBrowserSession? {
+        self.browserSessionLease?.session
+    }
+
+    var hasCurrentBrowserSession: Bool {
+        // Renewals revoke the lease before awaited WebKit cleanup replaces the document.
+        guard self.browserSessionLease?.isCurrent != false else { return false }
+        do {
+            try self.browserSession?.validate(for: self.currentURL)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     private let dashboardFrameAutosaveName: String
-    private let updater: UpdaterProviding?
+    let updater: UpdaterProviding?
     private var updateBridgeEnabled: Bool
     private let requestBrowserProfileImportOffer:
         @MainActor (@escaping @MainActor () -> Bool) async -> Bool
@@ -122,8 +123,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var browserProfileImportOfferRetryPending = false
     private var hasLiveContent = false
     private var nativeCommandsReady = false
-    private var isShowingFailurePage = false
+    private(set) var isShowingFailurePage = false
     private var navigationGeneration: UInt64 = 0
+    private var loadGeneration: UInt64 = 0
+    private var pendingLoad: Task<Void, Never>?
     private var pendingNativeCommands: [DashboardNativeCommand] = []
     private var pendingNativeNavigation: DashboardNativeNavigation?
     var onClosed: (() -> Void)?
@@ -135,6 +138,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
         tlsParams: GatewayTLSParams? = nil,
+        browserSessionLease: DashboardBrowserSessionStore.Lease? = nil,
         gatewaySnapshot: DashboardGatewaySnapshot? = nil,
         windowTitle: String = "OpenClaw",
         windowAutosaveName: String,
@@ -147,6 +151,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.auth = auth
         self.gatewaySnapshot = gatewaySnapshot
         self.tlsParams = tlsParams
+        self.browserSessionLease = browserSessionLease
         self.dashboardFrameAutosaveName = windowAutosaveName
         self.updater = updater
         self.updateBridgeEnabled = shouldEnableUpdateBridge
@@ -165,6 +170,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.userContentController.add(windowDragMessageHandler, name: Self.windowDragMessageHandlerName)
         let notificationsMessageHandler = DashboardNotificationsMessageHandler()
         config.userContentController.add(notificationsMessageHandler, name: Self.notificationsMessageHandlerName)
+        let deviceSettingsMessageHandler = DashboardDeviceSettingsMessageHandler()
+        self.deviceSettingsMessageHandler = deviceSettingsMessageHandler
+        config.userContentController.addScriptMessageHandler(
+            deviceSettingsMessageHandler, contentWorld: .page, name: Self.deviceSettingsMessageHandlerName)
+        let browserMessageHandler = DashboardBrowserMessageHandler()
+        config.userContentController.addScriptMessageHandler(
+            browserMessageHandler, contentWorld: .page, name: DashboardBrowserMessageHandler.name)
         let gatewaysMessageHandler = DashboardGatewaysMessageHandler()
         config.userContentController.add(gatewaysMessageHandler, name: Self.gatewaysMessageHandlerName)
         let commandsMessageHandler = DashboardCommandsMessageHandler()
@@ -189,40 +201,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // carries in-app navigation; the web titlebar buttons use this list.
         self.webView.allowsBackForwardNavigationGestures = true
 
-        let linkBrowser = DashboardLinkBrowserView(websiteDataStore: websiteDataStore)
-        let linkBrowserSplitView = DashboardLinkSplitView()
-        let splitViewController = NSSplitViewController()
-        splitViewController.splitView = linkBrowserSplitView
-        splitViewController.splitView.isVertical = true
-        splitViewController.splitView.dividerStyle = .thin
-
-        let dashboardViewController = NSViewController()
-        dashboardViewController.view = BrowserProfileImportBannerView.makeDashboardPane(webView: self.webView)
-        let dashboardItem = NSSplitViewItem(viewController: dashboardViewController)
-        dashboardItem.minimumThickness = DashboardWindowLayout.mainBrowserMinWidth
-
-        let linkBrowserViewController = NSViewController()
-        linkBrowserViewController.view = linkBrowser
-        let linkBrowserItem = NSSplitViewItem(viewController: linkBrowserViewController)
-        linkBrowserItem.minimumThickness = DashboardWindowLayout.linkBrowserMinWidth
-        linkBrowserItem.preferredThicknessFraction = DashboardWindowLayout.linkBrowserPreferredFraction
-        // Keep the sidebar width stable while staying below AppKit's divider-drag
-        // priority; the dashboard absorbs window resizing first.
-        linkBrowserItem.holdingPriority = NSLayoutConstraint.Priority(rawValue: 251)
-        linkBrowserItem.canCollapse = true
-        linkBrowserItem.isCollapsed = true
-
-        splitViewController.addSplitViewItem(dashboardItem)
-        splitViewController.addSplitViewItem(linkBrowserItem)
-
-        self.linkBrowser = linkBrowser
-        self.linkBrowserItem = linkBrowserItem
-        self.splitViewController = splitViewController
-
+        let readingDataStore = browserSessionLease?.session == nil ? websiteDataStore : WKWebsiteDataStore
+            .nonPersistent()
+        let dashboardPane = BrowserProfileImportBannerView.makeDashboardPane(webView: self.webView)
+        self.nativeBrowser = DashboardNativeBrowserHost(
+            dashboardWebView: self.webView,
+            container: dashboardPane,
+            websiteDataStore: readingDataStore,
+            onStateChange: { [weak browserMessageHandler] state in
+                browserMessageHandler?.owner?.publishBrowserState(state)
+            })
         let preservedWindowFrame = reusingWindow?.frame
         let restoreKeyboardFocus = reusingWindow?.isKeyWindow == true
         let window = Self.makeWindow(
-            contentView: splitViewController.view,
+            contentView: dashboardPane,
             title: windowTitle,
             frameAutosaveName: windowAutosaveName,
             reusing: reusingWindow)
@@ -230,29 +222,29 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // NSWindowController adopts its own frame state during initialization;
         // keep it aligned with the autosave name installed by makeWindow, then
         // re-correct placement in case the assignment re-applied a stale frame.
-        self.windowFrameAutosaveName = windowAutosaveName
+        windowFrameAutosaveName = windowAutosaveName
         if let preservedWindowFrame {
             window.setFrame(preservedWindowFrame, display: false)
         }
         WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
 
-        // Width is autosaved, while each new dashboard window starts with the
-        // optional browser collapsed until a link explicitly opens it.
-        self.linkBrowserItem.isCollapsed = true
         linkMessageHandler.owner = self
         windowDragMessageHandler.owner = self
         notificationsMessageHandler.owner = self
+        deviceSettingsMessageHandler.owner = self
+        browserMessageHandler.owner = self
+        deviceSettingsMessageHandler.startObserving()
         gatewaysMessageHandler.owner = self
         commandsMessageHandler.owner = self
         updateMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
-        self.linkBrowser.webViewNavigationDelegate = self
-        self.linkBrowser.webViewUIDelegate = self
-        self.linkBrowser.onClose = { [weak self] in self?.closeLinkBrowser() }
-        self.linkBrowser.onOpenExternal = { [weak self] url in self?.openExternal(url) }
-        linkBrowserSplitView.onDividerDragEnded = { [weak self] in
-            self?.persistLinkBrowserWidth()
+        self.nativeBrowser.navigationDelegate = self
+        self.nativeBrowser.uiDelegate = self
+        self.nativeBrowser.onOpen = { [weak self] in
+            guard let self else { return }
+            self.browserProfileImportOfferIsArmed = true
+            self.requestBrowserProfileImportOfferIfNeeded()
         }
         self.window?.delegate = self
         self.installHistoryStateBridge()
@@ -288,7 +280,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping @MainActor @Sendable (Bool) -> Void)
     {
-        guard webView === self.webView || self.linkBrowser.owns(webView) else {
+        guard webView === self.webView || self.nativeBrowser.owns(webView) else {
             completionHandler(false)
             return
         }
@@ -313,7 +305,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         initiatedByFrame _: WKFrameInfo,
         completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void)
     {
-        guard webView === self.webView || self.linkBrowser.owns(webView) else {
+        guard webView === self.webView || self.nativeBrowser.owns(webView) else {
             completionHandler(nil)
             return
         }
@@ -342,18 +334,18 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // WebKit reaches this callback only for user-allowed new-window requests;
         // every configuration disables automatic JavaScript windows.
         guard navigationAction.targetFrame == nil,
-              webView === self.webView || self.linkBrowser.owns(webView)
+              webView === self.webView || self.nativeBrowser.owns(webView)
         else {
             return nil
         }
-        // Sidebar target=_blank links become tabs; dashboard requests preserve
-        // the existing handoff to the default browser.
+        // Reading-tab new windows stay native; dashboard new windows hand off
+        // to the default browser.
         switch Self.newWindowAction(
             for: navigationAction.request.url,
-            sourceIsLinkBrowser: self.linkBrowser.owns(webView))
+            sourceIsNativeReadingTab: self.nativeBrowser.owns(webView))
         {
         case let .openTab(url):
-            self.linkBrowser.openInNewTab(url)
+            self.nativeBrowser.openNewWindow(url, opener: webView)
         case let .openExternal(url):
             self.openExternal(url)
         case .ignore:
@@ -376,6 +368,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.update(url: url, auth: auth)
     }
 
+    func invalidateBrowserSession(error: GatewayBrowserSessionError? = nil) {
+        self.nativeBrowser.dispose()
+        showFailure(
+            title: error == .expired ? "Gateway sign-in expired" : "Gateway reconnecting",
+            message: error?.localizedDescription ?? "The saved Gateway sign-in changed.",
+            detail: "Reconnect in Connection → Gateways.",
+            present: false,
+            preservingPendingCommands: true)
+    }
+
     /// Swap the dashboard to a new gateway endpoint without reordering the window:
     /// re-injects the native auth script for the new origin and reloads. Used when
     /// the remote tunnel is recreated on a new local port while the window stays
@@ -387,7 +389,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             newURL: url,
             currentAuth: self.auth,
             newAuth: auth,
-            hasUsableDocument: self.hasLiveContent || self.webView.isLoading,
+            hasUsableDocument: self.hasLiveContent || self.webView.isLoading || self.pendingLoad != nil,
             isShowingFailurePage: self.isShowingFailurePage)
         self.currentURL = url
         self.auth = auth
@@ -409,6 +411,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     func show() {
+        self.deviceSettingsMessageHandler.startObserving()
         if let window {
             let frame = window.frame
             if frame.width < DashboardWindowLayout.windowMinSize.width ||
@@ -425,82 +428,68 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     func closeDashboard() {
-        window?.performClose(nil)
+        // Manager teardown must close even while a modal sheet disables the close button.
+        self.window?.close()
     }
 
     func detachWindowForReplacement() -> NSWindow? {
         guard let window else { return nil }
         // Route changes replace the privileged document, not its native shell;
         // detaching first transfers AppKit ownership without a close/focus cycle.
+        self.retirePendingLoad()
+        self.deviceSettingsMessageHandler.stopObserving()
         self.webView.stopLoading()
-        self.closeLinkBrowser(focusDashboard: false)
+        self.nativeBrowser.dispose()
         self.onClosed = nil
         window.delegate = nil
         window.saveFrame(usingName: self.dashboardFrameAutosaveName)
-        self.windowFrameAutosaveName = ""
+        windowFrameAutosaveName = ""
         self.window = nil
         return window
     }
 
     private func load(_ url: URL) {
+        self.retirePendingLoad()
         // Endpoint swaps must queue commands for the replacement document.
         self.hasLiveContent = false
         self.nativeCommandsReady = false
         self.isShowingFailurePage = false
         dashboardWindowLogger
             .debug("dashboard load \(GatewayEndpointStore.diagnosticURLString(for: url), privacy: .public)")
-        self.webView.load(URLRequest(url: url))
-    }
-
-    private func openLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = true) {
-        let wasCollapsed = self.linkBrowserItem.isCollapsed
-        let persistedWidth = self.persistedLinkBrowserWidth()
-        self.linkBrowserItem.isCollapsed = false
-        if wasCollapsed {
-            self.restoreLinkBrowserWidth(persistedWidth)
+        guard let browserSessionLease else {
+            self.webView.load(URLRequest(url: url))
+            return
         }
-        self.linkBrowser.open(url)
-        window?.makeFirstResponder(self.linkBrowser.activeWebView)
-        if requestBrowserProfileImportOffer {
-            self.browserProfileImportOfferIsArmed = true
-            self.requestBrowserProfileImportOfferIfNeeded()
+        let generation = self.loadGeneration
+        let contentController = self.webView.configuration.userContentController
+        self.pendingLoad = Task { @MainActor [weak self] in
+            do {
+                try await browserSessionLease.prepare(for: url, in: contentController)
+                guard let self, self.loadGeneration == generation, self.window != nil else { return }
+                self.pendingLoad = nil
+                self.webView.load(URLRequest(url: url))
+            } catch {
+                guard !Task.isCancelled, let self, self.loadGeneration == generation else { return }
+                self.pendingLoad = nil
+                self.showFailure(
+                    title: "Gateway sign-in required",
+                    message: error.localizedDescription,
+                    detail: "Sign in again in Connection → Gateways.",
+                    present: false,
+                    preservingPendingCommands: true)
+            }
         }
     }
 
-    private func persistedLinkBrowserWidth() -> CGFloat? {
-        guard let number = AppDefaults.standard.object(
-            forKey: DashboardWindowLayout.linkBrowserWidthDefaultsKey) as? NSNumber
-        else { return nil }
-        let width = CGFloat(number.doubleValue)
-        return width.isFinite && width > 0 ? width : nil
-    }
-
-    private func restoreLinkBrowserWidth(_ persistedWidth: CGFloat?) {
-        let splitView = self.splitViewController.splitView
-        splitView.layoutSubtreeIfNeeded()
-        // AppKit requires adjusted, current pane frames before divider positions
-        // are meaningful. Uncollapsing invalidates those frames.
-        splitView.adjustSubviews()
-        let width = DashboardWindowLayout.linkBrowserWidth(
-            splitWidth: splitView.bounds.width,
-            dividerThickness: splitView.dividerThickness,
-            persistedWidth: persistedWidth)
-        splitView.setPosition(
-            splitView.bounds.width - splitView.dividerThickness - width,
-            ofDividerAt: 0)
-        splitView.layoutSubtreeIfNeeded()
-    }
-
-    private func persistLinkBrowserWidth() {
-        guard !self.linkBrowserItem.isCollapsed else { return }
-        let width = self.linkBrowser.frame.width
-        guard width.isFinite, width >= DashboardWindowLayout.linkBrowserMinWidth else { return }
-        AppDefaults.standard.set(Double(width), forKey: DashboardWindowLayout.linkBrowserWidthDefaultsKey)
+    private func retirePendingLoad() {
+        self.loadGeneration &+= 1
+        self.pendingLoad?.cancel()
+        self.pendingLoad = nil
     }
 
     private func requestBrowserProfileImportOfferIfNeeded() {
         guard self.browserProfileImportOfferIsArmed,
-              !self.linkBrowserItem.isCollapsed,
+              self.nativeBrowser.hasTabs,
               !self.didRequestBrowserProfileImportOffer
         else { return }
         if self.browserProfileImportOfferRequestIsInFlight {
@@ -515,7 +504,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             let didApply = await self.requestBrowserProfileImportOffer { [weak self] in
                 guard let self else { return false }
                 return self.browserProfileImportOfferIsArmed &&
-                    !self.linkBrowserItem.isCollapsed &&
+                    self.nativeBrowser.hasTabs &&
                     !self.didRequestBrowserProfileImportOffer
             }
             self.browserProfileImportOfferRequestIsInFlight = false
@@ -530,17 +519,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     func handleOnboardingCompletion() {
-        // A pre-onboarding inline browser leaves the one-shot armed. Retry at
+        // A Mac tab opened before onboarding leaves the one-shot armed. Retry at
         // the eligibility transition so it does not depend on later navigation.
         self.requestBrowserProfileImportOfferIfNeeded()
-    }
-
-    private func closeLinkBrowser(focusDashboard: Bool = true) {
-        self.linkBrowser.closeBrowser()
-        self.linkBrowserItem.isCollapsed = true
-        if focusDashboard {
-            window?.makeFirstResponder(self.webView)
-        }
     }
 
     private func openExternal(_ url: URL) {
@@ -550,7 +531,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     fileprivate func receiveLinkMessage(_ message: WKScriptMessage) {
         // The page-world handler is privileged. Accept only the main frame of
-        // the current Control UI path; the sibling browser never receives it.
+        // the current Control UI path; reading tabs never receive it.
         guard message.name == Self.linkMessageHandlerName,
               message.webView === self.webView,
               message.frameInfo.isMainFrame,
@@ -561,9 +542,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
 
         switch request.target {
-        case .inline:
-            self.openLinkBrowser(request.url)
-        case .external:
+        case .inline, .external:
+            // Older Control UI bundles still post inline; Mac tabs now use openclawBrowser.
             self.openExternal(request.url)
         }
     }
@@ -604,7 +584,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
               message.frameInfo.isMainFrame,
               Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
               Self.isStartUpdateRequest(message.body),
-              let updater = self.updater
+              let updater
         else {
             return
         }
@@ -639,53 +619,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
         switch target {
         case .inline:
-            guard self.isHTTPURL(url) else { return nil }
+            guard isHTTPURL(url) else { return nil }
         case .external:
-            guard self.isExternalURL(url) else { return nil }
+            guard isExternalURL(url) else { return nil }
         }
         return DashboardLinkRequest(url: url, target: target)
-    }
-
-    static func isTrustedLinkSource(_ sourceURL: URL?, dashboardURL: URL) -> Bool {
-        guard let sourceURL, sameOrigin(sourceURL, dashboardURL) else { return false }
-        let allowedPath = Self.allowedPath(for: dashboardURL)
-        return allowedPath == "/" || sourceURL.path(percentEncoded: true).hasPrefix(allowedPath)
-    }
-
-    static func shouldAllowEditorURLLaunch(
-        from sourceURL: URL?,
-        isMainFrame: Bool,
-        dashboardURL: URL) -> Bool
-    {
-        isMainFrame && self.isTrustedLinkSource(sourceURL, dashboardURL: dashboardURL)
-    }
-
-    private static func isHTTPURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              url.host?.isEmpty == false
-        else {
-            return false
-        }
-        return true
-    }
-
-    private static func isExternalURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased() else { return false }
-        if scheme == "http" || scheme == "https" {
-            return self.isHTTPURL(url)
-        }
-        return scheme == "mailto" || scheme == "tel"
-    }
-
-    private static func isEditorURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased(),
-              url.host?.lowercased() == "file",
-              !url.path.isEmpty
-        else {
-            return false
-        }
-        return scheme == "cursor" || scheme == "vscode" || scheme == "windsurf" || scheme == "zed"
     }
 
     private func refreshNativeAuthScript(url: URL, auth: DashboardWindowAuth) {
@@ -727,13 +665,14 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private var activeNavigationWebView: WKWebView {
-        guard let linkWebView = self.linkBrowser.activeWebView,
-              let firstResponder = self.window?.firstResponder as? NSView,
-              firstResponder === linkWebView || firstResponder.isDescendant(of: linkWebView)
-        else {
-            return self.webView
+        var responderView = window?.firstResponder as? NSView
+        while let view = responderView {
+            if let webView = view as? WKWebView, self.nativeBrowser.owns(webView) {
+                return webView
+            }
+            responderView = view.superview
         }
-        return linkWebView
+        return self.webView
     }
 
     private static func makeWindow(
@@ -809,106 +748,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return window
     }
 
-    static func shouldAllowNavigation(
-        to url: URL,
-        dashboardURL: URL,
-        isMainFrame: Bool,
-        isTrustedDashboardSource: Bool = false) -> Bool
-    {
-        guard let scheme = url.scheme?.lowercased() else { return true }
-        if scheme == "about" || scheme == "blob" || scheme == "data" {
-            return true
-        }
-        guard scheme == "http" || scheme == "https", url.user == nil, url.password == nil else { return false }
-        let host = url.host?.lowercased()
-        if self.sameOrigin(url, dashboardURL) {
-            return true
-        }
-        guard !isMainFrame,
-              isTrustedDashboardSource,
-              host?.isEmpty == false,
-              url.user == nil,
-              url.password == nil
-        else {
-            return false
-        }
-        let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
-        return url.path(percentEncoded: true) == "/mcp-app-sandbox" || (components.count == 4 &&
-            components[0] == "embed" &&
-            (components[1] == "channel" || components[1] == "thread"))
-    }
-
-    static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
-        if isMainFrame {
-            return self.isHTTPURL(url)
-        }
-        guard let scheme = url.scheme?.lowercased() else { return false }
-        return scheme == "about" || scheme == "blob" || scheme == "data" || self.isHTTPURL(url)
-    }
-
-    static func shouldAllowIdentityNavigation(
-        to url: URL,
-        auth: DashboardWindowAuth,
-        isMainFrame: Bool,
-        sourceIsDashboard: Bool,
-        navigationType: WKNavigationType) -> Bool
-    {
-        guard auth.usesBrowserIdentity, url.scheme?.lowercased() == "https",
-              url.host?.isEmpty == false, url.user == nil, url.password == nil else { return false }
-        // Dashboard links keep their browser handoff. Redirects and the identity
-        // provider's links/forms stay here so its cookies authenticate the returning page.
-        return sourceIsDashboard ? isMainFrame && navigationType != .linkActivated : true
-    }
-
-    static func shouldOpenExternalDashboardNavigation(
-        _ url: URL,
-        navigationType: WKNavigationType,
-        buttonNumber: Int) -> Bool
-    {
-        // WebKit also labels synthetic anchor.click() as linkActivated. Its
-        // action reports button 0; a physical primary click reports 1 here.
-        navigationType == .linkActivated && buttonNumber > 0 && self.isExternalURL(url)
-    }
-
-    static func targetlessNavigationAction(
-        for url: URL,
-        navigationType: WKNavigationType,
-        buttonNumber: Int,
-        allowEditorURLs: Bool) -> DashboardTargetlessNavigationAction
-    {
-        if self.isHTTPURL(url) {
-            return .allow
-        }
-        // The trusted Control UI's file sidebar opens these explicit editor URLs
-        // with window.open(); never grant the same synthetic-launch path to web content.
-        if allowEditorURLs, self.isEditorURL(url) {
-            return .openExternal
-        }
-        if self.shouldOpenExternalDashboardNavigation(
-            url,
-            navigationType: navigationType,
-            buttonNumber: buttonNumber)
-        {
-            return .openExternal
-        }
-        return .cancel
-    }
-
-    static func newWindowAction(for url: URL?, sourceIsLinkBrowser: Bool) -> DashboardNewWindowAction {
-        guard let url, self.isHTTPURL(url) else { return .ignore }
-        return sourceIsLinkBrowser ? .openTab(url) : .openExternal(url)
-    }
-
     private func showLoadFailure(_ error: Error) {
         let nsError = error as NSError
         // A cancelled provisional navigation never commits, so the prior
         // document survives and stays command-capable; clearing live state
         // here would queue native commands forever with no reload to flush.
         if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
-            self.refreshNativeCommandReadiness()
+            refreshNativeCommandReadiness()
             return
         }
-        self.prepareForFailure()
+        prepareForFailure()
         let urlDescription = GatewayEndpointStore.diagnosticURLString(for: self.currentURL)
         dashboardWindowLogger.error(
             """
@@ -1036,7 +885,7 @@ extension DashboardWindowController {
         let hostPart = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
         var out = "\(scheme)://\(hostPart)"
         // Browsers omit default ports even when a saved native profile makes them explicit.
-        if let port = url.port, port != self.defaultPort(for: scheme) {
+        if let port = url.port, port != defaultPort(for: scheme) {
             out += ":\(port)"
         }
         return out
@@ -1063,6 +912,7 @@ extension DashboardWindowController {
 
 extension DashboardWindowController {
     private func prepareForFailure(preservingPendingCommands: Bool = false) {
+        self.retirePendingLoad()
         self.hasLiveContent = false
         self.nativeCommandsReady = false
         self.isShowingFailurePage = true
@@ -1070,7 +920,9 @@ extension DashboardWindowController {
         // A pending picker owns its successor's actions, independent of the failing document.
         guard self.pendingGatewaySwitch == nil else { return }
         // Transient reconnects retain generic commands; route-specific navigation expires.
-        if !preservingPendingCommands { self.pendingNativeCommands = [] }
+        if !preservingPendingCommands {
+            self.pendingNativeCommands = []
+        }
         self.pendingNativeNavigation = nil
     }
 
@@ -1117,8 +969,8 @@ extension DashboardWindowController {
     }
 
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent? {
-        get { (self.window as? DashboardWindow)?.pendingGatewaySwitch }
-        set { (self.window as? DashboardWindow)?.pendingGatewaySwitch = newValue }
+        get { (window as? DashboardWindow)?.pendingGatewaySwitch }
+        set { (window as? DashboardWindow)?.pendingGatewaySwitch = newValue }
     }
 
     func navigateBack() {
@@ -1127,11 +979,6 @@ extension DashboardWindowController {
 
     func navigateForward() {
         self.activeNavigationWebView.goForward()
-    }
-
-    private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
-        self.isHTTPURL(lhs) && self.isHTTPURL(rhs) &&
-            self.originString(for: lhs) == self.originString(for: rhs)
     }
 
     private static func makeJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
@@ -1159,7 +1006,7 @@ extension DashboardWindowController {
     /// cancelled load with no successor, needs a reload before dispatch —
     /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
     var canDeliverNativeCommands: Bool {
-        !self.isShowingFailurePage && (self.hasLiveContent || self.webView.isLoading)
+        !self.isShowingFailurePage && (self.hasLiveContent || self.webView.isLoading || self.pendingLoad != nil)
     }
 
     private var isTrustedDashboardDocument: Bool {
@@ -1211,7 +1058,9 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        self.retirePendingLoad()
         (self.window as? DashboardWindow)?.lifetimeRevision &+= 1
+        self.deviceSettingsMessageHandler.stopObserving()
         self.advanceWindowIntent()
         self.advanceNavigationGeneration()
         self.hasLiveContent = false
@@ -1220,7 +1069,7 @@ extension DashboardWindowController {
         self.pendingNativeNavigation = nil
         self.pendingGatewaySwitch = nil
         self.webView.stopLoading()
-        self.closeLinkBrowser(focusDashboard: false)
+        self.nativeBrowser.dispose()
         self.onClosed?()
     }
 
@@ -1259,30 +1108,6 @@ extension DashboardWindowController {
         }
         let authorized = mediaTypes.allSatisfy { AVCaptureDevice.authorizationStatus(for: $0) == .authorized }
         decisionHandler(authorized ? .grant : .prompt)
-    }
-
-    static func isTrustedMediaCaptureOrigin(
-        protocol scheme: String,
-        host: String,
-        port: Int,
-        dashboardURL: URL) -> Bool
-    {
-        guard scheme.caseInsensitiveCompare(dashboardURL.scheme ?? "") == .orderedSame,
-              host.caseInsensitiveCompare(dashboardURL.host ?? "") == .orderedSame
-        else {
-            return false
-        }
-        let requestedPort = port == 0 ? Self.defaultPort(for: scheme) : port
-        let dashboardPort = dashboardURL.port ?? Self.defaultPort(for: dashboardURL.scheme)
-        return requestedPort == dashboardPort
-    }
-
-    private static func defaultPort(for scheme: String?) -> Int? {
-        switch scheme?.lowercased() {
-        case "http": 80
-        case "https": 443
-        default: nil
-        }
     }
 
     static func shouldReloadDashboard(
@@ -1386,15 +1211,15 @@ extension DashboardWindowController {
     }
 
     var windowIntentGeneration: UInt64? {
-        (self.window as? DashboardWindow)?.userIntentGeneration
+        (window as? DashboardWindow)?.userIntentGeneration
     }
 
     var windowLifetimeRevision: UInt64? {
-        (self.window as? DashboardWindow)?.lifetimeRevision
+        (window as? DashboardWindow)?.lifetimeRevision
     }
 
     private func advanceWindowIntent() {
-        (self.window as? DashboardWindow)?.userIntentGeneration &+= 1
+        (window as? DashboardWindow)?.userIntentGeneration &+= 1
     }
 
     private func advanceNavigationGeneration() {
@@ -1406,7 +1231,7 @@ extension DashboardWindowController {
     }
 
     private func flushPendingNativeNavigation() {
-        guard let navigation = self.pendingNativeNavigation else { return }
+        guard let navigation = pendingNativeNavigation else { return }
         self.pendingNativeNavigation = nil
         self.evaluateNativeNavigation(navigation)
     }
@@ -1421,8 +1246,8 @@ extension DashboardWindowController {
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
         let isDashboardWebView = webView === self.webView
-        let isLinkBrowserWebView = self.linkBrowser.owns(webView)
-        guard isDashboardWebView || isLinkBrowserWebView else {
+        let nativeTab = self.nativeBrowser.browserTab(for: webView)
+        guard isDashboardWebView || nativeTab != nil else {
             decisionHandler(.cancel)
             return
         }
@@ -1430,8 +1255,15 @@ extension DashboardWindowController {
             decisionHandler(isDashboardWebView ? .allow : .cancel)
             return
         }
-        if isLinkBrowserWebView {
-            // The lightweight sidebar has no download destination UI. Preserve
+        if let nativeTab {
+            let isMainFrame = navigationAction.targetFrame?.isMainFrame == true
+            if isMainFrame {
+                nativeTab.navigationWasUserActivated = Self.shouldOpenExternalDashboardNavigation(
+                    url,
+                    navigationType: navigationAction.navigationType,
+                    buttonNumber: navigationAction.buttonNumber)
+            }
+            // Mac tabs have no download destination UI. Preserve
             // direct pointer-activated downloads by handing them to the default browser.
             if navigationAction.shouldPerformDownload {
                 if Self.shouldOpenExternalDashboardNavigation(
@@ -1453,15 +1285,16 @@ extension DashboardWindowController {
                     decisionHandler: decisionHandler)
                 return
             }
-            let isMainFrame = navigationAction.targetFrame?.isMainFrame == true
-            if Self.shouldAllowBrowserNavigation(to: url, isMainFrame: isMainFrame) {
+            if Self.shouldAllowBrowserNavigation(to: url, isMainFrame: isMainFrame) ||
+                url.absoluteString == "about:blank"
+            {
                 if isMainFrame {
-                    self.linkBrowser.navigationWillStart(url, in: webView)
+                    self.nativeBrowser.navigationWillStart(url, in: webView)
                 }
                 decisionHandler(.allow)
                 return
             }
-            // The sidebar is an HTTP(S) reading surface. Only the trusted
+            // Mac tabs are HTTP(S) reading surfaces. Only the trusted
             // dashboard bridge may ask macOS to launch mail or phone URLs.
             decisionHandler(.cancel)
             return
@@ -1520,9 +1353,8 @@ extension DashboardWindowController {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        if self.linkBrowser.owns(webView) {
-            self.linkBrowser.navigationDidStart(navigation, in: webView)
-            self.linkBrowser.updateChrome()
+        if self.nativeBrowser.owns(webView) {
+            self.nativeBrowser.navigationDidStart(navigation, in: webView)
         } else if webView === self.webView {
             self.nativeCommandsReady = false
         }
@@ -1534,6 +1366,8 @@ extension DashboardWindowController {
     func webView(_ webView: WKWebView, didCommit _: WKNavigation!) {
         guard webView === self.webView else { return }
         self.notificationSourceID = UUID().uuidString
+        self.deviceSettingsMessageHandler.cancelRequests()
+        self.nativeBrowser.releaseAllScopes()
         self.hasLiveContent = false
         self.nativeCommandsReady = false
         // Swipe-back/⌘[ can leave the failure page through WKWebView history
@@ -1545,23 +1379,25 @@ extension DashboardWindowController {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if self.linkBrowser.owns(webView) {
-            self.linkBrowser.navigationDidFinish(navigation, for: webView)
+        if self.nativeBrowser.owns(webView) {
+            self.nativeBrowser.navigationDidFinish(navigation, for: webView)
         } else if webView === self.webView {
             guard !self.isShowingFailurePage else { return }
             // A finished sign-in document is usable but never receives native
             // commands. Keep pending intent until the verified dashboard returns.
             self.hasLiveContent = true
             guard self.isTrustedDashboardDocument else { return }
+            self.deviceSettingsMessageHandler.refresh(refreshAvailability: true)
             self.publishNativeHistoryState()
+            self.nativeBrowser.scheduleStatePush()
             self.refreshNativeCommandReadiness()
             self.flushReadyNativeActions()
         }
     }
 
     func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
-        if self.linkBrowser.owns(webView) {
-            self.linkBrowser.navigationDidFail(for: webView)
+        if self.nativeBrowser.owns(webView) {
+            self.nativeBrowser.navigationDidFail(for: webView)
             return
         }
         guard webView === self.webView else { return }
@@ -1573,12 +1409,47 @@ extension DashboardWindowController {
         didFailProvisionalNavigation _: WKNavigation!,
         withError error: Error)
     {
-        if self.linkBrowser.owns(webView) {
-            self.linkBrowser.navigationDidFail(for: webView)
+        if self.nativeBrowser.owns(webView) {
+            self.nativeBrowser.navigationDidFail(for: webView)
             return
         }
         guard webView === self.webView else { return }
         self.showLoadFailure(error)
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard self.nativeBrowser.owns(webView) else { return }
+        webView.reload()
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
+    {
+        guard let tab = self.nativeBrowser.browserTab(for: webView) else {
+            decisionHandler(.allow)
+            return
+        }
+        let userActivated = tab.navigationWasUserActivated
+        if navigationResponse.isForMainFrame {
+            // Consume the main-frame action; subframe responses cannot borrow it.
+            tab.navigationWasUserActivated = false
+        }
+        switch Self.browserResponseAction(
+            for: navigationResponse.response.url,
+            canShowMIMEType: navigationResponse.canShowMIMEType,
+            isMainFrame: navigationResponse.isForMainFrame,
+            userActivated: userActivated)
+        {
+        case .allow:
+            decisionHandler(.allow)
+        case let .openExternal(url):
+            self.openExternal(url)
+            decisionHandler(.cancel)
+        case .cancel:
+            decisionHandler(.cancel)
+        }
     }
 
     private func decideTargetlessNavigation(
@@ -1619,132 +1490,8 @@ extension DashboardWindowController {
         self.tlsParams
     }
 
-    var _testLinkBrowserIsCollapsed: Bool {
-        self.linkBrowserItem.isCollapsed
-    }
-
-    var _testLinkBrowserDataStore: WKWebsiteDataStore {
-        // Prefer the active tab's configured store so tests catch a tab that
-        // was built with the wrong (non-shared) data store.
-        self.linkBrowser.activeWebView?.configuration.websiteDataStore
-            ?? self.linkBrowser._testWebsiteDataStore
-    }
-
-    var _testLinkBrowserRepresentedURL: URL? {
-        self.linkBrowser._testRepresentedURL
-    }
-
-    var _testLinkBrowserNavigationObservationCount: Int {
-        self.linkBrowser._testNavigationObservationCount
-    }
-
-    var _testLinkBrowserWebViewIdentity: ObjectIdentifier? {
-        self.linkBrowser.activeWebView.map(ObjectIdentifier.init)
-    }
-
-    var _testLinkBrowserWebViewURL: URL? {
-        self.linkBrowser.activeWebView?.url
-    }
-
-    var _testLinkBrowserHistoryIsEmpty: Bool {
-        guard let history = self.linkBrowser.activeWebView?.backForwardList else { return true }
-        return history.currentItem == nil && history.backItem == nil && history.forwardItem == nil
-    }
-
-    var _testLinkBrowserDelegatesAreInstalled: Bool {
-        guard let webView = self.linkBrowser.activeWebView else { return false }
-        return webView.navigationDelegate === self && webView.uiDelegate === self
-    }
-
-    var _testLinkBrowserWebViewIsInstalled: Bool {
-        self.linkBrowser.activeWebView?.superview === self.linkBrowser
-    }
-
     var _testDashboardDataStore: WKWebsiteDataStore {
         self.webView.configuration.websiteDataStore
-    }
-
-    var _testCanOpenWindowsAutomatically: Bool {
-        self.webView.configuration.preferences.javaScriptCanOpenWindowsAutomatically ||
-            self.linkBrowser._testAllWebViews.contains {
-                $0.configuration.preferences.javaScriptCanOpenWindowsAutomatically
-            }
-    }
-
-    var _testAllWebViewsEnableTabNavigation: Bool {
-        self.webView.configuration.preferences.tabFocusesLinks &&
-            self.linkBrowser._testAllWebViews.allSatisfy(\.configuration.preferences.tabFocusesLinks)
-    }
-
-    var _testLinkBrowserWidth: CGFloat {
-        self.linkBrowser.frame.width
-    }
-
-    var _testLinkBrowserSplitWidth: CGFloat {
-        let splitView = self.splitViewController.splitView
-        // Hosted runners can constrain the visible window while content and split
-        // bounds still reflect the requested size. The window frame is authoritative.
-        return self.window?.frame.width ?? splitView.bounds.width
-    }
-
-    var _testLinkBrowserDividerThickness: CGFloat {
-        self.splitViewController.splitView.dividerThickness
-    }
-
-    var _testLinkBrowserMaximumThickness: CGFloat {
-        self.linkBrowserItem.maximumThickness
-    }
-
-    var _testLinkBrowserTabBarIsHidden: Bool {
-        self.linkBrowser._testTabBarIsHidden
-    }
-
-    var _testLinkBrowserToolbarHeight: CGFloat {
-        self.linkBrowser._testToolbarHeight
-    }
-
-    var _testLinkBrowserTabBarHeight: CGFloat {
-        self.linkBrowser._testTabBarHeight
-    }
-
-    func _testOpenLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = false) {
-        self.openLinkBrowser(url, requestBrowserProfileImportOffer: requestBrowserProfileImportOffer)
-    }
-
-    func _testCloseLinkBrowser() {
-        self.closeLinkBrowser()
-    }
-
-    var _testLinkBrowserTabCount: Int {
-        self.linkBrowser._testTabCount
-    }
-
-    var _testLinkBrowserTabURLs: [URL?] {
-        self.linkBrowser._testTabURLs
-    }
-
-    var _testLinkBrowserActiveTabIndex: Int? {
-        self.linkBrowser._testActiveTabIndex
-    }
-
-    func _testLinkBrowserOpenInNewTab(_ url: URL) {
-        self.linkBrowser.openInNewTab(url)
-    }
-
-    func _testLinkBrowserCloseTab(at index: Int) {
-        self.linkBrowser._testCloseTab(at: index)
-    }
-
-    func _testLinkBrowserMoveTab(from fromIndex: Int, to toIndex: Int) {
-        self.linkBrowser._testMoveTab(from: fromIndex, to: toIndex)
-    }
-
-    func _testLinkBrowserSelectTab(at index: Int) {
-        self.linkBrowser._testSelectTab(at: index)
-    }
-
-    func _testLinkBrowserContextMenu(forTabAt index: Int) -> NSMenu? {
-        self.linkBrowser._testContextMenu(forTabAt: index)
     }
 
     var _testAllowsBackForwardGestures: Bool {
@@ -1773,11 +1520,6 @@ extension DashboardWindowController {
 
     var _testDashboardWebViewIdentity: ObjectIdentifier {
         ObjectIdentifier(self.webView)
-    }
-
-    func _testFocusLinkBrowser() -> Bool {
-        guard let webView = self.linkBrowser.activeWebView else { return false }
-        return self.window?.makeFirstResponder(webView) == true
     }
 
     static func _testJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {

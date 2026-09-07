@@ -7,9 +7,22 @@ import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
-// Keep real install discovery inside the fixture; no entrypoint means no completion write.
+// Keep real install discovery inside the fixture; only the completion case has a CLI binary.
 await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-const [scenario, ...args] = process.argv.slice(2);
+const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
+const borrowed = scenario?.startsWith("borrowed-");
+if (scenario === "completion-hang") {
+  await fs.writeFile(
+    path.join(root, "openclaw.mjs"),
+    `import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(path.join(root, "completion.pid"))}, String(process.pid));
+process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 10_000);`,
+  );
+}
+if (scenario === "human-recovery-plugin-error") {
+  Object.defineProperty(process.stdin, "isTTY", { value: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: true });
+}
 const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
 const doctorSource = `
 import { intro, note, outro } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};
@@ -55,6 +68,12 @@ async function triageCommand() {
 }
 try {
   if (process.argv[2] === 'doctor') await doctorCommand();
+  else if (process.argv.slice(2).join(' ') === 'config validate --json') {
+    if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== '0') {
+      throw new Error('Config validation must use strict mode');
+    }
+    console.log(JSON.stringify({ valid: true, path: process.env.OPENCLAW_CONFIG_PATH, warnings: [] }));
+  }
   else if (process.argv[2] === 'triage') await triageCommand();
   else throw new Error('Unexpected installed CLI command: ' + process.argv[2]);
 } catch (error) {
@@ -69,6 +88,12 @@ export const readConfigFileSnapshot = async () => ({ valid: true, config, source
 export const assertConfigWriteAllowedInCurrentMode = () => {};
 `;
 const stubs = new Map<string, string>([
+  // Forward prepared locations, not currentModuleUrl as an import: builds may
+  // place that URL in a shared chunk. Workers still execute their real compiled code.
+  [
+    sourceUrl("../infra/runtime-process-entrypoints.ts"),
+    `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};`,
+  ],
   [sourceUrl("../commands/doctor.ts"), doctorSource],
   [sourceUrl("../config/config.ts"), snapshotSource],
   [
@@ -81,11 +106,21 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-config-snapshot.ts"),
-    "export const createUpdateConfigSnapshot = async () => {};",
+    scenario === "phase-hang"
+      ? 'export const createUpdateConfigSnapshot = async () => { console.error("fixture configSnapshot entered"); setInterval(() => {}, 1000); await new Promise(() => {}); };'
+      : scenario === "borrowed-phase"
+        ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
+        : "export const createUpdateConfigSnapshot = async () => {};",
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
-    "export const readPostCorePreUpdateSourceConfig = async () => undefined; export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot; export const persistValidatedDowngradeConfig = async () => {}; export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});",
+    `export const readPostCorePreUpdateSourceConfig = async () => {
+      ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}
+      return undefined;
+    };
+    export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot;
+    export const persistValidatedDowngradeConfig = async () => {};
+    export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});`,
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
@@ -96,6 +131,34 @@ const stubs = new Map<string, string>([
     `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
+const blockedPhase =
+  scenario === "phase-hang"
+    ? "configSnapshot"
+    : scenario === "completion-hang"
+      ? "completionCache"
+      : undefined;
+if (blockedPhase) {
+  const lifecycleUrl = sourceUrl("./update-cli/update-finalization-lifecycle.ts");
+  // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
+  stubs.set(
+    lifecycleUrl,
+    `import { UpdateFinalizationLifecycle as RealLifecycle } from ${JSON.stringify(`${lifecycleUrl}?fixture-original`)};
+export class UpdateFinalizationLifecycle extends RealLifecycle {
+  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? 1_000 : super.budget(phase); }
+}`,
+  );
+}
+if (scenario === "human-recovery-plugin-error") {
+  stubs.set(
+    sourceUrl("./update-cli/update-command-report.ts"),
+    `
+export async function runInteractiveUpdateFailureAction({ runtime }) {
+  await new Promise(resolve => setTimeout(resolve, 11_000));
+  runtime.log('Interactive recovery completed.');
+  return 'handled';
+}`,
+  );
+}
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith(".") || specifier.startsWith("file:")) {
@@ -114,28 +177,45 @@ const { registerUpdateCli } = await import("./update-cli.js");
 const { defaultRuntime } = await import("../runtime.js");
 const { formatCliJsonFailure } = await import("./failure-output.js");
 const { runCliWithExitFinalization } = await import("./one-shot-exit.js");
+const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
 const { enableConsoleCapture } = await import("../logging/console.js");
 const { withConsoleLogsRoutedToStderrForJson, applyResolvedCommandOutputMode } =
   await import("./json-output-mode.js");
 const { isCommandJsonOutputMode } = await import("./program/json-mode.js");
 process.argv = [process.execPath, path.join(root, "openclaw.mjs"), ...args];
 enableConsoleCapture();
-await runCliWithExitFinalization({
-  run: () =>
-    withConsoleLogsRoutedToStderrForJson(
-      process.argv,
-      async () => {
-        const program = new Command().name("openclaw");
-        program.hook("preAction", (_root, command) => {
-          applyResolvedCommandOutputMode(isCommandJsonOutputMode(command));
-        });
-        registerUpdateCli(program);
-        await program.parseAsync(process.argv);
-      },
-      { retainRoutingUntilProcessExit: true },
-    ),
-  onError: (error) => {
-    defaultRuntime.writeJson(formatCliJsonFailure(error));
-    process.exitCode = 1;
-  },
-});
+const run = () =>
+  withConsoleLogsRoutedToStderrForJson(
+    process.argv,
+    async () => {
+      const program = new Command().name("openclaw");
+      program.hook("preAction", (_root, command) => {
+        applyResolvedCommandOutputMode(isCommandJsonOutputMode(command));
+      });
+      registerUpdateCli(program);
+      await program.parseAsync(process.argv);
+      if (scenario === "handle-hang") {
+        setInterval(() => {}, 1000);
+      }
+      if (borrowed) {
+        if (scenario === "borrowed-output") {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 11_000);
+          });
+        }
+        console.error("Borrowed caller completed.");
+      }
+    },
+    { retainRoutingUntilProcessExit: true },
+  );
+if (borrowed) {
+  await run();
+} else {
+  await runCliWithExitFinalization({
+    run: () => withCliProcessScope(run),
+    onError: (error) => {
+      defaultRuntime.writeJson(formatCliJsonFailure(error));
+      process.exitCode = 1;
+    },
+  });
+}

@@ -27,6 +27,9 @@ type RecoveryCoordinatorParams = {
   clearAcceptedRecovery: ReturnType<
     typeof createSubagentRunManager
   >["clearAcceptedSubagentRestartRecovery"];
+  clearPendingNotice: ReturnType<
+    typeof createSubagentRunManager
+  >["clearPendingSubagentRecoveryNotice"];
   resumeAcceptedRecovery: ReturnType<
     typeof createSubagentRunManager
   >["resumeSettledSubagentRestartRecovery"];
@@ -126,6 +129,7 @@ export function createInterruptedRecoveryCoordinator(params: RecoveryCoordinator
       isCurrent: ownsCurrentGeneration,
       abandonLaunch: params.abandonLaunch,
       clearAcceptedRecovery: params.clearAcceptedRecovery,
+      clearPendingNotice: params.clearPendingNotice,
       getRun: (targetRunId) => params.runs.get(targetRunId),
       replaceRun: params.replaceRun,
       markLaunchAttempted: params.markLaunchAttempted,

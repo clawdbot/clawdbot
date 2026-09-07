@@ -5,7 +5,7 @@ import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sd
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
-import { WorkboardStore } from "./store.js";
+import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
   claimTokenField,
@@ -168,9 +168,9 @@ const CardIdSchema = strictObject({
 
 export function createWorkboardTools(params: {
   context?: OpenClawPluginToolContext;
-  store?: WorkboardStore;
+  store: WorkboardStore;
 }): AnyAgentTool[] {
-  const store = params.store ?? WorkboardStore.openSqlite();
+  const { store } = params;
   const ownerId = contextOwner(params.context);
   const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
     const input = readCardToolParams(rawParams, ownerId);
@@ -196,7 +196,7 @@ export function createWorkboardTools(params: {
     runCardMutation(rawParams, readScopedCardToolParams, mutate);
   const runClaimedCardMutation = (rawParams: unknown, mutate: WorkboardCardMutation) =>
     runCardMutation(rawParams, readClaimedCardToolParams, mutate);
-  return [
+  const tools: AnyAgentTool[] = [
     {
       name: "workboard_list",
       label: "Workboard List",
@@ -563,4 +563,9 @@ export function createWorkboardTools(params: {
       redactedCardResult,
     }),
   ];
+  for (const tool of tools) {
+    const execute = tool.execute;
+    tool.execute = (...args) => store.runOperation(() => execute(...args));
+  }
+  return tools;
 }

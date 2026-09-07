@@ -2,6 +2,7 @@
 import path from "node:path";
 import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
 import { pathMayExistSync } from "./path-existence.js";
+import { formatDoctorStateRepairFailure } from "./state-repair-message.js";
 
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 // Doctor usually runs in another process, so cache only the steady-state absence;
@@ -22,9 +23,14 @@ function doctorFixInstruction(filePath: string): string {
 }
 
 export class ExecApprovalsMigrationRequiredError extends Error {
-  constructor(filePath: string) {
+  constructor(filePath: string, operation?: "doctor", problem = "Legacy exec approvals exist") {
     super(
-      `Legacy exec approvals exist at ${filePath}. ${doctorFixInstruction(filePath)} before using exec approvals.`,
+      operation === "doctor"
+        ? formatDoctorStateRepairFailure(
+            `${problem} at ${filePath}`,
+            "Stop the Gateway and node hosts, then reconcile this file with a verified copy of the intended exec policy; preserve existing SQLite policy.",
+          )
+        : `${problem} at ${filePath}. ${doctorFixInstruction(filePath)} before using exec approvals.`,
     );
     this.name = "ExecApprovalsMigrationRequiredError";
   }
@@ -32,7 +38,7 @@ export class ExecApprovalsMigrationRequiredError extends Error {
 
 /** Refuse runtime access until Doctor owns the one-time legacy import. */
 export function assertNoPendingLegacyExecApprovals(
-  options: { pathMayExist?: (filePath: string) => boolean } = {},
+  options: { pathMayExist?: (filePath: string) => boolean; operation?: "doctor" } = {},
 ): void {
   const sourcePath = resolveExecApprovalsPath();
   if (legacyAbsenceCache.has(sourcePath)) {
@@ -44,7 +50,12 @@ export function assertNoPendingLegacyExecApprovals(
   const claim = probe(`${sourcePath}${DOCTOR_CLAIM_SUFFIX}`);
   const sourceAfter = probe(sourcePath);
   if (sourceBefore || claim || sourceAfter) {
-    throw new ExecApprovalsMigrationRequiredError(sourcePath);
+    throw new ExecApprovalsMigrationRequiredError(
+      options.operation === "doctor" && !sourceBefore && !sourceAfter
+        ? `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`
+        : sourcePath,
+      options.operation,
+    );
   }
   legacyAbsenceCache.add(sourcePath);
 }

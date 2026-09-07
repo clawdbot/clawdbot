@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./embedding-provider.js", () => ({
-  DEFAULT_OPENAI_EMBEDDING_MODEL: "text-embedding-3-small",
   createOpenAiEmbeddingProvider: mocks.createOpenAiEmbeddingProvider,
 }));
 

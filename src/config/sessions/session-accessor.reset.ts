@@ -16,6 +16,7 @@ import { loadSessionEntry, resolveSessionEntryFromStore } from "./session-access
 import {
   SessionEntryLifecycleUpsertConflictError,
   type SessionEntryLifecycleUpsert,
+  type SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -27,7 +28,6 @@ import type {
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type {
@@ -68,12 +68,13 @@ const loadSessionArchiveRuntime = createLazyRuntimeModule(
 );
 
 /**
- * Persists runner reset metadata after the caller appends the in-log boundary.
+ * Persists runner reset metadata with its transcript boundary.
  */
 export async function persistSessionResetLifecycle(params: {
   agentId?: string;
   cleanupPreviousTranscript?: boolean;
   nextEntry: SessionEntry;
+  workspaceDir: string;
   nextSessionFile: string;
   previousEntry: SessionEntry;
   previousSessionId?: string;
@@ -88,7 +89,7 @@ export async function persistSessionResetLifecycle(params: {
       {
         sessionKey: params.sessionKey,
         entry: params.nextEntry,
-        resetBoundary: { context: "preserve-tail", reason: "reset" },
+        resetBoundary: { context: "preserve-tail", reason: "reset", cwd: params.workspaceDir },
       },
     ],
     skipMaintenance: true,
@@ -187,7 +188,7 @@ export async function commitReplySessionInitialization(params: {
   ) => Promise<SessionEntry> | SessionEntry;
   /** Authoritative contextual route facts observed by the admitted inbound turn. */
   routeContext?: ConversationRouteContext | null;
-  resetBoundary?: SessionResetBoundaryRequest;
+  resetBoundary?: SessionResetBoundaryWrite;
   previousEntry?: SessionEntry;
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;

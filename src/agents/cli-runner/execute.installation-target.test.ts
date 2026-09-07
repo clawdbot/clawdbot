@@ -8,6 +8,7 @@ import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
   createManagedRun,
+  createSuccessfulProcessExit,
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
@@ -49,14 +50,9 @@ describe("CLI installation target", () => {
       }
       supervisorSpawnMock.mockResolvedValue(
         createManagedRun({
-          reason: "exit",
-          exitCode: 0,
-          exitSignal: null,
+          ...createSuccessfulProcessExit(),
           durationMs: 1,
           stdout: "done",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
         }),
       );
       await withEnvAsync(

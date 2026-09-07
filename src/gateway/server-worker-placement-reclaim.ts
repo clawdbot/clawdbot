@@ -21,6 +21,7 @@ import {
 } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerPlacementReclaimRequest } from "./worker-environments/service-contract.js";
+import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
 type SessionUtilsRuntime = typeof import("./session-utils.js");
 export type WorkerPlacementSessionRuntime = {
@@ -50,6 +51,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       key: sessionKey,
       agentId,
       clone: false,
+      exactRead: true,
     });
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     const cancelAndDrain = async (
@@ -146,6 +148,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         key: sessionKey,
         agentId,
         clone: false,
+        exactRead: true,
       });
       const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
         current.store,
@@ -236,14 +239,14 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         sessionKey,
         agentId,
       });
-    let worktreePath: string | undefined;
+    let workspace: WorkerSessionWorkspace | undefined;
     let reclaimedPlacement: Awaited<ReturnType<typeof reclaim>> | undefined;
     await runExclusiveSessionLifecycleMutation({
       scope: target.storePath,
       identities: lifecycleIdentities,
       prepare: async (lifecycle) => {
         beforeDrain?.();
-        const { worktree } = resolveWorkerPlacementSessionTarget({
+        const resolved = resolveWorkerPlacementSessionTarget({
           sessionRuntime,
           config: getRuntimeConfig(),
           sessionId,
@@ -259,10 +262,10 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           placement?.state !== "reclaimed"
         ) {
           throw new Error(
-            `Session ${sessionKey} has active work; wait before stopping its cloud worker`,
+            `Session ${sessionKey} cannot stop cloud worker from placement ${placement?.state ?? "missing"}`,
           );
         }
-        worktreePath = worktree.path;
+        workspace = resolved.workspace;
         const assertCurrent = () => {
           authorize?.();
           resolveWorkerPlacementSessionTarget({
@@ -278,7 +281,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         await cancelAndDrain(lifecycle.closeWorkAdmissions, assertCurrent);
       },
       run: async () => {
-        if (!worktreePath) {
+        if (!workspace) {
           throw new Error(`Session ${sessionKey} cloud worker stop barrier did not prepare`);
         }
         // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
@@ -287,7 +290,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         // Eligibility ends at this operation's drain, unlike caller authority during teardown.
         beforeDrain?.();
         const placement = begin();
-        reclaimedPlacement = await reclaim(worktreePath, placement, authorize);
+        reclaimedPlacement = await reclaim(workspace, placement, authorize);
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
       },
     });
@@ -311,6 +314,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           key: sessionKey,
           agentId,
           clone: false,
+          exactRead: true,
         });
         const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
           currentTarget.store,

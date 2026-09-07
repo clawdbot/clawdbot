@@ -275,6 +275,9 @@ suite.define(() => {
                 )) >= 2,
             )
             .toBe(true);
+          // A generic automatic retry used to wake one second after this
+          // first settled frame. Close must remain authoritative beyond it.
+          await page.waitForTimeout(1_500);
           if (documentRequests > 1) {
             await reloaded;
           }
@@ -484,6 +487,15 @@ suite.define(() => {
         if (testCase.webChrome) {
           await installNativeWebChrome(page);
         }
+        if (testCase.preserveCollapsedNavigation) {
+          // Bootstrap consumes this one-shot intent; seed each recovered document
+          // before its router can canonicalize the URL during the retry probe.
+          await page.addInitScript(() => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("nav", "collapsed");
+            window.history.replaceState(window.history.state, "", url);
+          });
+        }
         const failure = await installChunkFailure(page, testCase.chunk);
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
@@ -502,13 +514,6 @@ suite.define(() => {
           });
         }
 
-        if (testCase.preserveCollapsedNavigation) {
-          await page.evaluate(() => {
-            const url = new URL(window.location.href);
-            url.searchParams.set("nav", "collapsed");
-            window.history.replaceState(window.history.state, "", url);
-          });
-        }
         await retryThroughReload(page, error);
         if (testCase.webChrome) {
           const toolbar = page.locator(".macos-titlebar-controls");

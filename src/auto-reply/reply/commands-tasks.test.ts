@@ -260,7 +260,7 @@ describe("handleTasksCommand task board", () => {
 
     const reply = await buildTasksReplyForTest();
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).not.toContain("stale completed task");
     expect(reply.text).not.toContain("done a while ago");
   });
@@ -280,7 +280,7 @@ describe("handleTasksCommand task board", () => {
       sessionKey: "agent:main:empty-session",
     });
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden background task");
     expect(reply.text).not.toContain("hidden progress detail");
@@ -305,7 +305,7 @@ describe("handleTasksCommand task board", () => {
       sessionKey: "agent:main:empty-session",
     });
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden video background task");
     expect(reply.text).not.toContain("Queued video generation");
@@ -326,7 +326,7 @@ describe("handleTasksCommand task board", () => {
       sessionKey: "agent:target:empty-session",
     });
 
-    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("target hidden background task");
   });

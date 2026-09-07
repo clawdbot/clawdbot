@@ -11,12 +11,10 @@ import {
   loadPatternListFromEnv,
   relativizeScopedPatterns,
 } from "../test/vitest/vitest.pattern-file.ts";
-import { loadVitestExperimentalConfig } from "../test/vitest/vitest.performance-config.ts";
+import { loadVitestPerformanceConfig } from "../test/vitest/vitest.performance-config.ts";
 import {
   jsdomOptimizedDeps,
   nonIsolatedRunnerPath,
-  preserveIndependentVitestProject,
-  resolveDefaultVitestPool,
   sharedVitestConfig,
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
@@ -82,6 +80,10 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/share-build.ts"),
   },
   {
+    find: "@openclaw/session-url-contract/public-share",
+    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/public-share.ts"),
+  },
+  {
     find: "@openclaw/session-url-contract",
     replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
   },
@@ -107,11 +109,11 @@ function includeUiTests(patterns: string[], env = process.env): string[] {
 }
 
 const sharedUiTestConfig = {
-  ...loadVitestExperimentalConfig(process.env, process.platform, here),
+  ...loadVitestPerformanceConfig(process.env, process.platform, here),
   // Preserve calls recorded during shared setup and beforeAll hooks.
   clearMocks: false,
   isolate: false,
-  pool: resolveDefaultVitestPool(),
+  pool: "threads",
   // Real-Chromium layout tests exceed Vitest's 5s default on 4vcpu CI runners;
   // without this the checks-ui lane flakes on cold hover/interaction tests.
   testTimeout: 60_000,
@@ -158,8 +160,12 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
     plugins: [controlUiLocaleModulesPlugin()],
     optimizeDeps: {
       include: [
+        "@lit/context",
+        "@noble/ed25519",
+        "@noble/hashes/sha2.js",
         "@openclaw/uirouter",
         "dompurify",
+        "file-type",
         "highlight.js/lib/core",
         "highlight.js/lib/languages/{bash,cpp,css,diff,java,javascript,json,markdown,python,rust,typescript,xml,yaml}",
         "lit/async-directive.js",
@@ -175,6 +181,9 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
     },
     test: {
       ...sharedUiTestConfig,
+      // File-project loading overrides Vite's root with the config directory.
+      // Keep discovery and setup paths rooted in the UI in every entrypoint.
+      root: here,
       name: "browser",
       // No cleanup runner: it imports node:fs and repo server modules, which
       // cannot load in browser mode. Browser files own their own teardown.
@@ -206,7 +215,8 @@ export default defineConfig({
     reporters: sharedVitestConfig.test.reporters,
     // These projects already own their complete plugins, aliases, and test config.
     projects: [
-      defineProject({
+      {
+        extends: false,
         plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
@@ -234,8 +244,9 @@ export default defineConfig({
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
-      }),
-      defineProject({
+      },
+      {
+        extends: false,
         plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
@@ -251,8 +262,9 @@ export default defineConfig({
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
-      }),
-      defineProject({
+      },
+      {
+        extends: false,
         plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
@@ -272,8 +284,8 @@ export default defineConfig({
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
-      }),
-      createUiBrowserVitestConfig(),
-    ].map(preserveIndependentVitestProject),
+      },
+      { ...createUiBrowserVitestConfig(), extends: false },
+    ],
   },
 });

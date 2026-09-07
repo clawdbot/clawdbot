@@ -1,10 +1,12 @@
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { resolvePersonalGitHubOwner } from "../../state/user-github-connections.js";
 import type { PersonalGitHubAction } from "../github-personal-oauth.js";
+import { GitHubPublicationSessionChangedError } from "../github-publication-failure.js";
 import {
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "../operator-role-policy.js";
+import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
 import {
   createSessionListEntryFilter,
   resolveSessionMutationAuthorization,
@@ -83,7 +85,10 @@ type PersonalEligibility =
   | { kind: "absent" | "ineligible" };
 
 /** Shared reads do not require a person; absence never substitutes for failed authentication. */
-export function prepareGitHubPublicationOptionsRead(options: Request, sessionKey: string) {
+export function prepareGitHubPublicationOptionsRead(
+  options: Request,
+  { sessionKey, agentId: requestedAgentId }: SessionMutationTarget,
+) {
   // Store discovery is stable within this request; session rows remain live reads.
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
   const resolveEligibility = (): PersonalEligibility => {
@@ -125,10 +130,11 @@ export function prepareGitHubPublicationOptionsRead(options: Request, sessionKey
           sessionId: loaded.entry.sessionId,
           sessionKey: loaded.canonicalKey,
           agentId: loaded.agentId,
+          lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
         }
       : null;
   };
-  const session = readSession(sessionKey);
+  const session = readSession(sessionKey, requestedAgentId);
   if (!session) {
     throw new Error("GitHub publication session was not found.");
   }
@@ -137,7 +143,11 @@ export function prepareGitHubPublicationOptionsRead(options: Request, sessionKey
     session,
     currentSession: () => {
       const current = readSession(session.sessionKey, session.agentId);
-      if (!current || current.sessionId !== session.sessionId) {
+      if (
+        !current ||
+        current.sessionId !== session.sessionId ||
+        current.lifecycleRevision !== session.lifecycleRevision
+      ) {
         throw new Error("GitHub publication session access changed; select the session again.");
       }
       return session;
@@ -182,15 +192,21 @@ export function preparePersonalGitHubAction(
 
 export function preparePersonalGitHubSessionAction(
   options: Request,
-  sessionKey: string,
-): PersonalGitHubAction & { sessionId: string; sessionKey: string; agentId: string } {
+  { sessionKey, agentId }: SessionMutationTarget,
+): PersonalGitHubAction & {
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  lifecycleRevision: string | null;
+} {
   const action = preparePersonalGitHubAction(options, "operator.write");
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const initial = loadGatewaySessionEntryReadOnly(sessionKey, { targetDiscoveryCache });
+  const initial = loadGatewaySessionEntryReadOnly(sessionKey, { agentId, targetDiscoveryCache });
   if (!initial.entry?.sessionId) {
     throw new Error("GitHub publication session was not found.");
   }
   const sessionId = initial.entry.sessionId;
+  const lifecycleRevision = initial.entry.lifecycleRevision ?? null;
   const assertCurrent = () => {
     action.assertCurrent();
     const current = loadGatewaySessionEntryReadOnly(initial.canonicalKey, {
@@ -199,12 +215,11 @@ export function preparePersonalGitHubSessionAction(
     });
     if (
       current.entry?.sessionId !== sessionId ||
+      (current.entry.lifecycleRevision ?? null) !== lifecycleRevision ||
       current.entry.archivedAt !== undefined ||
       current.canonicalKey !== initial.canonicalKey
     ) {
-      throw new Error(
-        "GitHub publication session changed; select the current session and try again.",
-      );
+      throw new GitHubPublicationSessionChangedError();
     }
     // This is a session mutation, not a run start. Preserve current admin rights without
     // retaining an admin grant that the person's live role no longer permits.
@@ -223,6 +238,7 @@ export function preparePersonalGitHubSessionAction(
     ...action,
     assertCurrent,
     sessionId,
+    lifecycleRevision,
     sessionKey: initial.canonicalKey,
     agentId: initial.agentId,
   };

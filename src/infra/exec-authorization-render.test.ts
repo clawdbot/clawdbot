@@ -94,9 +94,10 @@ describe("exec authorization renderer", () => {
   });
 
   it("renders dispatch-wrapper safe-bin commands without quote-all argv rendering", async () => {
+    const binDir = makeExecApprovalsTempDir();
     const plan = await planShellAuthorization({
       command: "env rg -n needle",
-      env: POSIX_ENV,
+      env: makePathEnv(binDir),
     });
 
     const command = renderOk(

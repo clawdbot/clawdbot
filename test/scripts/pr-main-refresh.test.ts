@@ -6,6 +6,7 @@ import {
   existsSync,
   openSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -189,6 +190,110 @@ describePosix("native PR main refresh boundaries", () => {
       );
     expect(lockWrites).toHaveLength(2);
     expect(lockWrites[1]?.args?.at(-1)).toBe(lockWrites[0]?.args?.at(-2));
+  });
+
+  it("retains the publication receipt and operation lock on mismatched receipt ownership", () => {
+    const f = fixture();
+    const prepare = f.run("prepare-run");
+    expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
+    const receiptPath = join(f.local, "prep.env");
+    const receipt = readFileSync(receiptPath, "utf8").replace("PR_NUMBER=42\n", "PR_NUMBER=43\n");
+    writeFileSync(receiptPath, receipt);
+    const result = f.run("prepare-sync-head");
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("Retaining the operation lock for PR #42");
+    expect(readFileSync(receiptPath, "utf8")).toBe(receipt);
+    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.head);
+    expect(f.git(f.origin, "rev-parse", "refs/heads/topic")).toBe(f.head);
+    expect(f.events().filter((e) => e.kind === "unexpected-push")).toEqual([]);
+  });
+
+  it("retires prior publication evidence only after a fresh reviewed preparation", () => {
+    const f = fixture();
+    const firstPrepare = f.run("prepare-run");
+    expect(firstPrepare.status, firstPrepare.stdout + firstPrepare.stderr).toBe(0);
+    f.git(f.worktree, "commit", "--allow-empty", "-qm", "reviewed fixup");
+    const published = f.git(f.worktree, "rev-parse", "HEAD");
+    const gitShim = join(f.root, "bin", "git");
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const updateMetadata = [
+      'const fs = require("node:fs")',
+      "const file = process.argv[1]",
+      'const control = JSON.parse(fs.readFileSync(file, "utf8"))',
+      "control.metadata.headRefOid = process.argv[2]",
+      "fs.writeFileSync(file, JSON.stringify(control))",
+    ].join(";");
+    // Allow exactly this publication through real Git, then expose its new
+    // PR ref and metadata through the existing synthetic GitHub boundary.
+    writeFileSync(
+      gitShim,
+      `#!/bin/sh
+if [ "$1" = push ] && [ "$2" = "--force-with-lease=refs/heads/topic:${f.head}" ] && [ "$4" = "${published}:refs/heads/topic" ]; then
+  "${realGit}" "$@" || exit "$?"
+  "${realGit}" -C "${f.origin}" update-ref refs/pull/42/head "${published}" || exit "$?"
+  "${process.execPath}" -e '${updateMetadata}' "${join(f.root, "control.json")}" "${published}"
+  exit "$?"
+fi
+${readFileSync(gitShim, "utf8")}
+`,
+    );
+    f.env.OPENCLAW_PR_PUSH_MODE = "git";
+    f.env.OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH = "1";
+    const firstPublish = f.run("prepare-sync-head");
+    expect(firstPublish.status, firstPublish.stdout + firstPublish.stderr).toBe(0);
+    expect(f.git(f.origin, "rev-parse", "refs/heads/topic")).toBe(published);
+    const artifacts = [
+      "prep-context.env",
+      "prep.env",
+      "gates.env",
+      "prepare-push-result.env",
+      "prepare-sync-result.env",
+      "prep.md",
+    ];
+    const priorEvidence = artifacts.map(
+      (name) => [name, readFileSync(join(f.local, name), "utf8")] as const,
+    );
+    expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
+      `PR_HEAD_SHA_BEFORE=${f.head}\n`,
+    );
+
+    f.git(f.worktree, "commit", "--allow-empty", "-qm", "new contribution to review");
+    const reviewed = f.git(f.worktree, "rev-parse", "HEAD");
+    f.git(
+      f.worktree,
+      "push",
+      "origin",
+      `${reviewed}:refs/heads/topic`,
+      `${reviewed}:refs/pull/42/head`,
+    );
+    f.configure({ metadata: { ...f.metadata, headRefOid: reviewed } });
+    for (const command of ["review-init", "review-checkout-pr"]) {
+      const result = f.run(command);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    }
+    for (const name of ["review.md", "review.json"]) {
+      const path = join(f.local, name);
+      writeFileSync(path, readFileSync(path, "utf8").replaceAll(f.head, reviewed));
+    }
+    const nextPrepare = f.run("prepare-run");
+    expect(nextPrepare.status, nextPrepare.stdout + nextPrepare.stderr).toBe(0);
+    expect(readFileSync(join(f.local, "prep-context.env"), "utf8")).toContain(
+      `PR_HEAD_SHA_BEFORE=${reviewed}\n`,
+    );
+    expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
+      `PREP_HEAD_SHA=${reviewed}\n`,
+    );
+    const retained = readdirSync(f.local).filter((name) => name.startsWith("prep-evidence."));
+    expect(retained).toHaveLength(1);
+    for (const directory of retained) {
+      for (const [name, contents] of priorEvidence) {
+        expect(readFileSync(join(f.local, directory, name), "utf8")).toBe(contents);
+      }
+    }
+    const sync = f.run("prepare-sync-head");
+    expect(sync.status, sync.stdout + sync.stderr).toBe(0);
+    expect(f.git(f.origin, "rev-parse", "refs/heads/topic")).toBe(reviewed);
+    expect(f.events().filter((e) => e.kind === "unexpected-push")).toEqual([]);
   });
 
   it("completes supervised merge with two checkpoints and releases its exact lock after cleanup", () => {

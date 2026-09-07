@@ -1,3 +1,5 @@
+import path from "node:path";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {
@@ -30,17 +32,6 @@ function findJsonRootSuffix(
   return null;
 }
 
-function warnOnConfigPermissionHardeningFailure(params: {
-  context: ConfigIoContext;
-  detail: string;
-  error: unknown;
-}): void {
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
-  params.context.deps.logger.warn(
-    `Config permission hardening failed (${params.detail}): ${params.context.configPath}: ${message}`,
-  );
-}
-
 async function persistPrefixedConfigRecovery(params: {
   context: ConfigIoContext;
   originalRaw: string;
@@ -54,12 +45,14 @@ async function persistPrefixedConfigRecovery(params: {
     raw: params.originalRaw,
     observedAt,
   });
-  await context.deps.fs.promises.writeFile(context.configPath, params.recoveredRaw, {
-    encoding: "utf-8",
+  // Recovery must publish by rename; a copy fallback can truncate the live config.
+  await replaceFileAtomic({
+    filePath: context.configPath,
+    content: params.recoveredRaw,
+    dirMode: 0o700,
     mode: 0o600,
-  });
-  await context.deps.fs.promises.chmod?.(context.configPath, 0o600).catch((error: unknown) => {
-    warnOnConfigPermissionHardeningFailure({ context, detail: "prefix recovery", error });
+    tempPrefix: path.basename(context.configPath),
+    fileSystem: context.deps.fs,
   });
   context.deps.logger.warn(
     `Config auto-stripped non-JSON prefix: ${context.configPath}` +
@@ -94,7 +87,7 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
     context.deps.lowerPrecedenceEnv,
   );
   const validated = validateConfigObjectWithPlugins(resolution.resolvedConfigRaw, {
-    env: context.deps.env,
+    ...context.pathResolution,
     sourceRaw: suffixRecovery.parsed,
   });
   if (!validated.ok) {

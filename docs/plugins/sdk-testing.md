@@ -105,6 +105,7 @@ the focused test subpaths above.
 | `removeAckReactionAfterReply`                                             | Remove ack reaction after reply delivery. Import from `plugin-sdk/channel-feedback`                                                         |
 | `createTestRegistry`                                                      | Build a channel plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`                  |
 | `createEmptyPluginRegistry`                                               | Build an empty plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`                   |
+| `createPluginMetadataSnapshotFixture`                                     | Build a complete metadata snapshot with aligned manifest and installed-plugin views. Import from `plugin-sdk/plugin-test-runtime`           |
 | `setActivePluginRegistry`                                                 | Install a registry fixture for plugin runtime tests. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`      |
 | `createRequestCaptureJsonFetch`                                           | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-media-understanding`                                        |
 | `isLiveTestEnabled`                                                       | Gate opt-in live provider tests. Import from `plugin-sdk/test-live`                                                                         |
@@ -119,6 +120,7 @@ the focused test subpaths above.
 | `createProviderUsageFetch`                                                | Build provider usage fetch fixtures. Import from `plugin-sdk/test-env`                                                                      |
 | `useFrozenTime` / `useRealTime`                                           | Freeze and restore timers for time-sensitive tests. Import from `plugin-sdk/test-env`                                                       |
 | `createCliRuntimeCapture`                                                 | Capture CLI runtime output in tests. Import from `plugin-sdk/test-fixtures`                                                                 |
+| `findSourceImportBackedges`                                               | Asynchronously inspect repository-source static import closures for forbidden dependencies. Import from `plugin-sdk/test-fixtures`          |
 | `runDirectImportSmoke`                                                    | Run a plugin public-surface import in an isolated Node process. Import from `plugin-sdk/test-fixtures`                                      |
 | `importFreshModule`                                                       | Import an ESM module with a fresh query token to bypass module cache. Import from `plugin-sdk/test-fixtures`                                |
 | `bundledPluginRoot` / `bundledPluginFile`                                 | Resolve bundled plugin source or dist fixture paths. Import from `plugin-sdk/test-fixtures`                                                 |
@@ -135,6 +137,18 @@ Bundled-plugin contract suites also use these SDK testing subpaths for
 test-only registry, manifest, public-artifact, and runtime fixture helpers.
 Core-only suites that depend on bundled OpenClaw inventory stay under
 `src/plugins/contracts` instead.
+
+For channel account-policy tests, `createAccountPolicyInheritanceCases()` from
+`openclaw/plugin-sdk/channel-test-helpers` returns four literal inheritance rows
+with fresh objects and arrays on each call, preserving omitted policy fields.
+Use it alongside `validateTestChannelConfig(channelId, channelConfig)`, which
+validates schema-parsed channel data through the host config boundary. Each
+plugin test still owns its schema parsing, account resolver, and assertions,
+including checks that omitted account policies remain absent.
+
+For complete zero-usage inputs, `createZeroUsageFixture()` from
+`openclaw/plugin-sdk/test-fixtures` returns fresh usage and nested cost objects
+without optional telemetry fields. Keep expected usage values explicit.
 
 ### Types
 
@@ -352,7 +366,7 @@ patterns is recommended.
 
 ## Test configuration
 
-OpenClaw uses Vitest 4 with informational V8 coverage reporting. For plugin tests:
+OpenClaw uses Vitest 5 with informational V8 coverage reporting. For plugin tests:
 
 ```bash
 # Run all tests

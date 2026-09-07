@@ -157,14 +157,10 @@ export function applyQueueDropPolicy<T>(params: {
     }
     // Summary memory is bounded independently from the item cap to avoid prompt blowups.
     const limit = Math.max(0, params.summaryLimit ?? cap);
-    const elidedLines: string[] = [];
-    while (params.queue.summaryLines.length > limit) {
-      const line = params.queue.summaryLines.shift();
-      if (line !== undefined) {
-        elidedLines.push(line);
-      }
-    }
-    if (elidedLines.length > 0) {
+    const summaryLines = params.queue.summaryLines;
+    if (summaryLines.length > limit) {
+      // Round the cutoff first; subtraction can erase a fraction just below an integer.
+      const elidedLines = summaryLines.splice(0, summaryLines.length - Math.floor(limit));
       params.onSummaryElide?.(elidedLines);
     }
   }

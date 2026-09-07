@@ -71,6 +71,12 @@ model response before opening the agent. An already configured Gateway opens
 its normal dashboard after verification; newly configured access continues into
 guided onboarding.
 
+If the Gateway confirms that a live model test failed before saving the model
+and credentials, close the error and retry or choose another connection.
+An uncertain error keeps replacement setup blocked because settings may already
+have been saved. Confirmed cancellation and requests rejected before setup
+started can be retried immediately.
+
 Model Setup can resume an activation across a Gateway restart or app reopen
 while its temporary recovery record is valid. Recovery stays bound to the same
 Gateway, agent, and authentication. When the known activation target still
@@ -162,7 +168,7 @@ export XDG_CACHE_HOME="$cache"
 apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins"
 apps/linux/scripts/tauri-appimage-tools.sh prepare
 apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
-export LDAI_RUNTIME_FILE="$cache/tauri/.appimage-runtime-x86_64"
+export LDAI_RUNTIME_FILE="$(apps/linux/scripts/tauri-appimage-tools.sh runtime-path)"
 (
   cd apps/linux/src-tauri
   GSTREAMER_PLUGINS_DIR="$plugins" \
@@ -220,7 +226,7 @@ plain-text reply below the composer. Press `Esc` to dismiss the bar and its repl
 The CLI remains the simplest option for a headless server or VPS. Use a manual
 SSH tunnel when connecting without the Linux desktop companion:
 
-1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
+1. Install Node 26 (recommended), or another supported release: Node 24.16+ or Node 26.1+.
 2. On npm 12 or npm 11.16+, run `npm i -g openclaw@latest --allow-scripts=openclaw`. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -327,7 +333,7 @@ TimeoutStopSec=330
 TimeoutStartSec=30
 SuccessExitStatus=0 143
 OOMPolicy=continue
-KillMode=control-group
+KillMode=mixed
 
 [Install]
 WantedBy=default.target

@@ -1,3 +1,4 @@
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createPanelRefreshStatus,
   failPanelRefresh,
@@ -7,7 +8,6 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { toUsageErrorMessage } from "./helpers.ts";
 
 type UsageDetailRefreshFailure = {
   clearData: boolean;
@@ -17,18 +17,15 @@ type UsageDetailRefreshFailure = {
 export function failUsageDetailRefresh(
   status: PanelRefreshStatus,
   error: unknown,
+  gateway: ApplicationGatewaySnapshot | null,
 ): UsageDetailRefreshFailure {
-  if (isMissingOperatorReadScopeError(error)) {
-    return {
-      clearData: true,
-      status: failPanelRefresh(
-        createPanelRefreshStatus(),
-        formatMissingOperatorReadScopeMessage("usage details"),
-      ),
-    };
-  }
+  const clearData = isMissingOperatorReadScopeError(error);
+  const failed = failPanelRefresh(clearData ? createPanelRefreshStatus() : status, error, gateway);
   return {
-    clearData: false,
-    status: failPanelRefresh(status, toUsageErrorMessage(error)),
+    clearData,
+    status:
+      clearData && failed.error
+        ? { ...failed, error: formatMissingOperatorReadScopeMessage("usage details") }
+        : failed,
   };
 }

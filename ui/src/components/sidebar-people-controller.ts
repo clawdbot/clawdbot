@@ -61,6 +61,14 @@ export class SidebarPeopleController implements ReactiveController {
   };
 
   private readonly handleEvent = (event: Event): void => {
+    // Links own clicks, including modified browser gestures; only hover/focus opens their card.
+    if (
+      event.type === "click" &&
+      event.target instanceof Element &&
+      event.target.closest("a[href]")
+    ) {
+      return;
+    }
     if (this.runtime) {
       this.runtime.handleEvent(event);
       return;

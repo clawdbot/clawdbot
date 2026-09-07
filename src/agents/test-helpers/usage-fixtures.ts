@@ -6,18 +6,22 @@
  */
 import type { Usage } from "openclaw/plugin-sdk/llm";
 
-/** Usage fixture with every token and cost counter set to zero. */
-export const ZERO_USAGE_FIXTURE: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
+export function createZeroUsageFixture(): Usage {
+  return {
     input: 0,
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
-    total: 0,
-  },
-};
+    totalTokens: 0,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
+
+/** Usage fixture with every token and cost counter set to zero. */
+export const ZERO_USAGE_FIXTURE: Usage = createZeroUsageFixture();

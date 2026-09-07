@@ -20,6 +20,7 @@ export {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../agents/test-helpers/agent-message-fixtures.js";
+export { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 export { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 export { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
@@ -52,6 +53,16 @@ export {
 } from "./test-helpers/bundled-plugin-paths.js";
 export { importFreshModule } from "./test-helpers/import-fresh.js";
 export { runDirectImportSmoke } from "./test-helpers/direct-smoke.js";
+
+export async function findSourceImportBackedges(
+  entry: string,
+  forbidden: readonly string[],
+): Promise<string[]> {
+  // Ordinary fixture imports must not load the compiler or read repository configuration.
+  const inspector = await import("../../test/helpers/source-import-closure.js");
+  return inspector.findSourceImportBackedges(entry, forbidden);
+}
+
 export {
   createGrayscaleAlphaPngBuffer,
   createNoisyPngBuffer,

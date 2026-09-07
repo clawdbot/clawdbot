@@ -25,7 +25,8 @@ export function markManualCronJobActive(
   const jobId = job.id;
   state.activeManualRunJobIds.add(jobId);
   return markCronJobActive(jobId, {
-    payloadKind: job.payload.kind,
+    agentId: resolveEffectiveJobAgentId(job, resolveCurrentDefaultAgentId(state)),
+    declarationKey: job.declarationKey,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
   });
 }
@@ -71,7 +72,9 @@ export async function ensureLoadedForRead(state: CronServiceState) {
 
 /** Resolves the current configured default agent without caching reloadable state. */
 export function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+  return state.deps.resolveDefaultAgentId
+    ? state.deps.resolveDefaultAgentId()
+    : state.deps.defaultAgentId;
 }
 
 /** Returns whether a stream event still belongs to the job's current logical source. */

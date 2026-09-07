@@ -7,6 +7,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
+import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -87,9 +88,8 @@ function createContext(node: NodeSession) {
   };
 }
 
-async function runPolicy(node = createNode()) {
+async function runPolicy(node = createNode(), receipts: DecisionReceiptV1[] = []) {
   const { context, invoke } = createContext(node);
-  const receipts: DecisionReceiptV1[] = [];
   const clear = configureRuntimeActionDecisionSink((receipt) => {
     receipts.push(receipt);
     return true;
@@ -156,6 +156,16 @@ describe("plugin node action receipts", () => {
         enforcement: { coverageState: "enforced" },
       },
     ]);
+  });
+
+  it("does not turn a closed approval observation into a denied policy receipt", async () => {
+    const closed = new ApprovalObserverClosedError();
+    registerPolicy(async () => {
+      throw closed;
+    });
+    const receipts: DecisionReceiptV1[] = [];
+    await expect(runPolicy(createNode(), receipts)).rejects.toBe(closed);
+    expect(receipts).toEqual([]);
   });
 
   it.each(["allowed", "denied", "throws"] as const)(

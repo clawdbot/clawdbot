@@ -82,6 +82,9 @@ function markdownSemanticSignature(root: PositionedMarkdownNode): string {
 
 function normalizeDiscordBold(markdown: string): string {
   // This outbound contract is CommonMark: `__x__` is bold, never Discord-native underline.
+  if (!markdown.includes("__")) {
+    return markdown;
+  }
   const spans: Array<{ start: number; end: number }> = [];
   const contentEdits: Array<{
     spanId: number;

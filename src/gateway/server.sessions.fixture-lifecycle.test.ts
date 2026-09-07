@@ -9,6 +9,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { captureEnv } from "../test-utils/env.js";
+import { runGatewayFixtureFork } from "./server.fixture-lifetime.test-support.js";
 
 // Run the actual fixture hooks with controlled setup/teardown overlap instead
 // of waiting for the runner's 180s timeout. Consumer test bodies stay uncalled.
@@ -388,3 +389,173 @@ test("skipped environment setup does not release an enclosing suite's home", asy
     await emergencyCleanup(parent);
   }
 });
+
+function retainedGatewayFixtureSource(repoRoot: string, root: string): string {
+  const source = (file: string) => JSON.stringify(path.join(repoRoot, file));
+  return `
+import fs from "node:fs";
+import path from "node:path";
+import { vi } from "vitest";
+const hooks = vi.hoisted(() => ({ setup: [], cleanup: [], reset: [], afterEach: [] }));
+vi.mock("vitest", async (importOriginal) => ({
+  ...(await importOriginal()),
+  beforeAll: (fn) => hooks.setup.push(fn),
+  afterAll: (fn) => hooks.cleanup.push(fn),
+  beforeEach: (fn) => hooks.reset.push(fn),
+  afterEach: (fn) => hooks.afterEach.push(fn),
+}));
+const { test } = await vi.importActual("vitest");
+fs.writeFileSync(${JSON.stringify(path.join(root, "worker.pid"))}, String(process.pid));
+const sessions = await import(${source("src/gateway/test/server-sessions.test-helpers.ts")});
+const gatewayHelpers = await import(${source("src/gateway/test-helpers.server.ts")});
+const kernelModule = await import(${source("src/gateway/server-kernel.ts")});
+const { createDeferredCore } = await import(${source("src/shared/deferred.ts")});
+const takeHooks = () => Object.fromEntries(
+  Object.entries(hooks).map(([name, callbacks]) => [name, callbacks.splice(0)]),
+);
+async function runHooks(callbacks) {
+  for (const callback of callbacks) await callback();
+}
+const fault = new Error("synthetic received-connection cleanup failure");
+function containsFault(error) {
+  return error === fault || (error instanceof Error && (
+    containsFault(error.cause) ||
+    (error instanceof AggregateError && error.errors.some(containsFault))
+  ));
+}
+async function observeFailure(run) {
+  try {
+    await run();
+    return { rejected: false, faultPreserved: false };
+  } catch (error) {
+    return { rejected: true, faultPreserved: containsFault(error) };
+  }
+}
+
+test("observes retained Gateway owners through fixture teardown", async () => {
+  let kernel;
+  const createKernel = kernelModule.createGatewayKernel;
+  const factory = vi.spyOn(kernelModule, "createGatewayKernel").mockImplementation(async (...args) => {
+    kernel = await createKernel(...args);
+    return kernel;
+  });
+  const fixtureApi = sessions.setupGatewaySessionsTestHarness();
+  const fixture = takeHooks();
+  await runHooks(fixture.setup);
+  await runHooks(fixture.reset);
+  const harness = fixtureApi.getHarness();
+  await harness.server.startupSettled;
+  if (!kernel) throw new Error("expected the real Gateway kernel");
+  const { dir } = await fixtureApi.createSessionStoreDir();
+  const { ws } = await harness.openClient();
+  const home = process.env.HOME;
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!home || !stateDir) throw new Error("expected isolated Gateway fixture selectors");
+  // A changed synthetic selector makes the harness's earlier token snapshot observable.
+  process.env.OPENCLAW_GATEWAY_TOKEN = "synthetic-retained-gateway-token";
+  const selectors = new Map([
+    "HOME", "USERPROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_AGENT_DIR", "OPENCLAW_GATEWAY_TOKEN",
+  ].map(key => [key, process.env[key]]));
+  const markers = { home: path.join(home, "owned.txt"), state: path.join(stateDir, "owned.txt"),
+    sessions: path.join(dir, "owned.txt") };
+  for (const file of Object.values(markers)) fs.writeFileSync(file, "owned");
+  const readState = () => ({
+    ...Object.fromEntries(Object.entries(markers).map(([name, file]) => {
+      try { return [name, fs.readFileSync(file, "utf8") === "owned"]; }
+      catch { return [name, false]; }
+    })),
+    selectorsIntact: [...selectors].every(([key, value]) => process.env[key] === value),
+  });
+  const releaseProducer = createDeferredCore();
+  let phase = "before-cleanup";
+  const producer = releaseProducer.promise.then(() => {
+    const observation = { ...readState(), phase, writeSucceeded: false };
+    try {
+      fs.writeFileSync(path.join(dir, "late-producer.txt"), "joined");
+      observation.writeSucceeded = true;
+    } catch { /* The outer assertion reports a lost producer input, not a cleanup substitute. */ }
+    return observation;
+  });
+  let stopCalls = 0;
+  // This independent producer belongs to the generic owner, not the connection scope.
+  kernel.registerGatewayLifetimeSidecars([{ stop: async () => {
+    stopCalls++;
+    releaseProducer.resolve();
+    await producer;
+  } }]);
+  let connectionCleanupFinished = false;
+  const trackCleanup = kernel.connectionWork.trackCleanup.bind(kernel.connectionWork);
+  vi.spyOn(kernel.connectionWork, "trackCleanup").mockImplementationOnce(run =>
+    trackCleanup(async () => {
+      await run();
+      connectionCleanupFinished = true;
+      throw fault;
+    }),
+  );
+  try {
+    const close = await observeFailure(() => harness.close());
+    const afterClose = readState();
+    const afterEach = await observeFailure(() => runHooks(fixture.afterEach));
+    let successorCaseStarted = false;
+    const caseReset = await observeFailure(async () => {
+      await runHooks(fixture.reset);
+      successorCaseStarted = true;
+    });
+    const afterCaseReset = readState();
+    const cleanup = await observeFailure(() => runHooks(fixture.cleanup.toReversed()));
+    const repeatedCleanup = await observeFailure(() => runHooks(fixture.cleanup.toReversed()));
+    const afterCleanup = readState();
+    let harnessRetained = false;
+    try { harnessRetained = fixtureApi.getHarness() === harness; } catch { /* Observe release. */ }
+    phase = "after-cleanup";
+    releaseProducer.resolve();
+    const producerObservation = await producer;
+    // Retained ownership must outlive the module that originally acquired the Gateway.
+    vi.resetModules();
+    const freshHelpers = await import(${source("src/gateway/test-helpers.server.ts")});
+    freshHelpers.installGatewayTestHooks({ scope: "suite" });
+    const successor = takeHooks();
+    let successorSuiteStarted = false;
+    const suiteSetup = await observeFailure(async () => {
+      await runHooks(successor.setup);
+      successorSuiteStarted = true;
+    });
+    fs.writeFileSync(${JSON.stringify(path.join(root, "journal.json"))}, JSON.stringify({
+      close, afterEach, caseReset, cleanup, repeatedCleanup, suiteSetup,
+      afterClose, afterCaseReset, afterCleanup, afterModuleReset: readState(),
+      producer: producerObservation, connectionCleanupFinished, stopCalls,
+      harnessRetained, successorCaseStarted, successorSuiteStarted,
+    }));
+  } finally {
+    releaseProducer.resolve();
+    await producer;
+    ws.terminate();
+    factory.mockRestore();
+    // No unpoison/reset escape hatch: native Vitest owns this disposable fork's exit.
+  }
+});
+`;
+}
+
+test("retains fixture state and fences successors after a required Gateway close failure", (context) =>
+  runGatewayFixtureFork(context, retainedGatewayFixtureSource, (journal, text) => {
+    const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
+    expect(journal, text).toMatchObject({
+      close: { rejected: true, faultPreserved: true },
+      caseReset: { rejected: true },
+      cleanup: { rejected: true, faultPreserved: true },
+      repeatedCleanup: { rejected: true, faultPreserved: true },
+      suiteSetup: { rejected: true },
+      connectionCleanupFinished: true,
+      stopCalls: 0,
+      harnessRetained: true,
+      successorCaseStarted: false,
+      successorSuiteStarted: false,
+      afterClose: retained,
+      afterCaseReset: retained,
+      afterCleanup: retained,
+      afterModuleReset: retained,
+      producer: { ...retained, phase: "after-cleanup", writeSucceeded: true },
+    });
+  }));

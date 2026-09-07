@@ -44,6 +44,8 @@ export type ChannelStructuredContextEntry = {
   source?: string;
   type?: string;
   payload: unknown;
+  /** Keeps this provider-owned window independent of bounded canonical transcript enrichment. */
+  sessionTranscriptMode?: "preserve";
   /** Internal exact-id hints for canonical transcript/live-cache deduplication. */
   sessionTranscriptDedupeMessageIds?: string[];
   /** Internal visible-text hints for legacy assistant rows without transcript ids. */

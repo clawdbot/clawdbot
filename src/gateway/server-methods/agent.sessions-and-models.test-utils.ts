@@ -1,10 +1,13 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import type { AgentWaitResult } from "../../agents/run-wait.types.js";
+import type { SubagentRegistryDeps } from "../../agents/subagents/registry/subagent-registry-deps.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -12,18 +15,26 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
+import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import {
   findTaskByRunId,
+  createTaskRecord,
   listTaskRecords,
   markTaskTerminalById,
+  reloadTaskRegistryFromStore,
 } from "../../tasks/task-registry.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
+import { removeChatAbortControllerEntry } from "../chat-abort.js";
 import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
@@ -49,6 +60,7 @@ import {
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
+import { runTaskHandler } from "./tasks.test-helpers.js";
 
 const mocks = getAgentTestMocks();
 
@@ -410,6 +422,131 @@ describe("gateway agent handler", () => {
       expectRecordFields(run.completion, { required: true });
     });
   });
+
+  it.each(
+    [
+      { parent: "normal", requesterSessionKey: "agent:main:main" },
+      { parent: "cron", requesterSessionKey: "agent:main:cron:orchestration:run:scheduled-run" },
+    ].flatMap((parent) =>
+      [
+        { sourceTool: "subagent_settle", continuesRun: true },
+        { sourceTool: "subagent_announce", continuesRun: false },
+        { sourceTool: "sessions_send", continuesRun: false },
+      ].map((followup) => ({
+        parent: parent.parent,
+        requesterSessionKey: parent.requesterSessionKey,
+        sourceTool: followup.sourceTool,
+        continuesRun: followup.continuesRun,
+      })),
+    ),
+  )(
+    "handles $sourceTool followups to a yielded orchestrator for its $parent parent",
+    async ({ requesterSessionKey, sourceTool, continuesRun }) => {
+      await withTestDir({ prefix: "openclaw-gateway-yield-completion-" }, async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
+        resetSubagentRegistryForTests({ persist: false });
+        const childSessionKey = "agent:main:subagent:orchestrator";
+        const workerSessionKey = "agent:main:subagent:worker";
+        const previousRunId = "orchestrator-before-yield";
+        const runId = "orchestrator-completion-followup";
+        const result = "All worker results are ready.";
+        const completion = createDeferred<AgentWaitResult>();
+        const announce = vi.fn<SubagentRegistryDeps["runSubagentAnnounceFlow"]>(
+          async () => "delivered",
+        );
+        applyGatewaySubagentRegistryTestDeps({
+          callGateway: (async () =>
+            await completion.promise) as SubagentRegistryDeps["callGateway"],
+          runSubagentAnnounceFlow: announce,
+        });
+        addSubagentRunForTests({
+          runId: previousRunId,
+          childSessionKey,
+          requesterSessionKey,
+          requesterDisplayKey: requesterSessionKey,
+          task: "Collect the worker's result",
+          startedAt: Date.now() - 10,
+          endedAt: Date.now(),
+          pauseReason: "sessions_yield",
+          expectsCompletionMessage: true,
+        });
+        mockSpawnedChildSessionEntry(childSessionKey);
+        mocks.agentCommand.mockImplementation(async () => {
+          completion.resolve({
+            status: "ok",
+            startedAt: Date.now(),
+            endedAt: Date.now(),
+            terminalReply: { disposition: "visible", text: result },
+          });
+          return { payloads: [{ text: result }], meta: { durationMs: 1 } };
+        });
+        const context = makeContext();
+        const request = {
+          message: "The worker finished; summarize its result.",
+          sessionKey: childSessionKey,
+          idempotencyKey: runId,
+          inputProvenance: {
+            kind: "inter_session" as const,
+            sourceSessionKey: workerSessionKey,
+            sourceTool,
+          },
+        };
+
+        await invokeAgent(request, { context, reqId: runId, client: backendGatewayClient() });
+
+        const continued = requireValue(
+          getSubagentRunByChildSessionKey(childSessionKey),
+          "expected the orchestrator's continued run",
+        );
+        if (!continuesRun) {
+          await waitForAssertion(() => {
+            expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "ok" });
+          });
+          expectRecordFields(continued, {
+            runId: previousRunId,
+            requesterSessionKey,
+            pauseReason: "sessions_yield",
+            cleanupCompletedAt: undefined,
+          });
+          expect(announce).not.toHaveBeenCalled();
+          return;
+        }
+        expectRecordFields(continued, {
+          runId,
+          taskRunId: previousRunId,
+          requesterSessionKey,
+          pauseReason: undefined,
+        });
+        await waitForAssertion(() => {
+          expect(announce).toHaveBeenCalledTimes(1);
+          expectRecordFields(continued, { cleanupCompletedAt: expect.any(Number) });
+          expectRecordFields(continued.delivery, { status: "delivered" });
+        });
+        expect(announce).toHaveBeenCalledWith(
+          expect.objectContaining({
+            childSessionKey,
+            childRunId: runId,
+            requesterSessionKey,
+            roundOneReply: result,
+            outcome: expect.objectContaining({ status: "ok" }),
+          }),
+        );
+
+        const commandCallCount = mocks.agentCommand.mock.calls.length;
+        await invokeAgent(request, {
+          context,
+          reqId: `${runId}-retry`,
+          client: backendGatewayClient(),
+        });
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+        expect(announce).toHaveBeenCalledTimes(1);
+        expect(
+          listSubagentRunsForRequester(requesterSessionKey).map((entry) => entry.runId),
+        ).toEqual([runId]);
+      });
+    },
+  );
 
   it("registers normally when a follow-up to a paused session names its own requester", async () => {
     await withTestDir(
@@ -777,7 +914,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "review the repository",
         sessionKey: "agent:main:main",
@@ -794,26 +931,24 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({
-          status: "timeout",
-          stopReason: "timeout",
-        }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          runId: "agent-run-tool-use-deadline",
-          status: "timeout",
-          summary: "aborted",
-          stopReason: "timeout",
-        }),
-        undefined,
-        { runId: "agent-run-tool-use-deadline" },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({
+        status: "timeout",
+        stopReason: "timeout",
+      }),
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "agent-run-tool-use-deadline",
+        status: "timeout",
+        summary: "aborted",
+        stopReason: "timeout",
+      }),
+      undefined,
+      { runId: "agent-run-tool-use-deadline" },
+    );
   });
 
   it("projects a provider timeout result without an abort flag or stop reason as timed out", async () => {
@@ -836,7 +971,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "run a command that exceeds the provider deadline",
         sessionKey: "agent:main:main",
@@ -853,36 +988,34 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({
-          status: "timeout",
-          reason: "hard_timeout",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          runId: "agent-run-provider-timeout-result",
-          status: "timeout",
-          summary: "aborted",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        }),
-        undefined,
-        { runId: "agent-run-provider-timeout-result" },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({
+        status: "timeout",
+        reason: "hard_timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "agent-run-provider-timeout-result",
+        status: "timeout",
+        summary: "aborted",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+      undefined,
+      { runId: "agent-run-provider-timeout-result" },
+    );
   });
 
   it("projects a resolved agent error as a failed gateway response", async () => {
     mocks.agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "Provider rejected the request.", isError: true }],
       meta: {
-        error: "provider rejected the request",
+        error: { kind: "incomplete_turn", message: "provider rejected the request" },
         stopReason: "error",
       },
     });
@@ -890,7 +1023,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "run the agent",
         sessionKey: "agent:main:main",
@@ -907,27 +1040,25 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({
-          status: "error",
-          reason: "failed",
-          stopReason: "error",
-        }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          runId: "agent-run-resolved-error",
-          status: "error",
-          summary: "failed",
-          stopReason: "error",
-        }),
-        undefined,
-        { runId: "agent-run-resolved-error" },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({
+        status: "error",
+        reason: "failed",
+        stopReason: "error",
+      }),
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "agent-run-resolved-error",
+        status: "error",
+        summary: "failed",
+        stopReason: "error",
+      }),
+      undefined,
+      { runId: "agent-run-resolved-error" },
+    );
   });
 
   it("projects a recorded failed dispatch outcome through agent.wait", async () => {
@@ -945,7 +1076,7 @@ describe("gateway agent handler", () => {
     const onSettled = vi.fn(() => true);
     const runId = "agent-run-recorded-dispatch-failure";
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "run on the unavailable device",
         sessionKey: "agent:main:main",
@@ -962,20 +1093,79 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({ status: "error", reason: "failed" }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId, status: "error", summary: "failed" }),
-        undefined,
-        { runId },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({ status: "error", reason: "failed" }),
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId, status: "error", summary: "failed" }),
+      undefined,
+      { runId },
+    );
     await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
       status: "error",
+    });
+  });
+
+  it.each([
+    {
+      name: "resolved failure",
+      timeout: false,
+      recordedError: undefined,
+      expectedError: "Provider rejected this request.",
+    },
+    {
+      name: "resolved timeout",
+      timeout: true,
+      recordedError: undefined,
+      expectedError: "Request timed out before a response was generated.",
+    },
+    {
+      name: "producer lifecycle guidance",
+      timeout: false,
+      recordedError: "Reconnect the selected provider, then try again.",
+      expectedError: "Reconnect the selected provider, then try again.",
+    },
+  ])("retains the $name diagnostic on the tracked task", async (scenario) => {
+    await withTestDir({ prefix: "openclaw-agent-task-diagnostic-" }, async (root) => {
+      useTestStateDir(root);
+      resetAgentTaskRegistryForTests();
+      primeMainAgentRun();
+      const runId = `task-diagnostic-${scenario.name}`;
+      mocks.agentCommand.mockResolvedValueOnce(
+        recordAgentRunTerminalOutcome(
+          {
+            payloads: [],
+            meta: {
+              durationMs: 1,
+              error: {
+                kind: "incomplete_turn",
+                message: scenario.recordedError ? "Agent run failed" : scenario.expectedError,
+              },
+              ...(scenario.timeout
+                ? { timeoutPhase: "provider", providerStarted: true }
+                : { stopReason: "error" }),
+            },
+          },
+          "failed",
+          scenario.recordedError,
+        ),
+      );
+      await invokeAgent(
+        {
+          message: "Run this tracked request.",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context: makeContext(), reqId: runId },
+      );
+      await waitForAssertion(() =>
+        expect(findTaskByRunId(runId)).toMatchObject({
+          status: scenario.timeout ? "timed_out" : "failed",
+          error: scenario.expectedError,
+        }),
+      );
     });
   });
 
@@ -1042,7 +1232,7 @@ describe("gateway agent handler", () => {
     const context = makeContext();
     const respond = vi.fn();
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "review the repository",
         sessionKey: "agent:main:main",
@@ -1058,14 +1248,12 @@ describe("gateway agent handler", () => {
       taskTrackingMode: "none",
     });
 
-    await waitForAssertion(() => {
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "ok", summary: "completed" }),
-        undefined,
-        expect.any(Object),
-      );
-    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "ok", summary: "completed" }),
+      undefined,
+      expect.any(Object),
+    );
   });
 
   it("classifies RPC-aborted async gateway agent rejections as cancelled", async () => {
@@ -1403,7 +1591,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const runId = `agent-run-terminal-${test.label.replaceAll(" ", "-")}`;
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "characterize terminal ownership",
         sessionKey: "agent:main:main",
@@ -1419,18 +1607,16 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: test.outcome,
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId, ...test.payload }),
-        undefined,
-        { runId },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: test.outcome,
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId, ...test.payload }),
+      undefined,
+      { runId },
+    );
   });
 
   it("settles ordinary async gateway agent rejections as failed", async () => {
@@ -1440,7 +1626,7 @@ describe("gateway agent handler", () => {
     const onSettled = vi.fn(() => true);
     const respond = vi.fn();
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "background cli task",
         sessionKey: "agent:main:main",
@@ -1456,17 +1642,15 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: {
-          reason: "failed",
-          status: "error",
-          error: "provider request failed",
-        },
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalled();
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: {
+        reason: "failed",
+        status: "error",
+        error: "provider request failed",
+      },
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -1489,7 +1673,7 @@ describe("gateway agent handler", () => {
       const respond = vi.fn();
       const runId = "agent-run-model-not-found";
 
-      dispatchAgentRunFromGateway({
+      await dispatchAgentRunFromGateway({
         ingressOpts: {
           message: "hi",
           sessionKey: "agent:badmodel:main",
@@ -1504,20 +1688,217 @@ describe("gateway agent handler", () => {
         taskTrackingMode: "none",
       });
 
-      await waitForAssertion(() => {
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          { runId, status: "error", summary: message },
-          expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
-          { runId, error: message },
-        );
-        expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
-        expect(failure.message).toBe(message);
-        expect(failure.reason).toBe("model_not_found");
-      });
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        { runId, status: "error", summary: message },
+        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
+        { runId, error: message },
+      );
+      expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
+      expect(failure.message).toBe(message);
+      expect(failure.reason).toBe("model_not_found");
       await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
         status: "error",
         error: displayed,
+      });
+    },
+  );
+
+  it.each([
+    { route: "gateway", aborted: true, status: "cancelled" },
+    { route: "shared owner", aborted: true, status: "cancelled" },
+    { route: "gateway", aborted: false, status: "succeeded" },
+    { route: "shared owner", aborted: false, status: "succeeded" },
+  ] as const)(
+    "waits for the ordinary task producer through $route after a store reload before reporting $status",
+    async ({ route, aborted, status }) => {
+      await withTestDir({ prefix: "openclaw-agent-task-cancellation-" }, async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
+        primeMainAgentRun();
+        const run = createDeferred<{
+          payloads: [];
+          meta: { durationMs: number; aborted: boolean; stopReason: string };
+        }>();
+        mocks.agentCommand.mockReturnValueOnce(run.promise);
+        const context = makeContext();
+        context.cancelRunBoundApprovals = vi.fn();
+        const runId = `task-cancellation-${route}`;
+        await invokeAgent(
+          {
+            message: "Keep working until cancelled.",
+            sessionKey: "agent:main:main",
+            idempotencyKey: runId,
+          },
+          { context, reqId: runId },
+        );
+        const task = requireValue(findTaskByRunId(runId), "tracked task missing");
+        reloadTaskRegistryFromStore();
+        const entry = requireValue(context.chatAbortControllers.get(runId), "run owner missing");
+        const reason = "Stop this selected work.";
+        const cancellation =
+          route === "gateway"
+            ? runTaskHandler(
+                "tasks.cancel",
+                { taskId: task.taskId, reason },
+                {},
+                null,
+                context,
+              ).then(({ payload }) => payload)
+            : cancelDetachedTaskRunById({ cfg: {}, taskId: task.taskId, reason });
+        let responded = false;
+        void cancellation.then(() => {
+          responded = true;
+        });
+        try {
+          await waitForAssertion(() => expect(entry.controller.signal.aborted).toBe(true));
+          expect(context.cancelRunBoundApprovals).toHaveBeenCalledWith(runId);
+          expect(findTaskByRunId(runId)?.status).toBe("running");
+          expect(responded).toBe(false);
+          run.resolve({
+            payloads: [],
+            meta: { durationMs: 1, aborted, stopReason: aborted ? "rpc" : "stop" },
+          });
+          expect(await cancellation).toMatchObject({ found: true, cancelled: aborted });
+          expect(findTaskByRunId(runId)).toMatchObject({
+            status,
+            ...(aborted ? { error: reason } : {}),
+          });
+        } finally {
+          run.resolve({
+            payloads: [],
+            meta: { durationMs: 1, aborted, stopReason: aborted ? "rpc" : "stop" },
+          });
+          await cancellation;
+          await waitForAssertion(() =>
+            expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
+              summary: aborted ? "aborted" : "completed",
+            }),
+          );
+        }
+      });
+    },
+  );
+
+  it("does not confirm cancellation when its producer exceeds the settlement deadline", async () => {
+    await withTestDir({ prefix: "openclaw-agent-task-cancellation-timeout-" }, async (root) => {
+      useTestStateDir(root);
+      resetAgentTaskRegistryForTests();
+      primeMainAgentRun();
+      const run = createDeferred<{
+        payloads: [];
+        meta: { durationMs: number; aborted: true; stopReason: "rpc" };
+      }>();
+      mocks.agentCommand.mockReturnValueOnce(run.promise);
+      const context = makeContext();
+      const runId = "task-cancellation-settlement-timeout";
+      vi.useFakeTimers();
+      try {
+        await invokeAgent(
+          {
+            message: "Keep this execution pending.",
+            sessionKey: "agent:main:main",
+            idempotencyKey: runId,
+          },
+          { context, reqId: runId },
+        );
+        const task = requireValue(findTaskByRunId(runId), "tracked task missing");
+        const entry = requireValue(context.chatAbortControllers.get(runId), "run owner missing");
+        const cancellation = runTaskHandler(
+          "tasks.cancel",
+          { taskId: task.taskId },
+          {},
+          null,
+          context,
+        );
+        await waitForAssertion(() => expect(entry.controller.signal.aborted).toBe(true));
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect((await cancellation).payload).toMatchObject({
+          found: true,
+          cancelled: false,
+          reason: "Task cancellation settlement timed out after 10000ms",
+        });
+        expect(findTaskByRunId(runId)?.status).toBe("running");
+      } finally {
+        run.resolve({
+          payloads: [],
+          meta: { durationMs: 1, aborted: true, stopReason: "rpc" },
+        });
+        try {
+          await waitForAssertion(() => expect(findTaskByRunId(runId)?.status).toBe("cancelled"));
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    });
+  });
+
+  it.each(["task scope", "session", "entry", "controller", "lifecycle", "authority"] as const)(
+    "refuses ordinary task cancellation after its %s changes",
+    async (changedOwner) => {
+      await withTestDir({ prefix: "openclaw-agent-task-owner-" }, async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
+        primeMainAgentRun();
+        const run = createDeferred<{ payloads: []; meta: { durationMs: number } }>();
+        mocks.agentCommand.mockReturnValueOnce(run.promise);
+        const context = makeContext();
+        const runId = `task-owner-${changedOwner}`;
+        await invokeAgent(
+          {
+            message: "Keep this run alive.",
+            sessionKey: "agent:main:main",
+            idempotencyKey: runId,
+          },
+          { context, reqId: runId },
+        );
+        const task = requireValue(findTaskByRunId(runId), "tracked task missing");
+        const entry = requireValue(context.chatAbortControllers.get(runId), "run owner missing");
+        const originalController = entry.controller;
+        let taskId = task.taskId;
+        if (changedOwner === "task scope") {
+          taskId = requireValue(
+            createTaskRecord({
+              runtime: "cli",
+              ownerKey: "agent:other:main",
+              scopeKind: "session",
+              childSessionKey: "agent:other:main",
+              runId,
+              task: "Another task with copied run correlation.",
+              status: "running",
+              deliveryStatus: "not_applicable",
+            }),
+            "conflicting task missing",
+          ).taskId;
+        } else if (changedOwner === "session") {
+          entry.sessionKey = "agent:other:main";
+        } else if (changedOwner === "entry") {
+          context.chatAbortControllers.set(runId, { ...entry, controller: new AbortController() });
+        } else if (changedOwner === "controller") {
+          entry.controller = new AbortController();
+        } else if (changedOwner === "lifecycle") {
+          mocks.lifecycleGeneration = "replacement-generation";
+        } else {
+          const authority = claimAgentRunDelegatedAuthority(
+            requireValue(entry.operationalRunInstance, "operational instance missing"),
+          );
+          entry.agentRunDelegatedAuthority = authority;
+          releaseAgentRunDelegatedAuthority(authority);
+        }
+        try {
+          const result = await runTaskHandler("tasks.cancel", { taskId }, {}, null, context);
+          expect(result.payload).toMatchObject({ found: true, cancelled: false });
+          expect(originalController.signal.aborted).toBe(false);
+          expect(context.chatAbortControllers.get(runId)?.controller.signal.aborted).toBe(false);
+        } finally {
+          run.resolve({ payloads: [], meta: { durationMs: 1 } });
+          await waitForAssertion(() =>
+            expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
+              summary: "completed",
+            }),
+          );
+          removeChatAbortControllerEntry(context.chatAbortControllers, runId);
+        }
       });
     },
   );

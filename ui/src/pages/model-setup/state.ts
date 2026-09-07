@@ -8,7 +8,8 @@ import type {
 import { formatUiExternalText } from "../../lib/format-error.ts";
 
 export const MODEL_SETUP_DETECT_TIMEOUT_MS = 40_000;
-export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 30_000;
+// Match native setup: the Gateway's 90-second inference probe also needs startup allowance.
+export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 150_000;
 const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 export const MODEL_SETUP_AUTH_START_TIMEOUT_MS = 30_000;
 export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
@@ -36,6 +37,10 @@ export type ModelSetupVerifyState =
   | { phase: "checking" }
   | { phase: "ok"; modelRef: string; latencyMs?: number }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
+
+export type ModelSetupWizardResult =
+  | WizardNextResult
+  | { done: true; status: "not-admitted"; error: string };
 
 export type ModelSetupWizardState =
   | { phase: "idle" }
@@ -106,7 +111,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
 
 export function wizardStateFromResult(
   authChoice: string,
-  result: WizardNextResult,
+  result: ModelSetupWizardResult,
   fallbackError: string,
 ): ModelSetupWizardState {
   if (!result.done && result.step) {

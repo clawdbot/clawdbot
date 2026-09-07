@@ -126,6 +126,35 @@ function normalizeIMessageFullDiskAccessError(message: string): string | undefin
   return PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR;
 }
 
+function createLfLineFramer(onLine: (line: string) => void): {
+  write(chunk: Buffer | string): void;
+  flush(): void;
+} {
+  const decoder = new StringDecoder("utf8");
+  let buffer = "";
+  return {
+    write(chunk) {
+      buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        onLine(line);
+        newlineIndex = buffer.indexOf("\n");
+      }
+    },
+    flush() {
+      buffer += decoder.end();
+      if (!buffer) {
+        return;
+      }
+      const line = buffer;
+      buffer = "";
+      onLine(line);
+    },
+  };
+}
+
 export class IMessageRpcClient {
   private readonly cliPath: string;
   // The private-API cache is keyed by the *configured* cliPath (see
@@ -144,10 +173,8 @@ export class IMessageRpcClient {
   private isReaped = false;
   private child: ChildProcessWithoutNullStreams | null = null;
   private stopPromise: Promise<void> | null = null;
-  private stdoutBuffer = "";
-  private readonly stdoutDecoder = new StringDecoder("utf8");
-  private stderrBuffer = "";
-  private readonly stderrDecoder = new StringDecoder("utf8");
+  private readonly stdoutFramer = createLfLineFramer((line) => this.handleStdoutLine(line));
+  private readonly stderrFramer = createLfLineFramer((line) => this.handleStderrLine(line));
   private nextId = 1;
   private publicProcessError: string | null = null;
 
@@ -188,14 +215,14 @@ export class IMessageRpcClient {
       if (this.child !== child) {
         return;
       }
-      this.handleStdoutChunk(chunk);
+      this.stdoutFramer.write(chunk);
     });
 
     child.stderr?.on("data", (chunk) => {
       if (this.child !== child) {
         return;
       }
-      this.handleStderrChunk(chunk);
+      this.stderrFramer.write(chunk);
     });
 
     // Every process/stdio error is terminal for this RPC transport. Settle the
@@ -203,16 +230,23 @@ export class IMessageRpcClient {
     // monitor can wait forever on an unusable child. #75438 covered stdin only.
     const failFromProcessError = (err: unknown) => this.failTransport(err, child);
     child.on("error", failFromProcessError);
-    child.stdin.on("error", failFromProcessError);
-    child.stdout.on("error", failFromProcessError);
-    child.stderr.on("error", failFromProcessError);
+    for (const stream of [child.stdin, child.stdout, child.stderr]) {
+      stream.on("error", failFromProcessError);
+      stream.once("close", () => {
+        // Bun can close an errored stdio stream without emitting its error event.
+        const error = stream.errored;
+        if (error) {
+          failFromProcessError(error);
+        }
+      });
+    }
 
     child.on("close", (code, signal) => {
       if (this.child === child) {
         // Complete both byte streams before selecting the terminal error so a
         // final split diagnostic can still provide its public recovery guidance.
-        this.flushStdoutBuffer();
-        this.flushStderrBuffer();
+        this.stdoutFramer.flush();
+        this.stderrFramer.flush();
         this.child = null;
       }
       this.finish(this.buildCloseError(code, signal));
@@ -361,61 +395,12 @@ export class IMessageRpcClient {
     }
   }
 
-  private handleStdoutChunk(chunk: Buffer | string) {
-    const text = typeof chunk === "string" ? chunk : this.stdoutDecoder.write(chunk);
-    this.stdoutBuffer += text;
-
-    let newlineIndex = this.stdoutBuffer.indexOf("\n");
-    while (newlineIndex !== -1) {
-      const line = this.stdoutBuffer.slice(0, newlineIndex);
-      this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
-      this.handleStdoutLine(line);
-      newlineIndex = this.stdoutBuffer.indexOf("\n");
-    }
-  }
-
-  private flushStdoutBuffer() {
-    const tail = this.stdoutDecoder.end();
-    if (tail) {
-      this.stdoutBuffer += tail;
-    }
-    if (!this.stdoutBuffer) {
-      return;
-    }
-    const line = this.stdoutBuffer;
-    this.stdoutBuffer = "";
-    this.handleStdoutLine(line);
-  }
-
   private handleStdoutLine(line: string) {
     const trimmed = line.trim();
     if (!trimmed) {
       return;
     }
     this.handleLine(trimmed);
-  }
-
-  private handleStderrChunk(chunk: Buffer | string) {
-    const text = typeof chunk === "string" ? chunk : this.stderrDecoder.write(chunk);
-    this.stderrBuffer += text;
-
-    let newlineIndex = this.stderrBuffer.indexOf("\n");
-    while (newlineIndex !== -1) {
-      const line = this.stderrBuffer.slice(0, newlineIndex);
-      this.stderrBuffer = this.stderrBuffer.slice(newlineIndex + 1);
-      this.handleStderrLine(line);
-      newlineIndex = this.stderrBuffer.indexOf("\n");
-    }
-  }
-
-  private flushStderrBuffer() {
-    this.stderrBuffer += this.stderrDecoder.end();
-    if (!this.stderrBuffer) {
-      return;
-    }
-    const line = this.stderrBuffer;
-    this.stderrBuffer = "";
-    this.handleStderrLine(line);
   }
 
   private handleStderrLine(line: string) {

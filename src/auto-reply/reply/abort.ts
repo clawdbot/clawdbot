@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
+import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
@@ -45,6 +46,7 @@ export { isAbortRequestText, isAbortTrigger, setAbortMemory };
 export function abortSessionRunTargetWithOutcome(params: { key?: string; sessionId?: string }): {
   active: boolean;
   aborted: boolean;
+  retirement?: Promise<void>;
 } {
   const sessionIds = new Set<string>();
   const key = normalizeOptionalString(params.key);
@@ -65,7 +67,19 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
   for (const sessionId of sessionIds) {
     aborted = abortEmbeddedAgentRun(sessionId) || aborted;
   }
-  return { active, aborted };
+  // Stop owns these captured IDs; a later turn may rebind the session key.
+  const retirement =
+    !active || aborted
+      ? Promise.all(
+          [...sessionIds].map((sessionId) =>
+            retireSessionMcpRuntime({
+              sessionId,
+              reason: "session-stop",
+            }),
+          ),
+        ).then(() => undefined)
+      : undefined;
+  return { active, aborted, retirement };
 }
 
 export function formatAbortReplyText(
@@ -202,19 +216,15 @@ export async function tryFastAbortFromMessage(params: {
   const commandSessionKey =
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.ParentSessionKey);
   const targetKey = normalizeOptionalString(ctx.CommandTargetSessionKey) ?? commandSessionKey;
+  const resolveTargetAgentId = () =>
+    resolveSessionAgentId({
+      sessionKey: targetKey ?? ctx.SessionKey ?? "",
+      config: cfg,
+      fallbackAgentId: ctx.AgentId,
+    });
   const raw = stripStructuralPrefixes(ctx.commandText);
   const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
-  const stripped = isGroup
-    ? stripMentions(
-        raw,
-        ctx,
-        cfg,
-        resolveSessionAgentId({
-          sessionKey: targetKey ?? ctx.SessionKey ?? "",
-          config: cfg,
-        }),
-      )
-    : raw;
+  const stripped = isGroup ? stripMentions(raw, ctx, cfg, resolveTargetAgentId()) : raw;
   const abortRequested = isAbortRequestText(stripped);
   if (!abortRequested) {
     return { handled: false, aborted: false };
@@ -230,11 +240,7 @@ export async function tryFastAbortFromMessage(params: {
     return { handled: false, aborted: false };
   }
 
-  const agentId = resolveSessionAgentId({
-    sessionKey: targetKey ?? ctx.SessionKey ?? "",
-    config: cfg,
-    fallbackAgentId: ctx.AgentId,
-  });
+  const agentId = resolveTargetAgentId();
   const abortKey = targetKey ?? auth.from ?? auth.to;
   const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
 
@@ -308,6 +314,9 @@ export async function tryFastAbortFromMessage(params: {
                 key: abortTargetKey,
                 sessionId: sessionIdsByKey.get(abortTargetKey),
               });
+              if (outcome.retirement) {
+                acpCancellations.push(outcome.retirement);
+              }
               activeAbortRejected ||= outcome.active && !outcome.aborted;
               aborted = outcome.aborted || aborted;
             }
@@ -320,6 +329,9 @@ export async function tryFastAbortFromMessage(params: {
                 key: sourceAbortKey,
                 sessionId: sourceSessionId,
               });
+              if (outcome.retirement) {
+                acpCancellations.push(outcome.retirement);
+              }
               activeAbortRejected ||= outcome.active && !outcome.aborted;
               aborted = outcome.aborted || aborted;
             }

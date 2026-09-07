@@ -1,8 +1,26 @@
 // Matrix tests cover threads plugin behavior.
 import { describe, expect, it } from "vitest";
+import { resolveMatrixReplyToEventId, resolveMatrixThreadRootId } from "../relations.js";
 import { resolveMatrixThreadRouting } from "./threads.js";
 
 describe("resolveMatrixThreadRouting", () => {
+  it.each([undefined, false, true])(
+    "keeps thread placement independent from reply fallback %s",
+    (isFallingBack) => {
+      const content = {
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: "$root",
+          is_falling_back: isFallingBack,
+          "m.in_reply_to": { event_id: "$selected" },
+        },
+      };
+      expect(resolveMatrixThreadRootId(content)).toBe("$root");
+      expect(resolveMatrixReplyToEventId(content)).toBe(
+        isFallingBack === true ? undefined : "$selected",
+      );
+    },
+  );
   it("keeps sessions flat when threadReplies is off", () => {
     expect(
       resolveMatrixThreadRouting({

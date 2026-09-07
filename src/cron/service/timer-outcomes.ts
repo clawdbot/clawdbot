@@ -244,14 +244,13 @@ export function applyJobResult(
     } else if (opts?.replaySchedule && job.schedule.kind === "at") {
       applyReplaySchedule();
       job.enabled = job.state.nextRunAtMs !== undefined;
-    } else if (job.schedule.kind === "at") {
+    } else if (job.schedule.kind === "at" && isJobEnabled(job)) {
       if (shouldRetryDisabledHeartbeatOneShot(job, result)) {
         const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
           cronConfig: state.deps.cronConfig,
           consecutiveSkipped: job.state.consecutiveSkipped,
         });
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
-          job.enabled = true;
           if (
             assignNextRunAtMs({
               state,
@@ -340,8 +339,8 @@ export function applyJobResult(
         }
       }
     } else if (opts?.scheduleMode === "preserve") {
-      // Forced recurring runs do not consume, replace, or repair a scheduled
-      // slot. Preserve the timestamp and its paced provenance as one unit.
+      // Forced recurring or disabled one-shot runs cannot change a scheduled
+      // slot. Preserve its absence, or its timestamp and paced provenance.
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;

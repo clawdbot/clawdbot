@@ -2,7 +2,6 @@
  * Resolves workspace, runtime setup, context guards, and startup for an embedded attempt.
  * It may assume dispatch inputs and provider metadata are ready.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -28,33 +27,18 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
-import { resolveSkillsPrompt } from "../../../skills/loading/workspace-skill-prompt.js";
-import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
-import {
-  applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
-} from "../../../skills/runtime/env-overrides.js";
-import { resolveUserPath } from "../../../utils.js";
-import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
-import { resolveCodeModeSkills, type CodeModeSkillReader } from "../../code-mode-skills.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { resolveSandboxContext } from "../../sandbox.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
+import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
-import {
-  createSandboxPromptEntryLoader,
-  mapSandboxSkillEntriesForPrompt,
-  mapSandboxSkillUsagePaths,
-  resolveSandboxSkillRuntimeInputs,
-} from "../sandbox-skills.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
@@ -68,10 +52,7 @@ import {
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
 import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
-import {
-  buildAfterTurnRuntimeContext,
-  resolveAttemptFsWorkspaceOnly,
-} from "./attempt-prompt-helpers.js";
+import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
@@ -92,81 +73,7 @@ type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
   prepared: true;
 };
 
-type AttemptWorkspaceParams = Pick<
-  EmbeddedRunAttemptParams,
-  | "agentId"
-  | "config"
-  | "cwd"
-  | "execOverrides"
-  | "permissionMode"
-  | "sandboxSessionKey"
-  | "sandboxAgentId"
-  | "sessionId"
-  | "sessionKey"
-  | "sessionRoot"
-  | "skillWorkshopCollectionReconcile"
-  | "skillsSnapshot"
-  | "workspaceDir"
->;
-
-/** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
-export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspaceParams) {
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
-  await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sessionKey = params.sessionKey?.trim() || params.sessionId;
-  const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
-  // Collection review is a host-owned maintenance run with one restricted tool.
-  // Sandboxing would hide that tool or redirect it to a disposable workspace.
-  const sandbox = params.skillWorkshopCollectionReconcile
-    ? null
-    : await resolveSandboxContext({
-        config: params.config,
-        // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
-        agentId:
-          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
-        execOverrides: params.execOverrides,
-        sessionKey: sandboxSessionKey,
-        skillsSnapshot: params.skillsSnapshot,
-        workspaceDir: resolvedWorkspace,
-      });
-  const effectiveWorkspace =
-    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
-  // the agent's canonical workspace as their permission boundary.
-  const sessionPermissionRoot = params.sessionRoot ?? (await fs.realpath(resolvedWorkspace));
-  const sessionPermissionPolicy = params.permissionMode
-    ? {
-        root: sessionPermissionRoot,
-        mode: params.permissionMode,
-      }
-    : undefined;
-  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-    throw new Error(
-      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
-    );
-  }
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
-  return {
-    effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
-    effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
-      config: params.config,
-      sessionAgentId,
-    }),
-    effectiveWorkspace,
-    resolvedWorkspace,
-    sessionPermissionRoot,
-    sessionPermissionPolicy,
-    sandbox,
-    sandboxSessionKey,
-    sessionAgentId,
-  };
-}
+export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
@@ -292,6 +199,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   sandbox?: SandboxContext | null;
 }): {
   getAfterTurnCheckpoint: () => number | null;
+  recordCacheTouch: (startedAt: number) => void;
   remove: () => void;
   takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null;
 } {
@@ -372,7 +280,7 @@ export function installEmbeddedAttemptContextGuards(input: {
     };
   }
 
-  let removeLoopGuard: () => void;
+  let removeContextEngineLoopHook: (() => void) | undefined;
   if (activeContextEngine?.info.ownsCompaction === true) {
     const selectedContextEngineId = activeContextEngine.info.id;
     const runtimeSettings = buildContextEngineRuntimeSettings({
@@ -386,7 +294,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       fallbackReason: attempt.fallbackReason,
       degradedReason: attempt.degradedReason,
     });
-    const removeContextEngineLoopHook = installContextEngineLoopHook({
+    removeContextEngineLoopHook = installContextEngineLoopHook({
       agent: activeSession.agent,
       contextEngine: activeContextEngine,
       sessionId: attempt.sessionId,
@@ -402,6 +310,15 @@ export function installEmbeddedAttemptContextGuards(input: {
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,
+      // Only the outer accepted-turn owner may advance an admitted engine.
+      deferredTurn: attempt.onContextEngineTurnCandidate
+        ? {
+            prompt: attempt.prompt,
+            get availableTools() {
+              return new Set(activeSession.agent.state.tools.map((tool) => tool.name));
+            },
+          }
+        : undefined,
       onAfterTurnCheckpoint: (messageCount) => {
         afterTurnCheckpoint = messageCount;
       },
@@ -427,22 +344,12 @@ export function installEmbeddedAttemptContextGuards(input: {
       runtimeSettings,
       isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
     });
-    const removeToolResultGuard = installToolResultContextGuard({
-      agent: activeSession.agent,
-      contextWindowTokens: contextTokenBudget,
-      ...midTurnPrecheckOptions,
-    });
-    removeLoopGuard = () => {
-      removeToolResultGuard();
-      removeContextEngineLoopHook();
-    };
-  } else {
-    removeLoopGuard = installToolResultContextGuard({
-      agent: activeSession.agent,
-      contextWindowTokens: contextTokenBudget,
-      ...midTurnPrecheckOptions,
-    });
   }
+  const removeToolResultGuard = installToolResultContextGuard({
+    agent: activeSession.agent,
+    contextWindowTokens: contextTokenBudget,
+    ...midTurnPrecheckOptions,
+  });
 
   const removeHistoryImagePruneContextTransform = installHistoryImagePruneContextTransform(
     activeSession.agent,
@@ -478,10 +385,14 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   return {
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
+    recordCacheTouch: (startedAt) => {
+      lastCacheTouchAt = startedAt;
+    },
     remove: () => {
       activeSession.agent.transformContext = previousComputerFrameTransform;
       removeHistoryImagePruneContextTransform();
-      removeLoopGuard();
+      removeToolResultGuard();
+      removeContextEngineLoopHook?.();
       activeSession.agent.transformContext = previousCacheTtlTransform;
     },
     takePendingMidTurnPrecheckRequest: () => {
@@ -490,116 +401,6 @@ export function installEmbeddedAttemptContextGuards(input: {
       return request;
     },
   };
-}
-
-type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
-
-export function prepareEmbeddedAttemptSkills(params: {
-  attempt: EmbeddedRunAttemptParams;
-  effectiveWorkspace: string;
-  sandbox: AttemptSetup["sandbox"];
-  sessionAgentId: string;
-}) {
-  if (params.attempt.operation === "settled-tool-finalization") {
-    return {
-      restoreSkillEnv: () => {},
-      skillUsagePaths: undefined,
-      skillsPrompt: "",
-      skillsSnapshotForRun: undefined,
-      codeModeSkills: [],
-    };
-  }
-  const {
-    skillsEligibility,
-    skillsPromptWorkspaceDir,
-    skillsSnapshot,
-    skillsWorkspaceDir,
-    workspaceOnly,
-  } = resolveSandboxSkillRuntimeInputs({
-    sandbox: params.sandbox,
-    skillsAnchorWorkspace: params.attempt.bootstrapWorkspaceDir ?? params.effectiveWorkspace,
-    skillsSnapshot: params.attempt.skillsSnapshot,
-  });
-  const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
-    resolveEmbeddedRunSkillEntries({
-      workspaceDir: skillsWorkspaceDir,
-      config: params.attempt.config,
-      agentId: params.sessionAgentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot,
-      // Sandbox fallbacks stay inside their sandbox skill workspace;
-      // host execution skills are not mounted there.
-      ...(params.sandbox?.enabled === true
-        ? {}
-        : { executionSkillsDir: path.join(params.effectiveWorkspace, "skills") }),
-      workspaceOnly,
-    });
-  const restoreSkillEnv = skillsSnapshot
-    ? applySkillEnvOverridesFromSnapshot({
-        snapshot: skillsSnapshot,
-        config: params.attempt.config,
-      })
-    : applySkillEnvOverrides({
-        skills: skillEntries ?? [],
-        config: params.attempt.config,
-      });
-  try {
-    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      skillsWorkspaceDir,
-      skillsPromptWorkspaceDir,
-    });
-    const skillUsagePaths = mapSandboxSkillUsagePaths({
-      paths: params.sandbox?.skillUsagePaths,
-      skillsWorkspaceDir,
-      skillsPromptWorkspaceDir,
-    });
-    const skillsPrompt = resolveSkillsPrompt({
-      skillsSnapshot,
-      entries: promptSkillEntries,
-      loadEntries: createSandboxPromptEntryLoader({
-        loadEntries: loadSkillEntries,
-        skillsWorkspaceDir,
-        skillsPromptWorkspaceDir,
-      }),
-      config: params.attempt.config,
-      workspaceDir: skillsPromptWorkspaceDir,
-      agentId: params.sessionAgentId,
-      eligibility: skillsEligibility,
-      preserveEntryOrder,
-    });
-    const sandbox = params.sandbox;
-    const sandboxSkillReader: CodeModeSkillReader | undefined = sandbox?.enabled
-      ? async ({ location, signal }) => {
-          const bridge = sandbox.fsBridge;
-          if (!bridge) {
-            throw new Error("Sandbox filesystem bridge is unavailable for skill reads.");
-          }
-          return (
-            await bridge.readFile({
-              filePath: location,
-              cwd: sandbox.containerWorkdir,
-              signal,
-            })
-          ).toString("utf8");
-        }
-      : undefined;
-    const codeModeSkills = resolveCodeModeSkills({
-      skillsPrompt,
-      candidates: skillsSnapshot?.resolvedSkills ?? skillEntries.map((entry) => entry.skill),
-      reader: sandboxSkillReader,
-    });
-    return {
-      restoreSkillEnv,
-      skillUsagePaths,
-      skillsPrompt,
-      skillsSnapshotForRun: skillsSnapshot,
-      codeModeSkills,
-    };
-  } catch (error) {
-    restoreSkillEnv();
-    throw error;
-  }
 }
 
 export type EmitDiagnosticRunCompleted = (

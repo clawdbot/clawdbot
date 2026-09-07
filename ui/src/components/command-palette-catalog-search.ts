@@ -16,6 +16,7 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { t } from "../i18n/index.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
+import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icons.ts";
 
 type CommandPaletteCatalogCategory =
@@ -33,6 +34,8 @@ type CommandPaletteCatalogItem = {
   icon: IconName;
   category: CommandPaletteCatalogCategory;
   routeId: RouteId;
+  search?: string;
+  hash?: string;
   agentId?: string;
   description?: string;
   searchText?: string;
@@ -90,6 +93,14 @@ function getCommandPaletteBaseItems(
       icon: "fileText",
       category: "navigation",
       action: "nav:sessions",
+    },
+    {
+      id: "nav-meetings",
+      label: t("tabs.meetings"),
+      description: t("subtitles.meetings"),
+      icon: "book",
+      category: "navigation",
+      action: "nav:meetings",
     },
     {
       id: "nav-cron",
@@ -217,6 +228,8 @@ export function toCommandPaletteItems(
     icon: item.icon,
     category: item.category,
     action: `nav:${item.routeId}`,
+    search: item.search,
+    hash: item.hash,
     agentId: item.agentId,
     description: item.description,
     searchText: item.searchText,
@@ -260,7 +273,25 @@ export function getStaticCommandPaletteCatalogItems(
     description: t(`appsPage.cards.${card}.desc`),
     searchText: card,
   }));
-  return [...settings, ...apps];
+  const capture = SETTINGS_SEARCH_TARGETS.meetingCapture;
+  return [
+    ...settings,
+    ...(canAdmin
+      ? [
+          {
+            id: "settings-meeting-capture",
+            label: t(capture.labelKey),
+            icon: "settings" as const,
+            category: "settings" as const,
+            routeId: capture.routeId,
+            search: capture.search,
+            hash: capture.hash,
+            searchText: capture.aliases,
+          },
+        ]
+      : []),
+    ...apps,
+  ];
 }
 
 export async function loadCommandPaletteCatalogItems(params: {
@@ -268,7 +299,8 @@ export async function loadCommandPaletteCatalogItems(params: {
   agentId: string;
   agents: () => Promise<AgentsListResult | null>;
   methodAvailable: (method: string) => boolean;
-}): Promise<CommandPaletteCatalogItem[]> {
+}): Promise<{ items: CommandPaletteCatalogItem[]; modelSearchFailed: boolean }> {
+  let modelSearchFailed = false;
   const requestIfAvailable = async <T>(
     method: string,
     requestParams: unknown,
@@ -288,14 +320,21 @@ export async function loadCommandPaletteCatalogItems(params: {
     }),
     requestIfAvailable<SkillStatusReport>("skills.status", { agentId: params.agentId }),
     requestIfAvailable<PluginListResult>("plugins.list", {}),
-    requestIfAvailable<{ models: ModelCatalogEntry[] }>("models.list", {
-      view: "configured",
-      agentId: params.agentId,
-      preparedOnly: true,
-    }),
+    params.methodAvailable("models.list")
+      ? params.client
+          .request<{ models: ModelCatalogEntry[] }>("models.list", {
+            view: "configured",
+            agentId: params.agentId,
+            preparedOnly: true,
+          })
+          .catch(() => {
+            modelSearchFailed = true;
+            return null;
+          })
+      : null,
   ]);
 
-  return [
+  const items: CommandPaletteCatalogItem[] = [
     ...(agents?.agents ?? []).map((agent) => ({
       id: `agent-${agent.id}`,
       label: agent.identity?.name ?? agent.name ?? agent.id,
@@ -350,4 +389,5 @@ export async function loadCommandPaletteCatalogItems(params: {
         .join(" "),
     })),
   ];
+  return { items, modelSearchFailed };
 }

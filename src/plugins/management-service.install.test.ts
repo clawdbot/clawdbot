@@ -40,6 +40,9 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
+}));
+
+vi.mock("./install-config-mutation.js", () => ({
   resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
   selectInstallMutationWriteOptions: (writeOptions: unknown) =>
     mocks.selectWriteOptions(writeOptions),
@@ -83,8 +86,8 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
     mocks.officialCatalog(...args),
 }));
 
-const { clearManagedPluginOfficialCatalogCache, installManagedPlugin, setManagedPluginEnabled } =
-  await import("./management-service.js");
+const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { installManagedPlugin, setManagedPluginEnabled } = await import("./management-mutations.js");
 
 function mockHostedOfficialCatalog(entries: unknown[]) {
   mocks.officialCatalog.mockResolvedValue({

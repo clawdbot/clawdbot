@@ -303,6 +303,7 @@ const boardFixtureHtml = `<!doctype html>
     <link rel="stylesheet" href="/src/styles.css" />
     <style>
       body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--bg); }
+      #app { height: 100%; overflow: auto; }
       .board-fixture-shell { box-sizing: border-box; margin: 0 auto; max-width: 1440px; padding: 36px; }
       .board-fixture-header { align-items: end; display: flex; justify-content: space-between; margin-bottom: 24px; }
       .board-fixture-header span { color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .15em; }
@@ -1355,6 +1356,21 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
       "Refactored the render guard and reran the suite; all 12 tests pass.",
       workTurnBase + 172_000,
     ),
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "mock-work-yield",
+          name: "yield",
+          arguments: {
+            message:
+              "Waiting for the two visible implementation owners; resume on progress/completion to coordinate shared review and verification.",
+          },
+        },
+      ],
+      timestamp: workTurnBase + 173_000,
+    },
   );
 
   return messages;
@@ -2203,12 +2219,7 @@ async function createChatPickerScenario(
               configured: true,
               defaultModel: "gpt-realtime-2.1",
               transports: ["webrtc", "gateway-relay"],
-              models: [
-                "gpt-realtime-2.1",
-                "gpt-realtime-2.1-mini",
-                "gpt-realtime-2",
-                "gpt-live-1-codex",
-              ],
+              models: ["gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"],
               voices: [
                 "alloy",
                 "ash",

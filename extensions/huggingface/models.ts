@@ -134,6 +134,7 @@ function projectHuggingfaceModels(rows: readonly unknown[]): ModelDefinitionConf
 export async function discoverHuggingfaceModels(
   apiKey: string,
   timeoutMs = HUGGINGFACE_DISCOVERY_TIMEOUT_MS,
+  options: { discoveryMode?: "strict" } = {},
 ): Promise<ModelDefinitionConfig[]> {
   const trimmedKey = apiKey?.trim();
   if (!trimmedKey) {
@@ -142,6 +143,7 @@ export async function discoverHuggingfaceModels(
 
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
   const provider = await buildLiveModelProviderConfig({
+    ...options,
     providerId: "huggingface",
     endpoint: `${HUGGINGFACE_BASE_URL}/models`,
     providerConfig: { baseUrl: HUGGINGFACE_BASE_URL, api: "openai-completions" },

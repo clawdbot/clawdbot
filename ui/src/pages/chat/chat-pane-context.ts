@@ -1,7 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { isBrowserPanelSurfaceAvailable } from "../../app/panel-availability.ts";
 import {
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
@@ -270,13 +270,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.connected &&
       hasOperatorAdminAccess(state.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "terminal.open") === true;
-    const rootsChanged =
-      state.localMediaPreviewRoots.length !== config.localMediaPreviewRoots.length ||
-      state.localMediaPreviewRoots.some(
-        (value, index) => value !== config.localMediaPreviewRoots[index],
-      );
     if (
-      !rootsChanged &&
       state.terminalAvailable === previousTerminalAvailable &&
       state.embedSandboxMode === config.embedSandboxMode &&
       state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
@@ -284,10 +278,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     ) {
       return;
     }
-    if (rootsChanged) {
-      releaseChatMediaResourceSubscriber(state.requestUpdate);
-    }
-    state.localMediaPreviewRoots = config.localMediaPreviewRoots;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
     state.automaticallyFetchFavicons = config.automaticallyFetchFavicons;
@@ -336,7 +326,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         }
         state.chatSending = false;
         state.chatSendingScopeKey = null;
-        invalidateAssistantIdentityCache(state.client);
       }
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
@@ -351,7 +340,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.setTaskSuggestions([]);
       this.taskSuggestionBusyIds.clear();
       this.taskSuggestionOperations.clear();
-      this.resetTaskSuggestionCloudProfiles();
       this.resetSessionSuggestions();
       this.clearTypingActors();
       this.sessionDiscussionStates.clear();
@@ -375,6 +363,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // previous connection's sharing cache so a stale loading entry cannot
       // suppress the fresh load or leak the prior account's identities.
       this.sessionSharingStates = new Map();
+      this.sessionSharingHydrationTargets.clear();
       state.guardianNotices = [];
       this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
@@ -415,10 +404,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
-    state.browserPanelAvailable =
-      snapshot.phase === "connected" &&
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(snapshot, "browser.request") === true;
+    state.browserPanelAvailable = isBrowserPanelSurfaceAvailable(snapshot);
     const desktopPanelAvailable =
       snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&

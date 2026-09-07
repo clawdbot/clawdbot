@@ -109,7 +109,7 @@ type MatrixHandlerTestHarnessOptions = {
   runChannelInboundEvent?: MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"];
   runPrepared?: MatrixRunPreparedMock;
   inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
-  shouldAckReaction?: () => boolean;
+  shouldAckReaction?: MatrixMonitorHandlerParams["core"]["channel"]["reactions"]["shouldAckReaction"];
   enqueueSystemEvent?: (...args: unknown[]) => void;
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
   getMemberDisplayName?: MatrixMonitorHandlerParams["getMemberDisplayName"];

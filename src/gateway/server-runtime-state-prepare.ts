@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
+import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -39,17 +39,6 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type ChannelRuntime = ReturnType<
   (typeof import("../plugins/runtime/runtime-channel.js"))["createRuntimeChannel"]
 >;
-
-type GatewayStartupChannelPlugin = {
-  id: ChannelId;
-  gatewayMethods?: readonly string[];
-  gatewayMethodDescriptors?: readonly { name: string }[];
-  meta: { aliases?: readonly string[] };
-};
-
-function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
-  return listLoadedChannelPlugins() as GatewayStartupChannelPlugin[];
-}
 
 export async function prepareGatewayKernelState(params: {
   bootstrap: GatewayBootstrap;
@@ -100,6 +89,8 @@ export async function prepareGatewayKernelState(params: {
     registry: pluginBootstrap.pluginRegistry,
     baseGatewayMethods: pluginBootstrap.baseGatewayMethods,
   };
+  const listGatewayStartupChannelPlugins = () =>
+    listLoadedChannelPluginsForRegistry(pluginRuntime.registry);
   // The core device provider is configuration-free, so every full Gateway owns the
   // worker service even when no plugin-backed cloud profile has been configured.
   const shouldStartWorkerEnvironmentService = Boolean(workerEnvironmentStartup);
@@ -147,6 +138,7 @@ export async function prepareGatewayKernelState(params: {
     workerEnvironmentService,
     workerLiveEvents,
     nodeWorkerGatewayNamespace,
+    nodeWorkerBundleRetention,
     bindDeviceNodeControl,
     bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
@@ -183,6 +175,7 @@ export async function prepareGatewayKernelState(params: {
             placements: workerEnvironmentStartup.placementStore,
             environments: workerEnvironmentService,
             gatewayNamespace: nodeWorkerGatewayNamespace,
+            nodeWorkerBundleRetention,
             getSessionChangeContext: () => pluginGatewayContext.current,
             persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
               // Placement runtime starts before chat state exists; moves invoke this only after startup.
@@ -404,7 +397,7 @@ export async function prepareGatewayKernelState(params: {
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
-    getPluginHttpRouteRegistry: () => pluginRuntime.registry,
+    getPluginRegistry: () => pluginRuntime.registry,
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
     getNativeApprovalRuntime: () => gatewayInstanceRuntimeRef.current?.nativeApprovals,
@@ -570,6 +563,7 @@ export async function prepareGatewayKernelState(params: {
     watchNodeRequestHandler,
     createHttpTransportOptions,
     transportBridge,
+    connectionWork: connectionState.connectionWork,
     clients,
     mentionInbox,
     broadcast,
@@ -587,9 +581,5 @@ export async function prepareGatewayKernelState(params: {
     sessionEventSubscribers,
     sessionMessageSubscribers,
     isConnectionActive,
-    getTailscaleIngressEndpoint: transportBridge.getTailscaleIngressEndpoint,
-    getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
-    ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,
-    getPortalService: transportBridge.getPortalService,
   };
 }

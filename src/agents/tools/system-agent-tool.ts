@@ -11,6 +11,7 @@ import {
   isSystemAgentNavigationOperation,
   type SystemAgentNavigationOperation,
 } from "../../system-agent/operation-types.js";
+import { assertConfigWriteDoesNotBypassInferenceVerification } from "../../system-agent/operations-execution-helpers.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
@@ -130,8 +131,11 @@ export function resolveSystemAgentProposalTransition(params: {
       operation,
     };
   }
-  // Executed or errored mutation: an armed approval is single-use either way.
-  return { proposal: undefined };
+  // Only admission consumes approval. A prevalidation error leaves the
+  // in-process proposal untouched and must do the same in CLI mirrors.
+  return params.resultText.startsWith(SYSTEM_AGENT_APPROVED_OPERATION_PREFIX)
+    ? { proposal: undefined }
+    : null;
 }
 
 const SYSTEM_AGENT_TOOL_ACTIONS = [
@@ -146,6 +150,7 @@ const SYSTEM_AGENT_TOOL_ACTIONS = [
   "config_get",
   "config_schema",
   "gateway_status",
+  "plugin_list",
   "plugin_search",
   // Host directives handled by the hosting chat after this turn.
   "connect_channel",
@@ -277,6 +282,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     }
     case "gateway_status":
       return { kind: "gateway-status" };
+    case "plugin_list":
+      return { kind: "plugin-list" };
     case "connect_channel":
       return { kind: "channel-setup", channel: requireParam(params, "channel").toLowerCase() };
     case "configure_skills":
@@ -398,7 +405,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     catalogMode: "direct-only",
     description: [
       "System agent. Setup, config, channels, plugins, agents, repair.",
-      "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_search, validate_config, doctor, audit.",
+      "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_list, plugin_search, validate_config, doctor, audit.",
       "Handoff: connect_channel, configure_skills, configure_search, configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent.",
       "Personal model accounts: manage_model_accounts opens the human-owned account controls; no change is made by the handoff. Shared provider/auth setup: exit; run `openclaw onboard`. Never request credentials.",
       "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_set_ref, create_agent, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
@@ -454,6 +461,13 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
       }
       const persistent = isPersistentSystemAgentOperation(operation);
       if (persistent) {
+        // Validate before approval-state reads: owner lookup can yield, and
+        // a rejected or cancelled operation must never become a proposal.
+        if (operation.kind === "config-set" || operation.kind === "config-set-ref") {
+          signal?.throwIfAborted();
+          await assertConfigWriteDoesNotBypassInferenceVerification(operation);
+          signal?.throwIfAborted();
+        }
         const operationHash = hashSystemAgentOperation(operation);
         const armedForThisOperation =
           params.approved === true &&

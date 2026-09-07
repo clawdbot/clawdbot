@@ -6,5 +6,16 @@
   "include": [
     "../../src/agents/*.test.ts",
     "../../src/agents/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/agents/bash-tools.exec-runtime*.test.ts",
+    "../../src/agents/bash-tools.exec-runtime*.test.tsx",
+    "../../src/agents/code-mode*.test.ts",
+    "../../src/agents/code-mode*.test.tsx",
+    "../../src/agents/tool-search*.test.ts",
+    "../../src/agents/tool-search*.test.tsx"
   ]
 }

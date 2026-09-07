@@ -544,6 +544,63 @@ describe("slackApprovalNativeRuntime", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { terminalStatus: undefined, label: "Not applied" },
+    { terminalStatus: "cancelled", label: "Cancelled" },
+  ] as const)(
+    "preserves the $label system-agent heading after denial",
+    async ({ terminalStatus, label }) => {
+      const result = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
+        ...APPROVAL_CONTEXT,
+        request: {
+          approvalKind: "system-agent",
+          id: "system-agent:change-1",
+          request: {
+            title: "OpenClaw change",
+            description: "restart the Gateway",
+            command: "restart the Gateway",
+            proposalHash: "a".repeat(64),
+            allowedDecisions: ["allow-once", "deny"],
+            sessionId: "delegation-1",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 60_000,
+        },
+        resolved: {
+          id: "system-agent:change-1",
+          decision: "deny",
+          applicationStatus: "not-applied",
+          terminalStatus,
+          ts: 1,
+        },
+        view: {
+          approvalKind: "system-agent",
+          approvalId: "system-agent:change-1",
+          phase: "resolved",
+          title: "OpenClaw change",
+          metadata: [],
+          commandText: "restart the Gateway",
+          operationSummary: "restart the Gateway",
+          decision: "deny",
+          applicationStatus: "not-applied",
+          terminalStatus,
+        },
+        entry: null,
+      });
+
+      expect(result).toMatchObject({
+        kind: "update",
+        payload: {
+          text: `*OpenClaw change approval: ${label}*\nResolved.\n\n*Change*\n\`\`\`\nrestart the Gateway\n\`\`\``,
+          blocks: [
+            { text: { text: `*OpenClaw change approval: ${label}*\nResolved.` } },
+            { text: { text: "*Change*\n```\nrestart the Gateway\n```" } },
+          ],
+        },
+      });
+    },
+  );
+
   it("renders expired exec approvals without interactive controls", async () => {
     const result = await buildExecExpiredResult();
 

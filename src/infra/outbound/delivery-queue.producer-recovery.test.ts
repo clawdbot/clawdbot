@@ -199,7 +199,7 @@ describe("exhausted delivery producer recovery", () => {
       const id = "unfinished-owner-settlement";
       const completion = await preparePendingFinal(id);
       const fault = vi
-        .spyOn(sessionAccessor, "updateSessionEntry")
+        .spyOn(sessionAccessor, "patchSessionEntryCore")
         .mockRejectedValueOnce(new Error("synthetic owner storage unavailable"));
 
       await recover(mode);
@@ -248,7 +248,7 @@ describe("exhausted delivery producer recovery", () => {
           status: "suppressed",
           reason: "no_visible_payload",
         });
-        vi.spyOn(sessionAccessor, "updateSessionEntry").mockRejectedValueOnce(
+        vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockRejectedValueOnce(
           new Error("synthetic rejection projection failure"),
         );
         throw new PlatformMessageNotDispatchedError("synthetic permanent rejection", {
@@ -338,8 +338,8 @@ describe("exhausted delivery producer recovery", () => {
     await preparePendingFinal(id);
     const entered = createDeferred();
     const release = createDeferred();
-    const update = sessionAccessor.updateSessionEntry;
-    vi.spyOn(sessionAccessor, "updateSessionEntry").mockImplementationOnce(async (...args) => {
+    const update = sessionAccessor.patchSessionEntryCore;
+    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(async (...args) => {
       entered.resolve();
       await release.promise;
       return update(...args);
@@ -375,7 +375,7 @@ describe("exhausted delivery producer recovery", () => {
     await fs.writeFile(artifact, "audio-bytes");
     const completion = await preparePendingFinal(id, [{ text: "reply", mediaUrl: artifact }]);
     const fault = vi
-      .spyOn(sessionAccessor, "updateSessionEntry")
+      .spyOn(sessionAccessor, "patchSessionEntryCore")
       .mockRejectedValueOnce(new Error("synthetic owner fault"));
     await recover("startup");
     const database = openOpenClawStateDatabase({

@@ -396,7 +396,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await focusChatSidePanel(page);
     await expectRetainedBoardPresentation(page, "expanded");
 
-    await sidePanel.getByRole("button", { name: "Restore split", exact: true }).click();
+    await page
+      .locator(".chat-pane__header")
+      .getByRole("button", { name: "Restore split", exact: true })
+      .click();
     await expectRetainedBoardPresentation(page, "split");
     await restoreChatAsMain(page);
 

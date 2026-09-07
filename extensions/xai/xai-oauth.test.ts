@@ -6,8 +6,11 @@ import {
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { fetch as undiciFetch, MockAgent, ProxyAgent } from "undici";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { withProxyFixture } from "openclaw/plugin-sdk/test-env";
+import { fetch as undiciFetch, MockAgent, type Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { applyXaiConfig } from "./onboard.js";
 import { createXaiDeviceCodeAuthMethod, createXaiOAuthAuthMethod } from "./xai-oauth-entry.js";
 import { refreshXaiOAuthCredential } from "./xai-oauth.js";
 
@@ -61,6 +64,7 @@ function createXaiOAuthCredential(
 
 describe("xAI OAuth", () => {
   afterEach(() => {
+    clearLiveCatalogCacheForTests();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.useRealTimers();
@@ -73,115 +77,168 @@ describe("xAI OAuth", () => {
     { proxy: "http_proxy", noProxy: "auth.x.ai" },
     { proxy: "https_proxy", noProxy: "auth.x.ai" },
     { proxy: "all_proxy", noProxy: "auth.x.ai" },
-    { proxy: "all_proxy", noProxy: "", proxyUrl: "socks5://127.0.0.1:7897" },
-    { proxy: "all_proxy", noProxy: "auth.x.ai", proxyUrl: "socks5://127.0.0.1:7897" },
-  ])(
-    "preserves $proxy routing with no_proxy=$noProxy",
-    async ({ proxy, noProxy, proxyUrl = "http://127.0.0.1:7897" }) => {
+    { proxy: "all_proxy", noProxy: "", socks: true },
+    { proxy: "all_proxy", noProxy: "auth.x.ai", socks: true },
+  ])("preserves $proxy routing with no_proxy=$noProxy", async ({ proxy, noProxy, socks }) => {
+    await withProxyFixture(async (fixture) => {
+      const proxyUrl = socks ? fixture.socksProxy : fixture.httpProxy;
       for (const key of ["http_proxy", "https_proxy", "all_proxy"]) {
         vi.stubEnv(key, key === proxy ? proxyUrl : "");
       }
       vi.stubEnv("no_proxy", noProxy);
-      const fetchImpl = vi.fn<typeof fetch>(async () =>
-        jsonResponse({ error: "temporarily_unavailable" }, { status: 503 }),
+      const fetchImpl = vi.fn<typeof fetch>(
+        async (input, init?: RequestInit & { dispatcher?: Dispatcher }) => {
+          expect(requestUrl(input)).toBe("https://auth.x.ai/oauth2/token");
+          expect(init?.method).toBe("POST");
+          if (noProxy) {
+            expect(init).not.toHaveProperty("dispatcher");
+          } else {
+            if (!init?.dispatcher) {
+              throw new Error("expected proxy dispatcher");
+            }
+            // The loopback fixture records this exact destination and refuses it
+            // before opening any upstream socket; no OAuth traffic leaves the host.
+            await expect(
+              undiciFetch(requestUrl(input), {
+                method: init.method,
+                body: requireStringBody(init),
+                headers: Object.fromEntries(new Headers(init.headers)),
+                redirect: init.redirect,
+                signal: init.signal,
+                dispatcher: init.dispatcher,
+              }),
+            ).rejects.toMatchObject({
+              cause: { code: socks ? "UND_ERR_SOCKS5_REPLY_2" : "UND_ERR_PRX_CONN" },
+            });
+          }
+          return jsonResponse({ error: "temporarily_unavailable" }, { status: 503 });
+        },
       );
       await expect(
         refreshXaiOAuthCredential(createXaiOAuthCredential(), { fetchImpl }),
       ).rejects.toThrow("temporarily_unavailable");
       expect(fetchImpl).toHaveBeenCalledOnce();
-      const init = fetchImpl.mock.calls[0]?.[1];
-      if (noProxy) {
-        expect(init).not.toHaveProperty("dispatcher");
-      } else {
-        expect(init).toHaveProperty("dispatcher", expect.any(ProxyAgent));
+      expect(fixture.connections).toEqual(noProxy ? [] : [`${socks ? "socks" : "http"}:auth.x.ai`]);
+      expect(fixture.originRoutes).toEqual([]);
+      await fixture.waitForSocketsClosed();
+    });
+  });
+
+  it.each(["OAuth", "catalog"] as const)(
+    "revalidates live authority before following a %s redirect",
+    async (boundary) => {
+      const transport = new MockAgent();
+      transport.disableNetConnect();
+      const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+        const response = await undiciFetch(requestUrl(input), {
+          method: init?.method,
+          headers: Object.fromEntries(new Headers(init?.headers)),
+          redirect: init?.redirect,
+          signal: init?.signal,
+          dispatcher: transport,
+        });
+        return new Response(await response.arrayBuffer(), {
+          status: response.status,
+          headers: Object.fromEntries(response.headers),
+        });
+      });
+      vi.stubGlobal("fetch", fetchImpl);
+      const held = createDeferred<void>();
+      const release = createDeferred<void>();
+      const controller = new AbortController();
+      let current = true;
+      const redirectStart =
+        boundary === "OAuth"
+          ? XAI_OAUTH_DISCOVERY_URL
+          : "https://cli-chat-proxy.grok.com/v1/models";
+      if (boundary === "catalog") {
+        const auth = transport.get("https://auth.x.ai");
+        auth.intercept({ path: "/.well-known/openid-configuration" }).reply(200, {
+          device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+          token_endpoint: "https://auth.x.ai/oauth2/token",
+        });
+        auth.intercept({ path: "/oauth2/device/code", method: "POST" }).reply(200, {
+          device_code: "device",
+          user_code: "CODE",
+          verification_uri: "https://auth.x.ai/device",
+          expires_in: 60,
+          interval: 1,
+        });
+        auth.intercept({ path: "/oauth2/token", method: "POST" }).reply(200, {
+          access_token: "access",
+          refresh_token: "refresh",
+          expires_in: 60,
+        });
+        transport
+          .get("https://cli-chat-proxy.grok.com")
+          .intercept({ path: "/v1/settings" })
+          .reply(200, { default_model: "subscription-fixture" });
+      }
+      const origin = transport.get(new URL(redirectStart).origin);
+      origin.intercept({ path: new URL(redirectStart).pathname }).reply(async () => {
+        held.resolve();
+        await release.promise;
+        return { statusCode: 302, responseOptions: { headers: { location: "/retired" } } };
+      });
+      const redirected = vi.fn(() => ({ statusCode: 403, data: "denied" }));
+      origin.intercept({ path: "/retired" }).reply(redirected);
+      const outcome = createXaiOAuthAuthMethod()
+        .run({
+          config: {},
+          isRemote: true,
+          openUrl: async () => {},
+          prompter: createTestWizardPrompter(),
+          runtime: createRuntimeEnv(),
+          signal: controller.signal,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("owner retired");
+            }
+          },
+          oauth: {
+            createVpsAwareHandlers: () => {
+              throw new Error("unexpected browser flow");
+            },
+          },
+        })
+        .catch((error: unknown) => error);
+      try {
+        await Promise.race([
+          held.promise,
+          outcome.then((error) => {
+            throw new Error("login ended before the held redirect", { cause: error });
+          }),
+        ]);
+        current = false;
+        release.resolve();
+        const error = await outcome;
+        expect(redirected).not.toHaveBeenCalled();
+        expect(transport.pendingInterceptors()).toEqual([
+          expect.objectContaining({ path: "/retired" }),
+        ]);
+        expect(error).toMatchObject({ message: expect.stringContaining("owner retired") });
+        expect(fetchImpl).toHaveBeenCalledWith(
+          redirectStart,
+          expect.objectContaining({
+            redirect: "manual",
+            signal: expect.any(AbortSignal),
+          }),
+        );
+        expect(controller.signal.aborted).toBe(false);
+      } finally {
+        controller.abort();
+        release.resolve();
+        await outcome;
+        await transport.close();
       }
     },
   );
-
-  it("revalidates live authority before following an OAuth redirect", async () => {
-    const transport = new MockAgent();
-    transport.disableNetConnect();
-    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
-      const response = await undiciFetch(requestUrl(input), {
-        method: init?.method,
-        headers: Object.fromEntries(new Headers(init?.headers)),
-        redirect: init?.redirect,
-        signal: init?.signal,
-        dispatcher: transport,
-      });
-      return new Response(await response.arrayBuffer(), {
-        status: response.status,
-        headers: Object.fromEntries(response.headers),
-      });
-    });
-    vi.stubGlobal("fetch", fetchImpl);
-    const held = createDeferred<void>();
-    const release = createDeferred<void>();
-    const controller = new AbortController();
-    let current = true;
-    const origin = transport.get("https://auth.x.ai");
-    origin.intercept({ path: "/.well-known/openid-configuration" }).reply(async () => {
-      held.resolve();
-      await release.promise;
-      return { statusCode: 302, responseOptions: { headers: { location: "/retired" } } };
-    });
-    const redirected = vi.fn(() => ({ statusCode: 403, data: "denied" }));
-    origin.intercept({ path: "/retired" }).reply(redirected);
-    const outcome = createXaiOAuthAuthMethod()
-      .run({
-        config: {},
-        isRemote: true,
-        openUrl: async () => {},
-        prompter: createTestWizardPrompter(),
-        runtime: createRuntimeEnv(),
-        signal: controller.signal,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("owner retired");
-          }
-        },
-        oauth: {
-          createVpsAwareHandlers: () => {
-            throw new Error("unexpected browser flow");
-          },
-        },
-      })
-      .catch((error: unknown) => error);
-    try {
-      await Promise.race([
-        held.promise,
-        outcome.then((error) => {
-          throw new Error("login ended before the held redirect", { cause: error });
-        }),
-      ]);
-      current = false;
-      release.resolve();
-      const error = await outcome;
-      expect(redirected).not.toHaveBeenCalled();
-      expect(transport.pendingInterceptors()).toEqual([
-        expect.objectContaining({ path: "/retired" }),
-      ]);
-      expect(error).toMatchObject({ message: expect.stringContaining("owner retired") });
-      expect(fetchImpl).toHaveBeenCalledWith(
-        XAI_OAUTH_DISCOVERY_URL,
-        expect.objectContaining({
-          redirect: "manual",
-          signal: expect.any(AbortSignal),
-        }),
-      );
-      expect(controller.signal.aborted).toBe(false);
-    } finally {
-      controller.abort();
-      release.resolve();
-      await outcome;
-      await transport.close();
-    }
-  });
 
   it.each([
     { boundary: "discovery response", requests: 1 },
     { boundary: "device prompt", requests: 2 },
     { boundary: "pending poll", requests: 3 },
+    { boundary: "token response", requests: 3 },
   ])(
     "revalidates live authority after held $boundary before another request",
     async ({ boundary, requests }) => {
@@ -216,6 +273,15 @@ describe("xAI OAuth", () => {
             expires_in: 60,
             interval: 1,
           });
+        }
+        if (url.endsWith("/models")) {
+          return jsonResponse({ data: [{ id: "subscription-fixture", api_backend: "responses" }] });
+        }
+        if (url.endsWith("/settings")) {
+          return jsonResponse({ default_model: "subscription-fixture" });
+        }
+        if (boundary === "token response") {
+          await hold();
         }
         polls += 1;
         if (boundary === "pending poll" && polls === 1) {
@@ -538,114 +604,192 @@ describe("xAI OAuth", () => {
     expect(refreshed.expires).toBe(100);
   });
 
-  it("logs in with xAI device code without a localhost callback", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const progress = {
-      update: vi.fn(),
-      stop: vi.fn(),
-    };
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse({
-          authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
-          device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
-          token_endpoint: "https://auth.x.ai/oauth2/token",
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          device_code: "device-code-1",
-          user_code: "ABCD-1234",
-          verification_uri: "https://accounts.x.ai/oauth2/device",
-          verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
-          expires_in: 900,
-          interval: 5,
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          access_token: createJwt({ exp: 4, sub: "acct-1" }),
-          refresh_token: "refresh-1",
-          id_token: createJwt({
-            sub: "acct-1",
-            email: "dev@example.com",
-            name: "Dev User",
+  it.each(["fresh", "subscription", "api"] as const)(
+    "logs in with device code and refreshes the %s catalog",
+    async (setup) => {
+      vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+      const progress = {
+        update: vi.fn(),
+        stop: vi.fn(),
+      };
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          jsonResponse({
+            authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+            device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+            token_endpoint: "https://auth.x.ai/oauth2/token",
           }),
-          expires_in: 120,
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            device_code: "device-code-1",
+            user_code: "ABCD-1234",
+            verification_uri: "https://accounts.x.ai/oauth2/device",
+            verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
+            expires_in: 900,
+            interval: 5,
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            access_token: createJwt({ exp: 4, sub: "acct-1" }),
+            refresh_token: "refresh-1",
+            id_token: createJwt({
+              sub: "acct-1",
+              email: "dev@example.com",
+              name: "Dev User",
+            }),
+            expires_in: 120,
+          }),
+        );
+      fetchImpl.mockImplementation(async (input) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/models")) {
+          return jsonResponse({ data: [{ id: "subscription-fixture", api_backend: "responses" }] });
+        }
+        if (url.endsWith("/settings")) {
+          return jsonResponse({ default_model: "subscription-fixture" });
+        }
+        throw new Error(`Unexpected catalog URL: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchImpl);
+      const deviceCode = vi.fn(async () => {});
+      const openUrl = vi.fn(async () => {});
+      const log = vi.fn();
+      const runtime = { ...createRuntimeEnv(), log };
+      const ctx: ProviderAuthContext = {
+        config:
+          setup === "fresh"
+            ? {}
+            : {
+                ...applyXaiConfig({}),
+                agents: {
+                  defaults: { model: { primary: "other/selected", fallbacks: ["other/fallback"] } },
+                },
+                ...(setup === "subscription"
+                  ? {
+                      models: {
+                        providers: {
+                          xai: {
+                            baseUrl: "https://cli-chat-proxy.grok.com/v1",
+                            api: "openai-responses",
+                            auth: "oauth",
+                            models: [
+                              {
+                                id: "stale-catalog",
+                                name: "Stale",
+                                reasoning: false,
+                                input: ["text"],
+                                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                                contextWindow: 1000,
+                                maxTokens: 100,
+                              },
+                            ],
+                          },
+                        },
+                      },
+                    }
+                  : {}),
+              },
+        isRemote: true,
+        assertCurrent: vi.fn(),
+        openUrl,
+        prompter: createTestWizardPrompter({
+          progress: vi.fn(() => progress),
+          deviceCode,
         }),
-      );
-    vi.stubGlobal("fetch", fetchImpl);
-    const deviceCode = vi.fn(async () => {});
-    const openUrl = vi.fn(async () => {});
-    const log = vi.fn();
-    const runtime = { ...createRuntimeEnv(), log };
-    const ctx: ProviderAuthContext = {
-      config: {},
-      isRemote: true,
-      openUrl,
-      prompter: createTestWizardPrompter({
-        progress: vi.fn(() => progress),
-        deviceCode,
-      }),
-      runtime,
-      oauth: {
-        createVpsAwareHandlers: () => {
-          throw new Error("unexpected VPS OAuth handler request");
+        runtime,
+        oauth: {
+          createVpsAwareHandlers: () => {
+            throw new Error("unexpected VPS OAuth handler request");
+          },
         },
-      },
-    };
+      };
 
-    const result = await createXaiOAuthAuthMethod().run(ctx);
+      if (setup === "api" && ctx.config.models?.providers?.xai) {
+        Object.assign(ctx.config.models.providers.xai, {
+          apiKey: "fixture-api-key",
+          headers: { Authorization: "Bearer fixture-key" },
+          request: {
+            auth: { mode: "authorization-bearer", token: "fixture-token" },
+            headers: { "x-api-key": "fixture-key" },
+            allowPrivateNetwork: false,
+          },
+        });
+      }
+      const result = await createXaiOAuthAuthMethod().run(ctx);
 
-    expect(openUrl).toHaveBeenCalledWith("https://accounts.x.ai/oauth2/device?user_code=ABCD-1234");
-    expect(deviceCode).toHaveBeenCalledWith({
-      title: "xAI OAuth",
-      code: "ABCD-1234",
-      expiresInMinutes: 15,
-      message: "Enter this one-time code on the xAI sign-in page.",
-    });
-    expect(openUrl.mock.invocationCallOrder[0]).toBeLessThan(
-      deviceCode.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
-    );
-    const remoteLog = log.mock.calls[0]?.[0];
-    expect(remoteLog).toContain("https://accounts.x.ai/oauth2/device");
-    expect(remoteLog).not.toContain("ABCD-1234");
-    const deviceRequest = fetchImpl.mock.calls[1]?.[1];
-    expect(deviceRequest?.method).toBe("POST");
-    const deviceBody = requireStringBody(deviceRequest);
-    expect(deviceBody).toContain(`client_id=${encodeURIComponent(XAI_OAUTH_CLIENT_ID)}`);
-    expect(deviceBody).toContain(`scope=${encodeURIComponent(XAI_OAUTH_SCOPE)}`);
+      expect(openUrl).toHaveBeenCalledWith(
+        "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
+      );
+      expect(deviceCode).toHaveBeenCalledWith({
+        title: "xAI OAuth",
+        code: "ABCD-1234",
+        expiresInMinutes: 15,
+        message: "Enter this one-time code on the xAI sign-in page.",
+      });
+      expect(openUrl.mock.invocationCallOrder[0]).toBeLessThan(
+        deviceCode.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+      );
+      const remoteLog = log.mock.calls[0]?.[0];
+      expect(remoteLog).toContain("https://accounts.x.ai/oauth2/device");
+      expect(remoteLog).not.toContain("ABCD-1234");
+      const deviceRequest = fetchImpl.mock.calls[1]?.[1];
+      expect(deviceRequest?.method).toBe("POST");
+      const deviceBody = requireStringBody(deviceRequest);
+      expect(deviceBody).toContain(`client_id=${encodeURIComponent(XAI_OAUTH_CLIENT_ID)}`);
+      expect(deviceBody).toContain(`scope=${encodeURIComponent(XAI_OAUTH_SCOPE)}`);
 
-    const tokenRequest = fetchImpl.mock.calls[2]?.[1];
-    expect(tokenRequest?.method).toBe("POST");
-    const tokenBody = requireStringBody(tokenRequest);
-    expect(tokenBody).toContain(
-      "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
-    );
-    expect(tokenBody).toContain("device_code=device-code-1");
+      const tokenRequest = fetchImpl.mock.calls[2]?.[1];
+      expect(tokenRequest?.method).toBe("POST");
+      const tokenBody = requireStringBody(tokenRequest);
+      expect(tokenBody).toContain(
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
+      );
+      expect(tokenBody).toContain("device_code=device-code-1");
 
-    expect(result.profiles[0]?.credential).toMatchObject({
-      type: "oauth",
-      provider: "xai",
-      refresh: "refresh-1",
-      email: "dev@example.com",
-      displayName: "Dev User",
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-      deviceAuthorizationEndpoint: "https://auth.x.ai/oauth2/device/code",
-      issuer: "https://auth.x.ai",
-      authFlow: "device-code",
-      accountId: "acct-1",
-      access: expect.any(String),
-    });
-    expect(result.defaultModel).toBe("xai/auto");
-    expect(result.configPatch?.agents?.defaults?.model).toEqual({
-      primary: "xai/auto",
-    });
-    expect(result.configPatch?.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
-    expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
-    expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
-  });
+      expect(result.profiles[0]?.credential).toMatchObject({
+        type: "oauth",
+        provider: "xai",
+        refresh: "refresh-1",
+        email: "dev@example.com",
+        displayName: "Dev User",
+        tokenEndpoint: "https://auth.x.ai/oauth2/token",
+        deviceAuthorizationEndpoint: "https://auth.x.ai/oauth2/device/code",
+        issuer: "https://auth.x.ai",
+        authFlow: "device-code",
+        accountId: "acct-1",
+        access: expect.any(String),
+      });
+      expect(result.defaultModel).toBe("xai/auto");
+      expect(result.configPatch?.agents?.defaults?.model).toEqual(
+        setup === "fresh"
+          ? { primary: "xai/auto" }
+          : { primary: "other/selected", fallbacks: ["other/fallback"] },
+      );
+      expect(result.configPatch?.models?.providers?.xai).toMatchObject({
+        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+        api: "openai-responses",
+        auth: "oauth",
+      });
+      expect(result.configPatch?.models?.providers?.xai?.models.map((model) => model.id)).toEqual([
+        "subscription-fixture",
+      ]);
+      const savedProvider = result.configPatch?.models?.providers?.xai;
+      expect(savedProvider?.models.some((model) => model.id === "auto")).toBe(false);
+      expect(savedProvider).toHaveProperty("apiKey", undefined);
+      expect(savedProvider).toHaveProperty("headers", undefined);
+      expect(savedProvider?.request).toHaveProperty("auth", undefined);
+      expect(savedProvider?.request).toHaveProperty("headers", undefined);
+      if (setup === "api") {
+        expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
+      }
+      expect(result.configPatch?.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
+      expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
+      expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
+    },
+  );
 
   it("falls back for unsafe xAI device-code lifetime fields", async () => {
     const progress = {
@@ -677,6 +821,16 @@ describe("xAI OAuth", () => {
           expires_in: 120,
         }),
       );
+    fetchImpl.mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "subscription-fixture", api_backend: "responses" }] });
+      }
+      if (url.endsWith("/settings")) {
+        return jsonResponse({ default_model: "subscription-fixture" });
+      }
+      throw new Error(`Unexpected catalog URL: ${url}`);
+    });
     vi.stubGlobal("fetch", fetchImpl);
     const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => {});
     const ctx: ProviderAuthContext = {

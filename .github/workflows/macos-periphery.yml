@@ -1,4 +1,7 @@
 name: macOS Periphery Dead Code
+# Job conclusions cannot distinguish passive draft events from scope loss.
+# Record source admission for the commenter before either job runs.
+run-name: ${{ github.workflow }} [${{ github.event_name == 'workflow_dispatch' && 'manual' || github.event.pull_request.draft == false && 'report' || github.event.action == 'converted_to_draft' && 'draft' || 'passive' }}]
 
 on:
   pull_request:

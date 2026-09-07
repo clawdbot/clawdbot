@@ -28,8 +28,11 @@ describe("Codex app-server child exit", () => {
     const closing = harness.client.closeAndWait().then(settled);
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toHaveBeenCalledExactlyOnceWith(true);
-      await expect(harness.client.closeAndWait()).resolves.toBe(true);
+      expect(settled).toHaveBeenCalledExactlyOnceWith({ exited: true, cleanup: "uncertain" });
+      await expect(harness.client.closeAndWait()).resolves.toEqual({
+        exited: true,
+        cleanup: "uncertain",
+      });
       expect(exited).toHaveBeenCalledExactlyOnceWith(code, signal);
       expect(harness.process).toMatchObject({ exitCode: code, signalCode: signal });
       expect(harness.stdinDestroyed).toBe(true);

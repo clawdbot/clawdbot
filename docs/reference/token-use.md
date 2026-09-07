@@ -171,6 +171,11 @@ can overstate the live context window. Context displays and diagnostics use
 the latest prompt snapshot (`promptTokens`, or the last model call when no
 prompt snapshot is available) for `context.used`.
 
+Native Codex turn usage sums the reported counts from each unique completed
+model response, including responses before a retry or cancellation. Missing
+response counts stay unknown; they do not erase already observed usage. A
+missing final response snapshot leaves context usage unavailable.
+
 ## Cost estimation (when shown)
 
 Costs are estimated from your model pricing config:
@@ -200,6 +205,9 @@ aggregate without complete per-request costs omits the cost instead of treating
 the summed tokens as one large request. Provider-billed totals, including zero,
 take precedence over catalog estimates and remain visible even when token counts
 are unavailable. Unknown token counts are not inferred from a billed amount.
+
+Transcript reports preserve valid recorded per-call totals and allocations, including priority/flex adjustments, and use current catalog pricing only for missing costs or unknown-price zero placeholders.
+Anthropic fast-mode estimates multiply base and tier rates alike, preserving tier thresholds and mixed 5-minute/1-hour cache-write pricing.
 
 Omitting `cost`, or setting it to `{}`, inherits the catalog pricing schedule.
 Explicit flat or all-zero model prices do not inherit a catalog tier schedule.

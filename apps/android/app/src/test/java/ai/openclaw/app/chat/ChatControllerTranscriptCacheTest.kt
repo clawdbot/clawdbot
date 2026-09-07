@@ -115,6 +115,7 @@ class ChatControllerTranscriptCacheTest {
       agentId: String,
       sessionKey: String,
       messages: List<ChatMessage>,
+      sessionInfo: ChatSessionEntry?,
     ) {
       savedTranscripts += SavedTranscript(gatewayId, agentId, sessionKey, messages)
     }
@@ -180,6 +181,155 @@ class ChatControllerTranscriptCacheTest {
         assertEquals("hi", queued.text)
         assertEquals(listOf("cached hello", "cached reply"), controller.messages.value.map { it.content.single().text })
       }
+    }
+
+  @Test
+  fun fullHistoryClearsOmittedRunUsageIndependentlyOfTranscriptRows() =
+    runTest {
+      val boundary = """{"role":"system","content":[],"__openclaw":{"kind":"compaction"}}"""
+      val reset = """{"role":"system","content":[],"__openclaw":{"kind":"reset"}}"""
+      val assistant = """{"role":"assistant","content":"reply without usage"}"""
+      val transcripts = listOf("", assistant, "$boundary,$assistant", "$reset,$assistant", boundary, reset)
+      for (messages in transcripts) {
+        val cache = FakeTranscriptCache()
+        cache.sessions =
+          listOf(
+            ChatSessionEntry(
+              key = "main",
+              updatedAtMs = 1L,
+              inputTokens = 18_420L,
+              outputTokens = 840L,
+              estimatedCostUsd = 0.023,
+            ),
+          )
+        val controller =
+          createCachedController(cache) { method, _ ->
+            when (method) {
+              "chat.history" -> {
+                """{"sessionId":"session-1","messages":[$messages],"sessionInfo":{"key":"main","updatedAt":999999,"totalTokens":24700,"totalTokensFresh":true,"contextTokens":272000}}"""
+              }
+
+              "sessions.list" -> {
+                error("list unavailable; history must own its snapshot")
+              }
+
+              else -> {
+                emptyChatGatewayResponse(method)
+              }
+            }
+          }
+
+        controller.load("main")
+        advanceUntilIdle()
+
+        val row = controller.sessions.value.single()
+        assertEquals("History must clear missing input: $messages", null, row.inputTokens)
+        assertEquals(null, row.outputTokens)
+        assertEquals(null, row.estimatedCostUsd)
+        assertEquals(24_700L, row.totalTokens)
+        assertEquals(272_000L, row.contextTokens)
+        assertEquals(true, row.totalTokensFresh)
+      }
+    }
+
+  @Test
+  fun fullHistoryUsageDoesNotDependOnRetainedAssistantOrBoundaryTimestamps() =
+    runTest {
+      val controller =
+        createChatController { method, _ ->
+          when (method) {
+            "chat.history" -> {
+              """{"sessionId":"session-1","messages":[{"role":"system","content":[],"__openclaw":{"kind":"compaction"}}],"sessionInfo":{"key":"main","inputTokens":2100,"outputTokens":160,"estimatedCostUsd":0.0045}}"""
+            }
+
+            "sessions.list" -> {
+              error("list unavailable")
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      val row = controller.sessions.value.single()
+      assertEquals(2_100L, row.inputTokens)
+      assertEquals(160L, row.outputTokens)
+      assertEquals(0.0045, row.estimatedCostUsd)
+    }
+
+  @Test
+  fun partialMetadataEventsPreserveRunUsageButFullListClearsOmissions() =
+    runTest {
+      var usage = """, "inputTokens":18420, "outputTokens":840, "estimatedCostUsd":0.023"""
+      val controller =
+        createChatController { method, _ ->
+          if (method == "sessions.list") """{"sessions":[{"key":"main"$usage}]}""" else emptyChatGatewayResponse(method)
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+      for (event in listOf("sessions.changed", "session.message")) {
+        controller.handleGatewayEvent(event, """{"session":{"key":"main","agentId":"main","label":"renamed","updatedAt":999999}}""")
+        advanceUntilIdle()
+        val row = controller.sessions.value.single()
+        assertEquals(18_420L, row.inputTokens)
+        assertEquals(840L, row.outputTokens)
+        assertEquals(0.023, row.estimatedCostUsd)
+      }
+
+      usage = ""
+      controller.refreshSessions()
+      advanceUntilIdle()
+      val cleared = controller.sessions.value.single()
+      assertEquals(null, cleared.inputTokens)
+      assertEquals(null, cleared.outputTokens)
+      assertEquals(null, cleared.estimatedCostUsd)
+    }
+
+  @Test
+  fun compactionNotificationRefreshesTheAuthoritativeUsageSnapshot() =
+    runTest {
+      var usage = """, "inputTokens":18420, "outputTokens":840, "estimatedCostUsd":0.023"""
+      var messages = """{"role":"assistant","content":"before"}"""
+      val controller =
+        createChatController { method, _ ->
+          when (method) {
+            "chat.history" -> """{"sessionId":"session-1","messages":[$messages],"sessionInfo":{"key":"main"$usage}}"""
+            "sessions.list" -> """{"sessions":[{"key":"main"$usage}]}"""
+            else -> emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(
+        840L,
+        controller.sessions.value
+          .single()
+          .outputTokens,
+      )
+
+      usage = ""
+      messages = """{"role":"system","content":[],"__openclaw":{"kind":"compaction"}}"""
+      // Real compact notifications have a flattened session projection but omit cleared usage.
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"compact","compacted":true,"sessionKey":"main","agentId":"main","permissionMode":null,"permissionModePending":false,"totalTokens":24700,"totalTokensFresh":true,"contextTokens":272000}""",
+      )
+      advanceUntilIdle()
+      val cleared = controller.sessions.value.single()
+      assertEquals(null, cleared.inputTokens)
+      assertEquals(null, cleared.outputTokens)
+      assertEquals(null, cleared.estimatedCostUsd)
+      assertEquals(
+        "compaction",
+        controller.messages.value
+          .single()
+          .transcriptMarker
+          ?.kind,
+      )
     }
 
   @Test

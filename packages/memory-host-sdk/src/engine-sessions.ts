@@ -4,6 +4,7 @@ export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js
 export {
   buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
+  matchesSessionEntryPrefixHash,
   parseCanonicalSessionSyncTargetFromPath,
   readTranscriptStatsBatchReadOnlySync,
   sessionPathForFile,

@@ -2,18 +2,6 @@ import AppKit
 import Foundation
 
 enum SoundEffectCatalog {
-    /// All discoverable system sound names, with "Glass" pinned first.
-    static let systemOptions: [String] = {
-        var names = Set(Self.discoveredSoundMap.keys).union(Self.fallbackNames)
-        names.remove("Glass")
-        let sorted = names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-        return ["Glass"] + sorted
-    }()
-
-    static func displayName(for raw: String) -> String {
-        raw
-    }
-
     static func url(for name: String) -> URL? {
         self.discoveredSoundMap[name]
     }
@@ -22,27 +10,6 @@ enum SoundEffectCatalog {
 
     private static let allowedExtensions: Set<String> = [
         "aif", "aiff", "caf", "wav", "m4a", "mp3",
-    ]
-
-    private static let fallbackNames: [String] = [
-        "Glass", // default
-        "Ping",
-        "Pop",
-        "Frog",
-        "Submarine",
-        "Funk",
-        "Tink",
-        "Basso",
-        "Blow",
-        "Bottle",
-        "Hero",
-        "Morse",
-        "Purr",
-        "Sosumi",
-        "Mail Sent",
-        "New Mail",
-        "Mail Scheduled",
-        "Mail Fetch Error",
     ]
 
     private static let searchRoots: [URL] = [

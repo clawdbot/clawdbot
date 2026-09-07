@@ -1,36 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { FailoverReason } from "../failover/signal.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
-import type { ModelFallbackRunOptions } from "../model-fallback-attempt.js";
-import type { runWithModelFallback } from "../model-fallback-runner.js";
+import { runEmbeddedAgentEntry } from "./run-entry.js";
+import {
+  initialAttemptOptions,
+  fallbackAttemptOptions,
+  type FallbackRunnerParams,
+} from "./run-entry.test-support.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
-
-type FallbackRunnerParams = Parameters<typeof runWithModelFallback<EmbeddedAgentRunResult>>[0];
-
-function initialAttemptOptions(params: FallbackRunnerParams): ModelFallbackRunOptions {
-  return {
-    modelRoutingProvenance: {
-      requestedProvider: params.provider,
-      requestedModel: params.model,
-      stage: "initial",
-    },
-  };
-}
-
-function fallbackAttemptOptions(
-  params: FallbackRunnerParams,
-  fallbackReason: FailoverReason,
-): ModelFallbackRunOptions {
-  return {
-    modelRoutingProvenance: {
-      requestedProvider: params.provider,
-      requestedModel: params.model,
-      stage: "fallback",
-      fallbackReason,
-    },
-  };
-}
 
 const state = vi.hoisted(() => ({
   runWithModelFallback: vi.fn(),
@@ -219,8 +196,45 @@ describe("runEmbeddedAgentEntry", () => {
       });
   });
 
+  it("does not persist a previous candidate error after fallback setup fails", async () => {
+    const transcript = await import("../../config/sessions/transcript.js");
+    const { makeAssistantMessageFixture } =
+      await import("../test-helpers/assistant-message-fixtures.js");
+    const append = vi
+      .spyOn(transcript, "appendExactAssistantMessageToSessionTranscript")
+      .mockRejectedValue(new Error("stale error committed"));
+    try {
+      await expect(
+        runEmbeddedAgentEntry({
+          selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
+          identity: { runId: "run-stale-error", agentId: "main", sessionId: "session-1" },
+          harness: createDirectHarness(),
+          behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+          sessionOverride: { kind: "preserve" },
+          runCandidate: async (provider, model, options) => {
+            if (options.isFallbackRetry) {
+              throw new Error("fallback setup failed");
+            }
+            options.assistantErrorTranscript.record(
+              makeAssistantMessageFixture({ provider, model }),
+              {
+                agentId: "main",
+                sessionId: "session-1",
+                sessionKey: "agent:main:session-1",
+                storePath: "/tmp/unused-stale-error.sqlite",
+              },
+            );
+            return makeResult({ provider, model, classification: "empty" });
+          },
+        }),
+      ).rejects.toThrow("fallback setup failed");
+      expect(append).not.toHaveBeenCalled();
+    } finally {
+      append.mockRestore();
+    }
+  });
+
   it("keeps shared fallback and terminal behavior aligned across entry modes", async () => {
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     const cfg: OpenClawConfig = {};
     const runMode = async (behavior: "channel-delivery" | "command-rpc") => {
       const candidateCalls: Array<{
@@ -381,7 +395,6 @@ describe("runEmbeddedAgentEntry", () => {
       label: `CLI backend "${provider}"`,
       capabilities: [],
     }));
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
 
     await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
@@ -419,7 +432,6 @@ describe("runEmbeddedAgentEntry", () => {
         contextEngineHostCapabilities: [],
       };
     });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
 
     await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
@@ -460,7 +472,6 @@ describe("runEmbeddedAgentEntry", () => {
         attempts: [],
       };
     });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
       identity: { runId: "maintenance", agentId: "main", sessionId: "session-1" },
@@ -481,7 +492,6 @@ describe("runEmbeddedAgentEntry", () => {
       expect(state.finalizedAttempts).toEqual([]);
       return releaseAcceptedTerminalWork;
     });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
       identity: { runId: "settle-winner", agentId: "main", sessionId: "session-1" },
@@ -526,7 +536,6 @@ describe("runEmbeddedAgentEntry", () => {
         attempts: [],
       };
     });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
       identity: { runId: "settle-after-abort", agentId: "main", sessionId: "session-1" },
@@ -578,7 +587,6 @@ describe("runEmbeddedAgentEntry", () => {
           attempts: [],
         };
       });
-      const { runEmbeddedAgentEntry } = await import("./run-entry.js");
       const run = await runEmbeddedAgentEntry({
         selection: { cfg: {}, provider: "provider", model: "model" },
         identity: { runId: "settle-result", agentId: "main", sessionId: "session-1" },
@@ -638,7 +646,6 @@ describe("runEmbeddedAgentEntry", () => {
         attempts: [],
       };
     });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
       identity: { runId: "settle-exhausted", agentId: "main", sessionId: "session-1" },
@@ -690,7 +697,6 @@ describe("runEmbeddedAgentEntry", () => {
       result: "same_model_transient" as const,
       reason: "rate_limit",
     };
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
       identity: { runId: "settle-non-terminal", agentId: "main", sessionId: "session-1" },
@@ -741,7 +747,6 @@ describe("runEmbeddedAgentEntry", () => {
       });
       throw classificationError;
     });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     await expect(
       runEmbeddedAgentEntry({
         selection: { cfg: {}, provider: "provider", model: "model" },
@@ -784,7 +789,6 @@ describe("runEmbeddedAgentEntry", () => {
       expect(allowed).toBe(false);
       throw failure;
     });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     const runCandidate = vi.fn(async (_provider: string, _model: string) => {
       throw failure;
     });
@@ -844,7 +848,6 @@ describe("runEmbeddedAgentEntry", () => {
         ],
       };
     });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     const runCandidate = vi.fn(async (provider: string, model: string) => {
       if (provider === "primary-provider") {
         throw failure;
@@ -896,7 +899,6 @@ describe("runEmbeddedAgentEntry", () => {
         attempts: [],
       };
     });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
       identity: { runId: "followup", agentId: "main", sessionId: "session-1" },
@@ -966,7 +968,6 @@ describe("runEmbeddedAgentEntry", () => {
         model: params.model,
         attempts: [],
       }));
-      const { runEmbeddedAgentEntry } = await import("./run-entry.js");
       const result = await runEmbeddedAgentEntry({
         selection: { cfg: {}, provider: "provider", model: "model" },
         identity: { runId, agentId: "main", sessionId: "session-1" },

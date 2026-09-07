@@ -84,7 +84,7 @@ struct GatewayEnvironmentTests {
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let node = bin.appendingPathComponent("node")
         let gateway = bin.appendingPathComponent("openclaw")
-        try "#!/bin/sh\necho v24.15.0\n".write(to: node, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v24.16.0\n".write(to: node, atomically: true, encoding: .utf8)
         try "#!/bin/sh\nexit 1\n".write(to: gateway, atomically: true, encoding: .utf8)
         for executable in [node, gateway] {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
@@ -104,7 +104,7 @@ struct GatewayEnvironmentTests {
             #expect(message.contains(gateway.path))
             #expect(message.contains("repair"))
             #expect(gatewayStatus.gatewayVersion == nil)
-            #expect(gatewayStatus.nodeVersion == "24.15.0")
+            #expect(gatewayStatus.nodeVersion == "24.16.0")
         }
     }
 

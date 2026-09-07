@@ -86,6 +86,9 @@ describe("SessionRowSchema", () => {
       false,
     );
     expect(Value.Check(SessionRowSchema, { ...roundTripped, lastRunId: "" })).toBe(false);
+    expect(Value.Check(SessionRowSchema, { ...roundTripped, archiveReason: "age-retention" })).toBe(
+      true,
+    );
     expect(Value.Check(SessionRowSchema, { ...roundTripped, archiveReason: "unknown" })).toBe(
       false,
     );

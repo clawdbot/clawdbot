@@ -2,7 +2,6 @@ import { kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 // DashScope-compatible video provider adapts DashScope-style generation APIs.
-import { readResponseWithLimit } from "../infra/http-body.js";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
   assertOkOrThrowHttpError,
@@ -11,6 +10,7 @@ import {
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   postJsonRequest,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
@@ -372,6 +372,29 @@ export function extractDashscopeVideoUrls(payload: DashscopeVideoGenerationRespo
   return uniqueStrings(urls);
 }
 
+// Successful response bodies stay caller-owned and are never replayed by request retries.
+function fetchDashscopeVideoResponse(params: {
+  provider: string;
+  stage: "poll" | "download";
+  requestFailedMessage: string;
+  request: () => ReturnType<typeof fetchWithTimeoutGuarded>;
+}): ReturnType<typeof fetchWithTimeoutGuarded> {
+  return executeProviderOperationWithRetry({
+    provider: params.provider,
+    stage: params.stage,
+    operation: async () => {
+      const result = await params.request();
+      try {
+        await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
+        return result;
+      } catch (error) {
+        await result.release();
+        throw error;
+      }
+    },
+  });
+}
+
 export async function pollDashscopeVideoTaskUntilComplete(params: {
   providerLabel: string;
   taskId: string;
@@ -389,11 +412,12 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
     label: `${params.providerLabel} video generation task ${params.taskId}`,
   });
   for (let attempt = 0; attempt < DEFAULT_VIDEO_GENERATION_MAX_POLL_ATTEMPTS; attempt += 1) {
-    const pollResult = await executeProviderOperationWithRetry({
+    const pollResult = await fetchDashscopeVideoResponse({
       provider: params.providerLabel,
       stage: "poll",
-      operation: async () => {
-        const result = await fetchWithTimeoutGuarded(
+      requestFailedMessage: `${params.providerLabel} video-generation task poll failed`,
+      request: () =>
+        fetchWithTimeoutGuarded(
           `${params.baseUrl}/api/v1/tasks/${params.taskId}`,
           {
             method: "GET",
@@ -405,18 +429,7 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
             ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
             ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
           },
-        );
-        try {
-          await assertOkOrThrowHttpError(
-            result.response,
-            `${params.providerLabel} video-generation task poll failed`,
-          );
-          return result;
-        } catch (error) {
-          await result.release();
-          throw error;
-        }
-      },
+        ),
     });
     let payload: DashscopeVideoGenerationResponse;
     try {
@@ -585,35 +598,20 @@ export async function downloadDashscopeGeneratedVideos(params: {
   const videos: GeneratedVideoAsset[] = [];
   const downloadLabel = `${params.providerLabel} generated video download`;
   for (const [index, url] of params.urls.entries()) {
-    const result = await executeProviderOperationWithRetry({
+    const result = await fetchDashscopeVideoResponse({
       provider: params.providerLabel,
       stage: "download",
-      operation: async () => {
+      requestFailedMessage: `${params.providerLabel} generated video download failed`,
+      request: () => {
         const downloadTimeoutMs = resolveDashscopeVideoDownloadTimeoutMs(
           params.providerLabel,
           params.timeoutMs,
           params.defaultTimeoutMs,
         );
-        const guarded = await fetchWithTimeoutGuarded(
-          url,
-          { method: "GET" },
-          downloadTimeoutMs,
-          params.fetchFn,
-          {
-            ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-            ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-          },
-        );
-        try {
-          await assertOkOrThrowHttpError(
-            guarded.response,
-            `${params.providerLabel} generated video download failed`,
-          );
-          return guarded;
-        } catch (error) {
-          await guarded.release();
-          throw error;
-        }
+        return fetchWithTimeoutGuarded(url, { method: "GET" }, downloadTimeoutMs, params.fetchFn, {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+        });
       },
     });
     let buffer: Buffer;
@@ -629,9 +627,8 @@ export async function downloadDashscopeGeneratedVideos(params: {
           throw new Error(`${downloadLabel}: malformed video response`);
         }
       } catch (error) {
-        // Header rejection happens before the body reader, so explicitly cancel
-        // unread streams before their guarded dispatcher and timeout release.
-        await result.response.body?.cancel(error).catch(() => undefined);
+        // A capture tee can retain cancellation until the guarded transport is released.
+        void result.response.body?.cancel(error).catch(() => undefined);
         throw error;
       }
 
@@ -644,12 +641,12 @@ export async function downloadDashscopeGeneratedVideos(params: {
           params.defaultTimeoutMs,
         );
       } catch (error) {
-        // The body reader normally owns cancellation. If deadline resolution
-        // fails first, cancel here before release clears the guarded abort.
-        await result.response.body?.cancel(error).catch(() => undefined);
+        // A capture tee must not delay releasing the expired request.
+        void result.response.body?.cancel(error).catch(() => undefined);
         throw error;
       }
-      buffer = await readResponseWithLimit(result.response, params.maxBytes, {
+      buffer = await readProviderBinaryResponse(result.response, downloadLabel, "video", {
+        maxBytes: params.maxBytes,
         chunkTimeoutMs: downloadTimeoutMs,
         onOverflow: ({ maxBytes }) =>
           new Error(`${params.providerLabel} generated video download exceeds ${maxBytes} bytes`),

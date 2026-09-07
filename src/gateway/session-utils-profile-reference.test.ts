@@ -10,8 +10,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, linkEmail, resolveUserProfileId } from "../state/user-profiles.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
-import { listSessionsFromStoreAsync } from "./session-utils.js";
 
 const roots = createTempDirTracker();
 let stateRoot: string;
@@ -41,7 +41,7 @@ function listActivity(
   involvingProfileId: string,
   options: Partial<SessionsListParams> = {},
 ) {
-  return listSessionsFromStoreAsync({
+  return listSessionFixture({
     cfg: {},
     storePath: stateRoot,
     store: Object.fromEntries(
@@ -151,7 +151,7 @@ it.each(["12345678-a123-4123-8123-123456789abc", "12345678-A123-4123-8123-123456
 
 it("resolves qualified retained creators without treating legacy human IDs as profiles", async () => {
   const retained = "12345678-a123-4123-8123-123456789abc";
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
     cfg: {},
     storePath: stateRoot,
     store: {
@@ -227,7 +227,7 @@ it.each([
   };
   for (const reference of ["12345678a123", hiddenId, hiddenId.replaceAll("-", "")]) {
     entryFilter.mockClear();
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg: {},
       storePath: stateRoot,
       store,
@@ -257,7 +257,7 @@ it("resolves merge aliases for visible owners without considering hidden profile
       authenticatedUserProfile: { profileId: target },
     } as GatewayClient,
   });
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
     cfg: {},
     storePath: stateRoot,
     entryFilter,

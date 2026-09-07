@@ -1,6 +1,6 @@
 // Qa Lab tests cover slack live plugin behavior.
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
 import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
@@ -32,6 +32,7 @@ import {
   runSlackTableInvalidBlocksFallbackScenario,
 } from "./slack-live.observations.js";
 import * as slackScenarioImplementations from "./slack-live.scenario-implementations.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 // Keep real Slack operations in Vitest's graph instead of recompiling them through Jiti.
 // The separate facade tests own plugin loading; this suite owns delivery behavior.
@@ -114,6 +115,13 @@ function renderExpectedSlackTableAccessibleText(summaryText: string) {
 }
 
 describe("Slack live QA runtime helpers", () => {
+  beforeAll(async () => {
+    // Load the real Slack action graph as suite preparation, outside scenario
+    // deadlines: the first send otherwise pays that cold import inside its
+    // 120s test budget and times out on contended CI shards.
+    await loadSlackQaRuntime().preloadSlackActions();
+  });
+
   it("converts Slack rate-limit retry seconds for the observer backoff", () => {
     expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 10 })).toBe(10_000);
     expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 0 })).toBeUndefined();

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 
@@ -15,6 +16,27 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer context usage", () => {
+  it.each([true, false])("uses the last-run prompt budget with fresh usage %s", (fresh) => {
+    const container = renderComposer({
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: 2,
+        totalTokens: 160_000,
+        totalTokensFresh: fresh,
+        contextTokens: 200_000,
+        contextBudgetStatus: contextBudgetStatusFixture(),
+      },
+    });
+    expect(container.querySelector(".context-usage__context-value")?.textContent).toContain("180k");
+    expect(container.querySelector(".context-usage__title")?.textContent).toBe(
+      "Prompt budget (last run)",
+    );
+    expect(
+      container.querySelector(".context-ring")?.classList.contains("context-ring--warning"),
+    ).toBe(fresh);
+  });
+
   it.each([
     { name: "renders the owner-selected global alias", sessionKey: "agent:work:main", owned: true },
     {

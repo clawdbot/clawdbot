@@ -99,6 +99,8 @@ export type NativeCommandSpec = {
 /** Extra context used when normalizing slash command text. */
 export type CommandNormalizeOptions = {
   botUsername?: string;
+  /** Keeps complete directive/task arguments, including whitespace and later lines. */
+  preserveArguments?: boolean;
   /** Strip an explicit command target only while channel bot identity is unavailable. */
   targetedCommandMode?: "pre-identity";
 };

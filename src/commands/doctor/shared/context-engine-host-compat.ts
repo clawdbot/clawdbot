@@ -269,7 +269,15 @@ async function resolveSelectedContextEngineInfo(params: {
         };
       }
     }
-    if (pluginRegistry?.contextEngines.get(engineId)?.lifecycle !== "runtime") {
+    const registration = pluginRegistry?.contextEngines.get(engineId);
+    if (registration?.lifecycle === "readOnlyDiscovery") {
+      return {
+        warnings: [
+          `- plugins.slots.contextEngine: context engine "${engineId}" is registered for read-only discovery; offline host compatibility inspection is unavailable. This does not indicate a missing runtime registration in the Gateway.`,
+        ],
+      };
+    }
+    if (registration?.lifecycle !== "runtime") {
       return {
         warnings: [
           `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`,

@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
@@ -612,6 +613,531 @@ class ChatControllerReconnectRestoreTest {
       assertEquals(listOf("keep working"), controller.messageTexts)
       assertEquals(1, controller.pendingRunCount.value)
     }
+
+  @Test
+  fun delayedRecoveryHistoryCannotRestoreAnEndedRun() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(listOf(userTurn), inFlightRun = "run-active" to "working"))
+      val historyStarted = CompletableDeferred<Unit>()
+      val delayedHistory = CompletableDeferred<String>()
+      val staleHistory = history(listOf(userTurn), inFlightRun = "run-active" to "stale working")
+      gateway.respond("chat.history") {
+        historyStarted.complete(Unit)
+        delayedHistory.await()
+      }
+
+      fun runState() =
+        Triple(
+          controller.pendingRunCount.value,
+          controller.selectedActiveRunPresentation.value,
+          controller.streamingAssistantText.value,
+        )
+      val settled = Triple(0, ChatActiveRunPresentation(), null)
+
+      try {
+        reconnect(controller)
+        historyStarted.await()
+        assertEquals(1, controller.pendingRunCount.value)
+        controller.handleGatewayEvent(
+          "agent",
+          """{"sessionKey":"main","runId":"run-active","seq":2,"stream":"lifecycle","data":{"phase":"end"}}""",
+        )
+        assertEquals(settled, runState())
+
+        delayedHistory.complete(staleHistory)
+        runCurrent()
+
+        assertEquals(settled, runState())
+      } finally {
+        delayedHistory.complete(staleHistory)
+        runCurrent()
+      }
+    }
+
+  @Test
+  fun sparseRecoveryHistoryKeepsLifecycleEndedRunSettled() = runTest { verifySparseHistoryAfterTerminal("agent") }
+
+  @Test
+  fun sparseRecoveryHistoryKeepsChatEndedRunSettled() = runTest { verifySparseHistoryAfterTerminal("chat") }
+
+  @Test
+  fun inactiveChatCompletionCannotRestoreAnEndedRunFromSparseHistory() = runTest { verifySparseHistoryAfterTerminal("chat", completeInactiveChat = true) }
+
+  private suspend fun TestScope.verifySparseHistoryAfterTerminal(
+    terminalEvent: String,
+    completeInactiveChat: Boolean = false,
+  ) {
+    val gateway = ScriptedGateway(json)
+    gateway.respondWith("chat.history", history(listOf(userTurn), inFlightRun = "run-active" to "working"))
+    val controller = newScopedController(gateway)
+    controller.load("main")
+    runCurrent()
+    val firstHistory = CompletableDeferred<String>()
+    val secondHistory = CompletableDeferred<String>()
+    val staleHistory = history(listOf(userTurn), inFlightRun = "run-active" to "stale working", hasActiveRun = true, activeRunIds = null)
+    var historyCalls = 0
+    gateway.respond("chat.history") {
+      if (++historyCalls == 1) firstHistory.await() else secondHistory.await()
+    }
+
+    fun runState() = Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value.runId, controller.streamingAssistantText.value)
+    val settled = Triple(0, null, null)
+    try {
+      reconnect(controller)
+      assertEquals(1, historyCalls)
+      controller.handleGatewayEvent(
+        terminalEvent,
+        if (terminalEvent == "agent") {
+          """{"sessionKey":"main","runId":"run-active","seq":2,"stream":"lifecycle","data":{"phase":"end"}}"""
+        } else {
+          chatTerminalPayload("main", "run-active", seq = 2, assistantText = "done")
+        },
+      )
+      runCurrent()
+      assertEquals(settled, runState())
+
+      firstHistory.complete(staleHistory)
+      runCurrent()
+      assertEquals(settled, runState())
+      assertEquals(1, controller.selectedActiveRunPresentation.value.count)
+
+      if (completeInactiveChat) {
+        controller.handleGatewayEvent(
+          "chat",
+          chatTerminalPayload("agent:main:background", "background-run", seq = 1, assistantText = "background done"),
+        )
+        assertEquals(settled, runState())
+      }
+      if (terminalEvent == "agent") controller.refresh()
+      runCurrent()
+      assertEquals(2, historyCalls)
+      secondHistory.complete(staleHistory)
+      runCurrent()
+      assertEquals(settled, runState())
+      assertEquals(1, controller.selectedActiveRunPresentation.value.count)
+    } finally {
+      firstHistory.complete(staleHistory)
+      secondHistory.complete(staleHistory)
+      runCurrent()
+    }
+  }
+
+  @Test
+  fun canonicalAckCannotReactivateAnEndedRun() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("chat.history", history(emptyList()))
+      gateway.respondWith("question.list", """{"questions":[]}""")
+      val controller = newScopedController(gateway)
+      controller.load("main")
+      runCurrent()
+      val requestSeen = CompletableDeferred<String>()
+      val releaseAck = CompletableDeferred<Unit>()
+      gateway.respond("chat.send") { paramsJson ->
+        requestSeen.complete(
+          json
+            .parseToJsonElement(requireNotNull(paramsJson))
+            .jsonObject
+            .getValue("idempotencyKey")
+            .jsonPrimitive.content,
+        )
+        releaseAck.await()
+        """{"runId":"canonical-run","status":"started"}"""
+      }
+      val send = async { controller.sendMessageAwaitAcceptance("keep client identity", "off", emptyList()) }
+      try {
+        val clientRunId = requestSeen.await()
+        controller.handleGatewayEvent(
+          "agent",
+          """{"sessionKey":"main","runId":"$clientRunId","seq":1,"stream":"assistant","data":{"text":"working"}}""",
+        )
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"reason":"patch","session":{"key":"main","agentId":"main","hasActiveRun":true,"activeRunIds":["canonical-run"]}}""",
+        )
+        controller.handleGatewayEvent(
+          "agent",
+          """{"sessionKey":"main","runId":"canonical-run","seq":2,"stream":"lifecycle","data":{"phase":"end"}}""",
+        )
+        releaseAck.complete(Unit)
+        assertTrue(send.await())
+        runCurrent()
+        assertEquals(
+          Triple(0, ChatActiveRunPresentation(), null),
+          Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value, controller.streamingAssistantText.value),
+        )
+        assertEquals(
+          "$clientRunId:user",
+          controller.messages.value
+            .single { it.role == "user" }
+            .idempotencyKey,
+        )
+
+        gateway.respondWith(
+          "chat.history",
+          history(
+            listOf(
+              ReplayHistoryMessage("user", "keep client identity", 1_000, idempotencyKey = "$clientRunId:user"),
+              ReplayHistoryMessage("assistant", "done", 2_000),
+            ),
+            hasActiveRun = false,
+            activeRunIds = emptyList(),
+          ),
+        )
+        controller.refresh()
+        runCurrent()
+        assertEquals(
+          "$clientRunId:user",
+          controller.messages.value
+            .single { it.role == "user" }
+            .idempotencyKey,
+        )
+        val historyCalls = gateway.callCount("chat.history")
+        advanceTimeBy(120_001)
+        runCurrent()
+        assertEquals(historyCalls, gateway.callCount("chat.history"))
+        assertEquals(0, controller.pendingRunCount.value)
+        assertNull(controller.streamingAssistantText.value)
+      } finally {
+        releaseAck.complete(Unit)
+        send.await()
+      }
+    }
+
+  @Test
+  fun notEnqueuedReplayRestoresLiveRunWithTheSameId() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val attempts = mutableListOf<String>()
+      gateway.respondWith("question.list", """{"questions":[]}""")
+      gateway.respond("chat.send") { paramsJson ->
+        val runId =
+          json
+            .parseToJsonElement(requireNotNull(paramsJson))
+            .jsonObject
+            .getValue("idempotencyKey")
+            .jsonPrimitive.content
+        attempts += runId
+        if (attempts.size == 1) throw GatewayRequestNotEnqueued("socket unavailable")
+        """{"runId":"$runId","status":"started"}"""
+      }
+      gateway.respond("chat.history") {
+        val inFlightRun = attempts.takeIf { it.size > 1 }?.last()?.let { it to "working" }
+        history(emptyList(), inFlightRun = inFlightRun)
+      }
+      val controller = newScopedController(gateway)
+      controller.load("main")
+      runCurrent()
+
+      assertTrue(controller.sendMessageAwaitAcceptance("retry after connection loss", "off", emptyList()))
+      val queued = controller.outboxItems.value.single()
+      assertEquals(ChatOutboxStatus.Queued, queued.status)
+      assertFalse(controller.healthOk.value)
+
+      controller.handleGatewayEvent("health", null)
+      controller.outboxItems.first { items -> items.any { it.id == queued.id && it.status == ChatOutboxStatus.Accepted } }
+      runCurrent()
+      assertEquals(listOf(queued.id, queued.id), attempts)
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals(queued.id, controller.selectedActiveRunPresentation.value.runId)
+      assertEquals("working", controller.streamingAssistantText.value)
+
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"${queued.id}","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
+      )
+      assertEquals(
+        Triple(0, ChatActiveRunPresentation(), null),
+        Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value, controller.streamingAssistantText.value),
+      )
+    }
+
+  @Test
+  fun lateUnknownOutcomeCannotBlockNextIdlessTerminal() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("chat.history", history(emptyList()))
+      gateway.respondWith("question.list", """{"questions":[]}""")
+      val firstRequest = CompletableDeferred<String>()
+      val firstResponse = CompletableDeferred<String>()
+      val sentRunIds = mutableListOf<String>()
+      gateway.respond("chat.send") { paramsJson ->
+        val runId =
+          json
+            .parseToJsonElement(requireNotNull(paramsJson))
+            .jsonObject
+            .getValue("idempotencyKey")
+            .jsonPrimitive.content
+        sentRunIds += runId
+        if (sentRunIds.size == 1) {
+          firstRequest.complete(runId)
+          firstResponse.await()
+        } else {
+          """{"runId":"$runId","status":"started"}"""
+        }
+      }
+      val controller = newScopedController(gateway)
+      controller.load("main")
+      runCurrent()
+      val firstSend = async { controller.sendMessageAwaitAcceptance("first request", "off", emptyList()) }
+      try {
+        val firstRunId = firstRequest.await()
+        assertTrue(controller.outboxItems.value.any { it.id == firstRunId && it.status == ChatOutboxStatus.Sending })
+        gateway.respondWith(
+          "chat.history",
+          history(
+            listOf(
+              ReplayHistoryMessage("user", "first request", 1_000, idempotencyKey = "$firstRunId:user", entryId = "r-user"),
+              ReplayHistoryMessage("assistant", "first reply", 2_000, entryId = "r-done"),
+            ),
+            hasActiveRun = false,
+            activeRunIds = emptyList(),
+          ),
+        )
+        controller.handleGatewayEvent("chat", chatTerminalPayload("main", firstRunId, seq = 1, assistantText = "first reply"))
+        controller.outboxItems.first { items -> items.none { it.id == firstRunId } }
+        runCurrent()
+        assertEquals(listOf("first request", "first reply"), controller.messageTexts)
+        assertFalse(firstSend.isCompleted)
+        assertEquals(0, controller.pendingRunCount.value)
+
+        gateway.respond("chat.history") { throw IllegalStateException("history temporarily unavailable") }
+        firstResponse.completeExceptionally(GatewayRequestOutcomeUnknown("response lost"))
+        assertTrue(firstSend.await())
+        runCurrent()
+        assertTrue(controller.outboxItems.value.isEmpty())
+        assertTrue(controller.healthOk.value)
+
+        assertTrue(controller.sendMessageAwaitAcceptance("second request", "off", emptyList()))
+        assertEquals(2, sentRunIds.size)
+        val secondRunId = sentRunIds.last()
+        assertTrue(firstRunId != secondRunId)
+        assertEquals(1, controller.pendingRunCount.value)
+        assertEquals(secondRunId, controller.selectedActiveRunPresentation.value.runId)
+        controller.handleGatewayEvent("chat", chatDeltaPayload("main", secondRunId, 1, "second working", "second working"))
+
+        controller.handleGatewayEvent("agent", """{"sessionKey":"main","stream":"lifecycle","data":{"phase":"end"}}""")
+        assertEquals(
+          Triple(0, ChatActiveRunPresentation(), null),
+          Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value, controller.streamingAssistantText.value),
+        )
+      } finally {
+        firstResponse.completeExceptionally(GatewayRequestOutcomeUnknown("test complete"))
+        firstSend.await()
+        runCurrent()
+      }
+    }
+
+  @Test
+  fun completedConcurrentRunCannotReturnFromStaleHistory() = runTest { verifyConcurrentRunHistory() }
+
+  @Test
+  fun sessionListRefreshCannotRestoreEndedConcurrentRun() = runTest { verifyConcurrentRunHistory(refreshSessionList = true) }
+
+  @Test
+  fun endedRunHistoryCannotSettleAnotherLiveRun() = runTest { verifyConcurrentRunHistory(applyHistoryBeforeSecondCompletion = true) }
+
+  @Test
+  fun steeringCompletionCannotRestoreEndedRecoveredRun() = runTest { verifyConcurrentRunHistory(recoveredFirstRun = true) }
+
+  private suspend fun TestScope.verifyConcurrentRunHistory(
+    refreshSessionList: Boolean = false,
+    applyHistoryBeforeSecondCompletion: Boolean = false,
+    recoveredFirstRun: Boolean = false,
+  ) {
+    val gateway = ScriptedGateway(json)
+    val recoveredRunId = "run-recovered"
+    val transcript =
+      if (recoveredFirstRun) {
+        listOf(ReplayHistoryMessage("user", "first request", 1_000, idempotencyKey = "$recoveredRunId:user", entryId = "before-entry"))
+      } else {
+        listOf(ReplayHistoryMessage("assistant", "Earlier reply", 1_000, entryId = "before-entry"))
+      }
+    gateway.respondWith("chat.history", history(transcript, inFlightRun = if (recoveredFirstRun) recoveredRunId to "first working" else null))
+    gateway.respondWith("question.list", """{"questions":[]}""")
+    gateway.respondWith(
+      "sessions.branches.list",
+      """{"branches":[{"leafEntryId":"before-entry","headline":"Current","messageCount":1,"active":true}]}""",
+    )
+    val sentRunIds = mutableListOf<String>()
+    gateway.respond("chat.send") { paramsJson ->
+      val runId =
+        json
+          .parseToJsonElement(requireNotNull(paramsJson))
+          .jsonObject
+          .getValue("idempotencyKey")
+          .jsonPrimitive.content
+      sentRunIds += runId
+      """{"runId":"$runId","status":"started"}"""
+    }
+    val controller = newScopedController(gateway)
+    controller.load("main")
+    runCurrent()
+    if (recoveredFirstRun) {
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals(recoveredRunId, controller.selectedActiveRunPresentation.value.runId)
+      assertTrue(controller.outboxItems.value.isEmpty())
+    } else {
+      assertTrue(controller.sendMessageAwaitAcceptance("first request", "off", emptyList()))
+    }
+    assertTrue(controller.sendMessageAwaitAcceptance("second request", "off", emptyList()))
+    // Drain ACK-triggered work before recovery starts a new branch refresh.
+    runCurrent()
+    assertEquals(if (recoveredFirstRun) 1 else 2, sentRunIds.size)
+    val firstRunId = if (recoveredFirstRun) recoveredRunId else sentRunIds.first()
+    val secondRunId = sentRunIds.last()
+    assertTrue(firstRunId != secondRunId)
+    assertEquals(2, controller.pendingRunCount.value)
+
+    val snapshotTranscript =
+      if (recoveredFirstRun) {
+        transcript + ReplayHistoryMessage("user", "second request", 2_000, idempotencyKey = "$secondRunId:user", entryId = "steered-user")
+      } else {
+        transcript
+      }
+    if (recoveredFirstRun) {
+      // A normal persisted-user notification precedes the steer source's empty final.
+      gateway.respondWith("chat.history", history(snapshotTranscript, inFlightRun = firstRunId to "first working"))
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      assertEquals(listOf("first request", "second request"), controller.messageTexts)
+      assertTrue(controller.outboxItems.value.isEmpty())
+      assertEquals(2, controller.pendingRunCount.value)
+    }
+
+    val firstHistory = CompletableDeferred<String>()
+    val secondHistory = CompletableDeferred<String>()
+    val currentHistory = CompletableDeferred<String>()
+    val staleHistory = history(snapshotTranscript, inFlightRun = firstRunId to "stale first work", hasActiveRun = true, activeRunIds = null)
+    val settledHistory =
+      if (recoveredFirstRun) {
+        history(
+          snapshotTranscript + ReplayHistoryMessage("assistant", "first done", 3_000, entryId = "recovered-done"),
+          hasActiveRun = false,
+          activeRunIds = emptyList(),
+        )
+      } else {
+        history(snapshotTranscript)
+      }
+    var historyRequests = 0
+    gateway.respond("chat.history") {
+      when (historyRequests++) {
+        0 -> firstHistory.await()
+        1 -> secondHistory.await()
+        else -> currentHistory.await()
+      }
+    }
+
+    fun runState() = Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value.runId, controller.streamingAssistantText.value)
+    val settled = Triple(0, null, null)
+    try {
+      if (recoveredFirstRun) {
+        // Fresh sends ACK started; successful steering later finalizes its own source ID.
+        controller.handleGatewayEvent("chat", chatTerminalPayload("main", secondRunId, seq = 1))
+        runCurrent()
+        assertEquals(1, historyRequests)
+        assertEquals(Triple(1, firstRunId, "first working"), runState())
+        controller.handleGatewayEvent("chat", chatTerminalPayload("main", firstRunId, seq = 1, assistantText = "first done"))
+        runCurrent()
+        assertEquals(2, historyRequests)
+        assertEquals(settled, runState())
+
+        gateway.respondWith(
+          "sessions.list",
+          """{"sessions":[{"key":"main","sessionId":"session-1","agentId":"main","hasActiveRun":false,"activeRunIds":[]}]}""",
+        )
+        controller.refreshSessions()
+        runCurrent()
+        val refreshedSession = controller.sessions.value.single { it.key == "main" }
+        assertEquals("main", refreshedSession.ownerAgentId)
+        assertEquals(false, refreshedSession.hasActiveRun)
+        assertEquals(emptyList<String>(), refreshedSession.activeRunIds)
+        assertEquals(settled, runState())
+        assertEquals(0, controller.selectedActiveRunPresentation.value.count)
+        assertEquals(2, historyRequests)
+
+        firstHistory.complete(staleHistory)
+        runCurrent()
+        assertEquals(settled, runState())
+        // H2 began after the final; this response includes its now-persisted reply.
+        secondHistory.complete(settledHistory)
+        runCurrent()
+        assertEquals(listOf("first request", "second request", "first done"), controller.messageTexts)
+        assertEquals(settled, runState())
+        assertEquals(0, controller.selectedActiveRunPresentation.value.count)
+        return
+      }
+      recoverSeqGap(controller)
+      assertEquals(1, historyRequests)
+      controller.handleGatewayEvent("chat", chatDeltaPayload("main", secondRunId, 1, "second working", "second working"))
+      controller.handleGatewayEvent("chat", chatTerminalPayload("main", firstRunId, seq = 2, assistantText = "first done"))
+      runCurrent()
+      assertEquals(2, historyRequests)
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("second working", controller.streamingAssistantText.value)
+      if (refreshSessionList) {
+        gateway.respondWith(
+          "sessions.list",
+          """{"sessions":[{"key":"main","sessionId":"session-1","agentId":"main","hasActiveRun":true,"activeRunIds":["$secondRunId"]}]}""",
+        )
+        controller.refreshSessions()
+        runCurrent()
+        val refreshedSession = controller.sessions.value.single { it.key == "main" }
+        assertEquals("main", refreshedSession.ownerAgentId)
+        assertEquals(true, refreshedSession.hasActiveRun)
+        assertEquals(listOf(secondRunId), refreshedSession.activeRunIds)
+        assertEquals(Triple(1, secondRunId, "second working"), runState())
+        assertEquals(2, historyRequests)
+      }
+      if (applyHistoryBeforeSecondCompletion) {
+        assertEquals(secondRunId, controller.selectedActiveRunPresentation.value.runId)
+        firstHistory.complete(staleHistory)
+        runCurrent()
+        assertEquals(Triple(1, secondRunId, "second working"), runState())
+        assertEquals(1, controller.selectedActiveRunPresentation.value.count)
+      }
+
+      controller.handleGatewayEvent("chat", chatTerminalPayload("main", secondRunId, seq = 2, assistantText = "second done"))
+      runCurrent()
+      if (!applyHistoryBeforeSecondCompletion) assertEquals(3, historyRequests)
+      assertEquals(settled, runState())
+      if (!applyHistoryBeforeSecondCompletion) {
+        firstHistory.complete(staleHistory)
+        runCurrent()
+        assertEquals(settled, runState())
+        // The fixed list re-advertises terminal S; the empty list retains anonymous history.
+        if (refreshSessionList) {
+          assertEquals(
+            listOf(secondRunId),
+            controller.sessions.value
+              .single { it.key == "main" }
+              .activeRunIds,
+          )
+        }
+        assertEquals(if (refreshSessionList) 0 else 1, controller.selectedActiveRunPresentation.value.count)
+      }
+      secondHistory.complete(staleHistory)
+      runCurrent()
+      assertEquals(settled, runState())
+      if (!applyHistoryBeforeSecondCompletion) {
+        if (refreshSessionList) {
+          assertEquals(
+            listOf(secondRunId),
+            controller.sessions.value
+              .single { it.key == "main" }
+              .activeRunIds,
+          )
+        }
+        assertEquals(if (refreshSessionList) 0 else 1, controller.selectedActiveRunPresentation.value.count)
+      }
+    } finally {
+      firstHistory.complete(staleHistory)
+      secondHistory.complete(if (recoveredFirstRun) settledHistory else staleHistory)
+      currentHistory.complete(settledHistory)
+      runCurrent()
+    }
+  }
 
   @Test
   fun delayedTranscriptCannotRestoreAnEndedRecoveredRun() =

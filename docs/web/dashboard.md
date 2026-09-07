@@ -28,7 +28,7 @@ Auth is enforced at the WebSocket handshake via the configured gateway auth path
 See `gateway.auth` in [Gateway configuration](/gateway/configuration).
 
 <Warning>
-The Control UI is an **admin surface** (chat, config, exec approvals). Do not expose it publicly. The UI keeps dashboard URL tokens in sessionStorage for the current browser tab and selected gateway URL, and strips them from the URL after load. Prefer localhost, Tailscale Serve, or an SSH tunnel.
+The Control UI is an **admin surface** (chat, config, exec approvals). Do not expose it publicly. The UI strips credentials from the URL after load. After a successful token-mode connection, it keeps the shared secret in sessionStorage for the current browser tab and Gateway origin; passwords stay in memory only. Prefer localhost, Tailscale Serve, or an SSH tunnel.
 </Warning>
 
 ## Fast path (recommended)
@@ -40,7 +40,7 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 - If clipboard and browser delivery both fail, `openclaw dashboard` either gives a safe manual-token
   hint or tells you to run `openclaw dashboard --json` and open its short-lived `browserUrl`; it never
   prints the shared token value in interactive logs.
-- If the UI prompts for shared-secret auth, paste the configured token or password into Control UI settings.
+- If the UI prompts for shared-secret auth, paste the configured token or type the password into **Gateway secret** on the login screen or in **Settings → Gateway**.
 
 ## Auth basics (local vs remote)
 

@@ -16,6 +16,17 @@ import org.robolectric.util.ReflectionHelpers
 
 internal fun closeNodeRuntimeTestFixture(runtime: NodeRuntime) = drainWithMainLooper { closeRuntime(runtime) }
 
+// Robolectric has no AndroidKeyStore. UI fixtures bind a real runtime with test-backed SecurePrefs.
+internal fun bindNodeRuntimeTestFixture(
+  app: NodeApp,
+  runtime: NodeRuntime?,
+) {
+  NodeApp::class.java
+    .getDeclaredField("runtimeInstance")
+    .apply { isAccessible = true }
+    .set(app, runtime)
+}
+
 internal fun closeNodeServiceTestFixture(
   controller: ServiceController<NodeForegroundService>,
   app: NodeApp,

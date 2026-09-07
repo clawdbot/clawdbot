@@ -84,6 +84,26 @@ function createMultiAccountHealthSummary(
 }
 
 describe("formatHealthChannelLines", () => {
+  it.each([false, true])("keeps the named startup error with terminal controls=%s", (controls) => {
+    const error = "Legacy exec approvals exist at /tmp/synthetic/exec-approvals.json.";
+    const summary = createHealthSummary({
+      channels: {
+        telegram: {
+          accountId: "default",
+          configured: true,
+          running: false,
+          healthState: "not-running",
+          lastError: controls ? `\u001b[31m${error}\u001b[0m\n` : error,
+        },
+      },
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+    });
+    expect(formatHealthChannelLines(summary)).toEqual([
+      `Telegram: not-running (${error}${controls ? "\\n" : ""})`,
+    ]);
+  });
+
   it("formats per-account probe timings", () => {
     const summary = createHealthSummary({
       channels: {
@@ -166,6 +186,21 @@ describe("formatHealthChannelLines", () => {
       "auth stabilizing",
     ],
     [
+      "disabled account over configured metadata",
+      { enabled: false, stateReason: "disabled" },
+      "disabled",
+    ],
+    [
+      "disabled account over a stale successful probe",
+      { enabled: false, healthState: "healthy", probe: { ok: true, elapsedMs: 12 } },
+      "disabled",
+    ],
+    [
+      "disabled account over stale failure metadata",
+      { enabled: false, healthState: "blocked", probe: { ok: false, error: "old failure" } },
+      "disabled",
+    ],
+    [
       "disabled status over stale passive healthy state",
       { healthState: "healthy", statusState: "disabled" },
       "disabled",
@@ -206,6 +241,29 @@ describe("formatHealthChannelLines", () => {
 
     expect(formatHealthChannelLines(summary)).toStrictEqual([`Test: ${expected}`]);
   });
+
+  it.each(["default", "all"] as const)(
+    "renders a sole disabled configured account in %s health output",
+    (accountMode) => {
+      const account = {
+        accountId: "main",
+        enabled: false,
+        configured: true,
+        running: false,
+        stateReason: "disabled",
+        lastError: null,
+      };
+      const summary = createHealthSummary({
+        channels: { matrix: { ...account, accounts: { main: account } } },
+        channelOrder: ["matrix"],
+        channelLabels: { matrix: "Matrix" },
+      });
+
+      expect(formatHealthChannelLines(summary, { accountMode })).toStrictEqual([
+        "Matrix: disabled",
+      ]);
+    },
+  );
 
   it.each([
     ["blocked", { healthState: "blocked" }],
@@ -252,26 +310,31 @@ describe("formatHealthChannelLines", () => {
       expectedAll: "failed (unknown) - sync rejected",
     },
   ])(
-    "reports the $name active probe when the preferred account is unconfigured",
+    "reports the $name active probe when the preferred account is inactive",
     ({ probe, expected, expectedAll }) => {
-      const summary = createMultiAccountHealthSummary(
-        { healthState: "healthy", probe },
-        { configured: false, linked: undefined, healthState: undefined, probe: undefined },
-      );
-      const accountIdsByChannel = { matrix: ["main"] };
+      for (const [inactive, scopedState] of [
+        [{ configured: false }, "not configured"],
+        [{ enabled: false }, "disabled"],
+      ] as const) {
+        const summary = createMultiAccountHealthSummary(
+          { healthState: "healthy", probe },
+          { ...inactive, linked: undefined, healthState: undefined, probe: undefined },
+        );
+        const accountIdsByChannel = { matrix: ["main"] };
 
-      expect(formatHealthChannelLines(summary)).toStrictEqual([`Matrix: ${expected}`]);
-      expect(
-        formatHealthChannelLines(summary, { accountMode: "all", accountIdsByChannel }),
-      ).toStrictEqual([`Matrix: ${expectedAll}`]);
-      expect(
-        formatHealthChannelLines(summary, { accountMode: "default", accountIdsByChannel }),
-      ).toStrictEqual(["Matrix: not configured"]);
-      expect(
-        formatHealthChannelLines(summary, {
-          accountIdsByChannel: { matrix: ["alerts"] },
-        }),
-      ).toStrictEqual([`Matrix: ${expected}`]);
+        expect(formatHealthChannelLines(summary)).toStrictEqual([`Matrix: ${expected}`]);
+        expect(
+          formatHealthChannelLines(summary, { accountMode: "all", accountIdsByChannel }),
+        ).toStrictEqual([`Matrix: ${expectedAll}`]);
+        expect(
+          formatHealthChannelLines(summary, { accountMode: "default", accountIdsByChannel }),
+        ).toStrictEqual([`Matrix: ${scopedState}`]);
+        expect(
+          formatHealthChannelLines(summary, {
+            accountIdsByChannel: { matrix: ["alerts"] },
+          }),
+        ).toStrictEqual([`Matrix: ${expected}`]);
+      }
     },
   );
 
@@ -285,6 +348,25 @@ describe("formatHealthChannelLines", () => {
     expect(
       formatHealthChannelLines(summary, { accountIdsByChannel: { matrix: ["1", "9"] } }),
     ).toStrictEqual(["Matrix: ok (1ms)"]);
+  });
+
+  it("keeps the selected username first, deduplicates it, and preserves webhook text", () => {
+    const summary = createMultiAccountHealthSummary(
+      { accountId: "1", probe: { ok: true, bot: { username: "sibling" } } },
+      {
+        accountId: "9",
+        probe: {
+          ok: true,
+          elapsedMs: 12,
+          bot: { username: "selected" },
+          webhook: { url: "https://example.test/hook" },
+        },
+      },
+    );
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual([
+      "Matrix: ok (@selected, @sibling) (12ms) - webhook https://example.test/hook",
+    ]);
   });
 
   it.each([undefined, {}])("preserves the channel snapshot when accounts are %j", (accounts) => {

@@ -5,7 +5,6 @@ import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { applyCliProfileEnv } from "../profile.js";
 import {
   filterContainerGenericHints,
-  renderRuntimeHints,
   renderGatewayServiceStartHints,
   resolveRuntimeStatusColor,
 } from "./shared.js";
@@ -66,15 +65,6 @@ describe("renderGatewayServiceStartHints", () => {
       ]);
     },
   );
-
-  it("uses GUI session wording for installed LaunchAgents that cannot access gui/$UID", () => {
-    expect(
-      renderRuntimeHints(
-        { missingSupervision: true, missingGuiSession: true },
-        {} as NodeJS.ProcessEnv,
-      ).join("\n"),
-    ).toContain("logged-in macOS GUI session");
-  });
 
   it("prepends a single container restart hint when OPENCLAW_CONTAINER is set", () => {
     expect(

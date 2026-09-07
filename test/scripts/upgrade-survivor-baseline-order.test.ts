@@ -1,12 +1,89 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path, { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runner = path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
+
+it.each([
+  { scenario: "legacy-operator-state", mode: "auto-auth" },
+  { scenario: "legacy-operator-state", mode: "manual" },
+  { scenario: "base", mode: "auto-auth" },
+  { scenario: "mobile-pairing-reconnect", mode: "auto-auth" },
+])("binds the current registry before $scenario service start ($mode)", ({ scenario, mode }) => {
+  const source = readFileSync(runner, "utf8");
+  const routing = source.slice(
+    source.indexOf("companion_survivor_scenario()"),
+    source.indexOf("\npackage_root()"),
+  );
+  const orchestration = source.slice(
+    source.indexOf("phase seed-state seed_state"),
+    source.indexOf("phase update-candidate update_candidate_for_install_mode"),
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -eu
+SCENARIO="$1"
+UPDATE_RESTART_MODE="$2"
+COMMAND_TIMEOUT=1
+plugin_registry_pid=synthetic
+NPM_CONFIG_REGISTRY=initial-registry
+manager_registry="$NPM_CONFIG_REGISTRY"
+${routing}
+openclaw_e2e_stop_process() { :; }
+configure_plugin_registry() {
+  NPM_CONFIG_REGISTRY="\${1:-candidate}-registry"
+  printf 'registry=%s\\n' "$NPM_CONFIG_REGISTRY"
+}
+prepare_schema_expectation() { printf 'schema-snapshot\\n'; }
+install_update_restart_systemctl_shim() {
+  manager_registry="$NPM_CONFIG_REGISTRY"
+  printf 'manager=%s\\n' "$manager_registry"
+}
+run_update_restart_probe_gateway() {
+  [ "$#" -eq 3 ] && [ "$1" = start ] && [ "$2" = 18789 ] && [ "$3" = "$COMMAND_TIMEOUT" ] || return 97
+  if [ "$manager_registry" != "$NPM_CONFIG_REGISTRY" ]; then
+    printf 'manager retained stale registry: %s, current: %s\\n' "$manager_registry" "$NPM_CONFIG_REGISTRY" >&2
+    return 91
+  fi
+  printf 'service=%s\\n' "$manager_registry"
+}
+phase() {
+  shift
+  case "$1" in
+    configure_plugin_registry|prepare_schema_expectation|install_update_restart_systemctl_shim|run_update_restart_probe_gateway) "$@" ;;
+    *) : ;;
+  esac
+}
+${orchestration}
+`,
+      "survivor-manager-registry-order",
+      scenario,
+      mode,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout.trim().split("\n").filter(Boolean)).toEqual(
+    scenario === "legacy-operator-state"
+      ? [
+          "registry=baseline-registry",
+          "registry=candidate-registry",
+          "schema-snapshot",
+          ...(mode === "auto-auth"
+            ? ["manager=candidate-registry", "service=candidate-registry"]
+            : []),
+        ]
+      : scenario === "base"
+        ? ["registry=candidate-registry"]
+        : [],
+  );
+});
 
 it.each([
   { scenario: "base", mode: "manual" },
@@ -55,7 +132,7 @@ it.each([
     probePath,
     `import assert from "node:assert/strict";
 import fs from "node:fs";
-import path from "node:path";
+import path, { delimiter, join, resolve } from "node:path";
 import { assertSessionStoreMigrationComplete } from ${JSON.stringify(startupModule.href)};
 const state = process.env.OPENCLAW_STATE_DIR;
 const volume = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "sqlite-volume";
@@ -160,4 +237,123 @@ ${phases}
     rows: scenario === "sqlite-volume" ? 15 : 3,
     volume: scenario === "sqlite-volume",
   });
+});
+
+const assertions = resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+
+it("authors the default cron job before adding ops and retains both CLI creation receipts", () => {
+  const root = tempDirs.make("survivor-operator-lifecycle-");
+  const bin = join(root, "bin");
+  const artifacts = join(root, "artifacts");
+  const workspace = join(root, "workspace");
+  const state = join(root, "state");
+  const configPath = join(root, "openclaw.json");
+  const ledgerPath = join(artifacts, "legacy-operator-baseline.json");
+  mkdirSync(bin);
+  mkdirSync(artifacts);
+  mkdirSync(state);
+  writeFileSync(configPath, "{}");
+  const cliPath = join(bin, "openclaw");
+  // Model the shipped API boundary: ownerless creation needs an unambiguous
+  // roster, an explicit owner must exist, and global listing may fail later.
+  writeFileSync(
+    cliPath,
+    `#!${process.execPath}
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+const configPath = process.env.OPENCLAW_CONFIG_PATH;
+const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
+const approvalPath = path.join(process.env.OPENCLAW_STATE_DIR, "exec-approvals.json");
+if (args[0] === "--help") {
+  process.stdout.write("  approvals Manage exec approvals\\n");
+} else if (args[0] === "setup" && args[1] === "--help") {
+  process.stdout.write("  --baseline Create baseline state\\n");
+} else if (args[0] === "setup") {
+  cfg.agents = { entries: { main: {} }, defaults: {} };
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
+} else if (args[0] === "config" && args[1] === "set") {
+  const keys = args[2].split(".");
+  let target = cfg;
+  for (const key of keys.slice(0, -1)) target = target[key] ??= {};
+  target[keys.at(-1)] = JSON.parse(args[3]);
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
+} else if (args[0] === "approvals" && args[1] === "set") {
+  fs.copyFileSync(args[args.indexOf("--file") + 1], approvalPath);
+} else if (args[0] === "approvals" && args[1] === "allowlist") {
+  const agent = args[args.indexOf("--agent") + 1];
+  assert(cfg.agents.entries[agent], "baseline approvals reject unknown agents");
+  const policy = JSON.parse(fs.readFileSync(approvalPath, "utf8"));
+  policy.agents[agent] = { allowlist: [{ pattern: args[args.indexOf("--agent") + 2] }] };
+  fs.writeFileSync(approvalPath, JSON.stringify(policy));
+} else if (args[0] === "approvals" && args[1] === "get") {
+  const file = JSON.parse(fs.readFileSync(approvalPath, "utf8"));
+  for (const agent of Object.values(file.agents)) {
+    for (const entry of agent.allowlist ?? []) entry.id ??= crypto.randomUUID();
+  }
+  process.stdout.write(JSON.stringify({ file }));
+} else if (args[0] === "cron" && args[1] === "add") {
+  const explicitAgent = args.includes("--agent") ? args[args.indexOf("--agent") + 1] : undefined;
+  assert(explicitAgent ? cfg.agents.entries[explicitAgent] : Object.keys(cfg.agents.entries).length === 1,
+    "baseline cannot resolve the requested cron owner");
+  const name = args[args.indexOf("--name") + 1];
+  process.stdout.write(JSON.stringify({ id: "native-" + name, name, ...(explicitAgent ? { agentId: explicitAgent } : {}) }));
+} else if (args[0] === "agents" && args[1] === "add") {
+  cfg.agents.entries[args[2]] = {};
+  cfg.agents.defaults.systemAgent = { agentId: "main" };
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
+} else if (args[0] === "config" && args[1] === "unset") {
+  delete cfg.agents.defaults.systemAgent;
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
+} else {
+  throw new Error("baseline global cron reads are unavailable with unresolved owners");
+}
+`,
+  );
+  chmodSync(cliPath, 0o755);
+  const run = (command: string) =>
+    spawnSync(process.execPath, [assertions, command], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
+        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+        OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "baseline",
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+        OPENCLAW_STATE_DIR: state,
+        GATEWAY_AUTH_TOKEN_REF: "survivor-test-token",
+      },
+    });
+  const initialized = run("seed-legacy-operator");
+  expect(initialized.status, initialized.stderr).toBe(0);
+  const earlyAgent = run("seed-legacy-operator-agent");
+  expect(earlyAgent.status).toBe(1);
+  expect(earlyAgent.stderr).toContain("create the default-owner cron job before adding ops");
+  for (const command of [
+    "seed-legacy-operator-default-cron",
+    "seed-legacy-operator-agent",
+    "seed-legacy-operator-gateway",
+    "assert-exec-approvals",
+  ]) {
+    const result = run(command);
+    expect(result.status, result.stderr).toBe(0);
+  }
+  expect(JSON.parse(readFileSync(ledgerPath, "utf8")).jobs).toEqual([
+    { id: "native-survivor-default-owner", name: "survivor-default-owner" },
+    { id: "native-survivor-ops-owner", name: "survivor-ops-owner", agentId: "ops" },
+  ]);
+  expect(JSON.parse(readFileSync(ledgerPath, "utf8"))).toMatchObject({
+    approvalsJsonEra: true,
+    approvals: {
+      agents: {
+        main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
+        ops: { allowlist: [{ pattern: "/usr/bin/date" }] },
+      },
+    },
+  });
+  expect(JSON.parse(readFileSync(configPath, "utf8")).agents.defaults.systemAgent).toBeUndefined();
 });

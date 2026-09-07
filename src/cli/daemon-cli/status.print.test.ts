@@ -105,10 +105,7 @@ vi.mock("./shared.js", async (importOriginal) => ({
     warnText: (text: string) => text,
     errorText: (text: string) => text,
   }),
-  filterDaemonEnv: () => ({}),
-  formatRuntimeStatus: () => "running (pid 8000)",
   resolveRuntimeStatusColor: () => "",
-  renderRuntimeHints: () => [],
   safeDaemonEnv: () => [],
 }));
 
@@ -182,6 +179,10 @@ describe("printDaemonStatus", () => {
       expect(payload).toHaveProperty("service.command.reloadPending", true);
       expect(JSON.stringify(payload)).not.toContain("gateway-token");
     }
+    expect(command.definitionPaths).toEqual(["/etc/systemd/user/private-definition.conf"]);
+    expect(command.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("effective-gateway-token");
+    expect(command.managedDefinition).toBeDefined();
+    expect(command.managedOverrides).toBeDefined();
   });
 
   it("prints user-manager pending reload guidance after the service file", () => {
@@ -617,7 +618,7 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("Gateway port 18789 is not listening");
   });
 
-  it("prints GUI-session wording before generic missing-supervision wording", () => {
+  it("prints GUI-session recovery guidance for the service profile", () => {
     printDaemonStatus(
       {
         service: {
@@ -627,10 +628,10 @@ describe("printDaemonStatus", () => {
           notLoadedText: "not loaded",
           runtime: {
             status: "unknown",
-            missingSupervision: true,
             missingGuiSession: true,
             detail: "Bootstrap failed: 125: Domain does not support specified action",
           },
+          command: { programArguments: [], environment: { OPENCLAW_PROFILE: "work" } },
         },
         extraServices: [],
       },
@@ -638,41 +639,73 @@ describe("printDaemonStatus", () => {
     );
 
     expectMockLineContains(runtime.error, "macOS has no usable GUI session");
-    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
-    expect(errors).not.toContain("launchd has no loaded job");
+    expectMockLineContains(runtime.error, "logged-in macOS GUI session");
+    expectMockLineContains(runtime.error, "openclaw --profile work gateway restart");
   });
 
-  it("prints probe kind and capability separately", () => {
-    printDaemonStatus(
-      {
-        service: {
-          label: "LaunchAgent",
-          loadState: { status: "loaded" },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
-          runtime: { status: "running", pid: 8000 },
+  it.each([
+    {
+      kind: undefined,
+      capability: undefined,
+      probeLabel: "Connectivity probe:",
+      capabilityLine: undefined,
+    },
+    {
+      kind: "connect",
+      capability: "",
+      probeLabel: "Connectivity probe:",
+      capabilityLine: undefined,
+    },
+    {
+      kind: "connect",
+      capability: "write_capable",
+      probeLabel: "Connectivity probe:",
+      capabilityLine: "Capability: write-capable",
+    },
+    {
+      kind: "read",
+      capability: "read_only",
+      probeLabel: "Read probe:",
+      capabilityLine: "Capability: read-only",
+    },
+  ] as const)(
+    "prints probe kind $kind and capability $capability separately",
+    ({ kind, capability, probeLabel, capabilityLine }) => {
+      printDaemonStatus(
+        {
+          service: {
+            label: "LaunchAgent",
+            loadState: { status: "loaded" },
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: { status: "running", pid: 8000 },
+          },
+          gateway: {
+            bindMode: "loopback",
+            bindHost: "127.0.0.1",
+            port: 18789,
+            portSource: "env/config",
+            probeUrl: "ws://127.0.0.1:18789",
+          },
+          rpc: {
+            ok: true,
+            kind,
+            capability,
+            url: "ws://127.0.0.1:18789",
+          },
+          extraServices: [],
         },
-        gateway: {
-          bindMode: "loopback",
-          bindHost: "127.0.0.1",
-          port: 18789,
-          portSource: "env/config",
-          probeUrl: "ws://127.0.0.1:18789",
-        },
-        rpc: {
-          ok: true,
-          kind: "connect",
-          capability: "write_capable",
-          url: "ws://127.0.0.1:18789",
-        },
-        extraServices: [],
-      },
-      { json: false },
-    );
+        { json: false },
+      );
 
-    expectMockLineContains(runtime.log, "Connectivity probe: ok");
-    expectMockLineContains(runtime.log, "Capability: write-capable");
-  });
+      expectMockLineContains(runtime.log, `${probeLabel} ok`);
+      expect(
+        runtime.log.mock.calls
+          .map(([line]) => line)
+          .filter((line) => line.startsWith("Capability:")),
+      ).toEqual(capabilityLine ? [capabilityLine] : []);
+    },
+  );
 
   it("prints the last gateway error when a running service fails the RPC probe", () => {
     printDaemonStatus(
@@ -1320,16 +1353,50 @@ describe("printDaemonStatus", () => {
     expect(logged).not.toContain("Warm-up: launch agents");
   });
 
-  it("does not combine diagnostic-only service state with the active probe target", () => {
-    printDaemonStatus(
-      {
+  it.each(
+    (
+      [
+        {
+          serviceRuntime: { status: "running", pid: 8000 },
+          runtimeLabel: "running",
+          runtimeText: "running (pid 8000)",
+        },
+        { serviceRuntime: { status: "stopped" }, runtimeLabel: "stopped", runtimeText: "stopped" },
+        { serviceRuntime: { status: "unknown" }, runtimeLabel: "unknown", runtimeText: "unknown" },
+        { serviceRuntime: undefined, runtimeLabel: "absent", runtimeText: undefined },
+      ] as const
+    ).flatMap(({ serviceRuntime, runtimeLabel, runtimeText }) =>
+      (
+        [
+          {
+            targetRole: "diagnostic-only",
+            suffix: " (diagnostic only, not the probe target)",
+            rpcOk: false,
+          },
+          { targetRole: "target", suffix: "", rpcOk: true },
+          { targetRole: undefined, suffix: "", rpcOk: true },
+        ] as const
+      ).map(({ targetRole, suffix, rpcOk }) => ({
+        serviceRuntime,
+        runtimeLabel,
+        runtimeText,
+        targetRole,
+        suffix,
+        rpcOk,
+      })),
+    ),
+  )(
+    "projects $targetRole service state with $runtimeLabel runtime",
+    ({ serviceRuntime, runtimeText, targetRole, suffix, rpcOk }) => {
+      const status: DaemonStatus = {
         service: {
           label: "LaunchAgent",
+          loaded: true,
           loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
-          targetRole: "diagnostic-only",
-          runtime: { status: "running", pid: 8000 },
+          targetRole,
+          runtime: serviceRuntime,
         },
         gateway: {
           bindMode: "loopback",
@@ -1338,27 +1405,37 @@ describe("printDaemonStatus", () => {
           portSource: "env/config",
           probeUrl: "ws://127.0.0.1:18900",
         },
-        port: {
-          port: 18900,
-          status: "free",
-          listeners: [],
-          hints: [],
-        },
+        port: { port: 18900, status: "free", listeners: [], hints: [] },
         rpc: {
-          ok: false,
-          error: "connect ECONNREFUSED 127.0.0.1:18900",
+          ok: rpcOk,
+          error: rpcOk ? undefined : "connect ECONNREFUSED 127.0.0.1:18900",
           url: "ws://127.0.0.1:18900",
         },
         extraServices: [],
-      },
-      { json: false },
-    );
+      };
+      const expectedJson = structuredClone(status);
+      printDaemonStatusRuntime(status, { json: false });
 
-    expectMockLineContains(runtime.log, "Runtime: running");
-    const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
-    expect(output).not.toContain("Warm-up: launch agents");
-    expect(output).not.toContain("service appears running");
-  });
+      const lines = runtime.log.mock.calls.map(([line]) => line);
+      expect(
+        lines.filter((line) => line.startsWith("Service:") || line.startsWith("Runtime:")),
+      ).toEqual([
+        `Service: LaunchAgent (loaded)${suffix}`,
+        ...(runtimeText === undefined ? [] : [`Runtime: ${runtimeText}${suffix}`]),
+      ]);
+      if (targetRole === "diagnostic-only") {
+        const output = [...lines, ...runtime.error.mock.calls.flat()].join("\n");
+        expect(output).not.toContain("Warm-up: launch agents");
+        expect(output).not.toContain("service appears running");
+      }
+      runtime.log.mockClear();
+      runtime.error.mockClear();
+      printDaemonStatusRuntime(status, { json: true });
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(expectedJson);
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {
     // inspectGatewayRestart can set healthy from reachability after ownership failed,

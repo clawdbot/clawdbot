@@ -7,12 +7,18 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parentPort, workerData } from "node:worker_threads";
 import zlib from "node:zlib";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   settleOpenClawAgentDatabaseWorkerClose,
+  withOpenClawAgentDatabaseAdmission,
   type OpenClawAgentDatabaseWorkerCloseResult,
+  type OpenClawAgentDatabaseWriteAdmission,
 } from "../../state/openclaw-agent-db.js";
 import {
   hashSessionArchiveBytes,
@@ -176,18 +182,22 @@ function parseWorkerPlans(value: unknown): TranscriptArchiveWorkerPlan[] | undef
 }
 
 function stageTranscriptArchiveContent(
-  database: import("node:sqlite").DatabaseSync,
+  database: DatabaseSync,
   sessionId: string,
   stagedPath: string,
 ): number {
   const fd = fs.openSync(stagedPath, "wx", 0o600);
   let rowCount = 0;
   try {
-    const query = "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq ASC";
-    const rows = database /* sqlite-allow-raw: the iterator keeps one row in memory at a time. */
-      .prepare(query)
-      .iterate(sessionId);
-    for (const row of rows) {
+    const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database);
+    for (const row of iterateSqliteQuerySync(
+      database,
+      db
+        .selectFrom("transcript_events")
+        .select("event_json")
+        .where("session_id", "=", sessionId)
+        .orderBy("seq", "asc"),
+    )) {
       if (typeof row.event_json !== "string") {
         throw new Error(`Invalid transcript event row for ${sessionId}`);
       }
@@ -417,27 +427,69 @@ async function runReclamationWorkerPort(
 ): Promise<void> {
   let result: ReturnType<typeof reclaimSqliteSessionInTransaction>;
   const commitGate = data.commitGate;
-  try {
-    let transactionDatabase: DatabaseSync | undefined;
-    try {
-      result = reclaimSqliteSessionInTransaction(data.plan, {
-        onCommit: commitGate
-          ? (database) => {
-              transactionDatabase = database.db;
-              waitForSqliteReclamationCommit(commitGate, () =>
-                port.postMessage({ type: "commit-request" }),
-              );
-            }
-          : undefined,
-      });
-    } finally {
-      if (
-        transactionDatabase &&
-        (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
-      ) {
-        markSqliteReclamationSettled(commitGate);
+  let admissionId = 0;
+  let finalAdmission = false;
+  const withAdmission: OpenClawAgentDatabaseWriteAdmission = async (run) => {
+    const requestedId = ++admissionId;
+    const allowed = await new Promise<boolean>((resolve, reject) => {
+      const receive = (message: { type: string; admissionId: number; allowed: boolean }) => {
+        cleanup();
+        if (message.type !== "admission" || message.admissionId !== requestedId) {
+          reject(new Error("SQLite reclamation Worker received invalid write admission"));
+          return;
+        }
+        resolve(message.allowed);
+      };
+      const closed = () => {
+        cleanup();
+        reject(new Error("SQLite reclamation parent closed during database admission"));
+      };
+      const cleanup = () => {
+        port.off("message", receive);
+        port.off("close", closed);
+      };
+      port.on("message", receive);
+      port.once("close", closed);
+      port.postMessage({ type: "admission-request", admissionId: requestedId });
+    });
+    const value = await run(() => {
+      if (!allowed) {
+        throw new Error("SQLite reclamation database admission was revoked");
       }
+    });
+    if (!finalAdmission) {
+      port.postMessage({ type: "admission-release", admissionId: requestedId });
     }
+    return value;
+  };
+  try {
+    result = await withOpenClawAgentDatabaseAdmission(
+      data.plan.databaseOptions,
+      withAdmission,
+      () => {
+        finalAdmission = true;
+        let transactionDatabase: DatabaseSync | undefined;
+        try {
+          return reclaimSqliteSessionInTransaction(data.plan, {
+            onCommit: commitGate
+              ? (database) => {
+                  transactionDatabase = database.db;
+                  waitForSqliteReclamationCommit(commitGate, () =>
+                    port.postMessage({ type: "commit-request" }),
+                  );
+                }
+              : undefined,
+          });
+        } finally {
+          if (
+            transactionDatabase &&
+            (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
+          ) {
+            markSqliteReclamationSettled(commitGate);
+          }
+        }
+      },
+    );
   } catch (error) {
     const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
     if (cleanup.settled) {

@@ -84,8 +84,8 @@ function createAccount(overrides: Partial<ResolvedSynologyChatAccount> = {}) {
   } satisfies ResolvedSynologyChatAccount;
 }
 
-function installRuntime() {
-  const openedStores: Array<ReturnType<typeof createPluginStateKeyedStoreForTests>> = [];
+function installRuntime(bulkReads = true) {
+  const openedStores: PluginStateKeyedStore<unknown>[] = [];
   let registerCallCount = 0;
   const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) => {
     const store = createPluginStateKeyedStoreForTests("synology-chat", {
@@ -97,11 +97,18 @@ function installRuntime() {
       registerCallCount += 1;
       await register(key, value, opts);
     };
-    openedStores.push(store);
-    return store;
+    const exposedStore = { ...store, lookupMany: bulkReads ? store.lookupMany : undefined };
+    openedStores.push(exposedStore);
+    return exposedStore;
   });
   setSynologyRuntime({ state: { openKeyedStore } } as unknown as PluginRuntime);
   return { openKeyedStore, openedStores, getRegisterCallCount: () => registerCallCount };
+}
+
+function trackChunkReads<T>(store: PluginStateKeyedStore<T>) {
+  const lookup = vi.spyOn(store, "lookup");
+  const lookupMany = store.lookupMany ? vi.spyOn(store, "lookupMany") : undefined;
+  return () => lookup.mock.calls.length + (lookupMany?.mock.calls.length ?? 0);
 }
 
 function internalCapabilityUrl(publicUrl: string, pathName = "/internal/synology"): string {
@@ -230,97 +237,100 @@ describe("Synology Chat hosted outbound media", () => {
     expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reconstructs persisted bytes before honoring response backpressure", async () => {
-    const { openedStores } = installRuntime();
-    const frozenBytes = Buffer.alloc(40 * 1024, 0x61);
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: frozenBytes,
-      kind: undefined,
-      contentType: "application/pdf",
-      fileName: "report.pdf",
-    });
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
-    const chunkStore = openedStores[1] as
-      | PluginStateKeyedStore<HostedOutboundMediaChunkRecord>
-      | undefined;
-    if (!chunkStore) {
-      throw new Error("expected hosted media chunk store");
-    }
-    const chunkLookup = vi.spyOn(chunkStore, "lookup");
-    const response = makeRes();
-    const write = response.write.bind(response);
-    let firstWrite = true;
-    response.write = ((chunk: Uint8Array | string) => {
-      write(chunk);
-      if (firstWrite) {
-        firstWrite = false;
-        return false;
-      }
-      return true;
-    }) as typeof response.write;
-    let settled = false;
+  it.each([true, false])(
+    "reconstructs persisted bytes before response backpressure (bulk: %s)",
+    async (bulkReads) => {
+      installRuntime(bulkReads);
+      const frozenBytes = Buffer.alloc(40 * 1024, 0x61);
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer: frozenBytes,
+        kind: undefined,
+        contentType: "application/pdf",
+        fileName: "report.pdf",
+      });
+      const account = createAccount();
+      const prepared = await prepareSynologyHostedMedia({
+        account,
+        mediaUrl: "https://files.example.com/report.pdf",
+      });
+      const response = makeRes();
+      const write = response.write.bind(response);
+      let firstWrite = true;
+      response.write = ((chunk: Uint8Array | string) => {
+        write(chunk);
+        if (firstWrite) {
+          firstWrite = false;
+          return false;
+        }
+        return true;
+      }) as typeof response.write;
+      const writeSpy = vi.spyOn(response, "write");
+      let settled = false;
 
-    const serving = tryHandleSynologyHostedMediaRequest(
-      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
-      response,
-      account,
-    ).finally(() => {
-      settled = true;
-    });
-    await vi.waitFor(() => expect(chunkLookup).toHaveBeenCalledTimes(2));
-    expect(settled).toBe(false);
-
-    response.emit("drain");
-    await expect(serving).resolves.toBe(true);
-    expect(chunkLookup).toHaveBeenCalledTimes(2);
-    expect(Buffer.from(response.body)).toEqual(frozenBytes);
-  });
-
-  it("rejects a corrupt persisted payload before writing response bytes", async () => {
-    const { openedStores } = installRuntime();
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.alloc(40 * 1024, 0x61),
-      kind: undefined,
-      contentType: "application/pdf",
-      fileName: "report.pdf",
-    });
-    const account = createAccount();
-    const prepared = await prepareSynologyHostedMedia({
-      account,
-      mediaUrl: "https://files.example.com/report.pdf",
-    });
-    const chunkStore = openedStores[1] as
-      | PluginStateKeyedStore<HostedOutboundMediaChunkRecord>
-      | undefined;
-    if (!chunkStore) {
-      throw new Error("expected hosted media chunk store");
-    }
-    const originalLookup = chunkStore.lookup.bind(chunkStore);
-    vi.spyOn(chunkStore, "lookup").mockImplementation(async (key) => {
-      const chunk = await originalLookup(key);
-      return chunk?.index === 1
-        ? { ...chunk, dataBase64: Buffer.from("oversized").toString("base64") }
-        : chunk;
-    });
-    const response = makeRes({ finishOnEnd: false });
-    const writeSpy = vi.spyOn(response, "write");
-
-    await expect(
-      tryHandleSynologyHostedMediaRequest(
+      const serving = tryHandleSynologyHostedMediaRequest(
         makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
         response,
         account,
-      ),
-    ).resolves.toBe(true);
+      ).finally(() => {
+        settled = true;
+      });
+      await vi.waitFor(() => expect(writeSpy).toHaveBeenCalledOnce());
+      expect(writeSpy).toHaveBeenCalledWith(frozenBytes);
+      expect(settled).toBe(false);
 
-    expect(response.statusCode).toBe(404);
-    expect(response.destroyed).toBe(false);
-    expect(writeSpy).not.toHaveBeenCalled();
-  });
+      response.emit("drain");
+      await expect(serving).resolves.toBe(true);
+      expect(writeSpy).toHaveBeenCalledOnce();
+      expect(Buffer.from(response.body)).toEqual(frozenBytes);
+    },
+  );
+
+  it.each([true, false])(
+    "rejects persisted corruption before writing response bytes (bulk: %s)",
+    async (bulkReads) => {
+      const { openedStores } = installRuntime(bulkReads);
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer: Buffer.alloc(40 * 1024, 0x61),
+        kind: undefined,
+        contentType: "application/pdf",
+        fileName: "report.pdf",
+      });
+      const account = createAccount();
+      const prepared = await prepareSynologyHostedMedia({
+        account,
+        mediaUrl: "https://files.example.com/report.pdf",
+      });
+      const chunkStore = openedStores[1] as
+        | PluginStateKeyedStore<HostedOutboundMediaChunkRecord>
+        | undefined;
+      if (!chunkStore) {
+        throw new Error("expected hosted media chunk store");
+      }
+      const chunk = (await chunkStore.entries()).find(({ value }) => value.index === 1);
+      if (!chunk) {
+        throw new Error("expected the second persisted payload chunk");
+      }
+      await chunkStore.register(chunk.key, {
+        ...chunk.value,
+        dataBase64: Buffer.from("truncated").toString("base64"),
+      });
+      const response = makeRes({ finishOnEnd: false });
+      const writeSpy = vi.spyOn(response, "write");
+
+      await expect(
+        tryHandleSynologyHostedMediaRequest(
+          makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
+          response,
+          account,
+        ),
+      ).resolves.toBe(true);
+
+      expect(response.statusCode).toBe(404);
+      expect(response.destroyed).toBe(false);
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(await chunkStore.entries()).toEqual([]);
+    },
+  );
 
   it("never treats capability query values as an on-demand fetch target", async () => {
     const account = createAccount();
@@ -659,7 +669,7 @@ describe("Synology Chat hosted outbound media", () => {
     if (!chunkStore) {
       throw new Error("expected hosted media chunk store");
     }
-    const chunkReadSpy = vi.spyOn(chunkStore, "lookup");
+    const chunkReads = trackChunkReads(chunkStore);
 
     for (let index = 0; index < 4; index += 1) {
       const response = makeRes();
@@ -671,7 +681,8 @@ describe("Synology Chat hosted outbound media", () => {
       expect(response.statusCode).toBe(200);
       await Promise.resolve();
     }
-    const chunkReadsAtLimit = chunkReadSpy.mock.calls.length;
+    const chunkReadsAtLimit = chunkReads();
+    expect(chunkReadsAtLimit).toBeGreaterThan(0);
 
     const head = makeRes();
     await tryHandleSynologyHostedMediaRequest(
@@ -689,7 +700,7 @@ describe("Synology Chat hosted outbound media", () => {
     );
     expect(limited.statusCode).toBe(429);
     expect(limited.headers["retry-after"]).toBe("60");
-    expect(chunkReadSpy).toHaveBeenCalledTimes(chunkReadsAtLimit);
+    expect(chunkReads()).toBe(chunkReadsAtLimit);
   });
 
   it("persists frozen capabilities across plugin-state reopen and runtime replacement", async () => {

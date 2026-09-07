@@ -67,7 +67,7 @@ describe("retained managed npm record commits", () => {
         await commitPluginInstallRecordsWithConfig({
           previousInstallRecords: { "retained-active": npmRecord(packageName, installPath) },
           nextInstallRecords: {
-            "active-alias": {
+            "retained-active": {
               source: "path",
               sourcePath: activePath,
               installPath: activePath,
@@ -77,6 +77,7 @@ describe("retained managed npm record commits", () => {
         });
 
         expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
+        expect(fs.existsSync(activePath)).toBe(true);
       });
     },
   );

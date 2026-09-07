@@ -16,16 +16,11 @@ import {
   applyFileBackedSessionStoreMaintenance,
   type SessionMaintenanceApplyReport,
 } from "../config/sessions/store-maintenance-operations.js";
+import { planSessionEntryMaintenance } from "../config/sessions/store-maintenance-plan.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import {
-  archiveStaleDashboardEntries,
-  capEntryCount,
   countUnarchivedSessionEntries,
-  pruneStaleEntries,
-  pruneStaleModelRunEntries,
-  shouldRunModelRunPrune,
-  shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "../config/sessions/store-maintenance.js";
@@ -273,36 +268,15 @@ export function loadLegacySessionStore(
         storePath,
         store: sessionStore,
       });
-      archiveStaleDashboardEntries(sessionStore, maintenance.archiveDashboardAfterMs, {
-        log: false,
+      planSessionEntryMaintenance({
+        profile: "legacy-read",
+        maintenance,
+        initialUnarchivedCount: beforeCount,
         preserveKeys: preserveSessionKeys,
+        log: false,
+        readAgeCandidates: () => sessionStore,
+        readCapCandidates: () => ({ store: sessionStore, maxEntries: maintenance.maxEntries }),
       });
-      if (shouldRunModelRunPrune({ maintenance, entryCount: beforeCount })) {
-        pruneStaleModelRunEntries(sessionStore, maintenance.modelRunPruneAfterMs, {
-          log: false,
-          preserveKeys: preserveSessionKeys,
-          preserveRecentMs: maintenance.preserveRecentMs,
-        });
-      }
-      if (countUnarchivedSessionEntries(sessionStore) > maintenance.maxEntries) {
-        pruneStaleEntries(sessionStore, maintenance.pruneAfterMs, {
-          log: false,
-          preserveKeys: preserveSessionKeys,
-          preserveRecentMs: maintenance.preserveRecentMs,
-        });
-        if (
-          shouldRunSessionEntryMaintenance({
-            entryCount: countUnarchivedSessionEntries(sessionStore),
-            maxEntries: maintenance.maxEntries,
-          })
-        ) {
-          capEntryCount(sessionStore, maintenance.maxEntries, {
-            log: false,
-            preserveKeys: preserveSessionKeys,
-            preserveRecentMs: maintenance.preserveRecentMs,
-          });
-        }
-      }
     }
   }
   return sessionStore;

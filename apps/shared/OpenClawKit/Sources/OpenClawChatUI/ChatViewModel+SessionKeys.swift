@@ -123,18 +123,20 @@ extension OpenClawChatViewModel {
     }
 
     @discardableResult
-    func applyLiveRunLifecycle(runID: String, sequence: Int, terminal: Bool) -> Bool {
+    func acceptLiveRunSequence(runID: String, sequence: Int) -> Bool {
         guard sequence > 0, self.ownsLiveTelemetryRun(runID) else { return false }
         var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
         guard sequence > state.sequence, !state.terminal else { return false }
         state.sequence = sequence
-        state.terminal = terminal
         self.liveRunStateByRunID[runID] = state
         return true
     }
 
     func retireTerminalRun(_ runID: String?) {
         guard let runID = Self.normalizedRunID(runID) else { return }
+        // Advertised-only runs must fence earlier history even after a later
+        // session snapshot releases their terminal tombstone.
+        self.invalidateRunSnapshots()
         let previous = self.liveRunStateByRunID[runID]
         self.liveRunStateByRunID[runID] = ChatLiveRunState(
             sequence: previous?.sequence ?? 0,
@@ -292,7 +294,7 @@ extension OpenClawChatViewModel {
         syncSelection: Bool)
     {
         let existingIndex = self.sessionIndexForModelState(sessionKey: sessionKey)
-        var updated = existingIndex.map { self.sessions[$0] } ?? self.placeholderSession(key: sessionKey)
+        var updated = existingIndex.map { self.sessions[$0] } ?? OpenClawChatSessionEntry.placeholder(key: sessionKey)
         // Thinking metadata follows model identity; stale options must not survive a model change.
         let preservesThinkingMetadata =
             Self.normalizedModelIdentityComponent(updated.model) ==
@@ -336,29 +338,6 @@ extension OpenClawChatViewModel {
         return "\(provider)/\(modelID)"
     }
 
-    func placeholderSession(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
-            key: key,
-            kind: nil,
-            displayName: nil,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
-            updatedAt: nil,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
-            modelProvider: nil,
-            model: nil,
-            contextTokens: nil)
-    }
-
     public var sessionChoices: [OpenClawChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
@@ -373,7 +352,7 @@ extension OpenClawChatViewModel {
             result.append(main)
             included.insert(main.key)
         } else {
-            result.append(self.placeholderSession(key: mainSessionKey))
+            result.append(OpenClawChatSessionEntry.placeholder(key: mainSessionKey))
             included.insert(mainSessionKey)
         }
 
@@ -391,7 +370,7 @@ extension OpenClawChatViewModel {
             if let current = sorted.first(where: { $0.key == self.sessionKey }) {
                 result.append(current)
             } else {
-                result.append(self.placeholderSession(key: sessionKey))
+                result.append(OpenClawChatSessionEntry.placeholder(key: sessionKey))
             }
         }
 

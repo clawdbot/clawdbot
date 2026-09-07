@@ -31,9 +31,6 @@ import {
 /** Directory-backed destination kind used by outbound target resolution. */
 type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
 
-/** Strategy for resolving multiple matching directory entries. */
-type ResolveAmbiguousMode = "error" | "best" | "first";
-
 /** Canonical outbound target produced by plugin, directory, or normalized fallback resolution. */
 export type ResolvedMessagingTarget = {
   to: string;
@@ -64,7 +61,6 @@ export async function resolveChannelTarget(params: {
   accountId?: string | null;
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
-  resolveAmbiguous?: ResolveAmbiguousMode;
   unknownTargetMode?: "error" | "normalized";
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
@@ -401,25 +397,6 @@ function buildNormalizedResolveResult(params: {
   };
 }
 
-function pickAmbiguousMatch(
-  entries: ChannelDirectoryEntry[],
-  mode: ResolveAmbiguousMode,
-): ChannelDirectoryEntry | null {
-  if (entries.length === 0) {
-    return null;
-  }
-  if (mode === "first") {
-    return entries[0] ?? null;
-  }
-  const ranked = entries.map((entry) => ({
-    entry,
-    rank: typeof entry.rank === "number" ? entry.rank : 0,
-  }));
-  const bestRank = Math.max(...ranked.map((item) => item.rank));
-  const best = ranked.find((item) => item.rank === bestRank)?.entry;
-  return best ?? entries[0] ?? null;
-}
-
 /** Resolves a user target through id-like, directory, plugin, and normalized fallback paths. */
 async function resolveMessagingTarget(params: {
   cfg: OpenClawConfig;
@@ -428,7 +405,6 @@ async function resolveMessagingTarget(params: {
   accountId?: string | null;
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
-  resolveAmbiguous?: ResolveAmbiguousMode;
   unknownTargetMode?: "error" | "normalized";
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
@@ -515,23 +491,6 @@ async function resolveMessagingTarget(params: {
     };
   }
   if (match.kind === "ambiguous") {
-    const mode = params.resolveAmbiguous ?? "error";
-    if (mode !== "error") {
-      const best = pickAmbiguousMatch(match.entries, mode);
-      if (best) {
-        return {
-          ok: true,
-          target: {
-            to: normalizeDirectoryEntryId(params.channel, best, plugin),
-            kind,
-            display:
-              best.name ?? best.handle ?? stripTargetPrefixes(best.id, params.channel, plugin),
-            source: "directory",
-            resolutionSource: "directory",
-          },
-        };
-      }
-    }
     return {
       ok: false,
       error: ambiguousTargetError(providerLabel, raw, hint),

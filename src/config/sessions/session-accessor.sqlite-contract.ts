@@ -16,6 +16,12 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
+/** One writer callback owns this record; no Worker object or plan payload is retained. */
+export type SqliteSessionReclamationDiagnostics = {
+  kind?: "entry" | "lifecycle-artifacts" | "history-eviction" | "historical-generation";
+  workerThreadId?: number;
+};
+
 export type SessionTranscriptInstance = SessionEntrySummary & {
   agentId: string;
   /** Stable transcript identity, including rotated history for one logical session key. */

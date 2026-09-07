@@ -30,6 +30,7 @@ export function createDiagnosticsEventHandler(params: {
 }) {
   const { logger, recorders, recordLogRecord, recordSecurityEvent } = params;
   const {
+    recordGcDuration,
     recordGatewayEventLoopSample,
     recordGatewayRpc,
     recordModelUsage,
@@ -63,11 +64,9 @@ export function createDiagnosticsEventHandler(params: {
     recordHarnessRunError,
     recordContextAssembled,
     recordModelCallStarted,
-    recordModelCallCompleted,
-    recordModelCallError,
+    recordModelCallFinished,
     recordToolExecutionStarted,
-    recordToolExecutionCompleted,
-    recordToolExecutionError,
+    recordToolExecutionFinished,
     recordToolExecutionBlocked,
     recordSkillUsed,
     recordExecProcessCompleted,
@@ -86,6 +85,9 @@ export function createDiagnosticsEventHandler(params: {
   ) => {
     try {
       switch (evt.type) {
+        case "diagnostic.gc":
+          recordGcDuration(evt, metadata);
+          return;
         case "gateway.event_loop.sample":
           recordGatewayEventLoopSample(evt, metadata);
           return;
@@ -193,19 +195,15 @@ export function createDiagnosticsEventHandler(params: {
           recordModelCallStarted(evt, metadata);
           return;
         case "model.call.completed":
-          recordModelCallCompleted(evt, metadata, privateData.modelContent);
-          return;
         case "model.call.error":
-          recordModelCallError(evt, metadata, privateData.modelContent);
+          recordModelCallFinished(evt, metadata, privateData.modelContent);
           return;
         case "tool.execution.started":
           recordToolExecutionStarted(evt, metadata);
           return;
         case "tool.execution.completed":
-          recordToolExecutionCompleted(evt, metadata, privateData.toolContent);
-          return;
         case "tool.execution.error":
-          recordToolExecutionError(evt, metadata, privateData.toolContent);
+          recordToolExecutionFinished(evt, metadata, privateData.toolContent);
           return;
         case "tool.execution.blocked":
           recordToolExecutionBlocked(evt, metadata);

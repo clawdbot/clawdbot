@@ -11,7 +11,8 @@ const TEAMS_REACTION_EMOJI: Record<string, string> = {
 const TEAMS_REACTION_TYPES = Object.keys(TEAMS_REACTION_EMOJI);
 
 export function getMSTeamsReactionEmoji(raw: string): string | undefined {
-  return TEAMS_REACTION_EMOJI[raw.trim().toLowerCase()];
+  const key = raw.trim().toLowerCase();
+  return Object.hasOwn(TEAMS_REACTION_EMOJI, key) ? TEAMS_REACTION_EMOJI[key] : undefined;
 }
 
 export function resolveMSTeamsReactionEmoji(raw: string): string {

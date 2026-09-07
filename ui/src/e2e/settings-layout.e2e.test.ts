@@ -1,10 +1,12 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Request } from "playwright";
 import { expect, it } from "vitest";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI settings layout mocked Gateway E2E",
@@ -188,16 +190,10 @@ suite.define(() => {
   it("loads provider-settings copy after New Session and Chat without startup errors", async () => {
     const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      createControlUiE2eContextOptions(),
       async ({ context, page: firstPage }) => {
         const errors: string[] = [];
-        let phase = "setup";
-        const scriptRequests = new WeakMap<Request, { documentUrl: string; phase: string }>();
-        const failedScripts: Array<Record<string, unknown>> = [];
+        const failedScripts: string[] = [];
         const startupScripts: string[] = [];
         const settingsScripts: string[] = [];
         const providerCopy = "Model providers with auth, plan, quota, and cost data.";
@@ -213,25 +209,13 @@ suite.define(() => {
               errors.push(message.text());
             }
           });
-          page.on("request", (request) => {
-            if (request.resourceType() === "script") {
-              scriptRequests.set(request, { documentUrl: page.url(), phase });
-            }
-          });
           page.on("requestfailed", (request) => {
             if (request.resourceType() === "script") {
-              failedScripts.push({
-                source: "requestfailed",
-                url: request.url(),
-                errorText: request.failure()?.errorText,
-                started: scriptRequests.get(request),
-                observed: { documentUrl: page.url(), phase },
-              });
+              failedScripts.push(`${pathname}: ${request.url()} (${request.failure()?.errorText})`);
             }
           });
           await installMockGateway(page);
-          // Capture before delivery: Chromium drops response bodies after navigation,
-          // including late script loads that were absent from a Promise.all snapshot.
+          // Capture before delivery so copy assertions include every script that can execute.
           await page.route("**/*", async (route) => {
             if (route.request().resourceType() !== "script") {
               await route.fallback();
@@ -239,26 +223,17 @@ suite.define(() => {
             }
             const response = await route.fetch();
             if (!response.ok()) {
-              failedScripts.push({
-                source: "http",
-                url: response.url(),
-                status: response.status(),
-                statusText: response.statusText(),
-                started: scriptRequests.get(route.request()),
-                observed: { documentUrl: page.url(), phase },
-              });
+              failedScripts.push(`${pathname}: ${response.url()} (HTTP ${response.status()})`);
             }
             scripts.push(await response.text());
             await route.fulfill({ response });
           });
 
-          phase = `navigate:${pathname}`;
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
             ? page.getByRole("heading", { name: /^Configured providers\b/ })
             : page.locator(".agent-chat__composer-combobox textarea");
           await ready.waitFor();
-          phase = `ready:${pathname}`;
           if (isSettings) {
             expect(settingsScripts.join("\n")).toContain(providerCopy);
             expect(await page.locator(".model-providers__defaults").textContent()).toContain(
@@ -275,11 +250,8 @@ suite.define(() => {
           }
         }
         expect(startupScripts.join("\n")).not.toContain(providerCopy);
-        const startupErrors = { errors, failedScripts };
-        expect(startupErrors, JSON.stringify(startupErrors, null, 2)).toEqual({
-          errors: [],
-          failedScripts: [],
-        });
+        expect(errors).toEqual([]);
+        expect(failedScripts).toEqual([]);
       },
       async ({ context }) => {
         await Promise.all(context.pages().map((page) => page.unrouteAll({ behavior: "wait" })));
@@ -680,7 +652,7 @@ suite.define(() => {
       });
 
       expect(await page.locator(".page-subtitle").textContent()).toBe(
-        "Messages and text-to-speech settings.",
+        "Messages, text-to-speech, and meeting capture settings.",
       );
       expect(await page.locator("wa-tab-group.config-sections-hub-tabs").count()).toBe(1);
       expect((await page.locator("wa-tab").allTextContents()).map((label) => label.trim())).toEqual(

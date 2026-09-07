@@ -6,6 +6,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
@@ -555,6 +556,7 @@ export function handleToolExecutionStart(
     if (
       ctx.params.onToolResult &&
       shouldEmitToolEvents &&
+      !isAgentPlanProgressToolName(toolName) &&
       !ctx.state.toolSummaryById.has(toolCallId)
     ) {
       ctx.state.toolSummaryById.add(toolCallId);

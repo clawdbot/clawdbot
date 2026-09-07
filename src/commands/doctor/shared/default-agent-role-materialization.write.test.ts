@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { makeCronJob } from "../../../cron/delivery.test-helpers.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { loadCronRows, replaceCronRows } from "../../../cron/store/row-codec.js";
-import { writeConfigMachineState } from "../../../state/config-machine-state.js";
+import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,

@@ -125,12 +125,12 @@ const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
-const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
+// The assertion baseline is checked by its ratchet, not consumed by Oxlint.
+const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/assertion-safety-baseline\.txt$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
-const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
-const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+const TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/CHANGELOG.md",
@@ -164,19 +164,16 @@ function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
-  return paths.some((changedPath) =>
-    ANDROID_VERSION_SYNC_PATHS.has(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => ANDROID_VERSION_SYNC_PATHS.has(changedPath));
 }
 
 function hasMacosAppCiPath(paths: string[]) {
   // The metadata test has its own command; production edits still need native app proof.
   // Swift test-target sources do not feed the packaged app; native CI still covers them.
   return paths.some((changedPath) => {
-    const normalized = normalizeChangedPath(changedPath);
     return (
-      normalized !== SWIFT_BUILD_CACHE_METADATA_TEST_PATH &&
-      (MACOS_APP_CI_PATH_RE.test(normalized) || isMacosToolingPath(normalized))
+      changedPath !== SWIFT_BUILD_CACHE_METADATA_TEST_PATH &&
+      (MACOS_APP_CI_PATH_RE.test(changedPath) || isMacosToolingPath(changedPath))
     );
   });
 }
@@ -299,7 +296,16 @@ function buildDelegatedChangedCheckArgv(argv: string[], options: { cwd?: string 
   if (stagedPaths.length === 0) {
     return [...timedArgs, "--no-changes"];
   }
-  return [...timedArgs, "--base", "HEAD", "--head", "HEAD", "--", ...stagedPaths];
+  return [
+    ...timedArgs,
+    "--paths-from-git",
+    "--base",
+    "HEAD",
+    "--head",
+    "HEAD",
+    "--",
+    ...stagedPaths,
+  ];
 }
 
 export function shouldRunNpmLockGuard(paths: string[]) {
@@ -315,9 +321,7 @@ export function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
 }
 
 export function shouldRunControlUiI18nVerify(paths: string[]) {
-  return paths.some((changedPath) =>
-    CONTROL_UI_I18N_VERIFY_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath));
 }
 
 export function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
@@ -326,47 +330,35 @@ export function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
 
 /** Returns whether changed files can drift bundled doctor-contract declarations or closures. */
 export function shouldRunDoctorContractOwnerTests(paths: string[]) {
-  return paths.some((changedPath) =>
-    DOCTOR_CONTRACT_OWNER_TEST_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => DOCTOR_CONTRACT_OWNER_TEST_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can affect the sessions/transcripts SQLite schema baseline. */
 export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
-  return paths.some((changedPath) =>
-    SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
 export function shouldRunPluginSdkSurfaceChecks(paths: string[]) {
-  return paths.some((changedPath) =>
-    PLUGIN_SDK_SURFACE_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => PLUGIN_SDK_SURFACE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can alter deprecated API or plugin-boundary results. */
 export function shouldRunDeprecationHygieneChecks(paths: string[]) {
-  return paths.some((changedPath) =>
-    DEPRECATION_HYGIENE_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => DEPRECATION_HYGIENE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can alter wrapper-shadowing results. */
 export function shouldRunWrapperShadowingCheck(paths: string[]) {
-  return paths.some((changedPath) =>
-    WRAPPER_SHADOWING_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
+  return paths.some((changedPath) => WRAPPER_SHADOWING_PATH_RE.test(changedPath));
 }
 
 export function shouldRunAppcastOwnerTest(paths: string[]) {
-  return paths.some((changedPath) => normalizeChangedPath(changedPath) === "appcast.xml");
+  return paths.includes("appcast.xml");
 }
 
 export function shouldRunTestTempCreationReport(paths: string[]) {
-  return paths.some(
-    (changedPath) => getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest,
-  );
+  return paths.some((changedPath) => getChangedPathFacts(changedPath).isChangedLaneTest);
 }
 
 export function createNpmLockGuardCommand(paths: string[]) {
@@ -868,7 +860,7 @@ export function createChangedCheckPlan(
       return (
         (surface === "source" || surface === "package" || surface === "ui") &&
         !CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath) &&
-        !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
+        !LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
       );
     });
     addTargetedLint(
@@ -1029,7 +1021,7 @@ export function createTargetedExtensionLintCommand(
     env,
     label: "extension",
     lintablePathRe: LINTABLE_EXTENSION_PATH_RE,
-    neutralPathRe: EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: EXTENSIONS_OXLINT_TS_CONFIG,
     ...options,
@@ -1045,7 +1037,7 @@ export function createTargetedScriptLintCommand(
     env,
     label: "script",
     lintablePathRe: LINTABLE_SCRIPT_PATH_RE,
-    neutralPathRe: SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: SCRIPTS_OXLINT_TS_CONFIG,
     ...options,
@@ -1070,7 +1062,7 @@ function createTargetedOxlintCommand({
         !LINTABLE_SCRIPT_PATH_RE.test(changedPath) &&
         !getChangedPathFacts(changedPath).isRootTestSource &&
         !neutralPathRe.test(changedPath) &&
-        !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
+        !LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
     )
   ) {
     return null;
@@ -1276,8 +1268,8 @@ function printSummary(timings: ChangedCheckTiming[], options: ChangedCheckRunOpt
 function parseArgs(argv: string[]) {
   const separatorIndex = argv.indexOf("--");
   const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
-  const explicitPaths =
-    separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizeChangedPath);
+  const explicitPaths = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
+  const preservePathTokens = flagArgv.includes("--paths-from-git");
   const args = {
     base: "origin/main",
     head: "HEAD",
@@ -1289,7 +1281,7 @@ function parseArgs(argv: string[]) {
     paths: new Array<string>(),
   };
   const parsed = parseFlagArgs(
-    flagArgv,
+    flagArgv.filter((arg) => arg !== "--paths-from-git"),
     args,
     [
       stringFlag("--base", "base"),
@@ -1306,12 +1298,15 @@ function parseArgs(argv: string[]) {
         if (arg.startsWith("-")) {
           throw new Error(`Unknown option: ${arg}`);
         }
-        target.paths.push(normalizeChangedPath(arg));
+        target.paths.push(arg);
         return "handled";
       },
     },
   );
   parsed.paths.push(...explicitPaths);
+  if (!preservePathTokens) {
+    parsed.paths = parsed.paths.map((changedPath) => normalizeChangedPath(changedPath));
+  }
   return parsed;
 }
 

@@ -133,8 +133,9 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
             struct UpdateStatusResponse: Decodable {
                 let effectiveChannel: String?
             }
-            guard let data = try? await GatewayConnection.shared.requestRaw(
+            guard let data = try? await GatewayConnection.shared.request(
                 method: "update.status",
+                params: nil,
                 timeoutMs: 5000),
                 let response = try? JSONDecoder().decode(UpdateStatusResponse.self, from: data)
             else { return nil }

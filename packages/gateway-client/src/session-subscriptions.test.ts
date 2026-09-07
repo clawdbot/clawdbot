@@ -449,6 +449,102 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
+  it.each([
+    {
+      name: "a closed approval pane leaves a plain observer",
+      initialApprovals: false,
+      closeFirst: true,
+      before: ["approval-old"],
+      after: [],
+    },
+    {
+      name: "another pane joins an upgraded observer",
+      initialApprovals: false,
+      closeFirst: false,
+      before: [],
+      after: ["approval-new"],
+    },
+    {
+      name: "another pane joins an initial approval observer",
+      initialApprovals: true,
+      closeFirst: false,
+      before: ["approval-old"],
+      after: ["approval-new"],
+    },
+  ])("refreshes pending approvals when $name", async (scenario) => {
+    let replay = { approvals: scenario.before.map((id) => ({ id })) };
+    const { client, request } = createClient(async (method, params) =>
+      method === "sessions.messages.subscribe"
+        ? { key: params.key, ...(params.includeApprovals ? { approvalReplay: replay } : {}) }
+        : {},
+    );
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const retained = await coordinator.acquire("main", {
+      includeApprovals: scenario.initialApprovals,
+    });
+    const first = scenario.initialApprovals
+      ? retained
+      : await coordinator.acquire("main", { includeApprovals: true });
+    const handles = new Set([retained, first]);
+    try {
+      if (scenario.closeFirst) {
+        await coordinator.release(first);
+      }
+      replay = { approvals: scenario.after.map((id) => ({ id })) };
+      const next = await coordinator.acquire("main", { includeApprovals: true });
+      handles.add(next);
+      expect(next.approvalReplay).toEqual(replay);
+    } finally {
+      for (const handle of handles) {
+        await coordinator.release(handle);
+      }
+    }
+    expect(
+      request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
+    ).toHaveLength(1);
+  });
+
+  it.each(["none", "plain", "approvals"] as const)(
+    "restores the %s owner's capability after an approval replay times out",
+    async (retained) => {
+      let capability: "none" | "plain" | "approvals" = "none";
+      let timeoutNext = false;
+      const timeout = new GatewayProtocolRequestTimeoutError({
+        method: "sessions.messages.subscribe",
+        timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+        requestSent: true,
+      });
+      const { client } = createClient(async (method, params) => {
+        capability =
+          method === "sessions.messages.unsubscribe"
+            ? "none"
+            : params.includeApprovals
+              ? "approvals"
+              : "plain";
+        if (timeoutNext) {
+          timeoutNext = false;
+          throw timeout;
+        }
+        return { key: params.key, approvalReplay: { approvals: [] } };
+      });
+      const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+      const owner =
+        retained === "none"
+          ? null
+          : await coordinator.acquire("main", { includeApprovals: retained === "approvals" });
+      try {
+        timeoutNext = true;
+        await expect(coordinator.acquire("main", { includeApprovals: true })).rejects.toBe(timeout);
+        expect(capability).toBe(retained);
+      } finally {
+        if (owner) {
+          await coordinator.release(owner);
+        }
+      }
+      expect(capability).toBe("none");
+    },
+  );
+
   it("preserves the plain observer when an approval upgrade is unauthorized", async () => {
     let rejectApproval = true;
     const { client, request } = createClient(async (method, params) => {

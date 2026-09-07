@@ -56,6 +56,35 @@ afterEach(() => {
 });
 
 describe("cacheRetention default behavior", () => {
+  it.each(["openai-responses", "openai-chatgpt-responses", "openai-completions"] as const)(
+    "forwards configured native OpenAI retention to %s stream options",
+    (api) => {
+      for (const cacheRetention of ["none", "short", "long"] as const) {
+        for (const baseUrl of ["https://api.openai.com/v1", "https://proxy.example/v1"]) {
+          const captured = runExtraParamsCase({
+            model: {
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              api,
+              provider: "openai",
+              baseUrl,
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128_000,
+              maxTokens: 4096,
+            },
+            cfg: { agents: { defaults: { params: { cacheRetention } } } },
+            payload: {},
+          });
+          expect(captured.options?.cacheRetention).toBe(
+            baseUrl === "https://api.openai.com/v1" ? cacheRetention : undefined,
+          );
+        }
+      }
+    },
+  );
+
   it.each([undefined, "none", "short", "long"] as const)(
     "forwards Model Studio explicit retention %s without opting into cache keys",
     (cacheRetention) => {
@@ -279,6 +308,20 @@ describe("cacheRetention default behavior", () => {
       ),
     ).toBe("long");
   });
+
+  it.each([undefined, "short", "long", "none"] as const)(
+    "preserves %s retention for the Bedrock Converse policy owner",
+    (cacheRetention) => {
+      expect(
+        resolveCacheRetention(
+          { cacheRetention },
+          "amazon-bedrock",
+          "bedrock-converse-stream",
+          "amazon.nova-micro-v1:0",
+        ),
+      ).toBe(cacheRetention);
+    },
+  );
 
   it("warns instead of creating an undocumented cacheRetention alias", () => {
     applyAndExpectWrapped({

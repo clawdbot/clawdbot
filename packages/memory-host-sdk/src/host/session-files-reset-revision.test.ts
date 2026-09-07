@@ -14,7 +14,11 @@ import {
 } from "../../../../src/config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
-import { buildSessionEntry, type SessionFileEntry } from "./session-files.js";
+import {
+  buildSessionEntry,
+  matchesSessionEntryPrefixHash,
+  type SessionFileEntry,
+} from "./session-files.js";
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
   if (!entry) {
@@ -218,7 +222,7 @@ describe("SQLite session snapshots and reset content revision", () => {
     expect(Object.getOwnPropertyDescriptor(after, cutoff)?.value).toEqual({ state: "absent" });
   });
 
-  it("invalidates a session hash when a reset boundary changes its generation", async () => {
+  it("accepts a transcript append but invalidates its prefix hash after reset", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:chat:reset-revision";
@@ -244,6 +248,18 @@ describe("SQLite session snapshots and reset content revision", () => {
       updatedAtMs: 1,
     };
     const before = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
+    const beforeLineCount = before.content.split("\n").length;
+
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [{ message: { role: "assistant", content: "ordinary appended text" } }],
+        touchSessionEntry: true,
+        updateMode: "none",
+      },
+    );
+    const afterAppend = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
+    expect(matchesSessionEntryPrefixHash(afterAppend, beforeLineCount, before.hash)).toBe(true);
 
     await resetSessionEntryLifecycle({
       agentId: "main",
@@ -252,14 +268,14 @@ describe("SQLite session snapshots and reset content revision", () => {
         sessionId,
         updatedAt: 2,
       }),
-      resetBoundary: { context: "preserve-tail", reason: "reset" },
+      resetBoundary: { context: "preserve-tail", reason: "reset", cwd: tmpDir },
       storePath,
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
     });
 
     const after = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
-    expect(after.content).toBe(before.content);
-    expect(after.lineMap).toEqual(before.lineMap);
+    expect(after.content).toBe(afterAppend.content);
+    expect(after.lineMap).toEqual(afterAppend.lineMap);
     const cutoffSymbol = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
     expect(Object.getOwnPropertyDescriptor(after, cutoffSymbol)).toMatchObject({
       enumerable: false,
@@ -267,5 +283,6 @@ describe("SQLite session snapshots and reset content revision", () => {
     });
     expect(Object.keys(after)).not.toContain(cutoffSymbol.description);
     expect(after.hash).not.toBe(before.hash);
+    expect(matchesSessionEntryPrefixHash(after, beforeLineCount, before.hash)).toBe(false);
   });
 });

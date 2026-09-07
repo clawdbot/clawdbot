@@ -10,6 +10,18 @@ extension WebSocketTasking {
 }
 
 enum GatewayWebSocketTestSupport {
+    static let agentCatalogPayload = """
+    {
+      "defaultId": "system", "mainKey": "main", "scope": "per-agent",
+      "agents": [
+        { "id": "system", "kind": "system" },
+        { "id": "zeta", "kind": "agent", "name": " Zeta ", "workspaceGit": true },
+        { "id": "legacy" },
+        { "id": "alpha", "kind": "agent", "name": null, "workspaceGit": false }
+      ]
+    }
+    """
+
     static let identityFreeOperatorConnectOptions = GatewayConnectOptions(
         role: "operator",
         scopes: GatewayChannelActor.defaultOperatorConnectScopes,

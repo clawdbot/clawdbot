@@ -113,6 +113,29 @@ describe.each(["cron.status", "cron.runs"] as const)("%s event refresh ownership
     },
   );
 
+  it("settles a queued refresh without dispatch when page read admission closes", async () => {
+    const harness = createRefreshHarness(method);
+    let visible = true;
+    harness.state.canRefresh = () => visible;
+    try {
+      const initial = harness.load();
+      const queued = harness.load();
+      visible = false;
+      harness.response(0).resolve(harness.payload(1));
+      await Promise.all([initial, queued]);
+      expect(harness.request).toHaveBeenCalledTimes(1);
+      expect(harness.revision()).toBe(1);
+      visible = true;
+      const resumed = harness.load();
+      expect(harness.request).toHaveBeenCalledTimes(2);
+      harness.response(1).resolve(harness.payload(2));
+      await resumed;
+      expect(harness.revision()).toBe(2);
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("completes an explicit read without waiting for its queued event refresh", async () => {
     const harness = createRefreshHarness(method);
     try {
