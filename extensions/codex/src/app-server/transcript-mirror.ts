@@ -504,14 +504,10 @@ async function mirror(params: {
           runtimeMessage: nextMessage,
           preparedMessage: preparedUserMessage,
         });
-        let messageToAppend = (
-          idempotencyKey
-            ? {
-                ...attachCodexMirrorAttestation(restoredMessage, sourceFingerprint),
-                idempotencyKey,
-              }
-            : attachCodexMirrorAttestation(restoredMessage, sourceFingerprint)
-        ) as AgentMessage;
+        let messageToAppend = {
+          ...attachCodexMirrorAttestation(restoredMessage, sourceFingerprint),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        } as AgentMessage;
         if (mirrorIdentity) {
           // Hooks may replace the whole message. Restore the provider-owned
           // identity so retries cannot turn a stale idempotency hit into evidence.
