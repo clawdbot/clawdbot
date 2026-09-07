@@ -713,6 +713,48 @@ describe("talk realtime gateway relay", () => {
     });
   });
 
+  it("rejects a consult when its relay is replaced during startup", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      bridgeRequest = request;
+      return createIdleRelayProvider().createBridge(request);
+    };
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds: vi.fn(),
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn() },
+      } as never,
+      connId: "conn-replaced-runner",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey: "agent:main:main",
+    });
+    const original = relaySessions.get(session.relaySessionId);
+    const runAgentConsult = bridgeRequest?.runAgentConsult;
+    if (!original || !runAgentConsult) {
+      throw new Error("expected active relay agent runner");
+    }
+
+    const run = runAgentConsult({ prompt: "late consult", signal: AbortSignal.timeout(1_000) });
+    const replacement = { ...original, activeAgentRuns: new Map<string, string>() };
+    relaySessions.set(session.relaySessionId, replacement);
+    try {
+      await expect(run).rejects.toThrow("Realtime gateway-relay session is closed");
+      expect(replacement.activeAgentRuns.size).toBe(0);
+    } finally {
+      relaySessions.set(session.relaySessionId, original);
+      stopTalkRealtimeRelaySession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-replaced-runner",
+      });
+    }
+  });
+
   it.each([
     {
       name: "error before close",
