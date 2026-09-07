@@ -1,12 +1,12 @@
 ---
 name: acp-router
-description: Route plain-language requests for Claude Code, Cursor, Copilot, OpenClaw ACP, OpenCode, Gemini CLI, Qwen, Kiro, Kimi, iFlow, Factory Droid, Kilocode, or explicit ACP harness work into either OpenClaw ACP runtime sessions or direct acpx-driven sessions ("telephone game" flow). For coding-agent thread requests, read this skill first, then use only `sessions_spawn` for thread creation. Codex chat binding defaults to the native Codex app-server plugin unless ACP is explicit or background spawn needs ACP.
+description: Route plain-language requests for Claude Code, Cursor, Copilot, OpenClaw ACP, OpenCode, Gemini CLI, Grok Build, Qwen, Kiro, Kimi, iFlow, Factory Droid, Kilocode, or explicit ACP harness work into either OpenClaw ACP runtime sessions or direct acpx-driven sessions ("telephone game" flow). For coding-agent thread requests, read this skill first, then use only `sessions_spawn` for thread creation. Codex chat binding defaults to the native Codex app-server plugin unless ACP is explicit or background spawn needs ACP.
 user-invocable: false
 ---
 
 # ACP Harness Router
 
-When user intent is "run this in Claude Code/Cursor/Copilot/OpenClaw/OpenCode/Gemini/Qwen/Kiro/Kimi/iFlow/Droid/Kilocode (ACP harness)", do not use subagent runtime or PTY scraping. Route through ACP-aware flows.
+When user intent is "run this in Claude Code/Cursor/Copilot/OpenClaw/OpenCode/Gemini/Grok Build/Qwen/Kiro/Kimi/iFlow/Droid/Kilocode (ACP harness)", do not use subagent runtime or PTY scraping. Route through ACP-aware flows.
 
 Codex is special: plain chat/conversation binding and control should use the native Codex app-server plugin (`/codex bind`, `/codex threads`, `/codex resume`) instead of the default ACP path. Use ACP for Codex only when the user explicitly names ACP/`/acp`/acpx, or when spawning background child sessions through `sessions_spawn` where a native Codex runtime spawn is not available yet.
 
@@ -14,7 +14,7 @@ Codex is special: plain chat/conversation binding and control should use the nat
 
 Trigger this skill when the user asks OpenClaw to:
 
-- run something in Claude Code / Cursor / Copilot / OpenClaw / OpenCode / Gemini / Qwen / Kiro / Kimi / iFlow / Droid / Kilocode
+- run something in Claude Code / Cursor / Copilot / OpenClaw / OpenCode / Gemini / Grok Build / Qwen / Kiro / Kimi / iFlow / Droid / Kilocode
 - run Codex explicitly through ACP, `/acp`, or acpx
 - continue existing harness work
 - relay instructions to an external coding harness
@@ -56,6 +56,7 @@ Use these defaults when user names a harness directly:
 - "droid" or "factory droid" -> `agentId: "droid"`
 - "opencode" -> `agentId: "opencode"`
 - "gemini" or "gemini cli" -> `agentId: "gemini"`
+- "grok build" or "grok-build" -> `agentId: "grok-build"`
 - "iflow" -> `agentId: "iflow"`
 - "kilocode" -> `agentId: "kilocode"`
 - "kimi" or "kimi cli" -> `agentId: "kimi"`
@@ -63,6 +64,10 @@ Use these defaults when user names a harness directly:
 - "qwen" or "qwen code" -> `agentId: "qwen"`
 
 These defaults match current acpx built-in aliases.
+
+`grok-build` is an ACPX agent target, not the xAI model id
+`xai/grok-build-0.1`. Route `grok-build` through `agentId`; use the fully
+qualified xAI ref only in an OpenClaw `model` field.
 
 If policy rejects the chosen id, report the policy error clearly and ask for the allowed ACP agent id.
 
@@ -196,6 +201,7 @@ ${ACPX_CMD} codex sessions close oc-codex-<conversationId>
 - `cursor`
 - `droid`
 - `gemini`
+- `grok-build`
 - `iflow`
 - `kilocode`
 - `kimi`
@@ -215,6 +221,7 @@ Defaults are:
 - `cursor -> cursor-agent acp`
 - `droid -> droid exec --output-format acp`
 - `gemini -> gemini --acp`
+- `grok-build -> grok agent stdio`
 - `iflow -> iflow --experimental-acp`
 - `kilocode -> npx -y @kilocode/cli acp`
 - `kimi -> kimi acp`
