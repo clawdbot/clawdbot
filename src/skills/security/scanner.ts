@@ -6,6 +6,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../security/scan-paths.js";
+import { findCodeRegions, isInsideCode } from "../../shared/text/code-regions.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
 
 // ---------------------------------------------------------------------------
@@ -133,6 +134,8 @@ type LineRule = {
   severity: SkillScanSeverity;
   message: string;
   pattern: RegExp;
+  /** Pattern for Markdown files, whose prose otherwise satisfies code-shaped boundaries. */
+  prosePattern?: RegExp;
   /** If set, the rule only fires when the *full source* also matches this pattern. */
   requiresContext?: RegExp;
 };
@@ -168,6 +171,11 @@ const LINE_RULES: LineRule[] = [
     severity: "critical",
     message: "Dynamic code execution detected",
     pattern: /\beval\s*\(|new\s+Function\s*\(/,
+    // Deep audit runs this rule over SKILL.md prose, where `\b` treats the `-`
+    // in "Self-eval (" as a boundary. Prose gets an identifier-start boundary;
+    // executable sources and Markdown code keep the full pattern so
+    // `x-eval (y)` stays critical.
+    prosePattern: /(?<![\w$-])eval\s*\(|new\s+Function\s*\(/,
   },
   {
     ruleId: "crypto-mining",
@@ -550,6 +558,13 @@ function findSourceRuleMatch(params: {
   return { line, evidence: params.lines[line - 1] ?? truncateUtf16Safe(params.source, 120) };
 }
 
+/** Whether `pattern` matches `line` starting exactly at `index` (lookbehinds still see the prefix). */
+function stickyTest(pattern: RegExp, line: string, index: number): boolean {
+  const sticky = new RegExp(pattern.source, "y");
+  sticky.lastIndex = index;
+  return sticky.test(line);
+}
+
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
   const lines = source.split("\n");
@@ -563,6 +578,15 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const { methodAliases, namespaceAliases } = collectChildProcessBindings(heuristicSource);
 
   // --- Line rules ---
+  // Markdown prose gets a rule's `prosePattern`; its fenced, indented, and
+  // inline code keeps the source pattern so an example call is still a call.
+  const codeRegions = filePath.toLowerCase().endsWith(".md") ? findCodeRegions(source) : undefined;
+  const lineStarts: number[] = [];
+  let lineOffset = 0;
+  for (const line of lines) {
+    lineStarts.push(lineOffset);
+    lineOffset += line.length + 1;
+  }
   for (const rule of LINE_RULES) {
     // Skip rule entirely if context requirement not met
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
@@ -573,11 +597,19 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
     for (const [i, line] of lines.entries()) {
-      const matches = line.matchAll(
-        new RegExp(
-          rule.pattern.source,
-          rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
+      const matches = Array.from(
+        line.matchAll(
+          new RegExp(
+            rule.pattern.source,
+            rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
+          ),
         ),
+      ).filter(
+        (match) =>
+          !codeRegions ||
+          !rule.prosePattern ||
+          isInsideCode((lineStarts[i] ?? 0) + (match.index ?? 0), codeRegions) ||
+          stickyTest(rule.prosePattern, line, match.index ?? 0),
       );
       const literalDangerousExecIndexes = new Set<number>();
       for (const match of matches) {

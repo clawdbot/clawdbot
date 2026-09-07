@@ -222,6 +222,62 @@ const result = eval(code);
       expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
     },
     {
+      name: "detects eval called through a global member",
+      source: `
+window.eval(payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval called with space before the argument list",
+      source: `
+const result = eval (code);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval called as the right side of a subtraction",
+      source: `
+const result = 0-eval(payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval subtracted from a call result",
+      source: `
+const result = foo()-eval(payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval after a spaced minus",
+      source: `
+const result = x -eval(payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval under a unary minus",
+      source: `
+const result = -eval(payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval after a hyphen with a spaced argument list",
+      source: `
+const result = foo-eval (payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval called through an AngularJS-style $eval member",
+      source: `
+scope.$eval(expression);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
       name: "detects new Function constructor",
       source: `
 const fn = new Function("a", "b", "return a + b");
@@ -366,6 +422,50 @@ run("node a.js"); run("node b.js");
       (finding) => finding.ruleId === "dangerous-exec",
     );
     expect(findings).toHaveLength(2);
+  });
+
+  it("does not flag eval word fragments in Markdown prose", () => {
+    // Deep audit runs the source rules over SKILL.md prose, so an `eval` that
+    // only ends another word or identifier must not read as a call (#137907).
+    // Executable sources keep the full boundary: `foo-eval (x)` is a call there.
+    for (const [name, source] of [
+      ["hyphenated prose heading", "7. **Self-eval (before showing the user).**"],
+      ["hyphenated prose sentence", "Then re-eval (the plan) with the user."],
+      ["unrelated $eval identifier", "scope.$eval(expression);"],
+    ] as const) {
+      runSyncNamedCase(name, () => {
+        expectRulePresence(scanSource(source, "SKILL.md"), "dynamic-code-execution", false);
+        expectRulePresence(scanSource(source, "helper.js"), "dynamic-code-execution", true);
+      });
+    }
+    expectRulePresence(scanSource("eval(payload)", "SKILL.md"), "dynamic-code-execution", true);
+    // Only the hyphen reads as prose: a spaced call keeps its parenthesis boundary.
+    expectRulePresence(scanSource("eval (1 + 2)", "SKILL.md"), "dynamic-code-execution", true);
+    expectRulePresence(scanSource("x - eval (1 + 2)", "SKILL.md"), "dynamic-code-execution", true);
+  });
+
+  it("keeps the source eval rule for Markdown code", () => {
+    // A fenced or inline example is code even inside SKILL.md, so the
+    // subtraction shape prose tolerates must stay critical there.
+    const fenced = [
+      "7. **Self-eval (before showing the user).**",
+      "",
+      "```js",
+      "const r = foo-eval (payload);",
+      "```",
+    ].join("\n");
+    const fencedFindings = scanSource(fenced, "SKILL.md").filter(
+      (finding) => finding.ruleId === "dynamic-code-execution",
+    );
+    expect(fencedFindings.map((finding) => finding.line)).toEqual([4]);
+    expectRulePresence(
+      scanSource("Run `foo-eval (payload)` first.", "SKILL.md"),
+      "dynamic-code-execution",
+      true,
+    );
+    // Indented code is a code region too, so it must not fall back to prose.
+    const indented = ["Example:", "", "    const r = foo-eval (payload);", "", "Done."].join("\n");
+    expectRulePresence(scanSource(indented, "SKILL.md"), "dynamic-code-execution", true);
   });
 
   it("does not flag child_process import without exec/spawn call", () => {
