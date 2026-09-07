@@ -8,6 +8,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
@@ -27,26 +28,27 @@ import { usersMentionableHandlers } from "./server-methods/users-mentionable.js"
 const SESSION_KEY = "agent:main:dashboard:mention-test";
 const SESSION_ID = "mention-test-session";
 const handlers = { ...mentionHandlers, ...usersMentionableHandlers };
+type InboxFixtureOptions = { notifications?: boolean; beforeInbox?: () => void };
 
 afterEach(() => vi.useRealTimers());
 
 async function withInbox(
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
   cfg: OpenClawConfig = {},
-  options: { notifications?: boolean } = {},
+  options: InboxFixtureOptions = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const fixture = await createFixture(cfg, options);
     try {
       await run(fixture);
     } finally {
-      fixture.inbox.dispose();
+      fixture.dispose();
       vi.useRealTimers();
     }
   });
 }
 
-async function createFixture(cfg: OpenClawConfig, options: { notifications?: boolean }) {
+async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) {
   const alice = ensureProfileForEmail("alice@mentions.example.test");
   const bob = ensureProfileForEmail("bob@mentions.example.test");
   const carol = ensureProfileForEmail("carol@mentions.example.test");
@@ -72,13 +74,20 @@ async function createFixture(cfg: OpenClawConfig, options: { notifications?: boo
       },
     );
   await setSession({ displayName: "Design review" });
-  const inbox = createMentionInbox({
-    gatewayInstanceId: "mention-gateway",
-    getRuntimeConfig: () => cfg,
-    getClients: () => clients,
-    broadcastToConnIds: broadcast,
-    onMentionCreated: options.notifications === false ? undefined : push,
-  });
+  const inboxes = new Set<MentionInbox>();
+  const openInbox = (gatewayInstanceId = "mention-gateway") => {
+    const inbox = createMentionInbox({
+      gatewayInstanceId,
+      getRuntimeConfig: () => cfg,
+      getClients: () => clients,
+      broadcastToConnIds: broadcast,
+      onMentionCreated: options.notifications === false ? undefined : push,
+    });
+    inboxes.add(inbox);
+    return inbox;
+  };
+  options.beforeInbox?.();
+  const inbox = openInbox();
   const context = { mentionInbox: inbox } as GatewayRequestContext;
   async function call(method: string, params: Record<string, unknown>, client = bobClient) {
     let response: { ok: boolean; payload?: unknown; error?: ErrorShape } | undefined;
@@ -115,8 +124,14 @@ async function createFixture(cfg: OpenClawConfig, options: { notifications?: boo
     broadcast,
     push,
     setSession,
-    post(sourceId = "source-one", overrides: Partial<MentionCommittedInput> = {}) {
-      inbox.recordCommittedInput({
+    openInbox,
+    dispose() {
+      for (const instance of inboxes) {
+        instance.dispose();
+      }
+    },
+    post(sourceId = "source-one", overrides: Partial<MentionCommittedInput> = {}, target = inbox) {
+      target.recordCommittedInput({
         sourceId,
         sessionKey: SESSION_KEY,
         agentId: "main",
@@ -141,6 +156,209 @@ function read(inbox: MentionInbox, client: GatewayClient) {
 }
 
 describe("temporary human mention Inbox", () => {
+  it("retains original ids, order, and expiry across Gateway restart without replaying push", async () => {
+    await withInbox(async (f) => {
+      vi.useFakeTimers();
+      f.post("first");
+      await vi.advanceTimersByTimeAsync(1_000);
+      f.post("second");
+      const retained = read(f.inbox, f.bobClient).items;
+      expect(retained.map((item) => item.messageId)).toEqual(["message-second", "message-first"]);
+      f.inbox.dispose();
+      f.push.mockClear();
+      await vi.advanceTimersByTimeAsync(6 * 24 * 60 * 60_000);
+      const restarted = f.openInbox("restarted-gateway");
+
+      expect(read(restarted, f.bobClient)).toMatchObject({
+        gatewayInstanceId: "restarted-gateway",
+        items: retained,
+      });
+      f.post("first", {}, restarted);
+      f.post("second", {}, restarted);
+      expect(f.push).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000 - 1_000);
+      expect(read(restarted, f.bobClient).items).toEqual([retained[0]]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(read(restarted, f.bobClient).items).toEqual([]);
+    });
+  });
+
+  it.each(["normal", "transient failure", "dispose after failure"] as const)(
+    "restarts expiry cleanup without a connected client or an Inbox read (%s)",
+    async (scenario) => {
+      await withInbox(async (f) => {
+        vi.useFakeTimers();
+        f.clients.length = 0;
+        const { db } = openOpenClawStateDatabase();
+        const storedSources = () =>
+          db
+            .prepare(
+              "SELECT state_key FROM config_machine_state WHERE state_key GLOB 'notifications.mentions.source.*'",
+            )
+            .all();
+        f.post("original-deadline");
+        expect(storedSources()).toHaveLength(1);
+        f.inbox.dispose();
+        await vi.advanceTimersByTimeAsync(6 * 24 * 60 * 60_000);
+        const restarted = f.openInbox("restarted-gateway");
+        expect(storedSources()).toHaveLength(1);
+        if (scenario !== "normal") {
+          db.exec(`CREATE TEMP TRIGGER reject_mention_expiry BEFORE DELETE ON config_machine_state
+            WHEN OLD.state_key GLOB 'notifications.mentions.source.*'
+            BEGIN SELECT RAISE(ABORT, 'synthetic mention expiry failure'); END`);
+        }
+        try {
+          await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+          expect(storedSources()).toHaveLength(scenario === "normal" ? 0 : 1);
+        } finally {
+          if (scenario !== "normal") {
+            db.exec("DROP TRIGGER reject_mention_expiry");
+          }
+        }
+        if (scenario !== "normal") {
+          if (scenario === "dispose after failure") {
+            restarted.dispose();
+          }
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(storedSources()).toHaveLength(scenario === "dispose after failure" ? 1 : 0);
+          if (scenario === "dispose after failure") {
+            f.openInbox("next-gateway");
+            expect(storedSources()).toEqual([]);
+          }
+        }
+        expect(f.push).toHaveBeenCalledTimes(1);
+      });
+    },
+  );
+
+  it("keeps dismissed and evicted sources consumed across restart", async () => {
+    await withInbox(async (f) => {
+      f.clients.length = 0;
+      for (let index = 0; index < 101; index++) {
+        f.post(`retained-${index}`);
+      }
+      const retained = read(f.inbox, f.bobClient).items;
+      expect(retained).toHaveLength(100);
+      expect(retained.at(-1)?.messageId).toBe("message-retained-1");
+      expect(f.inbox.dismiss(f.bobClient, [retained[0]!.id]).ok).toBe(true);
+      const expected = retained.slice(1);
+      f.inbox.dispose();
+      f.push.mockClear();
+      const restarted = f.openInbox("restarted-gateway");
+
+      expect(read(restarted, f.bobClient).items).toEqual(expected);
+      for (const source of ["retained-0", "retained-100", "retained-50"]) {
+        f.post(source, {}, restarted);
+      }
+      expect(read(restarted, f.bobClient).items).toEqual(expected);
+      expect(f.push).not.toHaveBeenCalled();
+    });
+  });
+
+  it("merges alternating owners' writes without resurrecting dismissals or losing new input", async () => {
+    await withInbox(async (f) => {
+      vi.useFakeTimers();
+      f.post("first");
+      const first = read(f.inbox, f.bobClient).items[0]!;
+      const peer = f.openInbox("peer-gateway");
+      expect(read(peer, f.bobClient).items).toEqual([first]);
+      expect(f.inbox.dismiss(f.bobClient, [first.id]).ok).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      f.post("second", {}, peer);
+      const second = read(peer, f.bobClient).items[0]!;
+      expect(read(f.inbox, f.bobClient).items).toEqual([second]);
+      await vi.advanceTimersByTimeAsync(1);
+      f.post("third");
+      const both = read(f.inbox, f.bobClient).items;
+      expect(both.map((item) => item.messageId)).toEqual(["message-third", "message-second"]);
+      expect(read(peer, f.bobClient).items).toEqual(both);
+      expect(peer.dismiss(f.bobClient, [second.id]).ok).toBe(true);
+      expect(read(f.inbox, f.bobClient).items).toEqual([both[0]]);
+      expect(f.push.mock.calls[0]?.[0].isCurrent()).toBe(false);
+      expect(f.push.mock.calls[1]?.[0].isCurrent()).toBe(false);
+      f.inbox.dispose();
+      peer.dispose();
+      f.push.mockClear();
+      const restarted = f.openInbox("restarted-gateway");
+
+      f.post("first", {}, restarted);
+      f.post("second", {}, restarted);
+      expect(read(restarted, f.bobClient).items).toEqual([both[0]]);
+      expect(f.push).not.toHaveBeenCalled();
+    });
+  });
+
+  it("persists entries and dismissal without changing sqlite_schema or user_version", async () => {
+    const schema = () => {
+      const { db } = openOpenClawStateDatabase();
+      return {
+        schema: db.prepare("SELECT * FROM sqlite_schema ORDER BY type, name").all(),
+        userVersion: db.prepare("PRAGMA user_version").get(),
+      };
+    };
+    let before: ReturnType<typeof schema> | undefined;
+    await withInbox(
+      async (f) => {
+        f.post("dismissed");
+        f.post("retained");
+        const original = read(f.inbox, f.bobClient).items;
+        expect(f.inbox.dismiss(f.bobClient, [original[1]!.id]).ok).toBe(true);
+        f.inbox.dispose();
+        const restarted = f.openInbox("restarted-gateway");
+        expect(read(restarted, f.bobClient).items).toEqual([original[0]]);
+        expect(schema()).toEqual(before);
+      },
+      {},
+      { beforeInbox: () => (before = schema()) },
+    );
+  });
+
+  it.each(["dismissal", "new input"] as const)(
+    "retains committed state and withholds push when storage rejects %s",
+    async (operation) => {
+      await withInbox(async (f) => {
+        f.post("original");
+        const retained = read(f.inbox, f.bobClient).items;
+        const { db } = openOpenClawStateDatabase();
+        for (const action of ["INSERT", "UPDATE", "DELETE"]) {
+          db.exec(`CREATE TEMP TRIGGER reject_mention_${action} BEFORE ${action} ON config_machine_state
+            WHEN ${action === "DELETE" ? "OLD" : "NEW"}.state_key LIKE 'notifications.mentions.%'
+            BEGIN SELECT RAISE(ABORT, 'synthetic mention write failure'); END`);
+        }
+        f.push.mockClear();
+        f.broadcast.mockClear();
+        try {
+          if (operation === "dismissal") {
+            expect(f.inbox.dismiss(f.bobClient, [retained[0]!.id])).toMatchObject({
+              ok: false,
+              error: { code: "UNAVAILABLE" },
+            });
+          } else {
+            expect(() => f.post("retryable-source")).not.toThrow();
+          }
+          expect(read(f.inbox, f.bobClient).items).toEqual(retained);
+          expect(f.push).not.toHaveBeenCalled();
+          expect(f.broadcast).not.toHaveBeenCalled();
+        } finally {
+          for (const action of ["INSERT", "UPDATE", "DELETE"]) {
+            db.exec(`DROP TRIGGER reject_mention_${action}`);
+          }
+        }
+        f.inbox.dispose();
+        const restarted = f.openInbox("restarted-gateway");
+        expect(read(restarted, f.bobClient).items).toEqual(retained);
+        if (operation === "dismissal") {
+          expect(restarted.dismiss(f.bobClient, [retained[0]!.id]).ok).toBe(true);
+          expect(read(restarted, f.bobClient).items).toEqual([]);
+        } else {
+          f.post("retryable-source", {}, restarted);
+          expect(read(restarted, f.bobClient).items).toHaveLength(2);
+          expect(f.push).toHaveBeenCalledTimes(1);
+        }
+      });
+    },
+  );
+
   it("targets only the named person, synchronizes dismissal, and does not replay consumed input", async () => {
     await withInbox(async (f) => {
       for (const client of f.clients) {
@@ -237,30 +455,45 @@ describe("temporary human mention Inbox", () => {
     });
   });
 
-  it("retains acknowledgement across profile merges and projects current sender labels", async () => {
-    await withInbox(async (f) => {
-      const old = ensureProfileForEmail("bob-old@mentions.example.test");
-      const oldClient = { ...identifiedClient(old.id, "Bob"), connId: "old-bob" };
-      f.clients.push(oldClient);
-      f.post("two-profiles", { recipientProfileIds: [old.id, f.bob.id] });
-      const item = read(f.inbox, oldClient).items[0];
-      if (!item) {
-        throw new Error("Old profile did not receive the mention");
-      }
-      f.inbox.dismiss(oldClient, [item.id]);
-      linkEmail("bob-old@mentions.example.test", f.bob.id);
-      await Promise.resolve();
-      expect(read(f.inbox, f.bobClient).items).toEqual([]);
-      expect(read(f.inbox, oldClient).items).toEqual([]);
-      f.post("two-profiles", { recipientProfileIds: [old.id, f.bob.id] });
-      expect(f.push).toHaveBeenCalledTimes(2);
-      f.post("after-merge", { recipientProfileIds: [old.id, f.bob.id] });
-      expect(read(f.inbox, oldClient).items).toHaveLength(1);
-      setDisplayName(f.alice.id, "Alice Updated");
-      await Promise.resolve();
-      expect(read(f.inbox, f.bobClient).items[0]?.senderLabel).toBe("Alice Updated");
-    });
-  });
+  it.each([true, false])(
+    "retains acknowledgement across profile merges and projects current sender labels (dismissed first: %s)",
+    async (dismissedFirst) => {
+      await withInbox(async (f) => {
+        const old = ensureProfileForEmail("bob-old@mentions.example.test");
+        const oldClient = { ...identifiedClient(old.id, "Bob"), connId: "old-bob" };
+        const recipientProfileIds = dismissedFirst ? [old.id, f.bob.id] : [f.bob.id, old.id];
+        f.clients.push(oldClient);
+        f.post("two-profiles", { recipientProfileIds });
+        const item = read(f.inbox, oldClient).items[0];
+        if (!item) {
+          throw new Error("Old profile did not receive the mention");
+        }
+        f.inbox.dismiss(oldClient, [item.id]);
+        linkEmail("bob-old@mentions.example.test", f.bob.id);
+        await Promise.resolve();
+        expect(read(f.inbox, f.bobClient).items).toEqual([]);
+        expect(read(f.inbox, oldClient).items).toEqual([]);
+        f.post("two-profiles", { recipientProfileIds });
+        expect(f.push).toHaveBeenCalledTimes(2);
+        f.post("after-merge", { recipientProfileIds });
+        expect(read(f.inbox, oldClient).items).toHaveLength(1);
+        setDisplayName(f.alice.id, "Alice Updated");
+        await Promise.resolve();
+        const retained = read(f.inbox, f.bobClient).items;
+        expect(retained[0]?.senderLabel).toBe("Alice Updated");
+        f.inbox.dispose();
+        f.push.mockClear();
+        const restarted = f.openInbox("restarted-gateway");
+
+        expect(read(restarted, f.bobClient).items).toEqual(retained);
+        expect(read(restarted, oldClient).items).toEqual(retained);
+        f.post("two-profiles", { recipientProfileIds }, restarted);
+        f.post("after-merge", { recipientProfileIds }, restarted);
+        expect(read(restarted, f.bobClient).items).toEqual(retained);
+        expect(f.push).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("keeps recipients independent when they share a committed message", async () => {
     await withInbox(async (f) => {
@@ -522,6 +755,7 @@ describe("human mention directory", () => {
       sessionKey: SESSION_KEY,
       entry: { visibility: "draft" },
       visible: true,
+      storedSources: 1,
     },
     {
       name: "owner-only recipient of a shared session",
@@ -529,6 +763,7 @@ describe("human mention directory", () => {
       sessionKey: SESSION_KEY,
       entry: { visibility: "shared" },
       visible: false,
+      storedSources: 1,
     },
     {
       name: "administrator in an entry-flag incognito session",
@@ -536,6 +771,7 @@ describe("human mention directory", () => {
       sessionKey: "agent:main:dashboard:mention-incognito-flag",
       entry: { visibility: "shared", incognito: true },
       visible: false,
+      storedSources: 0,
     },
     {
       name: "administrator in a canonical-key incognito session",
@@ -543,10 +779,11 @@ describe("human mention directory", () => {
       sessionKey: "agent:main:dashboard:incognito-mention-key",
       entry: { visibility: "shared" },
       visible: false,
+      storedSources: 0,
     },
   ] as const)(
     "applies offline recipient policy across directory, admission, and delivery: $name",
-    async ({ role, sessionKey, entry, visible }) => {
+    async ({ role, sessionKey, entry, visible, storedSources }) => {
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {
@@ -585,11 +822,17 @@ describe("human mention directory", () => {
           accepted: admission.ok,
           inboxKeys: read(f.inbox, f.bobClient).items.map((item) => item.sessionKey),
           pushedRecipients: f.push.mock.calls.map(([mention]) => mention.recipientProfileId),
+          storedSources: openOpenClawStateDatabase()
+            .db.prepare(
+              "SELECT state_key FROM config_machine_state WHERE state_key GLOB 'notifications.mentions.source.*'",
+            )
+            .all().length,
         }).toEqual({
           users: visible ? [[f.bob.id, false]] : [],
           accepted: visible,
           inboxKeys: visible ? [sessionKey] : [],
           pushedRecipients: visible ? [f.bob.id] : [],
+          storedSources,
         });
       }, cfg);
     },

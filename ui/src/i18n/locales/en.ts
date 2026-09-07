@@ -3985,7 +3985,7 @@ export const en: TranslationMap & {
       emptyTitle: "No mentions yet",
       emptyBody: "When someone mentions you in a chat, it appears here.",
       retention:
-        "Mentions are temporary: kept for up to seven days and cleared when the Gateway restarts.",
+        "Mentions are kept for up to seven days. Gateway restarts preserve your Inbox and dismissals.",
       notifications: "Notification settings",
       loading: "Loading mentions…",
       unavailable: "Sign in and connect to the Gateway to see your mentions.",
