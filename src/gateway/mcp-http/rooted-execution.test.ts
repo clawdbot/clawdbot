@@ -2,38 +2,38 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import "../agents/test-helpers/fast-coding-tools.js";
-import "../agents/test-helpers/fast-openclaw-tools.js";
-import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
+import "../../agents/test-helpers/fast-coding-tools.js";
+import "../../agents/test-helpers/fast-openclaw-tools.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
-} from "../agents/cli-runner.test-helpers.js";
-import { prepareCliRunContext } from "../agents/cli-runner/prepare.js";
+} from "../../agents/cli-runner.test-helpers.js";
+import { prepareCliRunContext } from "../../agents/cli-runner/prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
   setCliRunnerPrepareTestDeps,
-} from "../agents/cli-runner/prepare.test-support.js";
-import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
+} from "../../agents/cli-runner/prepare.test-support.js";
+import type { PreparedCliRunContext } from "../../agents/cli-runner/types.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as fsSafe from "../infra/fs-safe.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as fsSafe from "../../infra/fs-safe.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   revokeMcpLoopbackClientGrant,
-} from "./mcp-grant-store.js";
-import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+} from "../mcp-grant-store.js";
+import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
+import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
 
-vi.mock("../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => null }));
+vi.mock("../../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => null }));
 
 type McpResponse = {
   result: {

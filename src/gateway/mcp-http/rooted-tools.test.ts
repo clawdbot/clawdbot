@@ -1,22 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import "../agents/test-helpers/fast-coding-tools.js";
-import "../agents/test-helpers/fast-openclaw-tools.js";
-import { prepareRootedExecutionCapability } from "../agents/rooted-run-params.js";
-import { createAgentToolsSandboxContext } from "../agents/test-helpers/agent-tools-sandbox-context.js";
-import { createHostSandboxFsBridge } from "../agents/test-helpers/host-sandbox-fs-bridge.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import "../../agents/test-helpers/fast-coding-tools.js";
+import "../../agents/test-helpers/fast-openclaw-tools.js";
+import { prepareRootedExecutionCapability } from "../../agents/rooted-run-params.js";
+import { createAgentToolsSandboxContext } from "../../agents/test-helpers/agent-tools-sandbox-context.js";
+import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
 import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
-} from "./mcp-http.runtime.js";
+} from "../mcp-http.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const callGatewayTool = vi.hoisted(() =>
   vi.fn(async () => ({ id: "review-approval", decision: null })),
 );
-vi.mock("../agents/tools/gateway.js", () => ({ callGatewayTool }));
+vi.mock("../../agents/tools/gateway.js", () => ({ callGatewayTool }));
 
 describe("rooted CLI mediated tools", () => {
   beforeEach(() => {
