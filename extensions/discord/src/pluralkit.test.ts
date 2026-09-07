@@ -1,4 +1,6 @@
 // Discord tests cover pluralkit plugin behavior.
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { fetchPluralKitMessageInfo } from "./pluralkit.js";
 
@@ -178,6 +180,62 @@ describe("fetchPluralKitMessageInfo", () => {
 
     await expect(lookupPromise).rejects.toThrow("preflight stopped");
     expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("redacts reflected PluralKit credentials from a real HTTP error body", async () => {
+    const uniqueSecret = "pluralkit-loopback-secret";
+    const token = `proof-prefix-${uniqueSecret}-proof-suffix`;
+    let authorization: string | undefined;
+    let requestUrl: string | undefined;
+    const server = createServer((request, response) => {
+      authorization = request.headers.authorization;
+      requestUrl = request.url;
+      response.writeHead(502, { "content-type": "text/plain" });
+      response.end(`proxy failure Authorization: ${authorization}; request rejected`);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected an ephemeral loopback address");
+    }
+    const origin = `http://127.0.0.1:${(address as AddressInfo).port}`;
+    const fetcher: typeof fetch = async (input, init) => {
+      const rewritten = new URL(String(input));
+      const target = new URL(`${rewritten.pathname}${rewritten.search}`, origin);
+      return await fetch(target, init);
+    };
+
+    let caught: Error | undefined;
+    try {
+      await fetchPluralKitMessageInfo({
+        messageId: "boom",
+        config: { enabled: true, token },
+        fetcher,
+      });
+    } catch (error) {
+      caught = error as Error;
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((closeError) => (closeError ? reject(closeError) : resolve()));
+      });
+    }
+
+    expect(requestUrl).toBe("/v2/messages/boom");
+    expect(authorization).toBe(token);
+    expect(caught?.message).toContain("PluralKit API failed (502)");
+    expect(caught?.message).toContain("proxy failure");
+    expect(caught?.message).toContain("Authorization:");
+    expect(caught?.message).not.toContain(token);
+    expect(caught?.message).not.toContain(uniqueSecret);
+    console.log(
+      `[pluralkit credential redaction proof] transport=http status=502 path=${requestUrl} authorization_received=${authorization === token} token_present=${caught?.message.includes(token)} unique_fragment_present=${caught?.message.includes(uniqueSecret)} detail=${caught?.message}`,
+    );
   });
 
   it("bounds PluralKit API error bodies without using response.text()", async () => {

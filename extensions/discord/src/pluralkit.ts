@@ -1,6 +1,7 @@
 // Discord plugin module implements pluralkit behavior.
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readProviderJsonObjectResponse,
   readResponseTextLimited,
@@ -72,7 +73,10 @@ export async function fetchPluralKitMessageInfo(params: {
       const text = await readResponseTextLimited(res, PLURALKIT_ERROR_BODY_LIMIT_BYTES).catch(
         () => "",
       );
-      const detail = text.trim() ? `: ${text.trim()}` : "";
+      // Match Discord API error redaction: PluralKit/proxy responses can reflect
+      // the configured Authorization token in the error body.
+      const redacted = text.trim() ? redactToolPayloadText(text.trim()) : "";
+      const detail = redacted ? `: ${redacted}` : "";
       throw new Error(`PluralKit API failed (${res.status})${detail}`);
     }
     return (await readProviderJsonObjectResponse(res, "PluralKit message")) as PluralKitMessageInfo;
