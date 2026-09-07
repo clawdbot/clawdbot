@@ -482,7 +482,7 @@ describe("OpenAI Codex OAuth flow", () => {
       }
       const response = await callbackResponse;
       expect(response.headers.connection).toBe("close");
-      expect(response.body).toContain("OpenAI authentication completed");
+      expect(response.body).toContain("OpenAI authorization received");
       await vi.waitFor(() => expect(manualPromptAborted).toBe(true));
       expect(Object.keys(agent.freeSockets)).toHaveLength(0);
       await vi.waitFor(() => expect(idleSocket?.destroyed).toBe(true));

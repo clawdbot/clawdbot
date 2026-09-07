@@ -213,15 +213,17 @@ function renderOAuthPage(options: {
 }
 
 /**
- * Renders the local OAuth callback success page after provider authentication completes.
+ * Renders the local OAuth callback page after the provider redirects back with
+ * an authorization code. Token exchange still runs after this page renders, so
+ * the heading reports only the established fact, never completion.
  */
 export function oauthSuccessHtml(
   /** Success message rendered in the local OAuth completion page. */
   message: string,
 ): string {
   return renderOAuthPage({
-    title: "Authentication successful",
-    heading: "Authentication successful",
+    title: "Authorization received",
+    heading: "Authorization received",
     message,
   });
 }

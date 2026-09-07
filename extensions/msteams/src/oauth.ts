@@ -73,7 +73,7 @@ export async function loginMSTeamsDelegated(
       port: MSTEAMS_OAUTH_CALLBACK_PORT,
       callbackPath: MSTEAMS_OAUTH_CALLBACK_PATH,
       redirectUri: MSTEAMS_OAUTH_REDIRECT_URI,
-      successTitle: "MSTeams Delegated OAuth complete",
+      successTitle: "MSTeams delegated authorization received",
       progressMessage: `Waiting for OAuth callback on ${MSTEAMS_OAUTH_REDIRECT_URI}...`,
       onProgress: (msg) => ctx.progress.update(msg),
     });

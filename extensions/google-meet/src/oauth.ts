@@ -257,7 +257,7 @@ export async function waitForGoogleMeetAuthCode(params: {
       port: 8085,
       callbackPath: "/oauth2callback",
       redirectUri: GOOGLE_MEET_REDIRECT_URI,
-      successTitle: "Google Meet OAuth complete",
+      successTitle: "Google Meet authorization received",
     });
     return callback.code;
   } catch (error) {
