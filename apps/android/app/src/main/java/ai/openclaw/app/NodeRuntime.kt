@@ -5365,6 +5365,7 @@ class NodeRuntime private constructor(
       // Agent selection owns every main-session consumer; switching chat alone would
       // leave Talk mode bound to the previous agent.
       selectedChatAgentId = normalizedAgentId
+      prefs.putString(chatAgentSelectionPrefKey(prefs.gatewayRegistry.activeStableId.value), normalizedAgentId)
       selectMainSessionKey(normalizedAgentId)
       selectedMainSessionKey = mainSessionKey.value
     }
@@ -5384,6 +5385,9 @@ class NodeRuntime private constructor(
       }
     }
   }
+
+  /** Persists the chat agent selection per gateway so Talk survives reconnects (#139277). */
+  private fun chatAgentSelectionPrefKey(stableId: String?): String = "chat.selectedAgentId." + (stableId?.trim()?.ifEmpty { null } ?: "default")
 
   private fun chatAgentSessionSelectionOwner(agentId: String): ChatAgentSessionSelectionOwner =
     ChatAgentSessionSelectionOwner(
@@ -6565,8 +6569,14 @@ class NodeRuntime private constructor(
       publishGatewayData(gatewayScope) {
         updateGatewayDefaultAgentId(defaultAgentId)
         _gatewayAgents.value = agents
-        val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
+        val stableId = prefs.gatewayRegistry.activeStableId.value
+        val persistedAgentId = prefs.getString(chatAgentSelectionPrefKey(stableId))?.trim()?.ifEmpty { null }
+        val selectedAgentId =
+          (selectedChatAgentId ?: persistedAgentId)?.takeIf { id -> agents.any { it.id == id } }
         selectedChatAgentId = selectedAgentId
+        if (persistedAgentId != selectedAgentId) {
+          prefs.putString(chatAgentSelectionPrefKey(stableId), selectedAgentId ?: "")
+        }
         syncMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
       }
     } catch (_: Throwable) {

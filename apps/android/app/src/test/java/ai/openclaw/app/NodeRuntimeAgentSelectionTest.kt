@@ -302,6 +302,33 @@ class NodeRuntimeAgentSelectionTest {
   }
 
   @Test
+  fun selectionSurvivesGatewayScopeChangeThroughAgentRefresh() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        runtime.selectChatAgent("scout")
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+
+        // A gateway scope change clears the in-memory selection (see clearOperatorGatewayState).
+        ReflectionHelpers.setField(runtime, "selectedChatAgentId", null)
+
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "agents.list")
+          """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"},{"id":"scout"}]}"""
+        }
+        runtime.refreshAgents()
+
+        // The persisted selection must be restored so Talk rebinds to scout (#139277).
+        withTimeout(2_000) {
+          runtime.mainSessionKey.first { resolveAgentIdFromMainSessionKey(it) == "scout" }
+        }
+        assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
   fun currentChatHydrationPreservesSelectionPublishedWhileItWaits() =
     runBlocking {
       val runtime = createConnectedRuntime()
