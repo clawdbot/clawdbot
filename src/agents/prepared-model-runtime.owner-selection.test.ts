@@ -33,7 +33,7 @@ let state: OpenClawTestState;
 describe("prepared model runtime owner selection", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
   });
 
   it("serializes live catalog sources for owners sharing one agent directory", async () => {

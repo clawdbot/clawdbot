@@ -440,7 +440,7 @@ describe("mcp connection resolver helpers", () => {
     } finally {
       await disposeAllSessionMcpRuntimes();
       clearCurrentProviderAuthState();
-      resetPreparedModelRuntimeSnapshotsForTest();
+      await resetPreparedModelRuntimeSnapshotsForTest();
       setGatewaySigusr1RestartPolicy({ allowExternal: previousExternalRestartPolicy });
       await proof.close();
     }
