@@ -13,8 +13,12 @@ OpenClaw's built-in harness. The Copilot CLI session owns the low-level
 agent loop: native tool execution, native compaction (`infiniteSessions`), and
 CLI-managed thread state under `copilotHome`. OpenClaw still owns chat
 channels, session files, model selection, dynamic tools (bridged), approvals,
-media delivery, the visible transcript mirror, `/btw` side questions (see
+media delivery, the visible chat transcript, `/btw` side questions (see
 [Side questions (`/btw`)](/plugins/copilot#side-questions-%2Fbtw)), and `openclaw doctor`.
+
+Direct bridged tools marked for sequential execution wait for earlier tool calls
+in the same attempt and delay later calls until they finish. Other tool calls
+can run concurrently.
 
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes).
@@ -182,7 +186,7 @@ Precedence, applied per agent during `runCopilotAttempt`:
 Each agent gets its own `copilotHome` so Copilot CLI tokens, sessions, and
 config never leak between agents on the same machine. Default:
 `<agentDir>/copilot` (keeps SDK state out of the same directory as
-OpenClaw's `models.json` / `auth-profiles.json`), or
+OpenClaw's `models.json` / `openclaw-agent.sqlite`), or
 `~/.openclaw/agents/<agentId>/copilot` when no agent directory is supplied.
 Override with `copilotHome: <path>` on the attempt input for a custom
 location (for example, a shared mount for migration).
@@ -228,22 +232,32 @@ When `harness.compact` runs, the Copilot SDK harness:
 3. Returns the SDK compaction outcome without writing compatibility marker
    files under the workspace.
 
-The OpenClaw-side transcript mirror (below) keeps receiving post-compaction
+The OpenClaw-side transcript journal (below) keeps receiving post-compaction
 messages, so user-facing chat history stays consistent.
 
-## Transcript mirroring
+## Transcript persistence
 
-`runCopilotAttempt` dual-writes each turn's mirrorable messages into the
-OpenClaw audit transcript via
-`extensions/copilot/src/dual-write-transcripts.ts`. The mirror is scoped per
-session (`copilot:${sessionId}`) and keyed per message
-(`${role}:${sha256_16(role,content)}`), so re-emitted prior-turn entries
-collide with existing on-disk keys instead of duplicating.
+`runCopilotAttempt` gives each attempt a transcript journal
+(`createAttemptTranscriptJournal` in
+`extensions/copilot/src/attempt-transcript-journal.ts`) that persists every
+turn's messages into the OpenClaw session transcript. Journal identity is
+turn-scoped, not content-scoped: the initial user turn is keyed
+`${runId}:user` and SDK-sourced events are keyed
+`copilot-sdk:${sdkSessionId}:${eventId}`, with claimed event ids plus an
+idempotency scan at the transcript store, so re-emitted prior-turn entries
+cannot duplicate.
 
-Two layers of failure containment wrap the mirror so a transcript write
-failure never fails the attempt: an internal best-effort wrapper, plus a
-defense-in-depth `.catch(...)` at the attempt level. Failures are logged, not
-surfaced.
+Assistant turns and their tool results are journaled as structurally complete
+groups, so a crash between groups leaves a valid transcript prefix.
+`before_message_write` hooks may redact content but cannot change role or
+tool topology; a structurally destructive rewrite suppresses the whole group
+instead of persisting a false replay.
+
+Persistence failures fail closed. The first write failure marks the journal
+failed, aborts the in-flight SDK session, and flags the attempt's replay as
+unvalidated so the next run creates a fresh SDK session instead of trusting a
+partial transcript. Only the post-append transcript update notification is
+best-effort and logged.
 
 ## Side questions (`/btw`)
 
@@ -317,19 +331,14 @@ that ever reaches `onPermissionRequest` — is the same safety net, and it
 never fires in practice because `overridesBuiltInTool: true` displaces every
 built-in.
 
-For the wrapped-tool layer to make policy decisions equivalent to PI, the
-harness forwards the full PI attempt-tool context to
-`createOpenClawCodingTools`: identity (`senderIsOwner`, `memberRoleIds`,
-`ownerOnlyToolAllowlist`, ...), channel/routing (`groupId`,
-`currentChannelId`, `replyToMode`, message-tool toggles), auth
-(`authProfileStore`), run identity (`sessionKey` / `runSessionKey` derived
-from `sandboxSessionKey`, `runId`), model context (`modelApi`,
-`modelContextWindowTokens`, `modelCompat`, `modelHasVision`), and run hooks
-(`onToolOutcome`, `onYield`). Without those fields, owner-only allowlists
-silently deny by default, plugin-trust policies cannot resolve to the right
-scope, and `session_status: "current"` resolves to a stale sandbox key. The
-bridge builder is `extensions/copilot/src/tool-bridge.ts`, mirroring the PI
-authoritative call at `src/agents/embedded-agent-runner/run/attempt.ts:1262`.
+The embedded, Codex, and Copilot harnesses share
+`buildEmbeddedAttemptToolRunContext` for originating client capabilities,
+tool bindings, sender and role identity, channel routing, task suggestions,
+and the device allowed to review approvals. This keeps those facts intact
+when selecting a backend or recovering a turn. The Copilot bridge in
+`extensions/copilot/src/tool-bridge.ts` adds its own session and workspace
+mapping, authentication, model context, and execution callbacks before
+calling `createOpenClawCodingTools`.
 `runAttempt` resolves sandbox context through the shared
 `resolveSandboxContext` seam, passes the SDK an effective working directory,
 and forwards `sandbox` plus the subagent-spawn workspace into the tool

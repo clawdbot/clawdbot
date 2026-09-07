@@ -233,14 +233,18 @@ describe("resizable-divider", () => {
     expect([...divider.classList]).toEqual(["dragging"]);
 
     dispatchPointer(document, "pointermove", 220, 7);
-    expectLastResizeRatio(resized, 0.7);
+    dispatchPointer(document, "pointermove", 120, 7);
+    expect(resized).not.toHaveBeenCalled();
+    await nextFrame();
+    expectLastResizeRatio(resized, 0.65);
+    expect(resized).toHaveBeenCalledTimes(1);
     expect(resizeEnded).not.toHaveBeenCalled();
 
     dispatchPointer(document, "pointerup", 220, 7);
     const endEvent = resizeEnded.mock.lastCall?.[0] as
       | CustomEvent<{ splitRatio: number }>
       | undefined;
-    expect(endEvent?.detail).toEqual({ splitRatio: 0.7 });
+    expect(endEvent?.detail).toEqual({ splitRatio: 0.65 });
     expect(resizeEnded).toHaveBeenCalledTimes(1);
     expect([...divider.classList]).toEqual([]);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
@@ -263,5 +267,53 @@ describe("resizable-divider", () => {
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
     dispatchPointer(document, "pointermove", 220);
     expect(resized).not.toHaveBeenCalled();
+  });
+
+  it("ends only the owner gesture when pointer capture is lost", async () => {
+    const divider = await renderDivider();
+    const resized = vi.fn();
+    const resizeEnded = vi.fn();
+    const capturedPointers = new Set<number>();
+    divider.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
+    divider.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
+    divider.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
+    divider.addEventListener("resize", resized);
+    divider.addEventListener("resize-end", resizeEnded);
+
+    dispatchPointer(divider, "pointerdown", 100, 7);
+    dispatchPointer(document, "pointermove", 120, 7);
+    dispatchPointer(divider, "lostpointercapture", 120, 8);
+
+    expect([...divider.classList]).toEqual(["dragging"]);
+    expect(resized).not.toHaveBeenCalled();
+    expect(resizeEnded).not.toHaveBeenCalled();
+
+    capturedPointers.delete(7);
+    dispatchPointer(divider, "lostpointercapture", 120, 7);
+
+    expectLastResizeRatio(resized, 0.65);
+    expectLastResizeRatio(resizeEnded, 0.65);
+    expect([...divider.classList]).toEqual([]);
+
+    dispatchPointer(divider, "pointerdown", 120, 8);
+    expect(capturedPointers.has(8)).toBe(true);
+    dispatchPointer(document, "pointerup", 120, 8);
+  });
+
+  it("commits the final pointer position when disconnected", async () => {
+    const divider = await renderDivider();
+    const resized = vi.fn();
+    const resizeEnded = vi.fn();
+    divider.setPointerCapture = vi.fn();
+    divider.releasePointerCapture = vi.fn();
+    divider.addEventListener("resize", resized);
+    divider.addEventListener("resize-end", resizeEnded);
+
+    dispatchPointer(divider, "pointerdown", 100);
+    dispatchPointer(document, "pointermove", 120);
+    divider.remove();
+
+    expectLastResizeRatio(resized, 0.65);
+    expectLastResizeRatio(resizeEnded, 0.65);
   });
 });

@@ -313,7 +313,8 @@ export function listDurableSqliteTargetOwnersForSessionStorePath(storePath: stri
   return [...owners];
 }
 
-function listSqliteTargetCandidatePathsForSessionStorePath(storePath: string): string[] {
+/** List inspection candidates without opening stores or assigning writable ownership. */
+export function listSqliteTargetCandidatePathsForSessionStorePath(storePath: string): string[] {
   const unsuffixedTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
   if (unsuffixedTarget.agentId || path.resolve(storePath).endsWith(".sqlite")) {
     return [unsuffixedTarget.path];

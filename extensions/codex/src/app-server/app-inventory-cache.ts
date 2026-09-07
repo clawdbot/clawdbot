@@ -2,7 +2,7 @@
  * Process-local cache for Codex app-server app inventories, keyed by runtime
  * identity and safe to refresh in the background.
  */
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
   isFutureDateTimestampMs,
   resolveDateTimestampMs,
@@ -486,6 +486,7 @@ async function readInstalledApps(
         appIds: apps
           .slice(index * CODEX_APP_READ_BATCH_LIMIT, (index + 1) * CODEX_APP_READ_BATCH_LIMIT)
           .map((app) => app.id),
+        includeTools: true,
       }),
     ),
   );
@@ -519,6 +520,7 @@ async function readInstalledApps(
           isAccessible: true,
           isEnabled: installedApp.enabled,
           pluginDisplayNames: metadata.pluginDisplayNames,
+          ...(metadata.toolSummaries ? { toolSummaries: metadata.toolSummaries } : {}),
         },
       ];
     }),

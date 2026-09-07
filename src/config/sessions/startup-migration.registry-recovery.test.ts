@@ -3,12 +3,15 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionDirs from "../../agents/session-dirs.js";
-import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
+import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
+  isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
+  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -18,6 +21,10 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import {
+  isCanonicalSqliteSessionMainKeyCurrent,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
 
@@ -26,6 +33,71 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+it.each(["cold", "preexisting"] as const)(
+  "preserves the %s database lifetime for maintenance without a runtime handoff",
+  async (lifetime) => {
+    const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-handle-lifetime-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const options = { agentId: "main", env };
+    const initial = openOpenClawAgentDatabase(options);
+    setCanonicalSqliteSessionMainKey(initial, "previous");
+    if (lifetime === "cold") {
+      closeOpenClawAgentDatabasesForTest();
+    }
+
+    await runSessionStartupMigration({
+      cfg: { agents: { entries: { main: {} } } },
+      env,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(isCanonicalSqliteSessionMainKeyCurrent(options, undefined)).toBe(true);
+    expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(lifetime === "preexisting");
+    if (lifetime === "preexisting") {
+      expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(initial);
+    }
+  },
+);
+
+it("does not create a missing configured agent database during startup maintenance", async () => {
+  const root = fs.realpathSync.native(tempDirs.make("openclaw-startup-missing-agent-db-"));
+  const stateDir = path.join(root, "state");
+  const storePath = path.join(stateDir, "agents", "idle", "sessions", "sessions.json");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const cfg: OpenClawConfig = {
+    agents: { entries: { idle: { default: true } } },
+    session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
+  };
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: "idle",
+    env,
+  }).path;
+  const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => 0);
+
+  await runSessionStartupMigration({
+    cfg,
+    env,
+    log: { info: vi.fn(), warn: vi.fn() },
+    deps: {
+      migrateLegacyMainSessionKeys: vi.fn(async () => ({
+        armed: false,
+        changes: [],
+        complete: false,
+        ledgerComplete: false,
+        legacyAgentId: "main",
+        mainKey: "main",
+        outcomes: [{ kind: "not-armed" as const }],
+        warnings: [],
+      })),
+      migrateManagedWorktreeCanonicalWorkspaces,
+      resolveAllAgentSessionStoreTargetsSync: () => [{ agentId: "idle", storePath }],
+    },
+  });
+
+  expect(fs.existsSync(sqlitePath)).toBe(false);
+  expect(migrateManagedWorktreeCanonicalWorkspaces).not.toHaveBeenCalled();
 });
 
 it("re-registers durable lineage children before configured-only runtime reads", async () => {
@@ -91,9 +163,6 @@ it("re-registers durable lineage children before configured-only runtime reads",
           outcomes: [{ kind: "not-armed" as const }],
           warnings: [],
         })),
-        migrateOrphanedSessionKeys: vi.fn(async () => ({ changes: [], warnings: [] })),
-        prepareLegacySessionSurfaces: () => EMPTY_LEGACY_SESSION_SURFACES,
-        sweepOrphanSessionStoreTemps: vi.fn(async () => 0),
       },
     });
     expect(migrateManagedWorktreeCanonicalWorkspaces).toHaveBeenCalled();
@@ -155,3 +224,67 @@ it("keeps copied state directories self-contained for combined gateway reads", a
     invalidateRegisteredAgentDatabasesMemo({ env });
   });
 });
+
+it.each(["registry", "main-key"] as const)(
+  "keeps the event loop responsive while repairing a cold %s startup contract",
+  async (repair) => {
+    const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-admission-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const options = { agentId: "main", env };
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      session: {},
+    };
+    const initial = openOpenClawAgentDatabase(options);
+    setCanonicalSqliteSessionMainKey(initial, repair === "main-key" ? "previous" : "main");
+    closeOpenClawAgentDatabasesForTest();
+    if (repair === "registry") {
+      unregisterOpenClawAgentDatabase({ ...options, path: initial.path });
+    }
+    const originalOpen = nodeSqlite.openNodeSqliteDatabase;
+    let yielded = false;
+    let maintenanceSawProgress = false;
+    let maintenanceSawSelectedKey = false;
+    let tick: ReturnType<typeof setImmediate> | undefined;
+    const open = vi
+      .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+      .mockImplementation((location, behavior) => {
+        const database = originalOpen(location, behavior);
+        if (location === initial.path && behavior?.readOnly !== true) {
+          // Earlier async setup cannot satisfy this admission-phase progress check.
+          tick = setImmediate(() => {
+            yielded = true;
+            cfg.session!.mainKey = "later";
+          });
+        }
+        return database;
+      });
+    const log = { info: vi.fn(), warn: vi.fn() };
+    try {
+      await runSessionStartupMigration({
+        cfg,
+        env,
+        log,
+        deps: {
+          migrateManagedWorktreeCanonicalWorkspaces: async () => {
+            maintenanceSawProgress = yielded;
+            maintenanceSawSelectedKey = isCanonicalSqliteSessionMainKeyCurrent(options, undefined);
+            return 0;
+          },
+        },
+      });
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(maintenanceSawProgress).toBe(true);
+      expect(maintenanceSawSelectedKey).toBe(true);
+      expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(
+        expect.objectContaining({ agentId: "main", path: initial.path }),
+      );
+      expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(false);
+    } finally {
+      if (tick) {
+        clearImmediate(tick);
+      }
+      open.mockRestore();
+    }
+  },
+);

@@ -1,12 +1,21 @@
-import { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../../../plugins/tools.js";
+import {
+  getPluginToolMeta,
+  getPluginToolSideEffectOwnerKey,
+} from "../../../plugins/tool-metadata.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   toClientToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
+import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
+import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
+import {
+  createToolDefinitionFromAgentTool,
+  wrapToolDefinition,
+} from "../../sessions/tools/tool-definition-wrapper.js";
 import {
   collectReplaySafeToolNames,
   collectSideEffectToolOwners,
@@ -21,8 +30,7 @@ import {
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
 import { splitSdkTools } from "../tool-split.js";
-import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
   attempt: EmbeddedRunAttemptParams;
@@ -38,6 +46,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
   toolSearchRuntimeConfig: EmbeddedRunAttemptParams["config"];
   uncompactedEffectiveTools: AgentTool[];
   clientTools: EmbeddedRunAttemptParams["clientTools"];
+  getToolAbortSignal?: () => AbortSignal;
 }) {
   // Reserve synchronously so parallel client-tool batches preserve assistant source order.
   const clientToolCallSlots: EmbeddedAttemptClientToolCallSlot[] = [];
@@ -57,36 +66,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
     cfg: params.attempt.config,
     agentId: params.sessionAgentId,
   });
-  // Raw names gate trusted local media passthrough; normalized aliases are insufficient.
-  const builtinToolNames = new Set(
-    params.uncompactedEffectiveTools.flatMap((tool) => {
-      const name = (tool.name ?? "").trim();
-      return name ? [name] : [];
-    }),
-  );
-  const coreBuiltinToolNames = collectCoreBuiltinToolNames(params.uncompactedEffectiveTools, {
-    isPluginTool: (tool) =>
-      Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
-  });
-  const isReplaySafeTool = (tool: { name?: string }) =>
-    isAgentToolReplaySafe(tool, params.replaySafetyOptions);
-  const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));
-  const replaySafeToolNames = collectReplaySafeToolNames(
-    params.uncompactedEffectiveTools,
-    params.replaySafetyOptions,
-  );
-  const clientConflictToolNames = params.deferredDirectoryToolsCallable
-    ? builtinToolNames
-    : coreBuiltinToolNames;
-  const clientToolNameConflicts = findClientToolNameConflicts({
-    tools: params.clientTools ?? [],
-    existingToolNames: [...clientConflictToolNames, ...AGENT_RESERVED_TOOL_NAMES],
-  });
-  if (clientToolNameConflicts.length > 0) {
-    throw createClientToolNameConflictError(clientToolNameConflicts);
-  }
-
-  let clientToolDefs = params.clientTools
+  const sourceClientToolDefs = params.clientTools
     ? toClientToolDefinitions(
         params.clientTools,
         {
@@ -129,59 +109,135 @@ export function prepareEmbeddedAttemptClientTools(params: {
         },
       )
     : [];
-  // Terminal observations are name-only, so ownership is valid only when one
-  // concrete OpenClaw or client tool owns the normalized name.
-  const sideEffectToolOwners = collectSideEffectToolOwners(
-    [...params.uncompactedEffectiveTools, ...clientToolDefs],
-    {
-      declaredOwner: (tool) =>
-        getPluginToolSideEffectOwnerKey(
-          tool as Parameters<typeof getPluginToolSideEffectOwnerKey>[0],
-        ),
-    },
-  );
-  const addClientToolsToCatalog = params.codeModeControlsEnabledForRun
-    ? addClientToolsToCodeModeCatalog
-    : addClientToolsToToolSearchCatalog;
-  const clientToolSearch = addClientToolsToCatalog({
-    tools: clientToolDefs,
-    // Mirrors applyAgentToolSurfaceCatalog: code mode reads the base config,
-    // tool search reads the run's resolved tool-search runtime config.
-    config: params.codeModeControlsEnabledForRun
-      ? params.attempt.config
-      : params.toolSearchRuntimeConfig,
-    sessionId: params.attempt.sessionId,
-    sessionKey: params.sandboxSessionKey,
-    agentId: params.sessionAgentId,
-    runId: params.attempt.runId,
-    catalogRef: params.toolSearchCatalogRef,
-  });
-  clientToolDefs = clientToolSearch.tools;
-  if (clientToolSearch.compacted) {
-    log.info(
-      params.codeModeControlsEnabledForRun
-        ? `code-mode: cataloged ${clientToolSearch.catalogToolCount} client tools behind exec/wait`
-        : `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
+  const buildSurface = () => {
+    // Raw names gate trusted local media passthrough; normalized aliases are insufficient.
+    const builtinToolNames = new Set(
+      params.uncompactedEffectiveTools.flatMap((tool) => {
+        const name = (tool.name ?? "").trim();
+        return name ? [name] : [];
+      }),
     );
-  }
+    const coreBuiltinToolNames = collectCoreBuiltinToolNames(params.uncompactedEffectiveTools, {
+      isPluginTool: (tool) =>
+        Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
+    });
+    const isReplaySafeTool = (tool: { name?: string }) =>
+      isAgentToolReplaySafe(tool, params.replaySafetyOptions);
+    const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));
+    const replaySafeToolNames = collectReplaySafeToolNames(
+      params.uncompactedEffectiveTools,
+      params.replaySafetyOptions,
+    );
+    // Only the marked Code Mode exec owns a resumable run; a plain shell exec of
+    // the same name must never be mistaken for one at tool completion. The marked
+    // controls exist only on the post-catalog `effectiveTools` surface.
+    const codeModeExecToolNames = new Set(
+      params.effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
+    );
+    const clientConflictToolNames = params.deferredDirectoryToolsCallable
+      ? builtinToolNames
+      : coreBuiltinToolNames;
+    const clientToolNameConflicts = findClientToolNameConflicts({
+      tools: params.clientTools ?? [],
+      existingToolNames: [...clientConflictToolNames, ...AGENT_RESERVED_TOOL_NAMES],
+    });
+    if (clientToolNameConflicts.length > 0) {
+      throw createClientToolNameConflictError(clientToolNameConflicts);
+    }
 
-  const { customTools } = splitSdkTools({
-    tools: params.effectiveTools,
-    sandboxEnabled: params.sandboxEnabled,
-    toolHookContext: params.catalogToolHookContext,
-  });
-  const allCustomTools = [...customTools, ...clientToolDefs];
-  const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
+    let clientToolDefs = sourceClientToolDefs.map((definition) =>
+      createToolDefinitionFromAgentTool(
+        wrapToolWithAbortSignal(wrapToolDefinition(definition), params.getToolAbortSignal?.()),
+      ),
+    );
+    // Terminal observations are name-only, so ownership is valid only when one
+    // concrete OpenClaw or client tool owns the normalized name.
+    const sideEffectToolOwners = collectSideEffectToolOwners(
+      [...params.uncompactedEffectiveTools, ...clientToolDefs],
+      {
+        declaredOwner: (tool) =>
+          getPluginToolSideEffectOwnerKey(
+            tool as Parameters<typeof getPluginToolSideEffectOwnerKey>[0],
+          ),
+      },
+    );
+    const addClientToolsToCatalog = params.codeModeControlsEnabledForRun
+      ? addClientToolsToCodeModeCatalog
+      : addClientToolsToToolSearchCatalog;
+    const clientToolSearch = addClientToolsToCatalog({
+      tools: clientToolDefs,
+      // Activation was resolved for this attempt; only Tool Search still needs
+      // its runtime configuration to choose the catalog layout.
+      config: params.codeModeControlsEnabledForRun
+        ? params.attempt.config
+        : params.toolSearchRuntimeConfig,
+      sessionId: params.attempt.sessionId,
+      sessionKey: params.sandboxSessionKey,
+      agentId: params.sessionAgentId,
+      runId: params.attempt.runId,
+      catalogRef: params.toolSearchCatalogRef,
+    });
+    clientToolDefs = clientToolSearch.tools;
+    if (clientToolSearch.compacted) {
+      log.info(
+        params.codeModeControlsEnabledForRun
+          ? `code-mode: cataloged ${clientToolSearch.catalogToolCount} client tools behind exec/wait`
+          : `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
+      );
+    }
+
+    const { customTools } = splitSdkTools({
+      tools: params.effectiveTools,
+      sandboxEnabled: params.sandboxEnabled,
+      toolHookContext: params.catalogToolHookContext,
+      abortSignal: params.getToolAbortSignal?.(),
+    });
+    const allCustomTools = [...customTools, ...clientToolDefs];
+    const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
+    return {
+      allCustomTools,
+      builtinToolNames,
+      coreBuiltinToolNames,
+      clientToolCallSlots,
+      clientToolDefs,
+      replaySafeToolNames,
+      replaySafeTools,
+      codeModeExecToolNames,
+      sideEffectToolOwners,
+      sessionToolAllowlist,
+    };
+  };
+  const current = buildSurface();
   return {
-    allCustomTools,
-    builtinToolNames,
-    coreBuiltinToolNames,
-    clientToolCallSlots,
-    clientToolDefs,
-    clientToolLoopDetection,
-    replaySafeToolNames,
-    replaySafeTools,
-    sideEffectToolOwners,
-    sessionToolAllowlist,
+    ...current,
+    refreshTools: () => {
+      const next = buildSurface();
+      current.allCustomTools.splice(0, current.allCustomTools.length, ...next.allCustomTools);
+      current.clientToolDefs.splice(0, current.clientToolDefs.length, ...next.clientToolDefs);
+      current.sessionToolAllowlist.splice(
+        0,
+        current.sessionToolAllowlist.length,
+        ...next.sessionToolAllowlist,
+      );
+      for (const key of [
+        "builtinToolNames",
+        "coreBuiltinToolNames",
+        "replaySafeToolNames",
+        "codeModeExecToolNames",
+      ] as const) {
+        current[key].clear();
+        for (const name of next[key]) {
+          current[key].add(name);
+        }
+      }
+      current.replaySafeTools.clear();
+      for (const tool of next.replaySafeTools) {
+        current.replaySafeTools.add(tool);
+      }
+      current.sideEffectToolOwners.clear();
+      for (const [name, owner] of next.sideEffectToolOwners) {
+        current.sideEffectToolOwners.set(name, owner);
+      }
+    },
   };
 }

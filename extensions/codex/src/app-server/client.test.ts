@@ -1,5 +1,6 @@
 // Codex tests cover client plugin behavior.
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SemVer } from "semver";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -14,6 +15,7 @@ const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
+  const newerMinorVersion = new SemVer(CODEX_APP_SERVER_VERSION).inc("minor").version;
 
   function startInitialize() {
     const harness = createClientHarness();
@@ -37,6 +39,35 @@ describe("CodexAppServerClient", () => {
     clients.length = 0;
   });
 
+  it.each([true, false])(
+    "bounds image frames only when the transport declares a limit (%s)",
+    async (bounded) => {
+      const harness = createClientHarness({
+        maxFrameBytes: bounded ? 16 * 1024 * 1024 : undefined,
+      });
+      clients.push(harness.client);
+      const input = [
+        { type: "image", url: `data:image/png;base64,${"A".repeat(16 * 1024 * 1024)}` },
+      ];
+      const request = harness.client.request("turn/start", { threadId: "thread", input });
+      if (bounded) {
+        const error = await request.catch((requestError: unknown) => requestError);
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toMatchObject({ message: expect.stringContaining("transport frame limit") });
+        expect(isCodexAppServerIndeterminateTransportError(error)).toBe(false);
+        expect(harness.writes).toEqual([]);
+      } else {
+        const sent = JSON.parse(await harness.waitForWrite(0));
+        harness.send({ id: sent.id, result: { turn: { id: "turn" } } });
+        await expect(request).resolves.toEqual({ turn: { id: "turn" } });
+      }
+      const next = harness.client.request("model/list", {});
+      const sent = JSON.parse(await harness.waitForWrite(bounded ? 0 : 1));
+      harness.send({ id: sent.id, result: { models: [] } });
+      await expect(next).resolves.toEqual({ models: [] });
+    },
+  );
+
   it("routes request responses by id", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -47,6 +78,24 @@ describe("CodexAppServerClient", () => {
 
     await expect(request).resolves.toEqual({ models: [] });
     expect(outbound.method).toBe("model/list");
+  });
+
+  it("replays configuration warnings emitted before their notification observer exists", () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const notification = {
+      method: "configWarning",
+      params: {
+        summary: "Error parsing rules; custom rules not applied.",
+        details: "rules.toml: unexpected token",
+      },
+    };
+
+    harness.send(notification);
+    const receiveNotification = vi.fn();
+    harness.client.addNotificationHandler(receiveNotification);
+
+    expect(receiveNotification).toHaveBeenCalledExactlyOnceWith(notification);
   });
 
   it("isolates synchronous notification handler failures", async () => {
@@ -261,6 +310,43 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
+  it("keeps the shared client when ownership expires after an overload rejection", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const releaseGuard = vi.fn();
+    harness.client.setThreadSessionRequestGuard(async () => releaseGuard);
+    let current = true;
+    const ownershipError = new Error("request owner expired");
+    const request = harness.client.request(
+      "thread/resume",
+      { threadId: "thread-1" },
+      {
+        timeoutMs: 5_000,
+        assertCurrent: () => {
+          if (!current) {
+            throw ownershipError;
+          }
+        },
+      },
+    );
+    const rejection = expect(request).rejects.toBe(ownershipError);
+    await vi.advanceTimersByTimeAsync(0);
+    const first = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: first.id,
+      error: { code: -32_001, message: "Server overloaded; retry later." },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    current = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await rejection;
+    expect(harness.writes).toHaveLength(1);
+    expect(releaseGuard).toHaveBeenCalledOnce();
+    expect(harness.client.getCloseError()).toBeUndefined();
+  });
+
   it("surfaces relogin details from Codex app-server RPC errors", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -350,6 +436,9 @@ describe("CodexAppServerClient", () => {
           extensions: {
             "openai/standard-form-input": {},
             "openai/form": {},
+            "io.modelcontextprotocol/ui": {
+              mimeTypes: ["text/html;profile=mcp-app"],
+            },
           },
         },
       },
@@ -371,28 +460,31 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("blocks the previously bundled Codex app-server version", async () => {
-    const { harness, initializing, outbound } = startInitialize();
-    harness.send({
-      id: outbound.id,
-      result: { userAgent: "openclaw/0.146.0 (macOS; test)" },
-    });
+  it.each(["0.147.0", "0.148.0"])(
+    "blocks previously bundled Codex app-server version %s",
+    async (version) => {
+      const { harness, initializing, outbound } = startInitialize();
+      harness.send({
+        id: outbound.id,
+        result: { userAgent: `openclaw/${version} (macOS; test)` },
+      });
 
-    await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.146.0`,
-    );
-    expect(harness.writes).toHaveLength(1);
-  });
+      await expect(initializing).rejects.toThrow(
+        `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${version}`,
+      );
+      expect(harness.writes).toHaveLength(1);
+    },
+  );
 
   it("blocks Codex app-server prereleases of the exact supported version", async () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.147.0-alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0-alpha.2 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.147.0-alpha.2`,
+      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.149.0-alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -402,11 +494,11 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.147.0+desktop (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0+desktop (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
-    expect(harness.client.getServerVersion()).toBe("0.147.0+desktop");
+    expect(harness.client.getServerVersion()).toBe("0.149.0+desktop");
     expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
     expect(warn).not.toHaveBeenCalled();
   });
@@ -438,9 +530,12 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([
-    ["0.148.0-alpha.23", 0],
-    ["0.148.0", 0],
-    ["1.0.0", 1],
+    ["0.149.0", 0],
+    [`${CODEX_APP_SERVER_VERSION}-alpha.4`, 0],
+    [CODEX_APP_SERVER_VERSION, 0],
+    [`${newerMinorVersion}-alpha.4`, 1],
+    [newerMinorVersion, 1],
+    [new SemVer(CODEX_APP_SERVER_VERSION).inc("major").version, 1],
   ])("accepts app-server version %s for normal startup validation", async (version, warnings) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const { harness, initializing, outbound } = startInitialize();
@@ -754,6 +849,56 @@ describe("CodexAppServerClient", () => {
       timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
     });
   });
+
+  it.each([
+    { name: "default", timeoutSeconds: undefined, waitMs: 900_000 },
+    { name: "explicit", timeoutSeconds: 900, waitMs: 900_000 },
+    { name: "maximum", timeoutSeconds: 3600, waitMs: 3_600_000 },
+  ])(
+    "keeps the transport open for a $name credential wait and bounds a hung handler",
+    async ({ timeoutSeconds, waitMs }) => {
+      vi.useFakeTimers();
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createClientHarness();
+      clients.push(harness.client);
+      let requestSignal: AbortSignal | undefined;
+      harness.client.addRequestHandler((_request, signal) => {
+        requestSignal = signal;
+        return new Promise<never>(() => {});
+      });
+      harness.send({
+        id: "credential-wait",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "credential-wait",
+          namespace: null,
+          tool: "secrets",
+          arguments: {
+            action: "request",
+            name: "TEST_API_KEY",
+            ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(waitMs + 30_000);
+      expect(harness.writes).toHaveLength(0);
+      expect(requestSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(harness.writes).toHaveLength(1);
+      expect(JSON.parse(harness.writes[0] ?? "{}")).toMatchObject({
+        id: "credential-wait",
+        result: {
+          success: false,
+          contentItems: [
+            { type: "inputText", text: expect.stringContaining(`${waitMs + 60_000}ms`) },
+          ],
+        },
+      });
+    },
+  );
 
   it("fails closed for unhandled native app-server approvals", async () => {
     const harness = createClientHarness();

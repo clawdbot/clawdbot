@@ -1,6 +1,6 @@
 // Health gateway methods return cached or refreshed status summaries while
 // detecting stale channel runtime state against live gateway snapshots.
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
@@ -10,7 +10,7 @@ import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
-import { formatForLog } from "../ws-log.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
@@ -24,7 +24,11 @@ function shouldScheduleRequestRefresh(
   now: number,
 ): boolean {
   const startedAt = requestRefreshStartedAt.get(refresh);
-  if (startedAt !== undefined && now - startedAt < HEALTH_REFRESH_INTERVAL_MS) {
+  if (
+    startedAt !== undefined &&
+    !isFutureDateTimestampMs(startedAt, { nowMs: now }) &&
+    now - startedAt < HEALTH_REFRESH_INTERVAL_MS
+  ) {
     return false;
   }
   // Scope the throttle to the Gateway refresh owner so independent servers do
@@ -43,7 +47,7 @@ function cachedLifecycleDiffersFromRuntime(params: {
       return true;
     }
   }
-  return false;
+  return params.cachedAccount === undefined;
 }
 
 /** Checks whether cached channel health is stale against the live runtime snapshot. */
@@ -92,7 +96,12 @@ function cachedHealthDiffersFromRuntime(
     }
   }
 
-  return false;
+  // Hot-unloaded plugins vanish from both runtime maps before cached health expires.
+  return Object.keys(cached.channels).some(
+    (channelId) =>
+      !Object.hasOwn(runtime.channels, channelId) &&
+      !Object.hasOwn(runtime.channelAccounts, channelId),
+  );
 }
 
 /** Merges cheap live runtime facts into a cached health summary before responding. */
@@ -147,6 +156,7 @@ export const healthHandlers: GatewayRequestHandlers = {
       !wantsProbe &&
       cached &&
       !cachedDiffersFromRuntime &&
+      !isFutureDateTimestampMs(cached.ts, { nowMs: now }) &&
       now - cached.ts < HEALTH_REFRESH_INTERVAL_MS
     ) {
       respond(
@@ -166,12 +176,10 @@ export const healthHandlers: GatewayRequestHandlers = {
       }
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
       respond(true, snap, undefined);
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
   status: async ({ respond, client, params, context }) => {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];

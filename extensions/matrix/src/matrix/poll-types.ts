@@ -7,8 +7,12 @@
  * - m.poll.end - Closes a poll
  */
 
+import {
+  M_POLL_KIND_DISCLOSED,
+  type PollKind as MatrixPollKind,
+} from "matrix-js-sdk/lib/@types/polls.js";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const M_POLL_START = "m.poll.start" as const;
 const M_POLL_RESPONSE = "m.poll.response" as const;
@@ -50,7 +54,7 @@ type PollParsedAnswer = {
 
 type PollStartSubtype = {
   question: TextContent;
-  kind?: PollKind;
+  kind?: MatrixPollKind;
   max_selections?: number;
   answers: PollAnswer[];
 };
@@ -120,11 +124,12 @@ export function isPollEventType(eventType: string): boolean {
   return (POLL_EVENT_TYPES as readonly string[]).includes(eventType);
 }
 
-function getTextContent(text?: TextContent): string {
-  if (!text) {
+function getTextContent(text?: unknown): string {
+  if (!isRecord(text)) {
     return "";
   }
-  return text["m.text"] ?? text["org.matrix.msc1767.text"] ?? text.body ?? "";
+  const value = text["m.text"] ?? text["org.matrix.msc1767.text"] ?? text.body;
+  return normalizeOptionalString(value) ?? "";
 }
 
 export function parsePollStart(content: PollStartContent): ParsedPollStart | null {
@@ -136,15 +141,18 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
     return null;
   }
 
-  const question = getTextContent(poll.question).trim();
+  const question = getTextContent(poll.question);
   if (!question) {
     return null;
   }
 
-  const answers = poll.answers
+  // Sender-controlled event content can violate declared Matrix types; discard
+  // malformed answers here so context building never drops the whole message.
+  const rawAnswers: unknown = poll.answers;
+  const answers = (Array.isArray(rawAnswers) ? rawAnswers : [])
     .map((answer) => ({
-      id: answer.id,
-      text: getTextContent(answer).trim(),
+      id: isRecord(answer) && typeof answer.id === "string" ? answer.id : "",
+      text: getTextContent(answer),
     }))
     .filter((answer) => answer.id.trim().length > 0 && answer.text.length > 0);
   if (answers.length === 0) {
@@ -160,7 +168,9 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
   return {
     question,
     answers,
-    kind: poll.kind ?? "m.poll.disclosed",
+    kind: M_POLL_KIND_DISCLOSED.matches(poll.kind ?? "m.poll.disclosed")
+      ? "m.poll.disclosed"
+      : "m.poll.undisclosed",
     maxSelections: Math.min(Math.max(maxSelections, 1), answers.length),
   };
 }

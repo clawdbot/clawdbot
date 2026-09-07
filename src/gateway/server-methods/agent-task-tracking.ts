@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
@@ -100,8 +101,19 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   if (params.modelRun === true) {
     return "none";
   }
-  if (!params.sessionKey?.trim() || params.inputProvenance?.kind === "inter_session") {
+  if (!params.sessionKey?.trim()) {
     return "none";
+  }
+  if (params.inputProvenance?.kind === "inter_session") {
+    // Only the settlement batch owns automatic paused-run adoption. Individual
+    // announcements and descendant wakes retain their own delivery lifecycle.
+    const pausedYieldRun =
+      params.inputProvenance.sourceTool === "subagent_settle" &&
+      getLatestLiveSubagentRunByChildSessionKey(
+        params.sessionKey.trim(),
+        (entry) => entry.pauseReason === "sessions_yield",
+      );
+    return pausedYieldRun ? "plugin_subagent" : "none";
   }
   const runTaskOwner = params.client?.internal?.agentRunTracking;
   if (runTaskOwner === "plugin_subagent") {
@@ -232,6 +244,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
 
 export function tryFinalizeTrackedAgentTask(params: {
   runId: string;
+  sessionKey?: string;
   status: GatewayAgentTaskTerminalStatus;
   error?: string;
   terminalSummary?: string;
@@ -241,6 +254,7 @@ export function tryFinalizeTrackedAgentTask(params: {
     finalizeTaskRunByRunId({
       runId: params.runId,
       runtime: "cli",
+      sessionKey: params.sessionKey,
       status: params.status,
       endedAt: Date.now(),
       ...(params.error !== undefined ? { error: params.error } : {}),

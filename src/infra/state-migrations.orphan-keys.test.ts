@@ -727,6 +727,44 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it("checks missing agent stores without comparing every earlier path", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const agentCount = 100;
+      const cfg = {
+        session: { store: path.join(tmpDir, "stores", "{agentId}", "sessions.json") },
+        agents: {
+          list: Array.from({ length: agentCount }, (_, index) => ({ id: `agent-${index}` })),
+        },
+      } as OpenClawConfig;
+      const statSpy = vi.spyOn(fs, "statSync");
+
+      try {
+        expect(await migrateFixtureState(stateDir, cfg)).toEqual({ changes: [], warnings: [] });
+        const storeProbes = statSpy.mock.calls.filter(([candidate]) =>
+          candidate.toString().endsWith("sessions.json"),
+        );
+        expect(storeProbes).toHaveLength(agentCount);
+      } finally {
+        statSpy.mockRestore();
+      }
+    });
+  });
+
+  it("does not prepare channel migration surfaces without a legacy store", async () => {
+    await withStateFixture(async ({ stateDir }) => {
+      const prepareLegacySessionSurfaces = vi.fn(() => EMPTY_LEGACY_SESSION_SURFACES);
+
+      const result = await migrateOrphanedSessionKeys({
+        cfg: OPS_WORK_CONFIG,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        legacySessionSurfaces: prepareLegacySessionSurfaces,
+      });
+
+      expect(result).toEqual({ changes: [], warnings: [] });
+      expect(prepareLegacySessionSurfaces).not.toHaveBeenCalled();
+    });
+  });
+
   it("is idempotent — running twice produces same result", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);

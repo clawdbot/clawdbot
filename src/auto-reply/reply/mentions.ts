@@ -8,7 +8,6 @@ import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { resolveMentionPatternPolicy } from "../../channels/mention-pattern-policy.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -446,7 +445,7 @@ export function stripMentions(
     (normalizeOptionalLowercaseString(ctx.Provider) as ChannelId | undefined) ??
     null;
   const providerMentions = providerId
-    ? (getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined)?.mentions
+    ? getLoadedChannelPluginById(providerId)?.mentions
     : undefined;
   const resolvedPatterns = resolveMentionPatterns(cfg, agentId);
   const configRegexes = compileMentionPatternsCached({

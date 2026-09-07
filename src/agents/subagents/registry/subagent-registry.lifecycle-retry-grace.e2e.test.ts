@@ -2,7 +2,11 @@
 // lifecycle events race gateway waits or transient announce failures.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
+import type { CallGatewayOptions } from "../../../gateway/call.js";
+import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
+import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
@@ -11,7 +15,6 @@ import * as mod from "./subagent-registry.test-helpers.js";
 
 const noop = () => {};
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
-const MAIN_REQUESTER_DISPLAY_KEY = "main";
 
 type LifecycleData = {
   phase?: string;
@@ -25,12 +28,8 @@ type LifecycleData = {
   timeoutPhase?: string;
   providerStarted?: boolean;
 };
-type LifecycleEvent = {
-  stream?: string;
-  runId: string;
-  sessionKey?: string;
-  data?: LifecycleData;
-};
+type LifecycleEvent = Pick<AgentEventPayload, "runId"> &
+  Partial<Omit<AgentEventPayload, "runId" | "data">> & { data?: LifecycleData };
 
 type SessionStoreEntry = {
   sessionId: string;
@@ -38,30 +37,20 @@ type SessionStoreEntry = {
   delivery?: SessionDeliveryState;
 };
 
-type GatewayAgentInternalEvent = {
-  status?: string;
-  statusLabel?: string;
-  result?: string;
-};
-
 type GatewayAgentRequestParams = {
   sessionKey?: string;
   inputProvenance?: {
     sourceSessionKey?: string;
   };
-  internalEvents?: GatewayAgentInternalEvent[];
+  internalEvents?: Array<{ status?: string; statusLabel?: string; result?: string }>;
 };
 
-type GatewayRequest = {
-  method?: string;
-  params?: GatewayAgentRequestParams;
-  timeoutMs?: number;
-  expectFinal?: boolean;
-};
+type GatewayRequest = Omit<CallGatewayOptions, "params"> & { params?: GatewayAgentRequestParams };
 
 let lifecycleHandler: ((evt: LifecycleEvent) => void) | undefined;
 let agentCallPlan: Array<"ok" | "throw"> = [];
 let agentCallGates = new Map<string, Promise<void>>();
+let releaseAgentCallGate: (() => void) | undefined;
 let chatHistoryBySessionKey = new Map<string, Array<Record<string, unknown>>>();
 let sessionStore: Record<string, SessionStoreEntry> = {};
 
@@ -72,8 +61,7 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     return { status: "pending" };
   }
   if (method === "chat.history") {
-    const sessionKey =
-      typeof request.params?.sessionKey === "string" ? request.params.sessionKey : "";
+    const sessionKey = request.params?.sessionKey ?? "";
     return {
       messages: chatHistoryBySessionKey.get(sessionKey) ?? [],
     };
@@ -88,7 +76,12 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     if (next === "throw") {
       throw new Error("announce delivery failed");
     }
-    return { result: { payloads: [{ text: "completion delivered" }] } };
+    return {
+      result: {
+        payloads: [{ text: "completion delivered" }],
+        deliveryStatus: { status: "sent", resultCount: 1 },
+      },
+    };
   }
   return {};
 });
@@ -113,6 +106,8 @@ vi.mock("../../../config/sessions.js", () => ({
 vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>()),
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
+  listSessionEntriesReadOnly: () =>
+    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
 }));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
@@ -213,7 +208,11 @@ describe("subagent registry lifecycle error grace", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Failed assertions must also release the delivery owned by this test.
+    releaseAgentCallGate?.();
+    releaseAgentCallGate = undefined;
+    await vi.advanceTimersByTimeAsync(0);
     lifecycleHandler = undefined;
     subagentAnnounceDeliveryTesting.setDepsForTest();
     subagentAnnounceOutputTesting.setDepsForTest();
@@ -253,7 +252,10 @@ describe("subagent registry lifecycle error grace", () => {
     throw new Error(`run ${runId} did not reach cleanupHandled=false in time`);
   };
 
-  const waitForDeliveredCleanup = async (runId: string) => {
+  const waitForDeliveredCleanup = async (
+    runId: string,
+    options?: { allowPendingRequesterSettleWake?: boolean },
+  ) => {
     let lastRun: ReturnType<typeof mod.listSubagentRunsForRequester>[number] | undefined;
     for (let attempt = 0; attempt < 80; attempt += 1) {
       const run = mod
@@ -263,7 +265,7 @@ describe("subagent registry lifecycle error grace", () => {
       if (
         run?.delivery?.status === "delivered" &&
         typeof run.cleanupCompletedAt === "number" &&
-        run.requesterSettleWake === undefined
+        (options?.allowPendingRequesterSettleWake === true || run.requesterSettleWake === undefined)
       ) {
         return;
       }
@@ -321,11 +323,39 @@ describe("subagent registry lifecycle error grace", () => {
       childSessionKey: `agent:main:subagent:${childSuffix}`,
       requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
       requesterAgentId: "main",
-      requesterDisplayKey: MAIN_REQUESTER_DISPLAY_KEY,
+      requesterDisplayKey: "main",
       task,
       cleanup: "keep",
       expectsCompletionMessage,
     });
+  }
+
+  async function settleYieldedCliTurn(params: {
+    requesterTurnRunId: string;
+    acceptedSessionSpawns: Array<{
+      runId: string;
+      childSessionKey: string;
+      expectsCompletionMessage?: boolean;
+    }>;
+  }) {
+    const { withLocalSessionPlacementTurnSettlement } =
+      await import("../../session-placement-admission.js");
+    return await withLocalSessionPlacementTurnSettlement(
+      {
+        sessionId: "sess-main",
+        sessionKey: MAIN_REQUESTER_SESSION_KEY,
+        agentId: "main",
+        runId: params.requesterTurnRunId,
+      },
+      async () => ({
+        acceptedSessionSpawns: params.acceptedSessionSpawns,
+        meta: {
+          durationMs: 1,
+          yielded: true,
+          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
+        },
+      }),
+    );
   }
 
   function emitLifecycleEvent(
@@ -342,16 +372,7 @@ describe("subagent registry lifecycle error grace", () => {
   }
 
   function readFirstAnnounceOutcome() {
-    const first = getAgentCalls()[0];
-    const internalEvents = first?.params?.internalEvents;
-    const event =
-      Array.isArray(internalEvents) && internalEvents[0] && typeof internalEvents[0] === "object"
-        ? (internalEvents[0] as { status?: string; statusLabel?: string })
-        : undefined;
-    return {
-      status: event?.status,
-      error: event?.statusLabel,
-    };
+    return getAgentCalls()[0]?.params?.internalEvents?.[0];
   }
 
   function setAssistantOutput(sessionKey: string, text: string) {
@@ -403,6 +424,101 @@ describe("subagent registry lifecycle error grace", () => {
       });
   }
 
+  it("yields an owned visible child and delivers its requester final exactly once", async () => {
+    const requesterTurnRunId = "run-requester-visible-yield";
+    const runId = "run-visible-yield";
+    const childSessionKey = "agent:main:dashboard:visible-yield";
+    const spawnResult = await maybeSpawnVisibleSession({
+      raw: { visible: true },
+      task: "finish visible dashboard work",
+      label: "Visible child",
+      runtime: "subagent",
+      sandbox: "inherit",
+      expectsCompletionMessage: true,
+      options: {
+        agentSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+        requesterAgentIdOverride: "main",
+        config: {
+          agents: { list: [{ id: "main" }] },
+          session: { mainKey: "main", scope: "per-sender" },
+        },
+        callGateway: vi.fn(async () => ({
+          key: childSessionKey,
+          runStarted: true,
+          runId,
+        })) as never,
+        registerRun: mod.registerSubagentRun,
+        countActiveRuns: () => 0,
+      },
+    });
+    expect(spawnResult).toMatchObject({ status: "accepted", runId, childSessionKey });
+    setAssistantOutput(childSessionKey, "visible dashboard child complete");
+
+    const onYield = vi.fn();
+    const yieldTool = createSessionsYieldTool({
+      sessionId: "sess-main",
+      claimYield: () =>
+        mod.markRequesterTurnYielded({
+          requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+          requesterAgentId: "main",
+          requesterTurnRunId,
+        }) > 0,
+      onYield,
+    });
+    const yieldResult = await yieldTool.execute("yield-visible-child", {
+      message: "Wait for the visible dashboard child",
+    });
+    expect(yieldResult.details).toEqual({
+      status: "yielded",
+    });
+    expect(onYield).toHaveBeenCalledOnce();
+    expect(onYield).toHaveBeenCalledWith("Wait for the visible dashboard child", undefined);
+
+    await settleYieldedCliTurn({
+      requesterTurnRunId,
+      acceptedSessionSpawns: [{ runId, childSessionKey, expectsCompletionMessage: true }],
+    });
+    const settled = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((run) => run.runId === runId);
+    expect(settled?.execution.status).toBe("running");
+    expect(settled?.requesterTurnRunId).toBeUndefined();
+    expect(settled?.requesterTurnYielded).toBeUndefined();
+    expect(settled?.requesterSettleWake).toMatchObject({
+      status: "pending",
+      batchRunIds: [runId],
+      requesterYieldBatch: true,
+    });
+    expect(settled?.delivery?.lastError).not.toBe("completion_handoff_pending");
+    expect(getAgentCalls()).toHaveLength(0);
+
+    const endedAt = Date.now();
+    const terminalResult = {
+      phase: "end",
+      endedAt,
+      terminalReply: {
+        disposition: "visible" as const,
+        text: "visible dashboard child complete",
+      },
+    };
+    emitLifecycleEvent(runId, terminalResult, { sessionKey: childSessionKey });
+    await waitForAgentCallCount(1);
+    await waitForDeliveredCleanup(runId);
+    expect(getAgentCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()[0]?.params).toMatchObject({
+      sessionKey: MAIN_REQUESTER_SESSION_KEY,
+      message: expect.stringContaining("visible final answer"),
+    });
+
+    emitLifecycleEvent(runId, terminalResult, { sessionKey: childSessionKey });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+  });
+
   it("does not replay a requester-owned final already delivered before its turn yields", async () => {
     const requesterTurnRunId = "run-requester-already-delivered";
     const runId = "run-completed-before-yield";
@@ -415,7 +531,7 @@ describe("subagent registry lifecycle error grace", () => {
       endedAt: Date.now(),
       terminalReply: { disposition: "visible", text: "child complete" },
     });
-    await waitForDeliveredCleanup(runId);
+    await waitForDeliveredCleanup(runId, { allowPendingRequesterSettleWake: true });
 
     const completed = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
@@ -431,20 +547,17 @@ describe("subagent registry lifecycle error grace", () => {
         requesterTurnRunId,
       }),
     ).toBe(1);
-    expect(
-      mod.settleRequesterAfterSessionSpawns({
-        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-        requesterTurnRunId,
-        requesterYielded: true,
-        acceptedSessionSpawns: [{ runId, childSessionKey }],
-      }),
-    ).toBe(true);
+    await settleYieldedCliTurn({
+      requesterTurnRunId,
+      acceptedSessionSpawns: [{ runId, childSessionKey, expectsCompletionMessage: true }],
+    });
 
     await vi.advanceTimersByTimeAsync(30_000);
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(1);
     expect(getRequesterWakeCalls()).toHaveLength(0);
     expect(completed?.delivery?.requesterVisibleFinal).toBeUndefined();
+    expect(completed?.requesterSettleWake).toBeUndefined();
   });
 
   it("lets requester settlement own a yielded batch after sibling deliveries race", async () => {
@@ -456,11 +569,10 @@ describe("subagent registry lifecycle error grace", () => {
     setAssistantOutput(alphaSessionKey, "alpha complete");
     setAssistantOutput(betaSessionKey, "beta complete");
 
-    let releaseBetaDelivery: (() => void) | undefined;
     agentCallGates.set(
       betaSessionKey,
       new Promise<void>((resolve) => {
-        releaseBetaDelivery = resolve;
+        releaseAgentCallGate = resolve;
       }),
     );
 
@@ -470,6 +582,7 @@ describe("subagent registry lifecycle error grace", () => {
       terminalReply: { disposition: "visible", text: "alpha complete" },
     });
     await waitForAgentCallCount(1);
+    await waitForDeliveredCleanup("run-yield-alpha", { allowPendingRequesterSettleWake: true });
 
     emitLifecycleEvent("run-yield-beta", {
       phase: "end",
@@ -491,20 +604,23 @@ describe("subagent registry lifecycle error grace", () => {
         requesterTurnRunId,
       }),
     ).toBe(2);
-    expect(
-      mod.settleRequesterAfterSessionSpawns({
-        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-        requesterTurnRunId,
-        requesterYielded: true,
-        acceptedSessionSpawns: [
-          { runId: "run-yield-alpha", childSessionKey: alphaSessionKey },
-          { runId: "run-yield-beta", childSessionKey: betaSessionKey },
-        ],
-      }),
-    ).toBe(true);
+    await settleYieldedCliTurn({
+      requesterTurnRunId,
+      acceptedSessionSpawns: [
+        {
+          runId: "run-yield-alpha",
+          childSessionKey: alphaSessionKey,
+          expectsCompletionMessage: true,
+        },
+        {
+          runId: "run-yield-beta",
+          childSessionKey: betaSessionKey,
+          expectsCompletionMessage: true,
+        },
+      ],
+    });
 
-    await vi.advanceTimersByTimeAsync(0);
-    await flushAsync();
+    await waitForDeliveredCleanup("run-yield-alpha");
 
     const yieldedBatch = mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY);
     expect(
@@ -535,7 +651,7 @@ describe("subagent registry lifecycle error grace", () => {
     expect(getRequesterWakeCalls()).toHaveLength(1);
 
     agentCallGates.delete(betaSessionKey);
-    releaseBetaDelivery?.();
+    releaseAgentCallGate?.();
     await waitForDeliveredCleanup("run-yield-alpha");
     await waitForDeliveredCleanup("run-yield-beta");
 
@@ -627,7 +743,7 @@ describe("subagent registry lifecycle error grace", () => {
     emitLifecycleEvent("run-transient-error", {
       phase: "error",
       error: "rate limit",
-      endedAt: 1_000,
+      endedAt: Date.now(),
     });
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(0);
@@ -635,7 +751,7 @@ describe("subagent registry lifecycle error grace", () => {
     await vi.advanceTimersByTimeAsync(14_999);
     expect(getAgentCalls()).toHaveLength(0);
 
-    emitLifecycleEvent("run-transient-error", { phase: "start", startedAt: 1_050 });
+    emitLifecycleEvent("run-transient-error", { phase: "start", startedAt: Date.now() });
     await flushAsync();
 
     await vi.advanceTimersByTimeAsync(20_000);
@@ -643,7 +759,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     emitLifecycleEvent("run-transient-error", {
       phase: "end",
-      endedAt: 1_250,
+      endedAt: Date.now(),
       terminalReply: { disposition: "visible", text: "Final answer transient" },
     });
     await flushAsync();
@@ -659,7 +775,7 @@ describe("subagent registry lifecycle error grace", () => {
     emitLifecycleEvent("run-terminal-error", {
       phase: "error",
       error: "fatal failure",
-      endedAt: 2_000,
+      endedAt: Date.now(),
     });
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(0);
@@ -669,7 +785,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("error");
-    expect(readFirstAnnounceOutcome()?.error).toContain("fatal failure");
+    expect(readFirstAnnounceOutcome()?.statusLabel).toContain("fatal failure");
   });
 
   it("freezes completion result at run termination across deferred announce retries", async () => {
@@ -889,7 +1005,7 @@ describe("subagent registry lifecycle error grace", () => {
       status: "timeout",
       timeoutPhase: "provider",
       providerStarted: true,
-      endedAt: 3_000,
+      endedAt: Date.now(),
       error: "provider timed out",
     });
     await flushAsync();
@@ -917,7 +1033,7 @@ describe("subagent registry lifecycle error grace", () => {
       status: "timeout",
       timeoutPhase: "provider",
       providerStarted: true,
-      endedAt: 4_000,
+      endedAt: Date.now(),
     });
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(0);
@@ -925,7 +1041,7 @@ describe("subagent registry lifecycle error grace", () => {
     // Before the grace window, the run successfully ends (non-aborted)
     emitLifecycleEvent("run-timeout-cancel", {
       phase: "end",
-      endedAt: 4_500,
+      endedAt: Date.now(),
       terminalReply: { disposition: "visible", text: "Final answer after recovery" },
     });
     await flushAsync();

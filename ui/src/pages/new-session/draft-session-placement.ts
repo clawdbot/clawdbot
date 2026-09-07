@@ -1,11 +1,22 @@
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { restoreChatApiAttachments } from "../chat/attachment-api.ts";
-import type { DraftPlaceState } from "./draft-place-state.ts";
+import type { NewSessionVisibility } from "./create-params.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
+
+export type PendingPlacementPlace = {
+  agentId: string;
+  profileId: string;
+  deviceId?: string;
+  autoDevice?: boolean;
+  machineClass?: string;
+  cwd?: string;
+  repository?: SessionCreateParams["repository"];
+};
 
 export function resolveDraftSessionPlacement(
   pending: Pick<PendingSessionPlacementRecoveryState, "sessionKey" | "target">,
-  place: Pick<DraftPlaceState, "cloudProfileId" | "deviceId" | "machineClass">,
+  place: { autoDevice: boolean; cloudProfileId: string; deviceId: string; machineClass: string },
 ) {
   const target = pending.sessionKey
     ? pending.target
@@ -17,27 +28,40 @@ export function resolveDraftSessionPlacement(
         }
       : place.deviceId
         ? { kind: "device" as const, deviceId: place.deviceId }
-        : null;
+        : place.autoDevice
+          ? { kind: "auto-device" as const }
+          : null;
   return { target };
 }
 
 export function projectDraftSessionPlacementRecovery(recovery: SessionPlacementRecovery) {
-  const visibility: "normal" | "incognito" =
-    recovery.createParams?.incognito === true ? "incognito" : "normal";
-  const placement = {
+  const visibility: NewSessionVisibility = recovery.createParams?.incognito
+    ? "incognito"
+    : recovery.createParams?.visibility === "draft"
+      ? "draft"
+      : "normal";
+  const placement: PendingPlacementPlace = {
     agentId: recovery.agentId,
     profileId: recovery.target.kind === "profile" ? recovery.target.profileId : "",
     ...(recovery.target.kind === "profile"
       ? { machineClass: recovery.target.machineClass }
-      : { deviceId: recovery.target.deviceId }),
+      : recovery.target.kind === "device"
+        ? { deviceId: recovery.target.deviceId }
+        : { autoDevice: true }),
     cwd: recovery.createParams?.cwd,
+    ...(recovery.createParams?.repository
+      ? { repository: { ...recovery.createParams.repository } }
+      : {}),
   };
   return {
     placement,
     draft: {
       message: recovery.message,
+      ...(recovery.mentions?.length ? { mentions: recovery.mentions } : {}),
       attachments: restoreChatApiAttachments(recovery.attachments),
       visibility,
+      toolOverrides: recovery.createParams?.toolOverrides ?? null,
+      permissionMode: recovery.createParams?.permissionMode,
     },
   };
 }

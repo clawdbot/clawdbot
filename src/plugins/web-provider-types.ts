@@ -24,7 +24,10 @@ export type WebSearchProviderToolDefinition = {
 export type WebFetchProviderToolDefinition = {
   description: string;
   parameters: TSchema;
-  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  execute: (
+    args: Record<string, unknown>,
+    context?: { signal?: AbortSignal },
+  ) => Promise<Record<string, unknown>>;
 };
 
 type WebSearchProviderContext = {

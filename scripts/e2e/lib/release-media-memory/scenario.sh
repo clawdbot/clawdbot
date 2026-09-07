@@ -80,7 +80,7 @@ dump_debug_logs() {
     "$GATEWAY_1_LOG" \
     "$GATEWAY_2_LOG"
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 start_gateway() {
   local log_path="$1"

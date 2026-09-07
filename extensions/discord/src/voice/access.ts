@@ -12,8 +12,11 @@ import {
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
 } from "../monitor/allow-list.js";
+import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
+import { resolveDiscordVoiceAccess } from "./owner-access.js";
 
-export async function authorizeDiscordVoiceIngress(params: {
+export async function authorizeDiscordVoiceIngress(initialParams: {
+  readPolicy?: DiscordLivePolicyReader;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId?: string;
@@ -36,6 +39,17 @@ export async function authorizeDiscordVoiceIngress(params: {
 }): Promise<
   { ok: true; channelConfig?: DiscordChannelConfigResolved | null } | { ok: false; message: string }
 > {
+  const policy = await initialParams.readPolicy?.();
+  if (policy?.isCurrent() === false) {
+    return { ok: false, message: "Access policy changed. Try this interaction again." };
+  }
+  const params = policy
+    ? {
+        ...initialParams,
+        ...policy,
+        admissionAllowFrom: resolveDiscordVoiceAccess(policy).admissionAllowFrom,
+      }
+    : initialParams;
   const groupPolicy =
     params.groupPolicy ??
     resolveOpenProviderRuntimeGroupPolicy({
@@ -102,7 +116,7 @@ export async function authorizeDiscordVoiceIngress(params: {
   });
 
   const admissionAllowList = normalizeDiscordAllowList(
-    params.admissionAllowFrom ?? params.discordConfig.allowFrom ?? params.discordConfig.allowFrom,
+    params.admissionAllowFrom ?? params.discordConfig.allowFrom,
     ["discord:", "user:", "pk:"],
   );
   const admissionAllowed = admissionAllowList

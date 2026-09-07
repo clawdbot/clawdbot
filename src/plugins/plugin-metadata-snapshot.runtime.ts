@@ -9,32 +9,11 @@
  * the metadata system (built code loads .js; source/jiti paths resolve .ts).
  */
 import { createRequire } from "node:module";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-
-type CurrentSnapshotModule = Pick<
-  typeof import("./current-plugin-metadata-snapshot.js"),
-  "getCurrentPluginMetadataSnapshot"
->;
-type SnapshotLoaderModule = Pick<
-  typeof import("./plugin-metadata-snapshot.js"),
-  "resolvePluginMetadataSnapshot"
->;
-
-type SnapshotReaderSlot = {
-  getCurrentPluginMetadataSnapshot?: CurrentSnapshotModule["getCurrentPluginMetadataSnapshot"];
-  resolvePluginMetadataSnapshot?: SnapshotLoaderModule["resolvePluginMetadataSnapshot"];
-};
-
-// globalThis-keyed so a require-loaded second module instance shares the slot.
-const snapshotReaderSlot = resolveGlobalSingleton<SnapshotReaderSlot>(
-  Symbol.for("openclaw.pluginMetadataSnapshotReaders"),
-  () => ({}),
-);
-
-/** Called by the snapshot modules at eval time; last registration wins. */
-export function registerPluginMetadataSnapshotReaders(readers: SnapshotReaderSlot): void {
-  Object.assign(snapshotReaderSlot, readers);
-}
+import {
+  snapshotReaderSlot,
+  type CurrentSnapshotModule,
+  type SnapshotLoaderModule,
+} from "./plugin-metadata-snapshot-readers.js";
 
 const require = createRequire(import.meta.url);
 
@@ -78,6 +57,14 @@ export function getCurrentPluginMetadataSnapshotRuntime(
     snapshotReaderSlot.getCurrentPluginMetadataSnapshot ??
     loadCurrentSnapshotModule()?.getCurrentPluginMetadataSnapshot;
   return reader?.(params) ?? undefined;
+}
+
+/** Publishes through the loaded lifecycle owner without waking a cold metadata system. */
+export function adoptCurrentPluginMetadataSnapshotIfAbsentRuntime(
+  snapshot: Parameters<CurrentSnapshotModule["adoptCurrentPluginMetadataSnapshotIfAbsent"]>[0],
+  options: Parameters<CurrentSnapshotModule["adoptCurrentPluginMetadataSnapshotIfAbsent"]>[1],
+): void {
+  snapshotReaderSlot.adoptCurrentPluginMetadataSnapshotIfAbsent?.(snapshot, options);
 }
 
 /**

@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import type { CatalogSessionContinuedDetail } from "../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   refreshSessionCatalogsLive,
@@ -18,8 +19,12 @@ import {
   mergeSessionCatalogPage,
   sessionCatalogRequestError,
 } from "./app-sidebar-session-catalog-state.ts";
+import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
-import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
+import type {
+  SidebarSessionOwnerFilter,
+  SidebarSessionStatusFilter,
+} from "./app-sidebar-session-types.ts";
 import {
   completePanelRefresh,
   failPanelRefresh,
@@ -35,6 +40,7 @@ export interface SessionDataControllerHost extends ReactiveControllerHost {
   promoteCreatedSession(sessionKey: string): void;
   selectedAgentIdForSessions(): string;
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
+  sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
   querySelector(selectors: string): Element | null;
 }
 
@@ -112,7 +118,23 @@ export function resolveSessionCatalogAgentId(
   return selected && selected !== helloDefault ? null : helloDefault;
 }
 
-function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
+export function scheduleSessionCatalogRefresh(
+  owner: SessionCatalogDataOwner,
+  queueIfActive = false,
+): void {
+  if (document.visibilityState === "hidden") {
+    owner.sessionCatalogLive.cancelScheduledRefreshes();
+    return;
+  }
+  owner.sessionCatalogLive.scheduleActivation(queueIfActive, (shouldQueue) => {
+    requestSessionCatalogRefresh(owner, shouldQueue);
+  });
+}
+
+export function requestSessionCatalogRefresh(
+  owner: SessionCatalogDataOwner,
+  queueIfActive: boolean,
+): void {
   const snapshot = owner.context?.gateway.snapshot;
   owner.sessionCatalogLive.requestRefresh({
     visible: document.visibilityState !== "hidden",
@@ -121,16 +143,9 @@ function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
       owner.sessionCatalogAgentId !== null &&
       Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
     generation: owner.sessionScopeGeneration,
+    queueIfActive,
     refresh: () => void owner.refreshSessionCatalogs(),
   });
-}
-
-export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
-  if (document.visibilityState === "hidden") {
-    owner.sessionCatalogLive.cancelScheduledRefreshes();
-    return;
-  }
-  owner.sessionCatalogLive.scheduleActivation(() => requestSessionCatalogRefresh(owner));
 }
 
 export function updateSessionCatalogData(owner: SessionCatalogDataOwner, defer = false): void {
@@ -156,7 +171,7 @@ export function applySessionCatalogPresence(
   payload: unknown,
 ): void {
   if (owner.sessionCatalogLive.observePresence(payload)) {
-    scheduleSessionCatalogRefresh(owner);
+    scheduleSessionCatalogRefresh(owner, true);
   }
 }
 
@@ -188,6 +203,29 @@ export function applySessionCatalogHostEvent(
       () => void owner.refreshSessionCatalogs(),
     );
   }
+}
+
+export function applySessionCatalogContinuation(
+  owner: SessionCatalogDataOwner,
+  detail: CatalogSessionContinuedDetail,
+): void {
+  const rawAgentId = typeof detail?.agentId === "string" ? detail.agentId.trim() : "";
+  const eventAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
+  const currentAgentId = owner.sessionCatalogAgentId
+    ? normalizeAgentId(owner.sessionCatalogAgentId)
+    : null;
+  if (!detail?.sessionKey || !eventAgentId || eventAgentId !== currentAgentId) {
+    return;
+  }
+  owner.sessionCatalogs = bindAdoptedCatalogSession(owner.sessionCatalogs, detail);
+  owner.requestSessionDataUpdate();
+  // Invalidate in-flight polls and load-more merges so a pre-adoption
+  // snapshot cannot clobber the patched rows; the 30s poll reconfirms.
+  owner.sessionCatalogRevision += 1;
+  owner.sessionCatalogRevisions.set(
+    detail.catalogId,
+    (owner.sessionCatalogRevisions.get(detail.catalogId) ?? 0) + 1,
+  );
 }
 
 export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Promise<void> {
@@ -228,7 +266,8 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     applyError: (error) => {
       owner.sessionCatalogRefreshStatus = failPanelRefresh(
         owner.sessionCatalogRefreshStatus,
-        sessionCatalogRequestError(error).message,
+        error,
+        owner.context?.gateway.snapshot,
       );
       owner.requestSessionDataUpdate();
     },
@@ -270,6 +309,7 @@ export async function loadMoreSessionCatalog(
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId,
       catalogId,
+      hostIds: Object.keys(cursors),
       cursors,
     });
     if (!isCurrentSessionCatalogRequest(owner, catalogId, client, generation, revision)) {

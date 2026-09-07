@@ -22,11 +22,12 @@ import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/int
  * Self-contained: no gateway, no provider, no live session.
  */
 import { describe, expect, it } from "vitest";
+import { resolveResponsesContinuationRequest } from "../../../../packages/ai/src/transports/openai-responses-continuation.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
-import type { Context, Model } from "../../../llm/types.js";
+import type { Model } from "../../../llm/types.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -35,9 +36,12 @@ import {
 } from "../../../sessions/user-turn-transcript.js";
 import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
 import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,
 } from "../../internal-runtime-context.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 
 // ---------------------------------------------------------------------------
@@ -116,7 +120,11 @@ async function captureOpenAICompletionsPayload(
     OPENAI_COMPLETIONS_MODEL,
     {
       systemPrompt: "Stable system prompt",
-      messages: normalizeMessagesForLlmBoundary(messages, { timezone: TZ }) as Context["messages"],
+      messages: convertToLlm(
+        relocateCurrentRuntimeContextCarrierToTail(
+          normalizeMessagesForLlmBoundary(messages, { timezone: TZ }),
+        ),
+      ),
     },
     {
       apiKey: TEST_PROVIDER_OPTION_VALUE,
@@ -142,7 +150,11 @@ async function captureOpenAIResponsesPayload(
     OPENAI_RESPONSES_MODEL,
     {
       systemPrompt: "Stable system prompt",
-      messages: normalizeMessagesForLlmBoundary(messages, { timezone: TZ }) as Context["messages"],
+      messages: convertToLlm(
+        relocateCurrentRuntimeContextCarrierToTail(
+          normalizeMessagesForLlmBoundary(messages, { timezone: TZ }),
+        ),
+      ),
     },
     {
       apiKey: TEST_PROVIDER_OPTION_VALUE,
@@ -171,6 +183,38 @@ function firstTwoProviderMessages(payload: Record<string, unknown>): unknown[] {
 // ---------------------------------------------------------------------------
 
 describe("prompt-cache byte-identity (issue #3658)", () => {
+  it("rejects unknown session projection versions before submitting history", () => {
+    expect(() => normalizeMessagesForLlmBoundary([], { sessionVersion: 99 })).toThrow(
+      "Unsupported session prompt projection version",
+    );
+  });
+  it.each([
+    [INTERNAL_RUNTIME_CONTEXT_BEGIN, "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]"],
+    [INTERNAL_RUNTIME_CONTEXT_END, "[[OPENCLAW_INTERNAL_CONTEXT_END]]"],
+  ])(
+    "projects literal marker mentions consistently without rewriting transcripts: %s",
+    (marker, escaped) => {
+      const text = `Please quote ${marker} literally.`;
+      const input: AgentMsg[] = [{ role: "user", content: text, timestamp: 123 }];
+      for (const sessionVersion of [3, 4]) {
+        const options = { sessionVersion, appendOnlyRuntimeContext: true, includeTimestamp: false };
+        const expected = sessionVersion === 4 ? `Please quote ${escaped} literally.` : text;
+        const current = normalizeMessagesForLlmBoundary(input, options);
+        const history = normalizeMessagesForLlmBoundary(
+          [...input, { role: "user", content: "Next request", timestamp: 456 }],
+          options,
+        );
+        expect(current[0]).toMatchObject({ role: "user", content: expected });
+        expect(history[0]).toMatchObject({ role: "user", content: expected });
+        expect(normalizeMessagesForLlmBoundary(current, options)[0]).toMatchObject({
+          role: "user",
+          content: expected,
+        });
+      }
+      expect(input).toEqual([{ role: "user", content: text, timestamp: 123 }]);
+    },
+  );
+
   it("bare current-turn message == same message aged to history (byte-identical, both stamped from msg.timestamp)", () => {
     // This is THE gate. It models the REAL wire asymmetry that the live capture
     // proved: turn 1 sent BARE+array when current, BARE+string when historical.
@@ -525,6 +569,112 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     ) as unknown as Array<Record<string, unknown>>;
 
   const META = "Conversation info:\nsender=Bob";
+
+  it("preserves the full-history cache prefix through a completed tool loop on the next user turn", async () => {
+    const user = currentUserMsg("Check the deployment.", TS_TURN1);
+    const toolCall = {
+      role: "assistant",
+      api: OPENAI_COMPLETIONS_MODEL.api,
+      provider: OPENAI_COMPLETIONS_MODEL.provider,
+      model: OPENAI_COMPLETIONS_MODEL.id,
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
+      timestamp: TS_TURN1 + 1,
+    } as AgentMsg;
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call_read",
+      toolName: "read",
+      content: [{ type: "text", text: "deployment ready" }],
+      isError: false,
+      timestamp: TS_TURN1 + 2,
+    } as AgentMsg;
+    const active = [runtimeCarrier(META, TS_TURN1), user, toolCall, toolResult];
+    const previous = await captureOpenAICompletionsPayload(active);
+    const next = await captureOpenAICompletionsPayload([
+      ...active,
+      ASSISTANT_MSG,
+      runtimeCarrier("new metadata", TS_TURN2),
+      currentUserMsg("next request", TS_TURN2),
+    ]);
+    const previousMessages = previous.messages as unknown[];
+    const nextMessages = next.messages as unknown[];
+
+    expect(nextMessages.slice(0, previousMessages.length - 1)).toEqual(
+      previousMessages.slice(0, -1),
+    );
+    expect(JSON.stringify(previousMessages.at(-1))).toContain("sender=Bob");
+    expect(JSON.stringify(nextMessages)).not.toContain("sender=Bob");
+  });
+
+  it.each([
+    "Check the deployment.",
+    "Current time: 2026-06-05 10:30. Check the deployment.",
+    "[Fri 2026-06-05 10:30 UTC] Check the deployment.",
+  ])("continues tool rounds without moving or losing active context: %s", async (prompt) => {
+    const memory = "Context:\n<active_memory_plugin>\nsaved preference\n</active_memory_plugin>";
+    const messages = [
+      runtimeCarrier(META, TS_TURN1),
+      currentUserMsg(`${memory}\n\n${prompt}`, TS_TURN1),
+    ];
+    let previous = await captureOpenAIResponsesPayload(messages);
+    expect(JSON.stringify(previous.input)).toContain("saved preference");
+    expect(JSON.stringify(previous.input)).toContain(META.replaceAll("\n", "\\n"));
+
+    for (const round of [1, 2]) {
+      const callId = `call_${round}`;
+      messages.push(
+        {
+          role: "assistant",
+          api: OPENAI_RESPONSES_MODEL.api,
+          provider: OPENAI_RESPONSES_MODEL.provider,
+          model: OPENAI_RESPONSES_MODEL.id,
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: callId, name: "read", arguments: {} }],
+          timestamp: TS_TURN1 + round,
+        } as AgentMsg,
+        {
+          role: "toolResult",
+          toolCallId: callId,
+          toolName: "read",
+          content: [{ type: "text", text: `result ${round}` }],
+          isError: false,
+          timestamp: TS_TURN1 + round,
+        } as AgentMsg,
+      );
+      const request = await captureOpenAIResponsesPayload(messages);
+      const continuation = resolveResponsesContinuationRequest(
+        {
+          lastRequest: previous,
+          lastResponseId: `resp_${round}`,
+          lastResponseItems: [
+            { type: "function_call", call_id: callId, name: "read", arguments: "{}" },
+          ],
+        },
+        request,
+      );
+      expect(continuation.continuationStatus).toBe("continued");
+      expect(continuation.request.input).toEqual([
+        { type: "function_call_output", call_id: callId, output: `result ${round}` },
+      ]);
+      previous = request;
+    }
+
+    messages.push(ASSISTANT_MSG, currentUserMsg("next request", TS_TURN2));
+    const nextTurn = await captureOpenAIResponsesPayload(messages);
+    expect(JSON.stringify(nextTurn.input)).not.toContain("saved preference");
+    expect(JSON.stringify(nextTurn.input)).not.toContain("sender=Bob");
+    expect(
+      resolveResponsesContinuationRequest(
+        {
+          lastRequest: previous,
+          lastResponseId: "resp_final",
+          lastResponseItems: [],
+        },
+        nextTurn,
+      ).continuationStatus,
+    ).toBe("history_changed");
+  });
 
   it("keeps the active user turn bare, tail-places the carrier, and drops it from replayed history", () => {
     // The runner installs the carrier immediately BEFORE the active user turn;

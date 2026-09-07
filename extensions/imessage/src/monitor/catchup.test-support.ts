@@ -1,18 +1,20 @@
 // Imessage tests cover catchup plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
-import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import {
-  advanceIMessageCatchupCursor,
   capFailureRetriesMap,
   IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+  resolveIMessageCatchupCursorKey,
+  type IMessageCatchupCursor,
+} from "../state-contract.js";
+import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
+import {
+  advanceIMessageCatchupCursor,
   performIMessageCatchup,
   resolveCatchupConfig,
-  resolveIMessageCatchupCursorKey,
   type CatchupDispatchFn,
   type CatchupFetchFn,
-  type IMessageCatchupCursor,
   type IMessageCatchupRow,
 } from "./catchup.js";
 

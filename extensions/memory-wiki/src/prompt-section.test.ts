@@ -94,6 +94,25 @@ async function seedCompiledDigest(params: {
       })),
     },
     claims: [],
+    dashboards: {
+      importInsights: {
+        sourceType: "chatgpt",
+        totalItems: 0,
+        totalClusters: 0,
+        clusters: [],
+        truncated: false,
+      },
+      overview: {
+        totalItems: 0,
+        totalPages: 0,
+        pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 0, report: 0 },
+        totalClaims: 0,
+        totalQuestions: 0,
+        totalContradictions: 0,
+        clusters: [],
+        truncated: false,
+      },
+    },
   };
   const publicationId = createMemoryWikiCompiledCachePublicationId();
   const reservationId = createMemoryWikiCompiledCachePublicationId();

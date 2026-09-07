@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
@@ -19,6 +19,7 @@ import {
 import { updateSkillProposalRecord } from "./store.js";
 
 let testState: OpenClawTestState;
+const workshopConfig = {};
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -35,6 +36,8 @@ describe("Skill Workshop SQLite store", () => {
   it("commits a pending transition once and rejects stale record facts", async () => {
     const proposal = await proposeCreateSkill({
       workspaceDir: testState.stateDir,
+      config: workshopConfig,
+      agentId: "main",
       name: "Transition Compare And Swap",
       description: "Bind state transitions to authoritative proposal facts",
       content: "# Transition Compare And Swap\n",
@@ -72,7 +75,6 @@ describe("Skill Workshop SQLite store", () => {
     const existing = new DatabaseSync(databasePath);
     existing.exec(`
       DROP TABLE skill_workshop_proposal_events;
-      DROP TABLE skill_workshop_proposal_origin_runs;
       DROP TABLE skill_workshop_proposal_rollbacks;
       DROP TABLE skill_workshop_proposals;
       DROP TABLE skill_workshop_collection_reviews;
@@ -85,7 +87,9 @@ describe("Skill Workshop SQLite store", () => {
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("skill_workshop_proposals"),
     ).toBeUndefined();
-    await expect(listSkillProposals()).resolves.toMatchObject({ proposals: [] });
+    await expect(
+      listSkillProposals({ config: workshopConfig, agentId: "main" }),
+    ).resolves.toMatchObject({ proposals: [] });
     expect(
       reopened.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -105,41 +109,14 @@ describe("Skill Workshop SQLite store", () => {
       reopened.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
         .get("idx_skill_workshop_collection_reviews_workspace_time"),
-    ).toEqual({ name: "idx_skill_workshop_collection_reviews_workspace_time" });
+    ).toBeUndefined();
     expect(
       reopened.db
         .prepare(
           "SELECT name, type, \"notnull\" FROM pragma_table_info('skill_workshop_proposals') WHERE name = ?",
         )
-        .get("claim_released_time"),
-    ).toEqual({ name: "claim_released_time", type: "INTEGER", notnull: 0 });
-    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-  });
-
-  it("lazily adds the ownership release column without changing the schema version", async () => {
-    const databasePath = openOpenClawStateDatabase().path;
-    closeOpenClawStateDatabaseForTest();
-    const { DatabaseSync } = requireNodeSqlite();
-    const existing = new DatabaseSync(databasePath);
-    existing.exec("ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;");
-    existing.close();
-
-    const reopened = openOpenClawStateDatabase();
-    expect(
-      reopened.db
-        .prepare("SELECT name FROM pragma_table_info('skill_workshop_proposals') WHERE name = ?")
         .get("claim_released_time"),
     ).toBeUndefined();
-    await expect(listSkillProposals()).resolves.toMatchObject({ proposals: [] });
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT name, type, \"notnull\" FROM pragma_table_info('skill_workshop_proposals') WHERE name = ?",
-        )
-        .get("claim_released_time"),
-    ).toEqual({ name: "claim_released_time", type: "INTEGER", notnull: 0 });
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
@@ -148,6 +125,7 @@ describe("Skill Workshop SQLite store", () => {
   it("keeps arbitrary payload keys disjoint from durable evaluations", async () => {
     const proposal = await proposeCreateSkill({
       workspaceDir: testState.stateDir,
+      config: workshopConfig,
       agentId: "main",
       name: "Event Envelope",
       description: "Exercise event payload encoding",
@@ -174,7 +152,7 @@ describe("Skill Workshop SQLite store", () => {
 
     expect(
       listSkillProposalEvents({
-        workspaceDir: testState.stateDir,
+        config: workshopConfig,
         proposalId: proposal.record.id,
       }).events[1],
     ).toMatchObject({
@@ -202,6 +180,7 @@ describe("Skill Workshop SQLite store", () => {
     const proposal = await proposeCreateSkill({
       workspaceDir: testState.stateDir,
       agentId: "main",
+      config: workshopConfig,
       name: "Event Page Budget",
       description: "Bound replay response size",
       content: "# Event Page Budget\n",
@@ -239,7 +218,7 @@ describe("Skill Workshop SQLite store", () => {
     }
 
     const firstPage = listSkillProposalEvents({
-      workspaceDir: testState.stateDir,
+      config: workshopConfig,
       proposalId: proposal.record.id,
       limit: 200,
     });
@@ -249,7 +228,7 @@ describe("Skill Workshop SQLite store", () => {
       2 * 1024 * 1024 + 1_024,
     );
     const secondPage = listSkillProposalEvents({
-      workspaceDir: testState.stateDir,
+      config: workshopConfig,
       proposalId: proposal.record.id,
       afterSequence: firstPage.nextSequence,
       limit: 200,
@@ -261,6 +240,7 @@ describe("Skill Workshop SQLite store", () => {
     const proposal = await proposeCreateSkill({
       workspaceDir: testState.stateDir,
       agentId: "main",
+      config: workshopConfig,
       name: "Oversized Stored Event",
       description: "Reject silent audit data loss",
       content: "# Oversized Stored Event\n",
@@ -273,7 +253,7 @@ describe("Skill Workshop SQLite store", () => {
 
     expect(() =>
       listSkillProposalEvents({
-        workspaceDir: testState.stateDir,
+        config: workshopConfig,
         proposalId: proposal.record.id,
       }),
     ).toThrow(/Stored Skill Workshop event .* cannot be replayed safely/);

@@ -1,32 +1,33 @@
-// Settings page owning the dashboard's gateway connection draft (URL, token,
-// password, default session key) plus the latest handshake snapshot.
+// Settings page owning this browser's Gateway connection draft (URL, credential,
+// default session) and the live handshake summary.
 import "../../styles/connection.css";
 import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
-import { loadGatewaySessionSelection, loadSettings, type UiSettings } from "../../app/settings.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+  loadGatewaySessionSelection,
+  loadSettings,
+  resolveGatewayCredentialsForUrlEdit,
+  type UiSettings,
+} from "../../app/settings.ts";
+import { type CredentialMode, resolveCredentialMode } from "../../components/credential-mode.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import {
+  GatewayPageController,
+  type GatewayPageChange,
+} from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "./system-info.ts";
 import { renderConnection } from "./view.ts";
 
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
-
-export { supportsSystemInfo } from "./system-info.ts";
 
 export class ConnectionPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -34,6 +35,8 @@ export class ConnectionPage extends OpenClawLightDomElement {
 
   @state() private settings: UiSettings = loadSettings();
   @state() private password = "";
+  // Operator's explicit Token/Password choice; null follows the draft and last error.
+  @state() private credentialMode: CredentialMode | null = null;
   @state() private gatewayTokenVisible = false;
   @state() private gatewayPasswordVisible = false;
   @state() private systemInfo: SystemInfoResult | null = null;
@@ -42,11 +45,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
   // Distinguishes an operator-edited session key from the stored selection so
   // Connect only overrides the per-gateway selection after an explicit edit.
   private sessionKeyDirty = false;
-  private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
-  private systemInfoGatewaySource: ApplicationContext["gateway"] | null = null;
-  private systemInfoClient: GatewayBrowserClient | null = null;
   private systemInfoLoading = false;
-  private systemInfoRequestId = 0;
 
   private readonly systemInfoPolling = new PollController(
     this,
@@ -57,34 +56,16 @@ export class ConnectionPage extends OpenClawLightDomElement {
     false,
   );
 
-  private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        this.resetDraft(gateway);
-        this.synchronizeSystemInfoGateway(gateway);
-        return gateway.subscribe((snapshot) => {
-          if (snapshot.client !== this.gatewayClient) {
-            this.resetDraft(gateway);
-          } else if (snapshot.phase !== "connected") {
-            this.resetSensitiveUi();
-          }
-          this.handleSystemInfoGatewaySnapshot(snapshot);
-          this.requestUpdate();
-        });
-      },
-    )
-    .watch(
-      () => this.context?.channels,
-      (channels, notify) => channels.subscribe(notify),
-    );
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => {
+      this.systemInfoLoading = false;
+    },
+    onSnapshot: (change) => this.handleGatewaySnapshot(change),
+  });
 
   override disconnectedCallback() {
     this.systemInfoPolling.stop();
-    this.invalidateSystemInfoRequest();
-    this.systemInfoGatewaySource = null;
-    this.systemInfoClient = null;
-    this.subscriptions.clear();
     this.resetSensitiveUi();
     super.disconnectedCallback();
   }
@@ -94,34 +75,28 @@ export class ConnectionPage extends OpenClawLightDomElement {
     this.gatewayPasswordVisible = false;
   }
 
-  private synchronizeSystemInfoGateway(gateway: ApplicationContext["gateway"]) {
-    if (gateway !== this.systemInfoGatewaySource) {
-      this.systemInfoPolling.stop();
-      this.invalidateSystemInfoRequest();
-      this.systemInfoGatewaySource = gateway;
-      this.systemInfoClient = null;
-      this.systemInfo = null;
-      this.systemInfoUnavailable = false;
-    }
-    this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
-  }
-
-  private handleSystemInfoGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const clientChanged = snapshot.client !== this.systemInfoClient;
-    const hasSystemInfo = supportsSystemInfo(snapshot.hello);
-    this.systemInfoClient = snapshot.client;
-    if (clientChanged) {
-      this.invalidateSystemInfoRequest();
+  private handleGatewaySnapshot({
+    snapshot,
+    initial,
+    sourceChanged,
+    clientChanged,
+  }: GatewayPageChange) {
+    if (initial || sourceChanged || clientChanged) {
+      this.resetDraft(this.context.gateway);
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
     } else if (snapshot.phase !== "connected") {
-      this.invalidateSystemInfoRequest();
+      this.resetSensitiveUi();
       this.systemInfo = null;
     }
+    if (initial || sourceChanged) {
+      this.systemInfoPolling.stop();
+    }
     if (snapshot.phase === "connected" && snapshot.hello) {
-      this.systemInfoUnavailable = !hasSystemInfo;
-      if (!hasSystemInfo) {
-        this.invalidateSystemInfoRequest();
+      this.systemInfoUnavailable = !supportsSystemInfo(snapshot.hello);
+      if (this.systemInfoUnavailable) {
+        this.gateway.invalidate();
+        this.systemInfoLoading = false;
         this.systemInfo = null;
       }
     }
@@ -145,53 +120,27 @@ export class ConnectionPage extends OpenClawLightDomElement {
     }
   }
 
-  private invalidateSystemInfoRequest() {
-    this.systemInfoRequestId += 1;
-    this.systemInfoLoading = false;
-  }
-
-  private isCurrentSystemInfoRequest(
-    requestId: number,
-    client: GatewayBrowserClient,
-    gatewaySource: ApplicationContext["gateway"],
-  ): boolean {
-    const gateway = gatewaySource.snapshot;
-    return (
-      this.isConnected &&
-      requestId === this.systemInfoRequestId &&
-      this.systemInfoGatewaySource === gatewaySource &&
-      this.context.gateway === gatewaySource &&
-      gateway.phase === "connected" &&
-      gateway.client === client
-    );
-  }
-
   private async loadSystemInfo() {
-    const gatewaySource = this.systemInfoGatewaySource;
+    const gatewaySource = this.gateway.gateway;
     if (!gatewaySource || gatewaySource !== this.context.gateway) {
       return;
     }
-    const gateway = gatewaySource.snapshot;
-    const client = gateway.client;
-    if (
-      gateway.phase !== "connected" ||
-      !client ||
-      this.systemInfoUnavailable ||
-      this.systemInfoLoading
-    ) {
+    const scope = this.gateway.capture();
+    if (!scope || this.systemInfoUnavailable || this.systemInfoLoading) {
       return;
     }
-
-    const requestId = ++this.systemInfoRequestId;
+    // Context can change before Lit rebinds the controller's source.
+    const isCurrent = () =>
+      this.isConnected && this.context.gateway === gatewaySource && this.gateway.isCurrent(scope);
     this.systemInfoLoading = true;
     try {
-      const response = await client.request("system.info", {});
-      if (!this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
+      const response = await scope.client.request("system.info", {});
+      if (!isCurrent()) {
         return;
       }
       this.systemInfo = response as SystemInfoResult;
     } catch (error) {
-      if (!this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
+      if (!isCurrent()) {
         return;
       }
       if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
@@ -200,7 +149,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
         this.systemInfoPolling.stop();
       }
     } finally {
-      if (this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
+      if (isCurrent()) {
         this.systemInfoLoading = false;
       }
     }
@@ -209,7 +158,6 @@ export class ConnectionPage extends OpenClawLightDomElement {
   private resetDraft(gateway: ApplicationContext["gateway"]) {
     const sessionKey = gateway.snapshot.sessionKey;
     const { gatewayUrl, token, password } = gateway.connection;
-    this.gatewayClient = gateway.snapshot.client;
     this.settings = {
       ...loadSettings(),
       gatewayUrl,
@@ -219,6 +167,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
     };
     this.password = password;
     this.sessionKeyDirty = false;
+    this.credentialMode = null;
     this.resetSensitiveUi();
   }
 
@@ -239,23 +188,53 @@ export class ConnectionPage extends OpenClawLightDomElement {
     });
   }
 
+  private updateConnection(patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) {
+    if (patch.gatewayUrl !== undefined) {
+      const credentials = resolveGatewayCredentialsForUrlEdit(
+        this.settings.gatewayUrl,
+        patch.gatewayUrl,
+        { token: this.settings.token, password: this.password },
+      );
+      this.password = credentials.password;
+      this.settings = { ...this.settings, ...patch, token: credentials.token };
+      return;
+    }
+    this.settings = { ...this.settings, ...patch };
+  }
+
   override render() {
     const gateway = this.context.gateway.snapshot;
+    const live = this.context.gateway.connection;
+    const dirty =
+      this.sessionKeyDirty ||
+      this.settings.gatewayUrl !== live.gatewayUrl ||
+      this.settings.token !== live.token ||
+      this.password !== live.password;
     const body = renderConnection({
       connected: gateway.phase === "connected",
       hello: gateway.hello,
       settings: this.settings,
+      liveGatewayUrl: live.gatewayUrl,
       password: this.password,
       lastError: gateway.lastError,
-      lastChannelsRefresh: this.context.channels.state.channelsLastSuccess,
       systemInfo: this.systemInfo,
       systemInfoUnavailable: this.systemInfoUnavailable,
+      credentialMode: resolveCredentialMode(
+        {
+          token: this.settings.token,
+          password: this.password,
+          lastErrorCode: gateway.lastErrorCode,
+        },
+        this.credentialMode,
+      ),
+      dirty,
       showGatewayToken: this.gatewayTokenVisible,
       showGatewayPassword: this.gatewayPasswordVisible,
-      onConnectionChange: (patch) => {
-        this.settings = { ...this.settings, ...patch };
-      },
+      onConnectionChange: (patch) => this.updateConnection(patch),
       onPasswordChange: (next) => (this.password = next),
+      onCredentialModeChange: (mode) => {
+        this.credentialMode = mode;
+      },
       onSessionKeyChange: (sessionKey) => {
         this.sessionKeyDirty = true;
         this.settings = {
@@ -271,15 +250,13 @@ export class ConnectionPage extends OpenClawLightDomElement {
         this.gatewayPasswordVisible = !this.gatewayPasswordVisible;
       },
       onConnect: () => this.connect(),
-      onRefresh: () => void this.context.channels.refresh(false),
     });
     return html`
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("connection")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("connection")}
-            ${renderDocsLink(CONNECTION_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("connection")} ${renderLearnMoreLink(CONNECTION_DOCS_URL)}
           </div>
         </div>
       </section>

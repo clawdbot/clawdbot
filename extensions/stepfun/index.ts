@@ -1,11 +1,10 @@
-// Stepfun plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
   type OpenClawConfig,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyStepFunPlanConfig,
@@ -93,8 +92,9 @@ async function resolveStepFunCatalog(
   ctx: ProviderCatalogContext,
   params: { providerId: string; surface: StepFunSurface },
 ) {
-  const auth = ctx.resolveProviderAuth(params.providerId);
-  const apiKey = auth.apiKey ?? ctx.resolveProviderApiKey(params.providerId).apiKey;
+  const profileAuth = ctx.resolveProviderAuth(params.providerId);
+  const auth = profileAuth.apiKey ? profileAuth : ctx.resolveProviderApiKey(params.providerId);
+  const apiKey = auth.apiKey;
   if (!apiKey) {
     return null;
   }
@@ -110,14 +110,14 @@ async function resolveStepFunCatalog(
   const baseUrl = explicitBaseUrl ?? resolveDefaultBaseUrl(params.surface, region ?? "intl");
   const providerConfig =
     params.surface === "plan" ? buildStepFunPlanProvider(baseUrl) : buildStepFunProvider(baseUrl);
-  return {
-    provider: await buildOpenAICompatibleLiveModelProviderConfig({
-      providerId: params.providerId,
-      providerConfig,
-      apiKey,
-      discoveryApiKey: auth.discoveryApiKey,
-    }),
-  };
+  return await buildOpenAICompatibleLiveProviderCatalog({
+    discoveryMode: "strict",
+    providerId: params.providerId,
+    providerConfig,
+    apiKey,
+    discoveryApiKey: auth.discoveryApiKey,
+    profileId: auth.profileId,
+  });
 }
 
 function resolveProfileIds(region: StepFunRegion): [string, string] {
@@ -151,6 +151,7 @@ function createStepFunApiKeyMethod(params: {
     profileIds: resolveProfileIds(params.region),
     allowProfile: false,
     defaultModel: params.defaultModel,
+    preserveExistingPrimary: true,
     expectedProviders: [STEPFUN_PROVIDER_ID, STEPFUN_PLAN_PROVIDER_ID],
     applyConfig: params.applyConfig,
     wizard: {

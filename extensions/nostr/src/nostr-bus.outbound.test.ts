@@ -1,57 +1,21 @@
-// Nostr tests cover outbound relay failover behavior.
+// Nostr outbound tests exercise signed EVENT/OK frames through the real pool.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { getPublicKey } from "nostr-tools";
+import { decrypt } from "nostr-tools/nip04";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
-import { startNostrBus } from "./nostr-bus.js";
+import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
+import { createNostrRelayFixture, PREFIX_ACK_REASON } from "./nostr-relay.test-harness.js";
 import { setNostrRuntime } from "./runtime.js";
+import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
 
-const BAD_RELAY = "wss://bad-relay.example";
-const GOOD_RELAY = "wss://good-relay.example";
-const RECIPIENT_PUBKEY = "b".repeat(64);
-
-const mocks = vi.hoisted(() => ({
-  poolPublish: vi.fn(),
-  close: vi.fn(),
-}));
-
-vi.mock("nostr-tools", () => {
-  class MockSimplePool {
-    subscribeMany() {
-      return { close: vi.fn() };
-    }
-
-    publish(relays: string[]) {
-      return mocks.poolPublish(relays);
-    }
-
-    close(relays: string[]) {
-      mocks.close(relays);
-    }
-  }
-
-  return {
-    SimplePool: MockSimplePool,
-    finalizeEvent: vi.fn((event: unknown) => event),
-    getPublicKey: vi.fn(() => "a".repeat(64)),
-    verifyEvent: vi.fn(() => true),
-    nip19: {
-      decode: vi.fn(),
-      npubEncode: vi.fn(),
-    },
-  };
-});
-
-vi.mock("nostr-tools/nip04", () => ({
-  decrypt: vi.fn(),
-  encrypt: vi.fn(() => "ciphertext"),
-}));
-
+// Keep existing state persistence isolation; transport, signatures and NIP-04 are real.
 vi.mock("./nostr-state-store.js", () => ({
   readNostrBusState: vi.fn(async () => null),
   writeNostrBusState: vi.fn(async () => {}),
@@ -60,73 +24,125 @@ vi.mock("./nostr-state-store.js", () => ({
   writeNostrProfileState: vi.fn(async () => {}),
 }));
 
-vi.mock("./nostr-profile.js", () => ({
-  publishProfile: vi.fn(),
-}));
-
+const RECIPIENT_KEY = new Uint8Array(32).fill(2);
+const RECIPIENT_PUBKEY = getPublicKey(RECIPIENT_KEY);
 let stateDir = "";
+let buses: NostrBusHandle[] = [];
+let relays: Array<Awaited<ReturnType<typeof createNostrRelayFixture>>> = [];
+
+async function relay(options: Parameters<typeof createNostrRelayFixture>[0] = {}) {
+  const result = await createNostrRelayFixture(options);
+  relays.push(result);
+  return result;
+}
+
+async function startBus(urls: string[], onError?: Parameters<typeof startNostrBus>[0]["onError"]) {
+  const bus = await startNostrBus({
+    privateKey: TEST_HEX_PRIVATE_KEY,
+    relays: urls,
+    onMessage: async () => {},
+    onError,
+  });
+  buses.push(bus);
+  return bus;
+}
 
 describe("Nostr outbound relay failover", () => {
   beforeEach(async () => {
     const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nostr-outbound-"));
     stateDir = await fs.realpath(created);
+    buses = [];
+    relays = [];
     const ingressQueue = createChannelIngressQueueForTests<Record<string, unknown>>({
       channelId: "nostr",
       accountId: "default",
       stateDir,
     });
     setNostrRuntime({
-      state: {
-        openChannelIngressQueue: () => ingressQueue,
-      },
+      state: { openChannelIngressQueue: () => ingressQueue },
     } as unknown as PluginRuntime);
-    mocks.poolPublish
-      .mockReset()
-      .mockImplementation((relays: string[]) => [
-        Promise.resolve(
-          relays[0] === BAD_RELAY ? "connection failure: connection failed" : "saved",
-        ),
-      ]);
-    mocks.close.mockReset();
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
+    const busResults = await Promise.allSettled(buses.map((bus) => bus.close()));
+    const relayResults = await Promise.allSettled(relays.map((entry) => entry.close()));
+    try {
+      const failures = [...busResults, ...relayResults].flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Nostr outbound cleanup failed");
+      }
+      for (const entry of relays) {
+        expect(entry.endpoints()).toEqual({ listening: false, connections: 0, clients: 0 });
+        expect(entry.errors).toEqual([]);
+      }
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
-  it("tries the next relay when the first relay cannot connect", async () => {
-    const bus = await startNostrBus({
-      privateKey: "1".repeat(64),
-      relays: [BAD_RELAY, GOOD_RELAY],
-      onMessage: vi.fn(async () => {}),
-      onMetric: () => {},
-    });
+  it("accepts a real positive OK even when its reason starts with connection failure", async () => {
+    const first = await relay({ reason: PREFIX_ACK_REASON });
+    const second = await relay();
+    const bus = await startBus([first.url, second.url]);
 
-    await bus.sendDm(RECIPIENT_PUBKEY, "hello");
+    const id = await bus.sendDm(RECIPIENT_PUBKEY, "hello");
 
-    expect(mocks.poolPublish.mock.calls.map(([relays]) => relays)).toEqual([
-      [BAD_RELAY],
-      [GOOD_RELAY],
-    ]);
-    await bus.close();
+    expect(first.events).toHaveLength(1);
+    expect(first.acknowledgements).toEqual([["OK", id, true, PREFIX_ACK_REASON]]);
+    expect(second.events).toEqual([]);
+    expect(first.events[0]).toMatchObject({ id, kind: 4, tags: [["p", RECIPIENT_PUBKEY]] });
+    expect(decrypt(RECIPIENT_KEY, bus.publicKey, first.events[0]!.content)).toBe("hello");
   });
 
-  it("preserves string connection failures when every relay fails", async () => {
-    const onError = vi.fn();
-    const bus = await startNostrBus({
-      privateKey: "1".repeat(64),
-      relays: [BAD_RELAY],
-      onMessage: vi.fn(async () => {}),
-      onError,
-      onMetric: () => {},
+  it.each([
+    { failure: "negative OK", rejectUpgrade: false },
+    { failure: "HTTP upgrade refusal", rejectUpgrade: true },
+  ])("tries the next relay after a real $failure", async ({ rejectUpgrade }) => {
+    const order: string[] = [];
+    const first = await relay({ accepted: false, reason: PREFIX_ACK_REASON, rejectUpgrade });
+    const second = await relay({ onEvent: () => order.push("second-event") });
+    const errors: Error[] = [];
+    const bus = await startBus([first.url, second.url], (error, context) => {
+      if (context === `publish to ${first.url}`) {
+        errors.push(error);
+        order.push("first-publish-error");
+      }
     });
+
+    const id = await bus.sendDm(RECIPIENT_PUBKEY, "hello");
+
+    expect(order).toEqual(["first-publish-error", "second-event"]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).toContain("connection failure:");
+    expect(first.upgradeAttempts()).toBeGreaterThan(0);
+    expect(second.events).toHaveLength(1);
+    expect(second.events[0]?.id).toBe(id);
+    expect(second.acknowledgements).toEqual([["OK", id, true, "saved"]]);
+    expect(decrypt(RECIPIENT_KEY, bus.publicKey, second.events[0]!.content)).toBe("hello");
+    if (rejectUpgrade) {
+      expect(first.events).toEqual([]);
+    } else {
+      expect(first.events).toEqual(second.events);
+      expect(first.acknowledgements).toEqual([["OK", id, false, PREFIX_ACK_REASON]]);
+    }
+  });
+
+  it("preserves real failures when every relay rejects", async () => {
+    const first = await relay({ rejectUpgrade: true });
+    const second = await relay({ accepted: false, reason: PREFIX_ACK_REASON });
+    const bus = await startBus([first.url, second.url]);
 
     await expect(bus.sendDm(RECIPIENT_PUBKEY, "hello")).rejects.toThrow(
-      "Failed to publish to any relay: connection failed",
+      `Failed to publish to any relay: ${PREFIX_ACK_REASON}`,
     );
-    expect(onError).toHaveBeenCalledWith(expect.any(Error), `publish to ${BAD_RELAY}`);
 
-    await bus.close();
+    expect(first.events).toEqual([]);
+    expect(second.events).toHaveLength(1);
+    expect(second.acknowledgements).toEqual([
+      ["OK", second.events[0]!.id, false, PREFIX_ACK_REASON],
+    ]);
   });
 });

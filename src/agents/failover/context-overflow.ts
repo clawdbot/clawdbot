@@ -1,9 +1,14 @@
 import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { isBillingErrorMessage, isRateLimitErrorMessage } from "./message-patterns.js";
+import {
+  isBillingErrorMessage,
+  isProviderRequestSizeCeilingError,
+  isRateLimitErrorMessage,
+} from "./message-patterns.js";
 import {
   classifyProviderPluginError,
   looksLikeProviderContextOverflowCandidate,
+  type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
@@ -28,8 +33,9 @@ export function isContextOverflowErrorFromTables(errorMessage?: string): boolean
   if (!errorMessage) {
     return false;
   }
-  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (hasRateLimitTpmHint(errorMessage)) {
+  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context
+  // overflow — unless the request alone exceeds the whole limit, which no wait can satisfy.
+  if (hasRateLimitTpmHint(errorMessage) && !isProviderRequestSizeCeilingError(errorMessage)) {
     return false;
   }
 
@@ -44,20 +50,30 @@ export function isContextOverflowErrorFromTables(errorMessage?: string): boolean
   );
 }
 
-export function isContextOverflowError(errorMessage?: string): boolean {
+export function isContextOverflowError(
+  errorMessage?: string,
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
+): boolean {
   if (!errorMessage) {
     return false;
   }
   return (
     isContextOverflowErrorFromTables(errorMessage) ||
     (looksLikeProviderContextOverflowCandidate(errorMessage) &&
-      classifyProviderPluginError({ errorMessage }) === "context_overflow")
+      classifyProviderPluginError({ errorMessage, providerPlugin: opts?.providerPlugin }) ===
+        "context_overflow")
   );
 }
 
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
+  }
+
+  // Settle an unsatisfiable request size first: the TPM and rate-limit exclusions below would
+  // otherwise claim the message on its rate-limit wording alone.
+  if (isProviderRequestSizeCeilingError(errorMessage)) {
+    return isContextOverflowErrorFromTables(errorMessage);
   }
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.

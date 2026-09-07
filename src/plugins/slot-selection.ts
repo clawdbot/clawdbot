@@ -1,8 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isBundledManifestOwner } from "./manifest-owner-policy.js";
 import type { PluginKind } from "./plugin-kind.types.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import { applyExclusiveSlotSelection } from "./slots.js";
-import { buildPluginDiagnosticsReport } from "./status.js";
 
 type SlotSelectionPlugin = {
   id: string;
@@ -33,41 +36,36 @@ function mergeRuntimeKinds(
   };
 }
 
-function loadRuntimeKindReportForPlugins(config: OpenClawConfig, pluginIds: readonly string[]) {
-  return buildPluginDiagnosticsReport({
-    config,
-    onlyPluginIds: [...pluginIds],
-  });
-}
-
-function buildSlotSelectionRegistry(
+export async function applySlotSelectionForPlugin(
   config: OpenClawConfig,
   pluginId: string,
-): SlotSelectionRegistry {
-  const plugins = loadPluginMetadataSnapshot({
-    config,
-    env: process.env,
-  }).plugins.filter((plugin) => plugin.id === pluginId);
-  return {
-    plugins: plugins.map((plugin) => ({
-      id: plugin.id,
-      kind: plugin.kind,
-    })),
-  };
-}
-
-export function applySlotSelectionForPlugin(
-  config: OpenClawConfig,
-  pluginId: string,
-): { config: OpenClawConfig; warnings: string[] } {
-  // Static metadata is preferred; runtime diagnostics fill in kind for older manifests.
-  const report = buildSlotSelectionRegistry(config, pluginId);
-  const plugin = report.plugins.find((entry) => entry.id === pluginId);
+  preparedMetadata?: PluginMetadataSnapshot,
+  beforeRuntimeInspection?: () => void,
+): Promise<{ config: OpenClawConfig; warnings: string[] }> {
+  // Selection inspects the install candidate, never the running Gateway's inventory.
+  const metadataSnapshot =
+    preparedMetadata ??
+    loadPluginMetadataSnapshot({
+      allowCurrent: false,
+      config,
+      env: process.env,
+    });
+  const plugin = metadataSnapshot.plugins.find((entry) => entry.id === pluginId);
   if (!plugin) {
     return { config, warnings: [] };
   }
-  if (!plugin.kind) {
-    const runtimeReport = loadRuntimeKindReportForPlugins(config, [plugin.id]);
+  const report: SlotSelectionRegistry = { plugins: [plugin] };
+  if (!plugin.kind && !isBundledManifestOwner(plugin)) {
+    // Bundled manifests own slot declarations. Only legacy external plugins need
+    // runtime kind inspection; enabling a bundled non-slot plugin must not execute its module.
+    const { buildPluginDiagnosticsReport } = await import("./status.js");
+    // Importing diagnostics yields; recheck the install owner before plugin code executes.
+    beforeRuntimeInspection?.();
+    const runtimeReport = buildPluginDiagnosticsReport({
+      config,
+      onlyPluginIds: [plugin.id],
+      metadataSnapshot,
+    });
     const runtimePlugin = runtimeReport.plugins.find((entry) => entry.id === plugin.id);
     if (runtimePlugin?.kind) {
       const result = applyExclusiveSlotSelection({

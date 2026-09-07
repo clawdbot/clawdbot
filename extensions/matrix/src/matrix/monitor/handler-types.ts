@@ -44,7 +44,6 @@ export type MatrixMonitorHandlerParams = {
   blockStreamingEnabled: boolean;
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  textLimit: number;
   mediaMaxBytes: number;
   historyLimit: number;
   startupMs: number;

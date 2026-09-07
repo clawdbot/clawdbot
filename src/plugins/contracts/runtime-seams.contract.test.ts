@@ -129,7 +129,6 @@ describe("shared runtime seam contracts", () => {
         artifactBasename: "runtime-api.js",
         location,
         sourceExtensionsRoot: bundledDir,
-        resolutionKey: `test:${pluginId}`,
       }).allowed,
     ).toBe(true);
     expect(

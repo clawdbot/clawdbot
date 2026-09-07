@@ -140,52 +140,60 @@ describe("nextcloud-talk send cfg threading", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("uses provided cfg for sendMessage and skips runtime loadConfig", async () => {
-    const cfg = { source: "provided" } as const;
-    mockNextcloudMessageResponse(12345, 1_706_000_000);
+  it.each([true, false])(
+    "preserves cfg and receipts with runtime initialized=%s",
+    async (initialized) => {
+      const cfg = { source: "provided" } as const;
+      if (!initialized) {
+        hoisted.record.mockImplementation(() => {
+          throw new Error("Nextcloud Talk runtime not initialized");
+        });
+      }
+      mockNextcloudMessageResponse(12345, 1_706_000_000);
 
-    const result = await sendMessageNextcloudTalk("room:abc123", "hello", {
-      cfg,
-      accountId: "work",
-    });
+      const result = await sendMessageNextcloudTalk("room:abc123", "hello", {
+        cfg,
+        accountId: "work",
+      });
 
-    expectProvidedMessageCfgThreading(cfg);
-    expect(hoisted.record).toHaveBeenCalledWith({
-      channel: "nextcloud-talk",
-      accountId: "default",
-      direction: "outbound",
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
-      messageId: "12345",
-      receipt: {
-        platformMessageIds: ["12345"],
-        primaryPlatformMessageId: "12345",
-        parts: [
-          {
-            index: 0,
-            kind: "text",
-            platformMessageId: "12345",
-            raw: {
+      expectProvidedMessageCfgThreading(cfg);
+      expect(hoisted.record).toHaveBeenCalledWith({
+        channel: "nextcloud-talk",
+        accountId: "default",
+        direction: "outbound",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        messageId: "12345",
+        receipt: {
+          platformMessageIds: ["12345"],
+          primaryPlatformMessageId: "12345",
+          parts: [
+            {
+              index: 0,
+              kind: "text",
+              platformMessageId: "12345",
+              raw: {
+                channel: "nextcloud-talk",
+                conversationId: "abc123",
+                messageId: "12345",
+              },
+            },
+          ],
+          raw: [
+            {
               channel: "nextcloud-talk",
               conversationId: "abc123",
               messageId: "12345",
             },
-          },
-        ],
-        raw: [
-          {
-            channel: "nextcloud-talk",
-            conversationId: "abc123",
-            messageId: "12345",
-          },
-        ],
-        sentAt: fixedSentAt,
-      },
-      roomToken: "abc123",
-      timestamp: 1_706_000_000,
-    });
-  });
+          ],
+          sentAt: fixedSentAt,
+        },
+        roomToken: "abc123",
+        timestamp: 1_706_000_000,
+      });
+    },
+  );
 
   it("strips mixed-case provider and room prefixes before sending", async () => {
     const cfg = { source: "provided" } as const;
@@ -227,50 +235,6 @@ describe("nextcloud-talk send cfg threading", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
       JSON.stringify({ message: text, replyTo: "parent-1" }),
     );
-  });
-
-  it("sends with provided cfg even when the runtime store is not initialized", async () => {
-    const cfg = { source: "provided" } as const;
-    hoisted.record.mockImplementation(() => {
-      throw new Error("Nextcloud Talk runtime not initialized");
-    });
-    mockNextcloudMessageResponse(12346, 1_706_000_001);
-
-    const result = await sendMessageNextcloudTalk("room:abc123", "hello", {
-      cfg,
-      accountId: "work",
-    });
-
-    expectProvidedMessageCfgThreading(cfg);
-    expect(result).toEqual({
-      messageId: "12346",
-      receipt: {
-        platformMessageIds: ["12346"],
-        primaryPlatformMessageId: "12346",
-        parts: [
-          {
-            index: 0,
-            kind: "text",
-            platformMessageId: "12346",
-            raw: {
-              channel: "nextcloud-talk",
-              conversationId: "abc123",
-              messageId: "12346",
-            },
-          },
-        ],
-        raw: [
-          {
-            channel: "nextcloud-talk",
-            conversationId: "abc123",
-            messageId: "12346",
-          },
-        ],
-        sentAt: fixedSentAt,
-      },
-      roomToken: "abc123",
-      timestamp: 1_706_000_001,
-    });
   });
 
   it("preserves reply ids in receipts", async () => {
@@ -531,7 +495,7 @@ describe("nextcloud-talk send bounded response reads", () => {
     expect(result.timestamp).toBeUndefined();
   });
 
-  it("bounds an oversized error body into a short send-failure snippet", async () => {
+  it("omits an oversized error body from the send failure", async () => {
     fetchMock.mockResolvedValueOnce(
       streamingResponse({
         status: 400,
@@ -543,10 +507,10 @@ describe("nextcloud-talk send bounded response reads", () => {
 
     await expect(
       sendMessageNextcloudTalk("room:abc", "hello", { cfg: { source: "provided" } }),
-    ).rejects.toThrow(/Nextcloud Talk: bad request/);
+    ).rejects.toThrow(new Error("Nextcloud Talk: bad request - invalid message format"));
   });
 
-  it("bounds an oversized reaction error body into a short snippet", async () => {
+  it("omits an oversized error body from the reaction failure", async () => {
     fetchMock.mockResolvedValueOnce(
       streamingResponse({
         status: 500,
@@ -556,31 +520,8 @@ describe("nextcloud-talk send bounded response reads", () => {
       }),
     );
 
-    let caught: unknown;
-    try {
-      await sendReactionNextcloudTalk("room:abc", "m-1", "👍", { cfg: { source: "provided" } });
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(Error);
-    // The collapsed snippet caps the message far below the streamed 17 MiB body.
-    expect((caught as Error).message.length).toBeLessThan(4_000);
-  });
-
-  it("still parses a normal small success body", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ ocs: { data: { id: 99, timestamp: 1_700_000_000 } } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-
-    const result = await sendMessageNextcloudTalk("room:abc", "hello", {
-      cfg: { source: "provided" },
-    });
-
-    expect(result.messageId).toBe("99");
-    expect(result.timestamp).toBe(1_700_000_000);
+    await expect(
+      sendReactionNextcloudTalk("room:abc", "m-1", "👍", { cfg: { source: "provided" } }),
+    ).rejects.toThrow(new Error("Nextcloud Talk reaction failed: 500"));
   });
 });

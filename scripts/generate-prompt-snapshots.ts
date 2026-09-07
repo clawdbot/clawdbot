@@ -1,12 +1,19 @@
 // Generate Prompt Snapshots script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { applyPatch, createTwoFilesPatch, FILE_HEADERS_ONLY, parsePatch } from "diff";
 import { createHappyPathPromptSnapshotFiles } from "../test/helpers/agents/happy-path-prompt-snapshots.js";
-import { CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR } from "../test/helpers/agents/prompt-snapshot-paths.js";
+import {
+  CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
+  CODEX_PROMPT_SNAPSHOT_FILES,
+  CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+  type CodexPromptSnapshotScenario,
+} from "../test/helpers/agents/prompt-snapshot-paths.js";
 import { coerceErrorMessage as describeError } from "./lib/error-format.mts";
 import {
   deleteStalePromptSnapshotFiles,
@@ -31,6 +38,116 @@ type CodexDynamicToolSnapshotOverrides = {
 
 const CODEX_DYNAMIC_TOOL_SNAPSHOT_PREFIX = "codex-dynamic-tools.";
 const CODEX_DYNAMIC_TOOL_BASE_SNAPSHOT = `${CODEX_DYNAMIC_TOOL_SNAPSHOT_PREFIX}telegram-direct.json`;
+const SHA256_HEADER_PATTERN = /^sha256=([a-f0-9]{64})$/u;
+
+function promptSnapshotEntries(): Array<[CodexPromptSnapshotScenario, string]> {
+  return Object.entries(CODEX_PROMPT_SNAPSHOT_FILES) as Array<
+    [CodexPromptSnapshotScenario, string]
+  >;
+}
+
+function resolvePromptSnapshotFileName(scenario: string): string {
+  if (!Object.hasOwn(CODEX_PROMPT_SNAPSHOT_FILES, scenario)) {
+    throw new Error(`Unknown Codex prompt snapshot scenario: ${scenario}`);
+  }
+  return CODEX_PROMPT_SNAPSHOT_FILES[scenario as CodexPromptSnapshotScenario];
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function readSha256Header(header: string | undefined, label: string): string {
+  const hash = SHA256_HEADER_PATTERN.exec(header ?? "")?.[1];
+  if (!hash) {
+    throw new Error(`Invalid Codex prompt snapshot ${label} hash header`);
+  }
+  return hash;
+}
+
+function createCodexPromptSnapshotDelta(scenario: string, base: string, target: string): string {
+  const targetFileName = resolvePromptSnapshotFileName(scenario);
+  const baseFileName = CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO];
+  if (targetFileName === baseFileName) {
+    throw new Error("The canonical Codex prompt snapshot does not use a delta");
+  }
+  return createTwoFilesPatch(
+    baseFileName,
+    targetFileName,
+    base,
+    target,
+    `sha256=${sha256(base)}`,
+    `sha256=${sha256(target)}`,
+    { context: 0, headerOptions: FILE_HEADERS_ONLY },
+  );
+}
+
+/** Strictly materialize one SHA-bound, zero-context prompt snapshot delta. */
+export function materializeCodexPromptSnapshotDelta(params: {
+  scenario: string;
+  base: string;
+  delta: string;
+}): string {
+  const targetFileName = resolvePromptSnapshotFileName(params.scenario);
+  const baseFileName = CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO];
+  let patches;
+  try {
+    patches = parsePatch(params.delta);
+  } catch (error) {
+    throw new Error("Invalid Codex prompt snapshot delta", { cause: error });
+  }
+  const patch = patches[0];
+  if (patches.length !== 1 || !patch) {
+    throw new Error("Codex prompt snapshot delta must contain exactly one patch");
+  }
+  if (patch.oldFileName !== baseFileName || patch.newFileName !== targetFileName) {
+    throw new Error("Codex prompt snapshot delta file names do not match the scenario");
+  }
+  const sourceHash = readSha256Header(patch.oldHeader, "source");
+  const targetHash = readSha256Header(patch.newHeader, "target");
+  if (sha256(params.base) !== sourceHash) {
+    throw new Error("Codex prompt snapshot delta source hash does not match the canonical base");
+  }
+  const materialized = applyPatch(params.base, patch, {
+    fuzzFactor: 0,
+    autoConvertLineEndings: false,
+  });
+  if (materialized === false || sha256(materialized) !== targetHash) {
+    throw new Error("Codex prompt snapshot delta did not materialize its target hash");
+  }
+  if (createCodexPromptSnapshotDelta(params.scenario, params.base, materialized) !== params.delta) {
+    throw new Error("Codex prompt snapshot delta is not canonical zero-context output");
+  }
+  return materialized;
+}
+
+function factorCodexPromptSnapshotFiles(files: PromptSnapshotFile[]): PromptSnapshotFile[] {
+  const byFileName = new Map(files.map((file) => [path.basename(file.path), file]));
+  const baseFileName = CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO];
+  const base = byFileName.get(baseFileName);
+  if (!base) {
+    throw new Error(`Missing canonical Codex prompt snapshot: ${baseFileName}`);
+  }
+  return files.map((file) => {
+    const scenario = promptSnapshotEntries().find(
+      ([, fileName]) => fileName === path.basename(file.path),
+    );
+    if (!scenario || scenario[0] === CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO) {
+      return file;
+    }
+    const delta = createCodexPromptSnapshotDelta(scenario[0], base.content, file.content);
+    if (
+      materializeCodexPromptSnapshotDelta({
+        scenario: scenario[0],
+        base: base.content,
+        delta,
+      }) !== file.content
+    ) {
+      throw new Error(`Codex prompt snapshot delta roundtrip failed: ${scenario[0]}`);
+    }
+    return { path: `${file.path}.diff`, content: delta };
+  });
+}
 
 async function writeSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
   await Promise.all(
@@ -118,7 +235,26 @@ async function formatPromptSnapshotFiles(
 
 async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
   const files = await createHappyPathPromptSnapshotFiles();
-  return await formatPromptSnapshotFiles(factorCodexDynamicToolSnapshotFiles(files));
+  const formatted = await formatPromptSnapshotFiles(factorCodexDynamicToolSnapshotFiles(files));
+  return factorCodexPromptSnapshotFiles(formatted);
+}
+
+/** Materialize one complete, formatted Codex prompt snapshot for human review. */
+export async function materializeCodexPromptSnapshot(scenario: string): Promise<string> {
+  const targetFileName = resolvePromptSnapshotFileName(scenario);
+  const baseFileName = CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO];
+  const base = await fs.readFile(
+    path.resolve(repoRoot, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, baseFileName),
+    "utf8",
+  );
+  if (targetFileName === baseFileName) {
+    return base;
+  }
+  const delta = await fs.readFile(
+    path.resolve(repoRoot, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${targetFileName}.diff`),
+    "utf8",
+  );
+  return materializeCodexPromptSnapshotDelta({ scenario, base, delta });
 }
 
 /** Materialize one complete, formatted Codex dynamic-tool catalog for human review. */
@@ -211,6 +347,18 @@ async function checkSnapshots() {
 }
 
 async function runPromptSnapshotGenerator(argv = process.argv.slice(2)) {
+  if (argv[0] === "--materialize-prompt") {
+    const scenario = argv[1];
+    if (!scenario || argv.length !== 2) {
+      console.error(
+        "Usage: node --import tsx scripts/generate-prompt-snapshots.ts --materialize-prompt <scenario>",
+      );
+      process.exitCode = 2;
+      return;
+    }
+    process.stdout.write(await materializeCodexPromptSnapshot(scenario));
+    return;
+  }
   if (argv[0] === "--materialize") {
     const scenario = argv[1];
     if (!scenario || argv.length !== 2) {

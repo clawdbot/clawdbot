@@ -59,7 +59,10 @@ export const CLAUDE_SELECTED_AUTH_ENV_KEYS = new Set([
   "ANTHROPIC_API_KEY",
   "CLAUDE_CODE_OAUTH_TOKEN",
 ]);
-export const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set(["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]);
+export const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set([
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+]);
 export function resolveNodeClaudeAuthEnv(context: PreparedCliRunContext): Record<string, string> {
   const secretInput = context.preparedBackend.secretInput;
   if (!secretInput) {

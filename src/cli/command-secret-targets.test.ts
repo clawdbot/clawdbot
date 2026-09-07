@@ -263,7 +263,7 @@ describe("command secret target ids", () => {
   });
 
   it("includes memorySearch remote targets for agent runtime commands", () => {
-    const ids = getAgentRuntimeCommandSecretTargetIds();
+    const ids = getAgentRuntimeCommandSecretTargetIds({ config: {} });
     expect(ids.has("memory.search.remote.apiKey")).toBe(true);
     expect(ids.has("agents.entries.*.memory.search.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
@@ -272,9 +272,7 @@ describe("command secret target ids", () => {
   });
 
   it("includes gateway auth targets for status command scans", () => {
-    const ids = getStatusCommandSecretTargetIds(undefined, undefined, {
-      includeChannelTargets: false,
-    });
+    const ids = getStatusCommandSecretTargetIds({});
 
     expect(ids.has("gateway.auth.token")).toBe(true);
     expect(ids.has("gateway.auth.password")).toBe(true);
@@ -937,7 +935,7 @@ describe("command secret target ids", () => {
   });
 
   it("includes channel targets for agent runtime when delivery needs them", () => {
-    const ids = getAgentRuntimeCommandSecretTargetIds({ includeChannelTargets: true });
+    const ids = getAgentRuntimeCommandSecretTargetIds({ config: {}, includeChannelTargets: true });
     expect(ids.has("channels.discord.token")).toBe(true);
     expect(ids.has("channels.telegram.botToken")).toBe(true);
   });

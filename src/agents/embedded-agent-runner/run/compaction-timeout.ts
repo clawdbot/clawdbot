@@ -51,15 +51,17 @@ type SnapshotSelection = {
 };
 
 export function canContinueFromMessage(message: AgentMessage | undefined): boolean {
-  switch (message?.role) {
+  if (!message || ("excludeFromContext" in message && message.excludeFromContext === true)) {
+    return false;
+  }
+  switch (message.role) {
     case "user":
     case "toolResult":
     case "branchSummary":
     case "compactionSummary":
     case "custom":
-      return true;
     case "bashExecution":
-      return message.excludeFromContext !== true;
+      return true;
     default:
       return false;
   }

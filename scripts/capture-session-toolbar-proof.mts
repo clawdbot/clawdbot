@@ -1,28 +1,18 @@
 #!/usr/bin/env node
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Page } from "playwright";
+import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
-
+import { readControlUiProofOption } from "./lib/control-ui-proof-args.mts";
 type CaptureMode = "after" | "before";
 
-function readOption(name: string): string | undefined {
-  const prefix = `--${name}=`;
-  const inline = process.argv.slice(2).find((arg) => arg.startsWith(prefix));
-  if (inline) {
-    return inline.slice(prefix.length);
-  }
-  const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 ? process.argv[index + 1] : undefined;
-}
-
 function readMode(): CaptureMode {
-  const value = readOption("mode") ?? "after";
+  const value = readControlUiProofOption(process.argv, "mode") ?? "after";
   if (value !== "after" && value !== "before") {
     throw new Error(`Expected --mode after|before, received ${value}`);
   }
@@ -112,15 +102,16 @@ const ungroupedSessions = [
 ];
 
 const mode = readMode();
-const outputDir = path.resolve(
-  readOption("output-dir") ?? ".artifacts/control-ui-e2e/session-toolbar-proof",
+const outputDir = createControlUiE2eArtifactDir(
+  "session-toolbar-proof",
+  readControlUiProofOption(process.argv, "output-dir") ??
+    ".artifacts/control-ui-e2e/session-toolbar-proof",
 );
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 if (!canRunPlaywrightChromium(executablePath)) {
   throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
 }
 
-await mkdir(outputDir, { recursive: true });
 const server = await startControlUiE2eServer(undefined, { source: true });
 const browser = await chromium.launch({ executablePath });
 const captured: string[] = [];
@@ -206,7 +197,7 @@ try {
       const toolbar = grouped.page.locator(".sidebar-session-toolbar");
       await toolbar.getByText("Sessions", { exact: true }).waitFor();
       const filter = toolbar.getByRole("button", { name: "Filter & sort" });
-      const add = toolbar.getByRole("button", { name: "New session" });
+      const add = toolbar.getByRole("link", { name: "New session" });
       await grouped.page.mouse.move(1_000, 850);
       const toolbarOpacity = await Promise.all([
         filter.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity)),

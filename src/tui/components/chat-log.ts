@@ -265,17 +265,19 @@ export class ChatLog extends Container {
     return component;
   }
 
-  addLiveUser(text: string, options: { messageId: string; runId?: string }) {
+  addLiveUser(text: string, options: { messageId: string; runId?: string; sendId?: string }) {
     const existing = this.userComponents.get(options.messageId);
     if (existing) {
       existing.setText(text);
       return existing;
     }
 
-    const pending = options.runId ? this.pendingUsers.get(options.runId) : undefined;
-    if (pending && options.runId && pending.text === text) {
+    // Persisted execution ownership can differ from the originating send;
+    // only the send identity may adopt its optimistic prompt.
+    const pending = options.sendId ? this.pendingUsers.get(options.sendId) : undefined;
+    if (pending && options.sendId && pending.text === text) {
       pending.component.setText(text);
-      this.pendingUsers.delete(options.runId);
+      this.pendingUsers.delete(options.sendId);
       this.userComponents.set(options.messageId, pending.component);
       return pending.component;
     }

@@ -15,6 +15,38 @@ Each command can install a managed Gateway with `--install-daemon`, require an a
 `--json` does not imply non-interactive mode. Pass `--non-interactive --accept-risk` explicitly for scripts.
 </Note>
 
+## Review required plugins
+
+Non-interactive onboarding cannot accept new external plugin capabilities.
+`--accept-risk` acknowledges onboarding risk only; it does not grant plugin
+consent. Before automating a setup that needs an external provider or runtime,
+review that plugin's source and declared capabilities, then preinstall it with
+explicit consent. For OpenAI setup, install the official Codex runtime:
+
+```bash
+# After reviewing the plugin and its declared capabilities:
+openclaw plugins install codex --accept-capabilities
+```
+
+The `codex` selector lets OpenClaw's official catalog choose the runtime package.
+Then run your onboarding command below. If onboarding reports a required plugin
+capability review, review and install the named plugin and rerun the same
+command. For an already-installed plugin that needs approval to enable it, use
+`openclaw plugins enable <plugin-id> --accept-capabilities`.
+
+External channel plugins need the same preparation before scripted
+`openclaw channels add`; for example, after reviewing Discord:
+
+```bash
+openclaw plugins install discord --accept-capabilities
+openclaw channels add --channel discord --token "$DISCORD_BOT_TOKEN"
+```
+
+Bundled plugins are exempt. Consent applies to the reviewed plugin operation,
+not every subsequent install. See
+[Capability consent](/plugins/manage-plugins#capability-consent) for artifact
+review, enablement, and update rules.
+
 ## Baseline non-interactive example
 
 ```bash
@@ -32,11 +64,11 @@ openclaw onboard --non-interactive --accept-risk \
 
 Add `--json` for a machine-readable summary.
 
-- `--gateway-port` defaults to `18789`; only pass it to override.
+- `--gateway-port` defaults to `18789`. Only pass it to override that default.
 - `--skip-bootstrap` skips creating default workspace files, for automation that pre-seeds its own workspace.
-- `--secret-input-mode ref` stores new credentials as env-backed references (`{ source: "env", provider: "default", id: "<ENV_VAR>" }`); set the provider env var when adding a credential or passing an inline key flag. Existing resolvable named profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new credential write or additional provider env var. Existing plaintext is not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
-- The gateway token follows the same mode. Setup generates that value itself, so reference mode has no env var to point at unless you supply one: with `OPENCLAW_GATEWAY_TOKEN` exported, `gateway.auth.token` becomes an `env` ref to it; otherwise the token goes into the SQLite secret store as `OPENCLAW_GATEWAY_TOKEN` and config keeps a `store` ref. Either way `openclaw.json` holds no plaintext gateway token. Inspect the entry with `openclaw secrets store list`.
-- In reference mode, explicit `--gateway-password` and `--remote-password` must match `OPENCLAW_GATEWAY_PASSWORD`, and `--remote-token` must match `OPENCLAW_GATEWAY_TOKEN`. Missing or mismatched environment values fail before setup changes state; matching credentials are stored as env SecretRefs.
+- `--secret-input-mode ref` stores new credentials as env-backed references, in the form `{ source: "env", provider: "default", id: "<ENV_VAR>" }`. Set the provider env var when you add a credential or pass an inline key flag. Existing resolvable named profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new credential write or additional provider env var. Existing plaintext is not migrated. Run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
+- The gateway token follows the same mode. Setup generates that value itself, so reference mode has no env var to point at unless you supply one. With `OPENCLAW_GATEWAY_TOKEN` exported, `gateway.auth.token` becomes an `env` ref to it. Otherwise the token goes into the SQLite secret store as `OPENCLAW_GATEWAY_TOKEN`, and config keeps a `store` ref. Either way `openclaw.json` holds no plaintext gateway token. Inspect the entry with `openclaw secrets store list`.
+- In reference mode, explicit `--gateway-password` and `--remote-password` must match `OPENCLAW_GATEWAY_PASSWORD`. `--remote-token` must match `OPENCLAW_GATEWAY_TOKEN`. Missing or mismatched environment values fail before setup changes state. Matching credentials are stored as env SecretRefs.
 
 ```bash
 openclaw onboard --non-interactive --accept-risk --skip-health \

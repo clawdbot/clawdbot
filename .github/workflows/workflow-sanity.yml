@@ -27,7 +27,7 @@ jobs:
     steps:
       - &workflow_sanity_checkout_step
         name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -63,9 +63,12 @@ jobs:
     steps:
       - *workflow_sanity_checkout_step
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
 
       - name: Prepare trusted workflow audit configs
         if: github.event_name == 'pull_request'
@@ -74,69 +77,76 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
-          trusted_zizmor_config="$RUNNER_TEMP/zizmor-base.yml"
-
-          fetch_base_ref() {
-            local ref="$1"
-            local target="$2"
-            local fetch_status
-            for attempt in 1 2 3; do
-              timeout --signal=TERM --kill-after=10s 30s git fetch --no-tags --depth=1 origin \
-                "+${ref}:${target}" && return 0
-              fetch_status="$?"
-              if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
-                return "$fetch_status"
-              fi
-              if [ "$attempt" = "3" ]; then
-                return "$fetch_status"
-              fi
-              echo "::warning::trusted base fetch for '$ref' timed out on attempt $attempt; retrying"
-              sleep 5
-            done
-          }
-
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            fetch_base_ref "$BASE_SHA" "refs/remotes/origin/security-base" ||
-              fetch_base_ref "refs/heads/${BASE_REF}" "refs/remotes/origin/${BASE_REF}"
-          fi
-
-          if git cat-file -e "${BASE_SHA}:.pre-commit-config.yaml" 2>/dev/null; then
-            git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
-          elif git show "refs/remotes/origin/${BASE_REF}:.pre-commit-config.yaml" \
-            > "$trusted_config" 2>/dev/null; then
-            echo "Base SHA ${BASE_SHA} does not expose .pre-commit-config.yaml; using origin/${BASE_REF} instead."
-          else
-            echo "::error title=trusted pre-commit config unavailable::Could not read .pre-commit-config.yaml from ${BASE_SHA} or origin/${BASE_REF}."
-            exit 1
-          fi
-
-          if git cat-file -e "${BASE_SHA}:.github/zizmor.yml" 2>/dev/null; then
-            git show "${BASE_SHA}:.github/zizmor.yml" > "$trusted_zizmor_config"
-          elif git show "refs/remotes/origin/${BASE_REF}:.github/zizmor.yml" \
-            > "$trusted_zizmor_config" 2>/dev/null; then
-            echo "Base SHA ${BASE_SHA} does not expose .github/zizmor.yml; using origin/${BASE_REF} instead."
-          else
-            echo "::error title=trusted zizmor config unavailable::Could not read .github/zizmor.yml from ${BASE_SHA} or origin/${BASE_REF}."
-            exit 1
-          fi
-
-          python3 - "$trusted_config" "$trusted_zizmor_config" <<'PY'
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
           from pathlib import Path
-          import sys
+          from subprocess import DEVNULL
+          from tempfile import TemporaryFile
+          from ci_git_owner import FetchTimeout, GitFailure, backoff, check_cancelled, run_git
 
-          config_path = Path(sys.argv[1])
-          zizmor_config_path = sys.argv[2]
-          text = config_path.read_text()
+          workspace = os.getcwd()
+          base, branch = os.environ["BASE_SHA"], os.environ["BASE_REF"]
+          remote = f"refs/remotes/origin/{branch}"
+          trusted_config = Path(os.environ["RUNNER_TEMP"]) / "pre-commit-base.yaml"
+          trusted_zizmor_config = Path(os.environ["RUNNER_TEMP"]) / "zizmor-base.yml"
+
+          def has_object(spec):
+              try:
+                  run_git(workspace, "cat-file", "-e", spec, stderr=DEVNULL)
+                  return True
+              except GitFailure:
+                  return False
+
+          def fetch_base(ref, target):
+              for attempt in range(1, 4):
+                  try:
+                      run_git(workspace, "fetch", "--no-tags", "--depth=1", "origin",
+                              f"+{ref}:{target}", timeout=30, reclaim_locks=True)
+                      return
+                  except (FetchTimeout, GitFailure) as error:
+                      if (isinstance(error, GitFailure) and error.code not in (124, 137)) or attempt == 3:
+                          raise
+                      print(f"::warning::trusted base fetch for '{ref}' timed out on attempt {attempt}; retrying", flush=True)
+                      backoff(5)
+
+          if not has_object(f"{base}^{{commit}}"):
+              try:
+                  fetch_base(base, "refs/remotes/origin/security-base")
+              except (FetchTimeout, GitFailure):
+                  fetch_base(f"refs/heads/{branch}", remote)
+
+          for source, target, label in [
+              (".pre-commit-config.yaml", trusted_config, "pre-commit"),
+              (".github/zizmor.yml", trusted_zizmor_config, "zizmor"),
+          ]:
+              exact = has_object(f"{base}:{source}")
+              # Only joined Git output may become a config; fatal ownership never selects another ref.
+              with TemporaryFile() as output:
+                  try:
+                      run_git(workspace, "show", f"{base if exact else remote}:{source}",
+                              stdout=output, stderr=None if exact else DEVNULL)
+                  except GitFailure:
+                      if exact:
+                          raise
+                      print(f"::error title=trusted {label} config unavailable::Could not read {source} from {base} or origin/{branch}.")
+                      raise SystemExit(1)
+                  output.seek(0)
+                  check_cancelled()
+                  target.write_bytes(output.read())
+              if not exact:
+                  print(f"Base SHA {base} does not expose {source}; using origin/{branch} instead.")
+
+          text = trusted_config.read_text()
           if ".github/zizmor.yml" not in text:
-            raise SystemExit("trusted pre-commit config does not reference .github/zizmor.yml")
-          config_path.write_text(text.replace(".github/zizmor.yml", zizmor_config_path))
-          PY
-
-          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
+              raise SystemExit("trusted pre-commit config does not reference .github/zizmor.yml")
+          trusted_config.write_text(text.replace(".github/zizmor.yml", str(trusted_zizmor_config)))
+          check_cancelled()
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"PRE_COMMIT_CONFIG_PATH={trusted_config}\n")
+          PYTHON
 
       - name: Install pre-commit
-        run: python -m pip install --disable-pip-version-check pre-commit==4.2.0
+        run: python -m pip install --disable-pip-version-check pre-commit==4.6.2
 
       - name: Install ShellCheck
         shell: bash
@@ -152,29 +162,25 @@ jobs:
           tar -xJf "${archive}" "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
           sudo install -m 0755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
 
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.0"
+          cache: false
+
       - name: Install actionlint
         shell: bash
         run: |
           set -euo pipefail
-          ACTIONLINT_VERSION="1.7.12"
-          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
-          # GitHub release downloads occasionally return transient 5xx responses.
-          # Retry all curl errors here so workflow-sanity does not fail closed on
-          # a one-off release edge outage.
-          curl_args=(
-            --connect-timeout 10
-            --max-time 120
-            --retry 5
-            --retry-delay 2
-            --retry-all-errors
-            -sSfL
-          )
-          curl "${curl_args[@]}" -o "${archive}" "${base_url}/${archive}"
-          curl "${curl_args[@]}" -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
-          grep " ${archive}\$" checksums.txt | sha256sum -c -
-          tar -xzf "${archive}" actionlint
-          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          # v1.7.12 writes ShellCheck stdin before starting it and deadlocks on large run blocks.
+          # Pin the upstream fix until a release includes rhysd/actionlint#651.
+          ACTIONLINT_REVISION="011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7"
+          export GOBIN="$RUNNER_TEMP/actionlint-bin"
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}"
+          version="$("$GOBIN/actionlint" -version)"
+          printf '%s\n' "$version"
+          grep -Fxq "v1.7.13-0.20260419144658-${ACTIONLINT_REVISION:0:12}" <<< "$version"
+          echo "$GOBIN" >> "$GITHUB_PATH"
 
       - name: Lint workflows
         run: actionlint

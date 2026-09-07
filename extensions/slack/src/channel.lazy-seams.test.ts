@@ -11,9 +11,9 @@
 //   - and accidental loss of the perf intent (re-introducing eager imports
 //     without updating the seam).
 
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { setSlackRuntime } from "./runtime.js";
 
 // --- Hoisted mocks for lazy seams ------------------------------------------------

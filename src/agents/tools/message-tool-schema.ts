@@ -242,11 +242,13 @@ function buildReactionSchema() {
         description: "snake_case alias of messageId; same defaults.",
       }),
     ),
-    emoji: Type.Optional(Type.String()),
+    emoji: Type.Optional(
+      Type.String({ description: "Unicode emoji; channels may also support custom emoji." }),
+    ),
     remove: Type.Optional(Type.Boolean()),
     trackToolCalls: Type.Optional(
       Type.Boolean({
-        description: "Use reacted current message for tool-progress reactions.",
+        description: "Use the reacted message for this turn's status reaction lifecycle.",
       }),
     ),
     track_tool_calls: Type.Optional(
@@ -262,7 +264,7 @@ function buildReactionSchema() {
 
 function buildFetchSchema() {
   return {
-    limit: optionalPositiveIntegerSchema(),
+    limit: optionalPositiveIntegerSchema({ description: "Maximum number of results to return." }),
     pageSize: optionalPositiveIntegerSchema(),
     pageToken: Type.Optional(Type.String()),
     before: Type.Optional(Type.String()),
@@ -357,7 +359,7 @@ function buildChannelTargetSchema() {
 function buildStickerSchema() {
   return {
     fileId: Type.Optional(Type.String()),
-    emojiName: Type.Optional(Type.String()),
+    emojiName: Type.Optional(Type.String({ description: "Name for an uploaded custom emoji." })),
     stickerId: Type.Optional(Type.Array(Type.String())),
     stickerName: Type.Optional(Type.String()),
     stickerDesc: Type.Optional(Type.String()),

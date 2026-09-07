@@ -76,10 +76,10 @@ enum LaunchAgentManager {
           <string>ai.openclaw.mac</string>
           <key>ProgramArguments</key>
           <array>
-            <string>\(bundlePath)/Contents/MacOS/OpenClaw</string>
+            <string>\(self.escapePlistText(bundlePath))/Contents/MacOS/OpenClaw</string>
           </array>
           <key>WorkingDirectory</key>
-          <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>
+          <string>\(self.escapePlistText(FileManager().homeDirectoryForCurrentUser.path))</string>
           <key>RunAtLoad</key>
           <true/>
           <key>EnvironmentVariables</key>
@@ -88,9 +88,9 @@ enum LaunchAgentManager {
             <string>\(path)</string>\(profileEnvironment)
           </dict>
           <key>StandardOutPath</key>
-          <string>\(LogLocator.launchdLogPath)</string>
+          <string>\(self.escapePlistText(LogLocator.launchdLogPath))</string>
           <key>StandardErrorPath</key>
-          <string>\(LogLocator.launchdLogPath)</string>
+          <string>\(self.escapePlistText(LogLocator.launchdLogPath))</string>
         </dict>
         </plist>
         """

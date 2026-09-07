@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { z } from "zod";
 
@@ -17,6 +17,7 @@ const managedThreadSchema = z.object({
 export type StoredCodexManagedThread = z.infer<typeof managedThreadSchema>;
 
 export type CodexManagedThreadStore = {
+  has(sourceHomeId: string, threadId: string): Promise<boolean>;
   mark(params: { sourceHomeId: string; threadId: string; rolloutPath?: string }): Promise<boolean>;
   snapshot(): Promise<ReadonlyMap<string, ReadonlySet<string>>>;
 };
@@ -52,9 +53,22 @@ function managedThreadStoreKey(sourceHomeId: string, threadId: string): string {
 
 /** Durable ownership index for Codex threads created by OpenClaw. */
 export function createCodexManagedThreadStore(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexManagedThread>, "entries" | "registerIfAbsent">,
+  state: Pick<
+    PluginStateSyncKeyedStore<StoredCodexManagedThread>,
+    "entries" | "lookup" | "registerIfAbsent"
+  >,
 ): CodexManagedThreadStore {
   return {
+    async has(sourceHomeId, threadId) {
+      const parsed = managedThreadSchema.safeParse(
+        state.lookup(managedThreadStoreKey(sourceHomeId, threadId)),
+      );
+      return (
+        parsed.success &&
+        parsed.data.sourceHomeId === sourceHomeId &&
+        parsed.data.threadId === threadId
+      );
+    },
     async mark(params) {
       try {
         const value = managedThreadSchema.parse({

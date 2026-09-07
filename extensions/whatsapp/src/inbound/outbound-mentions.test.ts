@@ -16,11 +16,25 @@ describe("resolveWhatsAppOutboundMentions", () => {
     });
   });
 
-  it("rewrites phone-number tokens to LID mention text without device suffixes", () => {
+  it.each([
+    { text: "ping @+5511976136970", expected: "ping @277038292303944" },
+    {
+      text: "literal \\` ping @+5511976136970",
+      expected: "literal \\` ping @277038292303944",
+    },
+    {
+      text: "literal \\\\\\` ping @+5511976136970",
+      expected: "literal \\\\\\` ping @277038292303944",
+    },
+    {
+      text: "inside ``notify ` @+5511976136970`` then @+5511976136970",
+      expected: "inside ``notify ` @+5511976136970`` then @277038292303944",
+    },
+  ])("rewrites visible phone-number mentions to LIDs: $text", ({ text, expected }) => {
     expect(
       resolveWhatsAppOutboundMentions({
         chatJid: "120363000000000000@g.us",
-        text: "ping @+5511976136970",
+        text,
         participants: [
           {
             id: "277038292303944:2@lid",
@@ -29,7 +43,7 @@ describe("resolveWhatsAppOutboundMentions", () => {
         ],
       }),
     ).toEqual({
-      text: "ping @277038292303944",
+      text: expected,
       mentionedJids: ["277038292303944@lid"],
     });
   });
@@ -114,6 +128,30 @@ describe("resolveWhatsAppOutboundMentions", () => {
       mentionedJids: ["277038292303944@lid"],
     });
   });
+
+  it.each([
+    "Run `notify @+5511976136970",
+    "Run `notify\n@+5511976136970",
+    "Run ``notify ` @+5511976136970",
+    "Run ``notify ` @+5511976136970``",
+    "literal \\\\` inside @+5511976136970",
+  ])(
+    "does not rewrite or mention phone numbers inside balanced or unterminated inline code: %j",
+    (text) => {
+      expect(
+        resolveWhatsAppOutboundMentions({
+          chatJid: "120363000000000000@g.us",
+          text,
+          participants: [
+            {
+              id: "277038292303944@lid",
+              phoneNumber: "5511976136970@s.whatsapp.net",
+            },
+          ],
+        }),
+      ).toEqual({ text, mentionedJids: [] });
+    },
+  );
 
   it("does not mention numeric prefixes inside longer tokens", () => {
     expect(

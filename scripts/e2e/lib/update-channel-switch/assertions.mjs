@@ -1,4 +1,6 @@
 // Assertions for update-channel switch E2E scenarios.
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { legacyPackageAcceptanceCompat } from "../package-compat.mjs";
@@ -8,7 +10,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-config-channel|assert-status-kind|assert-installed-version> [...]",
+    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-update> [...]",
   );
   process.exit(2);
 }
@@ -145,9 +147,21 @@ function prepareGitFixture(root) {
     packageJson.pnpm = pnpmConfig;
   }
   const fixtureUiBuildSource = `const fs=require("node:fs");fs.mkdirSync("dist/control-ui",{recursive:true});fs.writeFileSync("dist/control-ui/index.html",${JSON.stringify(controlUiHtml)})`;
+  const fixtureBuildPath = path.join(root, ".openclaw-fixture", "build.mjs");
+  fs.mkdirSync(path.dirname(fixtureBuildPath), { recursive: true });
+  fs.copyFileSync(new URL("./build.mjs", import.meta.url), fixtureBuildPath);
+  fs.copyFileSync(
+    path.join(root, "dist", "build-info.json"),
+    path.join(root, ".openclaw-fixture", "build-info.json"),
+  );
+  // The tarball omits source .gitignore rules; build metadata must remain generated.
+  fs.appendFileSync(
+    path.join(root, ".gitignore"),
+    "\n/dist/build-info.json\n/dist/.buildstamp\n/dist/.runtime-postbuildstamp\n",
+  );
   packageJson.scripts = {
     ...packageJson.scripts,
-    build: 'node -e "console.log(\\"fixture build skipped\\")"',
+    build: "node .openclaw-fixture/build.mjs",
     lint: 'node -e "console.log(\\"fixture lint skipped\\")"',
     "ui:build": `node -e ${JSON.stringify(fixtureUiBuildSource)}`,
   };
@@ -173,6 +187,37 @@ function assertUpdate(channel) {
   }
 }
 
+function assertRuntimeStagingClean(root) {
+  const pending = [root];
+  const leftovers = [];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      if (/\.openclaw-update-.*\.tmp$/u.test(entry.name)) {
+        leftovers.push(path.relative(root, fullPath));
+      } else if (entry.isDirectory() && entry.name !== ".git") {
+        pending.push(fullPath);
+      }
+    }
+  }
+  assert.deepEqual(leftovers, [], "successful update retained runtime staging entries");
+}
+
+function assertDirtyUpdate(root, expectedHead) {
+  const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
+  assert.equal(payload.reason, "dirty", "ordinary untracked input must block admission");
+  assert.equal(
+    execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    expectedHead,
+  );
+  assert.equal(
+    fs.readFileSync(path.join(root, "operator-update-notes.tmp"), "utf8"),
+    "retain user notes\n",
+  );
+  assertRuntimeStagingClean(root);
+}
+
 function assertConfigChannel(channel) {
   const config = readJson(path.join(process.env.HOME, ".openclaw", "openclaw.json"));
   if (config.update?.channel === channel) {
@@ -187,6 +232,18 @@ function assertConfigChannel(channel) {
   throw new Error(
     `expected persisted update.channel ${channel}, got ${JSON.stringify(config.update?.channel)}`,
   );
+}
+
+function assertDryRun(kind, channel) {
+  const preview = JSON.parse(process.env.UPDATE_JSON ?? "");
+  assert.equal(preview.dryRun, true);
+  assert.equal(preview.installKind, "package");
+  assert.equal(preview.storedChannel, "dev");
+  assert.equal(preview.effectiveChannel, channel);
+  assert.equal(preview.updateInstallKind, kind);
+  assert.equal(preview.mode, kind === "git" ? "git" : "npm");
+  assert.equal(preview.switchToGit, kind === "git");
+  assert.equal(preview.switchToPackage, false);
 }
 
 function assertStatusKind(kind) {
@@ -215,8 +272,17 @@ switch (command) {
   case "assert-update":
     assertUpdate(args[0]);
     break;
+  case "assert-runtime-staging-clean":
+    assertRuntimeStagingClean(args[0]);
+    break;
+  case "assert-dirty-update":
+    assertDirtyUpdate(args[0], args[1]);
+    break;
   case "assert-config-channel":
     assertConfigChannel(args[0]);
+    break;
+  case "assert-dry-run":
+    assertDryRun(args[0], args[1]);
     break;
   case "assert-status-kind":
     assertStatusKind(args[0]);

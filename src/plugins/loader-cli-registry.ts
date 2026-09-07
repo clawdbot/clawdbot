@@ -3,14 +3,10 @@ import path from "node:path";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolveUserPath } from "../utils.js";
-import { buildPluginApi } from "./api-builder.js";
-import {
-  resolveEffectiveEnableState,
-  resolveEffectivePluginActivationState,
-  resolveMemorySlotDecision,
-} from "./config-state.js";
-import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
+import { resolveMemorySlotDecision } from "./config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
 import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
@@ -20,42 +16,43 @@ import {
   runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
 import {
-  formatAutoEnabledActivationReason,
   formatMissingPluginRegisterError,
   markPluginActivationDisabled,
   recordPluginError,
 } from "./loader-records.js";
 import {
-  applyPluginManifestRecordDetails,
-  createManifestPluginRecord,
   createPluginLoaderLogger,
-  isAuthorizedDreamingSidecarPlugin,
-  matchesScopedPluginOrDreamingSidecar,
-  pushPluginValidationError,
+  preparePluginLoadRecord,
   resolveAuthorizedDreamingSidecar,
   safeRealpathOrResolve,
   validatePluginConfig,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
+import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { withProfile } from "./plugin-load-profile.js";
-import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import type { PluginRuntime } from "./runtime/types.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type { OpenClawPluginModule } from "./types.js";
-
-const CLI_METADATA_ENTRY_BASENAMES = [
-  "cli-metadata.ts",
-  "cli-metadata.js",
-  "cli-metadata.mjs",
-  "cli-metadata.cjs",
-] as const;
 
 export async function loadOpenClawPluginCliRegistry(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
   const context = resolvePluginLoadCacheContext({ ...options, activate: false });
+  // One CLI invocation resolves descriptors from several bootstrap stages; without reuse each
+  // stage re-executes every legacy external plugin's register and re-emits its diagnostics.
+  // The namespace is required: a runtime load with activate:false shares this cacheKey but
+  // produces a completely different registry. Diagnostics ride the cached registry, so only
+  // the duplicate log emission is dropped.
+  const cacheKey = `cli-metadata::${context.cacheKey}`;
+  const cacheEnabled = isPluginRegistryCacheEnabled(options);
+  if (cacheEnabled) {
+    const cached = pluginLoaderCacheState.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
   const logger = options.logger ?? createPluginLoaderLogger();
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
   const loadPluginModule = createPluginModuleLoader({
@@ -64,7 +61,7 @@ export async function loadOpenClawPluginCliRegistry(
   });
   const { registry, registerCli, rollbackPluginGlobalSideEffects } = createPluginRegistry({
     logger,
-    runtime: {} as PluginRuntime,
+    runtime: createUnavailableRuntime("cli-metadata"),
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
     ...(options.coreGatewayMethodNames !== undefined && {
       coreGatewayMethodNames: options.coreGatewayMethodNames,
@@ -96,80 +93,26 @@ export async function loadOpenClawPluginCliRegistry(
     if (!manifestRecord) {
       continue;
     }
-    const pluginId = manifestRecord.id;
-    const policyId = normalizePluginPolicyId(pluginId);
-    if (
-      !matchesScopedPluginOrDreamingSidecar({
-        onlyPluginIdSet,
-        pluginId,
-        sidecar: dreamingSidecar,
-      })
-    ) {
-      continue;
-    }
-    const isDreamingSidecar = isAuthorizedDreamingSidecarPlugin({
-      sidecar: dreamingSidecar,
-      pluginId,
-    });
-    const activationState = isDreamingSidecar
-      ? {
-          enabled: true,
-          activated: true,
-          explicitlyEnabled: false,
-          source: "auto" as const,
-          reason: `dreaming sidecar for selected memory slot "${dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
-        }
-      : resolveEffectivePluginActivationState({
-          id: pluginId,
-          origin: candidate.origin,
-          config: context.normalized,
-          rootConfig: context.cfg,
-          enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-          activationSource: context.activationSource,
-          autoEnabledReason: formatAutoEnabledActivationReason(
-            context.autoEnabledReasons[pluginId],
-          ),
-        });
-    const existingOrigin = seenIds.get(pluginId);
-    if (existingOrigin) {
-      const duplicate = createManifestPluginRecord({
-        candidate,
-        manifestRecord,
-        enabled: false,
-        activationState,
-      });
-      duplicate.status = "disabled";
-      duplicate.error = `overridden by ${existingOrigin} plugin`;
-      markPluginActivationDisabled(duplicate, duplicate.error);
-      registry.plugins.push(duplicate);
-      continue;
-    }
-    const enableState = isDreamingSidecar
-      ? { enabled: true }
-      : resolveEffectiveEnableState({
-          id: pluginId,
-          origin: candidate.origin,
-          config: context.normalized,
-          rootConfig: context.cfg,
-          enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-          activationSource: context.activationSource,
-        });
-    const entry = context.normalized.entries[policyId];
-    const record = createManifestPluginRecord({
+    const prepared = preparePluginLoadRecord({
       candidate,
       manifestRecord,
-      enabled: enableState.enabled,
-      activationState,
+      context,
+      onlyPluginIdSet,
+      dreamingSidecar,
+      registry,
+      seenIds,
     });
-    applyPluginManifestRecordDetails(record, manifestRecord);
+    if (!prepared) {
+      continue;
+    }
+    const { pluginId, policyId, isDreamingSidecar, enableState, entry, record } = prepared;
     const pushPluginLoadError = (message: string) =>
-      pushPluginValidationError({
+      recordPluginError({
         registry,
         seenIds,
-        pluginId,
-        origin: candidate.origin,
         record,
-        message,
+        phase: "validation",
+        error: message,
       });
     if (!enableState.enabled) {
       record.status = "disabled";
@@ -189,16 +132,20 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
     const validatedConfig = validatePluginConfig({
+      origin: candidate.origin,
       schema: manifestRecord.configSchema,
       cacheKey: manifestRecord.schemaCacheKey,
       value: entry?.config,
+      sourceValue: manifestRecord.configContracts?.secretInputs
+        ? context.activationSource.plugins.entries[policyId]?.config
+        : undefined,
     });
     if (!validatedConfig.ok) {
       logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`);
       pushPluginLoadError(`invalid config: ${validatedConfig.error.join(", ")}`);
       continue;
     }
-    const cliMetadataSource = resolveCliMetadataEntrySource(candidate.rootDir);
+    const cliMetadataSource = resolveCliMetadataEntrySource(candidate.rootDir, candidate.source);
     const sourceForCliMetadata =
       candidate.origin === "bundled"
         ? cliMetadataSource
@@ -235,6 +182,11 @@ export async function loadOpenClawPluginCliRegistry(
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
+    const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+      pluginId,
+      packageName: candidate.packageName,
+      packageBuild: candidate.packageManifest?.build,
+    });
     let mod: OpenClawPluginModule | null;
     try {
       mod = withProfile(
@@ -248,12 +200,11 @@ export async function loadOpenClawPluginCliRegistry(
         registry,
         record,
         seenIds,
-        pluginId,
-        origin: candidate.origin,
         phase: "load",
         error,
         logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
         diagnosticMessagePrefix: "failed to load plugin: ",
+        missingDependencyHint,
       });
       continue;
     }
@@ -322,7 +273,7 @@ export async function loadOpenClawPluginCliRegistry(
       registrationMode: "cli-metadata",
       config: context.cfg,
       pluginConfig: validatedConfig.value,
-      runtime: {} as PluginRuntime,
+      runtime: createUnavailableRuntime("cli-metadata", record.id),
       logger,
       resolvePath: (input) => resolveUserPath(input),
       handlers: {
@@ -342,23 +293,27 @@ export async function loadOpenClawPluginCliRegistry(
         registry,
         record,
         seenIds,
-        pluginId,
-        origin: candidate.origin,
         phase: "register",
         error,
         logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
         diagnosticMessagePrefix: "plugin failed during register: ",
+        missingDependencyHint,
       });
     }
+  }
+  if (cacheEnabled) {
+    pluginLoaderCacheState.set(cacheKey, registry);
   }
   return registry;
 }
 
-function resolveCliMetadataEntrySource(rootDir: string): string | null {
-  for (const basename of CLI_METADATA_ENTRY_BASENAMES) {
-    const candidate = path.join(rootDir, basename);
-    if (fs.existsSync(candidate)) {
-      return candidate;
+function resolveCliMetadataEntrySource(rootDir: string, source: string): string | null {
+  for (const directory of new Set([rootDir, path.dirname(source)])) {
+    for (const extension of [".ts", ".js", ".mjs", ".cjs"]) {
+      const candidate = path.join(directory, `cli-metadata${extension}`);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     }
   }
   return null;

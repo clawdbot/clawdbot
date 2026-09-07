@@ -1,3 +1,4 @@
+import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AnthropicOptions } from "../provider-options.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
@@ -13,8 +14,7 @@ type AnthropicProjectedTool = {
   readonly originalName: string;
   readonly wireName: string;
   readonly description?: string;
-  readonly inputSchema: {
-    readonly type: "object";
+  readonly inputSchema: AnthropicTool["input_schema"] & {
     readonly properties: Record<string, unknown>;
     readonly required: string[];
   };
@@ -156,6 +156,10 @@ function normalizeAnthropicJsonSchema(schema: unknown): unknown {
     changed = true;
   }
 
+  if (changed) {
+    // Converted tuples use 2020-12 syntax, including inside referenced schema resources.
+    delete normalized.$schema;
+  }
   return changed ? normalized : schema;
 }
 
@@ -165,6 +169,7 @@ export function projectAnthropicTools(
   toWireName: (name: string) => string,
 ): AnthropicToolProjection {
   const projectedTools: AnthropicProjectedTool[] = [];
+  const originalNameByWireName = new Map<string, string>();
   const unavailableOriginalNames = new Set<string>();
   for (const tool of tools) {
     let projectedTool: AnthropicProjectedTool;
@@ -211,6 +216,8 @@ export function projectAnthropicTools(
         wireName,
         ...(description ? { description } : {}),
         inputSchema: {
+          // Root constraints and reference targets belong to the validated schema too.
+          ...anthropicSchema,
           type: "object",
           properties: (properties ?? {}) as Record<string, unknown>,
           required: (required ?? []) as string[],
@@ -223,14 +230,13 @@ export function projectAnthropicTools(
       }
       continue;
     }
-    const conflictingTool = projectedTools.find(
-      (entry) => entry.wireName === projectedTool.wireName,
-    );
-    if (conflictingTool && conflictingTool.originalName !== projectedTool.originalName) {
+    const conflictingName = originalNameByWireName.get(projectedTool.wireName);
+    if (conflictingName !== undefined && conflictingName !== projectedTool.originalName) {
       throw new Error(
-        `Anthropic tool names "${conflictingTool.originalName}" and "${projectedTool.originalName}" both map to "${projectedTool.wireName}"`,
+        `Anthropic tool names "${conflictingName}" and "${projectedTool.originalName}" both map to "${projectedTool.wireName}"`,
       );
     }
+    originalNameByWireName.set(projectedTool.wireName, projectedTool.originalName);
     projectedTools.push(projectedTool);
   }
   return {

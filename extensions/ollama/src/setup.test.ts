@@ -461,6 +461,7 @@ describe("ollama setup", () => {
     const modelIds = models?.map((m) => m.id);
 
     expect(modelIds).toEqual(["minimax-m2.7", "minimax-m3", "kimi-k3", "glm-5.1", "glm-5.2"]);
+    expect(models?.every((model) => model.contextTokens === undefined)).toBe(true);
     expect(models).toEqual(
       expect.arrayContaining(
         [
@@ -531,7 +532,7 @@ describe("ollama setup", () => {
       (m) => m.id === "llama3:8b",
     );
 
-    expect(model?.contextWindow).toBe(65536);
+    expect(model).toMatchObject({ contextWindow: 65_536, contextTokens: 32_768 });
     expect(result.defaultModel).toBe("ollama/llama3:8b");
   });
 
@@ -948,41 +949,6 @@ describe("ollama setup", () => {
 
       expect(fetchMock).not.toHaveBeenCalled();
     });
-  });
-
-  it("uses discovered model when requested non-interactive download fails", async () => {
-    const fetchMock = createOllamaFetchMock({
-      tags: ["qwen2.5-coder:7b"],
-      pullResponse: new Response('{"error":"disk full"}\n', { status: 200 }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
-
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-4o-mini",
-              fallbacks: ["anthropic/claude-sonnet-4-5"],
-            },
-          },
-        },
-      },
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: "missing-model",
-      },
-      runtime,
-    });
-
-    expect(runtime.error).toHaveBeenCalledWith("Download failed: disk full");
-    expect(result.agents?.defaults?.model).toEqual({
-      primary: "ollama/qwen2.5-coder:7b",
-      fallbacks: ["anthropic/claude-sonnet-4-5"],
-    });
-    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
-    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("normalizes ollama/ prefix in non-interactive custom model download", async () => {

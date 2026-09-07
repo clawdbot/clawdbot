@@ -11,11 +11,9 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   providerHasGenericConfig,
-  providerSummaryText,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -66,7 +64,7 @@ async function runMemoryEmbeddingCreate(params: {
   let operationError: unknown;
   let operationFailed = false;
   try {
-    embeddings = await provider.embedBatch(params.texts);
+    embeddings = await provider.embedBatch(params.texts, { inputType: "document" });
   } catch (err) {
     operationError = err;
     operationFailed = true;
@@ -111,7 +109,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
   embedding
     .command("create")
     .description("Create embeddings")
-    .requiredOption("--text <text>", "Input text", collectOption, [])
+    .requiredOption("--text <text>", "Input text", collectOption)
     .option("--provider <id>", "Provider id")
     .option("--model <provider/model>", "Model override")
     .option(

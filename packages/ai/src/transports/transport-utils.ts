@@ -1,14 +1,10 @@
-import { createHash } from "node:crypto";
 import type { Model } from "@openclaw/llm-core";
-import {
-  asFiniteNumberInRange,
-  parseStrictFiniteNumber,
-  parseStrictNonNegativeInteger,
-} from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { consumeResponseBytes } from "@openclaw/normalization-core";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getAiTransportHost } from "../host.js";
-import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
+export { redactIdentifier, sha256Hex } from "@openclaw/normalization-core/node-crypto";
+export { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "../internal/retry-after.js";
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
@@ -17,29 +13,15 @@ const NON_LATIN_RE =
   /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6\u{20000}-\u{2FA1F}]/gu;
 const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
 
-export function sha256Hex(value: string | Uint8Array): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function sha256HexPrefix(value: string | Uint8Array, length: number): string {
-  return sha256Hex(value).slice(0, length);
-}
-
-export function redactIdentifier(value: string | undefined, opts?: { len?: number }): string {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return "-";
+export function parsePositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
   }
-  const length = Number.isFinite(opts?.len) ? Math.max(1, Math.floor(opts?.len ?? 12)) : 12;
-  return `sha256:${sha256HexPrefix(trimmed, length)}`;
+  return typeof value === "string" ? parseStrictPositiveInteger(value) : undefined;
 }
 
 export function redactSensitiveText(text: string, _options?: unknown): string {
   return getAiTransportHost().redactToolPayloadText(text);
-}
-
-export function resolveSecretSentinel(value: string): string {
-  return getAiTransportHost().resolveSecretSentinel(value);
 }
 
 export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel): TModel {
@@ -48,7 +30,7 @@ export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel)
   }
   let headers: Record<string, string> | undefined;
   for (const [name, value] of Object.entries(model.headers)) {
-    const resolved = resolveSecretSentinel(value);
+    const resolved = getAiTransportHost().resolveSecretSentinel(value);
     if (resolved !== value) {
       headers ??= { ...model.headers };
       headers[name] = resolved;
@@ -88,46 +70,6 @@ export function isCodeModeModelVisibleToolName(
   visibleToolNames: ReadonlySet<string>,
 ): boolean {
   return visibleToolNames.has(name);
-}
-
-function isGoogleGemini3Model(modelId: string, family: "flash" | "pro"): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  const suffix = family === "pro" ? "pro" : "flash";
-  return new RegExp(
-    `(?:^|/)gemini-(?:3(?:\\.\\d+)?-${suffix}|${suffix}${family === "flash" ? "(?:-lite)?" : ""}-latest)(?:-|$)`,
-  ).test(normalized);
-}
-
-export function isGoogleGemini3ProModel(modelId: string): boolean {
-  return isGoogleGemini3Model(modelId, "pro");
-}
-
-export function isGoogleGemini3FlashModel(modelId: string): boolean {
-  return isGoogleGemini3Model(modelId, "flash");
-}
-
-export function parseRetryAfterSeconds(headers: Headers): number | undefined {
-  const retryAfterMs = headers.get("retry-after-ms");
-  if (retryAfterMs) {
-    const trimmed = retryAfterMs.trim();
-    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
-      const milliseconds = asFiniteNumberInRange(parseStrictFiniteNumber(trimmed), {
-        min: 0,
-        max: Number.MAX_SAFE_INTEGER,
-      });
-      return milliseconds === undefined ? Number.POSITIVE_INFINITY : milliseconds / 1000;
-    }
-  }
-
-  const retryAfter = headers.get("retry-after")?.trim();
-  if (!retryAfter) {
-    return undefined;
-  }
-  if (/^\d+$/.test(retryAfter)) {
-    return parseStrictNonNegativeInteger(retryAfter) ?? Number.POSITIVE_INFINITY;
-  }
-  const retryAt = parseRetryAfterHttpDateMs(retryAfter);
-  return retryAt === undefined ? undefined : Math.max(0, (retryAt - Date.now()) / 1000);
 }
 
 async function readChunkWithIdleTimeout(
@@ -173,24 +115,21 @@ export async function readResponseTextSnippet(
   let bytes = 0;
   let truncated = false;
   try {
-    while (bytes < maxBytes) {
-      const result = options?.chunkTimeoutMs
-        ? await readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
-        : await reader.read();
-      if (result.done) {
-        break;
-      }
-      if (!result.value?.length) {
-        continue;
-      }
-      const remaining = maxBytes - bytes;
-      chunks.push(result.value.subarray(0, remaining));
-      bytes += Math.min(result.value.length, remaining);
-      if (result.value.length >= remaining) {
-        truncated = true;
-        await reader.cancel().catch(() => undefined);
-        break;
-      }
+    if (bytes < maxBytes) {
+      const result = await consumeResponseBytes({
+        maxBytes,
+        stopAtLimit: true,
+        read: () =>
+          options?.chunkTimeoutMs
+            ? readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
+            : reader.read(),
+        onChunk: (chunk) => chunks.push(chunk),
+        onLimit: async () => {
+          await reader.cancel().catch(() => undefined);
+        },
+      });
+      bytes = Math.min(result.size, maxBytes);
+      truncated = result.truncated;
     }
   } catch (error) {
     await reader.cancel(error).catch(() => undefined);

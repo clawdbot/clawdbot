@@ -27,6 +27,56 @@
   gap: 10px;
 }
 
+.model-setup__loading-sections {
+  display: grid;
+  gap: 18px;
+}
+
+.model-setup__loading-row {
+  min-height: 72px;
+}
+
+.model-setup__loading-section--selected .model-setup__loading-row {
+  min-height: 73px;
+}
+
+.model-setup__loading-section--candidates .model-setup__loading-row {
+  min-height: 79px;
+}
+
+.model-setup__loading-section--sign-in .model-setup__loading-row {
+  min-height: 68px;
+}
+
+.model-setup__loading-sections .settings-section > p {
+  margin: 0 0 12px;
+}
+
+.model-setup__loading-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+}
+
+.model-setup__loading-copy {
+  display: grid;
+  flex: 1;
+  gap: 8px;
+}
+
+.model-setup__loading-status {
+  height: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 14px;
+}
+
+.model-setup__loading-action {
+  width: 96px;
+  height: 36px;
+  flex: none;
+}
+
 .model-setup__row {
   display: flex;
   align-items: center;
@@ -230,7 +280,7 @@
 }
 
 :root[data-theme-mode="light"] .model-setup-provider-select__trigger {
-  background: white;
+  background: var(--bg-elevated);
 }
 
 .model-setup-provider-select__trigger:focus-visible {
@@ -284,9 +334,17 @@
 }
 
 .model-setup-provider-select__option {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
+  padding: 6px 8px;
+  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
+}
+
+.model-setup-provider-select__option[data-selected] {
+  background: var(--menu-selected);
 }
 
 .model-setup-provider-select__option::part(label) {
@@ -471,6 +529,11 @@
   .model-setup__row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .model-setup__loading-icon,
+  .model-setup__loading-action {
+    align-self: flex-start;
   }
 
   .model-setup__row > .btn {

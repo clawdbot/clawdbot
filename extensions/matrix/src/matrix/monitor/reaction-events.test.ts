@@ -372,6 +372,52 @@ describe("matrix approval reactions", () => {
     ).toBeNull();
   });
 
+  it("retains approval anchors and propagates transient Gateway failures for replay", async () => {
+    const core = buildCore();
+    const cfg = buildConfig();
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
+      approvalId: "req-123",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once"],
+    });
+    const client = createReactionClient();
+    resolveMatrixApproval.mockRejectedValueOnce(new Error("gateway 503"));
+
+    await expect(handleReaction({ client, core, cfg })).rejects.toThrow("gateway 503");
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).not.toBeNull();
+
+    await handleReaction({ client, core, cfg });
+
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).toBeNull();
+    expect(resolveMatrixApproval).toHaveBeenCalledTimes(2);
+    expect(resolveMatrixApproval).toHaveBeenLastCalledWith({
+      cfg,
+      approvalId: "req-123",
+      approvalKind: "exec",
+      decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
+      senderId: "@owner:example.org",
+    });
+    expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
   it("terminalizes every sibling prompt when this surface wins", async () => {
     const core = buildCore();
     const cfg = buildConfig();

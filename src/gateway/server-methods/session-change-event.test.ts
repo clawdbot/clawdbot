@@ -3,6 +3,8 @@ import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-ow
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { loadCachedSessionSharingSnapshot } from "../session-sharing-snapshot-cache.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -13,7 +15,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../session-sharing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-sharing.js")>();
-  return { ...actual, invalidateSessionSharingSnapshot: mocks.invalidate };
+  return {
+    ...actual,
+    invalidateSessionSharingSnapshot: mocks.invalidate.mockImplementation(
+      actual.invalidateSessionSharingSnapshot,
+    ),
+  };
 });
 
 vi.mock("../session-utils.js", async (importOriginal) => {
@@ -62,11 +69,13 @@ function createContext(
     chatAbortControllers,
     getRuntimeConfig: () => config,
     getSessionEventSubscriberConnIds: () => receivers,
+    mentionInbox: { invalidate: vi.fn() },
   } as unknown as GatewayRequestContext;
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
+  mocks.invalidate();
   mocks.invalidate.mockClear();
   mocks.loadRow.mockClear();
   mocks.rowLabel = "first";
@@ -81,6 +90,7 @@ describe("sessions.changed coalescing", () => {
   it("emits a leading row and one trailing row with the latest state", () => {
     const context = createContext();
     const initialVersion = readSessionsMutationVersion(context);
+    const initialAccessRevision = readGatewayAccessRevision();
 
     emitSessionsChanged(context, { reason: "create", sessionKey: "agent:main:chat" });
     mocks.rowLabel = "latest";
@@ -98,8 +108,40 @@ describe("sessions.changed coalescing", () => {
       reason: "send",
     });
     expect(readSessionsMutationVersion(context)).toBe(initialVersion + 3);
+    expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 3);
     expect(mocks.invalidate).toHaveBeenCalledTimes(3);
   });
+
+  it.each([true, false])(
+    "refreshes metadata projections without expiring access (receivers: %s)",
+    (receivesEvents) => {
+      const context = createContext(new Set(receivesEvents ? ["conn-1"] : []));
+      const sessionKey = "agent:main:metadata";
+      const initialVersion = readSessionsMutationVersion(context);
+      const initialAccessRevision = readGatewayAccessRevision();
+      const resolve = vi.fn(() => ({
+        canonicalKey: sessionKey,
+        snapshot: { incognito: false, visibility: "shared" as const },
+      }));
+      loadCachedSessionSharingSnapshot({ sessionKey, resolve });
+
+      emitSessionsChanged(context, { reason: "patch", sessionKey }, { accessChanged: false });
+
+      expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
+      expect(readSessionsMutationVersion(context)).toBe(initialVersion + 1);
+      expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+      loadCachedSessionSharingSnapshot({ sessionKey, resolve });
+      expect(resolve).toHaveBeenCalledTimes(2);
+      if (receivesEvents) {
+        const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+        expect(payload).toMatchObject({ reason: "patch", sessionKey, label: "first" });
+        expect(payload).not.toHaveProperty("accessChanged");
+      } else {
+        expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+        expect(mocks.loadRow).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("emits the latest trailing row by the sustained-mutation deadline", () => {
     const context = createContext();
@@ -122,6 +164,26 @@ describe("sessions.changed coalescing", () => {
       label: "state-5",
       reason: "update-5",
     });
+  });
+
+  it.each([false, true])("never samples a replacement for a delete (trailing: %s)", (trailing) => {
+    const context = createContext();
+    const sessionKey = "agent:main:chat";
+    if (trailing) {
+      emitSessionsChanged(context, { reason: "update", sessionKey });
+    }
+    mocks.loadRow.mockClear();
+    const deletion = { reason: "delete", sessionKey, sessionId: "generation-a", agentId: "main" };
+    emitSessionsChanged(context, deletion);
+    mocks.rowLabel = "replacement-b";
+    vi.advanceTimersByTime(100);
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1];
+    expect(payload).toEqual({
+      ...deletion,
+      agentId: "main",
+      ts: expect.any(Number),
+    });
+    expect(mocks.loadRow).not.toHaveBeenCalled();
   });
 
   it("keeps different session keys independent", () => {
@@ -208,8 +270,53 @@ describe("sessions.changed coalescing", () => {
         hasActiveRun: true,
       }),
       expect.anything(),
-      expect.anything(),
+      expect.objectContaining({
+        agentId: "ops",
+        sessionKeys: ["global"],
+      }),
     );
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    expect(payload).not.toHaveProperty("agentId");
+    expect(payload).not.toHaveProperty("goal");
+  });
+
+  it("keeps a retired fixed-store owner private after the mutation commits", () => {
+    const config = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { research: {} },
+      },
+    } satisfies OpenClawConfig;
+    const context = createContext(new Set(["conn-1"]), config);
+
+    emitSessionsChanged(context, { reason: "update", sessionKey: "global" });
+
+    expect(mocks.loadRow).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "global", reason: "update" }),
+      new Set(["conn-1"]),
+      {
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global"],
+      },
+    );
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    for (const field of [
+      "agentId",
+      "key",
+      "label",
+      "session",
+      "goal",
+      "status",
+      "hasActiveRun",
+      "activeRunIds",
+    ]) {
+      expect(payload, field).not.toHaveProperty(field);
+    }
   });
 
   it("tombstones exact run ids when lifecycle projection takes ownership", () => {
@@ -262,6 +369,10 @@ describe("sessions.changed coalescing", () => {
 
     expect(readSessionsMutationVersion(context)).toBe(initialVersion + 1);
     expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+    expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(context.mentionInbox!.invalidate).mock.invocationCallOrder[0]!,
+    );
     expect(mocks.loadRow).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
   });

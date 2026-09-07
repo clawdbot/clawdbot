@@ -1,9 +1,6 @@
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { runWithImageModelFallback } from "../../agents/model-fallback-image.js";
@@ -26,19 +23,18 @@ import {
 } from "../../media-understanding/runtime.js";
 import { getImageMetadata } from "../../media/media-services.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { readInputFiles, writeOutputAsset } from "../media-output.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   parseOptionalPositiveInteger,
   parseOptionalTimeoutMs,
   providerHasGenericConfig,
-  providerSummaryText,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -48,6 +44,9 @@ import {
 
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const IMAGE_QUALITIES = ["low", "medium", "high", "auto"] as const;
+const IMAGE_MODERATIONS = ["low", "auto"] as const;
+const parseImageOption = createEnumOptionParser();
 
 async function runImageGenerate(params: {
   capability: "image.generate" | "image.edit";
@@ -232,62 +231,6 @@ async function runImageDescribe(params: {
   } satisfies CapabilityEnvelope;
 }
 
-function normalizeImageOutputFormat(
-  raw: string | undefined,
-): ImageGenerationOutputFormat | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  if ((IMAGE_OUTPUT_FORMATS as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationOutputFormat;
-  }
-  throw new Error("--output-format must be one of png, jpeg, or webp");
-}
-
-function normalizeImageBackground(
-  raw: string | undefined,
-  label = "--background",
-): ImageGenerationBackground | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  if ((IMAGE_BACKGROUNDS as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationBackground;
-  }
-  throw new Error(`${label} must be one of transparent, opaque, or auto`);
-}
-
-function normalizeImageQuality(raw: string | undefined): ImageGenerationQuality | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized === "low" ||
-    normalized === "medium" ||
-    normalized === "high" ||
-    normalized === "auto"
-  ) {
-    return normalized;
-  }
-  throw new Error("--quality must be one of low, medium, high, or auto");
-}
-
-function normalizeOpenAIModeration(
-  raw: string | undefined,
-): ImageGenerationOpenAIModeration | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "low" || normalized === "auto") {
-    return normalized;
-  }
-  throw new Error("--openai-moderation must be one of low or auto");
-}
-
 function resolveImageDescribeInput(filePath: string): string {
   const trimmed = filePath.trim();
   return /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
@@ -322,14 +265,19 @@ function resolveImageGenerationOptions(opts: Record<string, unknown>, command: C
     size: opts.size as string | undefined,
     aspectRatio: opts.aspectRatio as string | undefined,
     resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
-    outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
-    background: normalizeImageBackground(opts.background as string | undefined),
-    openaiBackground: normalizeImageBackground(
-      opts.openaiBackground as string | undefined,
+    outputFormat: parseImageOption(opts.outputFormat, IMAGE_OUTPUT_FORMATS, "--output-format"),
+    background: parseImageOption(opts.background, IMAGE_BACKGROUNDS, "--background"),
+    openaiBackground: parseImageOption(
+      opts.openaiBackground,
+      IMAGE_BACKGROUNDS,
       "--openai-background",
     ),
-    openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
-    quality: normalizeImageQuality(opts.quality as string | undefined),
+    openaiModeration: parseImageOption(
+      opts.openaiModeration,
+      IMAGE_MODERATIONS,
+      "--openai-moderation",
+    ),
+    quality: parseImageOption(opts.quality, IMAGE_QUALITIES, "--quality"),
     timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs as string | number | undefined),
     output: opts.output as string | undefined,
   };
@@ -361,7 +309,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
     image
       .command("edit")
       .description("Edit images with one or more input files")
-      .requiredOption("--file <path>", "Input file", collectOption, [])
+      .requiredOption("--file <path>", "Input file", collectOption)
       .requiredOption("--prompt <text>", "Prompt text"),
   ).action(async (opts, command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
@@ -405,7 +353,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
   image
     .command("describe-many")
     .description("Describe multiple image files")
-    .requiredOption("--file <path>", "Image file", collectOption, [])
+    .requiredOption("--file <path>", "Image file", collectOption)
     .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")

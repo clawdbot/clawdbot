@@ -1,61 +1,16 @@
 // Github Copilot plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Context } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
   createPayloadPatchStreamWrapper,
+  projectCopilotRequestFacts,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 type StreamOptions = Parameters<StreamFn>[2];
-
-function containsCopilotContentType(value: unknown, type: string): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => containsCopilotContentType(item, type));
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const entry = value as { type?: unknown; content?: unknown };
-  return entry.type === type || containsCopilotContentType(entry.content, type);
-}
-
-function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" {
-  const last = messages[messages.length - 1];
-  if (!last) {
-    return "user";
-  }
-  if (last.role === "user" && containsCopilotContentType(last.content, "tool_result")) {
-    return "agent";
-  }
-  return last.role === "user" ? "user" : "agent";
-}
-
-function hasCopilotVisionInput(messages: Context["messages"]): boolean {
-  return messages.some((message) => {
-    if (message.role === "user" && Array.isArray(message.content)) {
-      return message.content.some((item) => containsCopilotContentType(item, "image"));
-    }
-    if (message.role === "toolResult" && Array.isArray(message.content)) {
-      return message.content.some((item) => containsCopilotContentType(item, "image"));
-    }
-    return false;
-  });
-}
-
-function buildCopilotDynamicHeaders(params: {
-  messages: Context["messages"];
-  hasImages: boolean;
-}): Record<string, string> {
-  return {
-    ...buildCopilotRuntimeHeaders(),
-    "x-initiator": inferCopilotInitiator(params.messages),
-    ...(params.hasImages ? { "Copilot-Vision-Request": "true" } : {}),
-  };
-}
 
 function patchOnPayloadResult(
   result: unknown,
@@ -70,19 +25,6 @@ function patchOnPayloadResult(
   }
   patchPayload(result === undefined ? fallbackPayload : result);
   return result;
-}
-
-function buildCopilotRequestHeaders(
-  context: Parameters<StreamFn>[1],
-  headers: Record<string, string> | undefined,
-): Record<string, string> {
-  return {
-    ...buildCopilotDynamicHeaders({
-      messages: context.messages,
-      hasImages: hasCopilotVisionInput(context.messages),
-    }),
-    ...headers,
-  };
 }
 
 type CopilotAnthropicToolBlock = {
@@ -185,9 +127,7 @@ function patchCopilotAnthropicPayload(payload: Record<string, unknown>): void {
   applyAnthropicEphemeralCacheControlMarkers(payload);
 }
 
-export function wrapCopilotAnthropicStream(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn | undefined {
+function wrapCopilotAnthropicStream(baseStreamFn: StreamFn | undefined): StreamFn | undefined {
   if (!baseStreamFn) {
     return undefined;
   }
@@ -203,7 +143,6 @@ export function wrapCopilotAnthropicStream(
     const originalOnPayload = options?.onPayload;
     return payloadWrapper(model, context, {
       ...options,
-      headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) =>
         patchOnPayloadResult(
           originalOnPayload?.(payload, payloadModel),
@@ -233,37 +172,39 @@ function wrapCopilotOpenAIResponsesStream(
     const originalOnPayload = options?.onPayload;
     const wrappedOptions: StreamOptions = {
       ...options,
-      headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
         sanitizeCopilotReplayResponsePayload(payload);
-        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));
+        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel), undefined, payload);
       },
     };
     return underlying(model, context, wrappedOptions);
   };
 }
 
-function wrapCopilotOpenAICompletionsStream(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn | undefined {
-  if (!baseStreamFn) {
+export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  const stream = wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn));
+  if (!stream) {
     return undefined;
   }
-  const underlying = baseStreamFn;
   return (model, context, options) => {
-    if (model.provider !== "github-copilot" || model.api !== "openai-completions") {
-      return underlying(model, context, options);
+    if (
+      model.provider !== "github-copilot" ||
+      !["anthropic-messages", "openai-responses", "openai-completions"].includes(model.api)
+    ) {
+      return stream(model, context, options);
     }
-
-    return underlying(model, context, {
+    const facts = projectCopilotRequestFacts(context.messages, "nested");
+    return stream(model, context, {
       ...options,
-      headers: buildCopilotRequestHeaders(context, options?.headers),
+      headers: buildCopilotRuntimeHeaders({
+        config: ctx.config,
+        headers: {
+          ...model.headers,
+          "x-initiator": facts.initiator,
+          ...(facts.hasImages ? { "Copilot-Vision-Request": "true" } : {}),
+          ...options?.headers,
+        },
+      }),
     });
   };
-}
-
-export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  return wrapCopilotOpenAICompletionsStream(
-    wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn)),
-  );
 }

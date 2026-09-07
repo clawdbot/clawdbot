@@ -1,6 +1,7 @@
 /** Gateway-backed archive and delete commands for stored sessions. */
 import type {
   PreservedSessionWorktree,
+  SessionRow,
   SessionsDeleteResult,
   WorktreePreservationReason,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -46,11 +47,7 @@ type SessionsLifecycleResult = {
   worktreePreserved?: PreservedSessionWorktree;
 };
 
-type SessionsListRow = {
-  key: string;
-  sessionId?: string;
-  archived?: boolean;
-};
+type SessionsListRow = Pick<SessionRow, "key" | "sessionId" | "archived" | "isMain">;
 
 type SessionsListResult = {
   sessions?: SessionsListRow[];
@@ -286,24 +283,27 @@ async function runSessionsLifecycleCommand(
   }
 
   for (const { index, session } of validTargets) {
-    if (opts.dryRun) {
-      results[index] = {
-        key: session.key,
-        ok: true,
-        status:
-          operation === "archive"
-            ? session.archived === true
-              ? "already_archived"
-              : "would_archive"
-            : "would_delete",
-      };
-      continue;
-    }
     if (operation === "archive" && session.archived === true) {
       results[index] = { key: session.key, ok: true, status: "already_archived" };
       continue;
     }
     try {
+      if (opts.dryRun) {
+        // Global classification does not encode selected-agent deletion eligibility.
+        if (session.isMain === true && session.key !== "global") {
+          throw new Error(
+            operation === "archive"
+              ? "Cannot archive an agent's main session."
+              : `Cannot delete the main session (${session.key}).`,
+          );
+        }
+        results[index] = {
+          key: session.key,
+          ok: true,
+          status: operation === "archive" ? "would_archive" : "would_delete",
+        };
+        continue;
+      }
       if (operation === "archive") {
         const response = (await callGatewayFromCliWithTransport(
           "sessions.patch",
@@ -331,7 +331,7 @@ async function runSessionsLifecycleCommand(
             deleteTranscript: true,
             ...(session.archived === true ? { archivedOnly: true } : {}),
           },
-          { defaultTimeoutMs: 30_000 },
+          { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
         )) as SessionsDeleteResult;
         if (!response.deleted) {
           results[index] = notFoundResult(session.key, agent);

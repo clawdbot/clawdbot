@@ -7,12 +7,12 @@ import {
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Message } from "../internal/discord.js";
 
-let resolveDiscordMessageText: typeof import("./message-utils.js").resolveDiscordMessageText;
-let resolveDiscordMessageHistoryText: typeof import("./message-utils.js").resolveDiscordMessageHistoryText;
+let resolveDiscordMessageText: typeof import("./message-text.js").resolveDiscordMessageText;
+let resolveDiscordMessageHistoryText: typeof import("./message-text.js").resolveDiscordMessageHistoryText;
 
 beforeAll(async () => {
   ({ resolveDiscordMessageHistoryText, resolveDiscordMessageText } =
-    await import("./message-utils.js"));
+    await import("./message-text.js"));
 });
 
 function asMessage(payload: Record<string, unknown>): Message {
@@ -124,6 +124,32 @@ describe("resolveDiscordMessageText", () => {
       }),
     );
     expect(text).toBe("Hello @Alice Wonderland and @bob!");
+  });
+
+  it.each(["a$'b", "$&", "big$$money", "a$`b"])(
+    "preserves literal mention labels containing %s",
+    (label) => {
+      const text = resolveDiscordMessageText(
+        asMessage({
+          content: "Hello <@1> and <@!1>, meet <@2>!",
+          mentionedUsers: [
+            { id: "1", globalName: label, username: "fallback" },
+            { id: "2", username: label },
+          ],
+        }),
+      );
+      expect(text).toBe(`Hello @${label} and @${label}, meet @${label}!`);
+    },
+  );
+
+  it.each([undefined, ""])("uses the user ID when mention names are %s", (name) => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Hello <@1> and <@!1>!",
+        mentionedUsers: [{ id: "1", globalName: name, username: name }],
+      }),
+    );
+    expect(text).toBe("Hello @1 and @1!");
   });
 
   it("leaves content unchanged if no mentions present", () => {

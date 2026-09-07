@@ -1,6 +1,6 @@
 /** Tests Code Mode MCP namespace. */
 
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { GetPromptResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
@@ -53,6 +53,7 @@ describe("Code Mode MCP namespace", () => {
           repo: { type: "string", description: "Repository 名称" },
           title: { type: "string", description: "Issue title\nShown in tracker" },
           body: { type: "string", default: "" },
+          labels: { type: "array", items: { type: "string", enum: ["red", "blue"] } },
         },
         required: ["owner", "repo", "title"],
       },
@@ -83,6 +84,7 @@ describe("Code Mode MCP namespace", () => {
           owner: "openclaw",
           repo: "openclaw",
           title: "Ship it",
+          labels: ["red", "blue"],
         });
         const createdPayload = JSON.parse(created.content[0].text);
         const searchHits = await catalog.search("github create issue", { limit: 5 });
@@ -117,6 +119,7 @@ describe("Code Mode MCP namespace", () => {
           repo: "openclaw",
           title: "Ship it",
           body: "",
+          labels: ["red", "blue"],
         },
       },
       leakedInternalDetails: false,
@@ -147,6 +150,9 @@ describe("Code Mode MCP namespace", () => {
     expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
     expect(value.apiHeader).not.toContain("@param title Issue title\n");
     expect(value.apiHeader).toContain("title: string;");
+    expect(value.apiHeader).toContain('@param body? Default: "".');
+    expect(value.apiHeader).toContain('labels?: Array<"red" | "blue">;');
+    expect(value.serverFileContent).toContain('labels?: Array<"red" | "blue">;');
     expect(githubCreate.execute).toHaveBeenCalledTimes(1);
   });
 
@@ -258,7 +264,7 @@ describe("Code Mode MCP namespace", () => {
       listResources: async () => privateUtilityResults.resources_list,
       readResource: async () => privateUtilityResults.resources_read,
       listPrompts: async () => privateUtilityResults.prompts_list,
-      getPrompt: async () => privateUtilityResults.prompts_get,
+      getPrompt: async () => GetPromptResultSchema.parse(privateUtilityResults.prompts_get),
       dispose: async () => {},
     };
     const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
@@ -293,7 +299,7 @@ describe("Code Mode MCP namespace", () => {
             "McpPromptsGetResult",
           ].map((name) => ({
             name,
-            declared: api.header.includes("type " + name + " ="),
+            declared: api.header.includes("interface " + name + " {"),
             returned: api.header.includes("Promise<" + name + ">"),
           })),
         };

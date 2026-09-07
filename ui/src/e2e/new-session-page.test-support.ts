@@ -1,7 +1,9 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { errors, type Locator, type Page } from "playwright";
 import { expect } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -12,11 +14,12 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { waitForCommittedState } from "./settle.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 export { controlUiSessionPath, controlUiSessionUrl, waitForConfirmModal };
 
 const NEW_SESSION_FEATURE_METHODS = [
+  "agent.wait",
   "chat.metadata",
   "chat.startup",
   "sessions.create",
@@ -34,6 +37,28 @@ export function installMockGateway(
 }
 
 export const WORKSPACE = "/home/peter/openclaw";
+
+export const LOCAL_GIT_WORKSPACE_RESPONSES = {
+  "agents.list": {
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Main" },
+        name: "Main",
+        workspace: WORKSPACE,
+        workspaceGit: true,
+      },
+    ],
+    defaultId: "main",
+    mainKey: "main",
+    scope: "agent",
+  },
+  "worktrees.branches": {
+    branches: [{ kind: "local", name: "main" }],
+    defaultBranch: "main",
+    repositoryStatus: "git",
+  },
+};
 export const PICKED = "/home/peter/openclaw/packages";
 export const SOURCE_REPO = "/tmp/source-repo";
 export const TARGET_REPO = "/tmp/target-repo";
@@ -43,42 +68,9 @@ const LOCATOR_TEXT_READ_TIMEOUT_MS = 500;
 const LOCATOR_TEXT_POLL_TIMEOUT_MS = 10_000;
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "cloud-worker-session",
-);
-export const reconnectProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "initial-prompt-reconnect",
-);
-export const projectProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "project-registry",
-);
-const environmentMetadataProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "environment-metadata",
-);
-const deviceRuntimeProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "device-runtime-gating",
-);
 
-export async function prepareProjectUiProof() {
-  if (captureUiProofEnabled) {
-    await mkdir(projectProofArtifactDir, { recursive: true });
-  }
-}
+type NewSessionProofSurface = { surface: Locator; content: readonly Locator[] };
+
 export const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 export const SESSION_LIST_DEFAULTS = {
@@ -113,6 +105,81 @@ export function createNewSessionPageE2eSuite() {
   });
 }
 
+export async function expectDecodedThumbnail(image: Locator, expectedNaturalWidth?: number) {
+  await image.waitFor({ state: "visible" });
+  await image.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() =>
+      image.evaluate(async (element: HTMLImageElement, expectedWidth) => {
+        await element.decode();
+        const bounds = element.getBoundingClientRect();
+        return (
+          (expectedWidth === undefined || element.naturalWidth === expectedWidth) &&
+          Math.min(element.naturalWidth, element.naturalHeight, bounds.width, bounds.height) >=
+            32 &&
+          bounds.top >= 0 &&
+          bounds.left >= 0 &&
+          bounds.bottom <= window.innerHeight &&
+          bounds.right <= window.innerWidth
+        );
+      }, expectedNaturalWidth),
+    )
+    .toBe(true);
+}
+
+export async function expectPastedPngImage(image: Locator) {
+  await image.waitFor({ state: "visible" });
+  const decoded = await image.evaluate(async (element: HTMLImageElement) => {
+    await element.decode();
+    const bytes = new Uint8Array(await (await fetch(element.currentSrc)).arrayBuffer());
+    return {
+      width: element.naturalWidth,
+      height: element.naturalHeight,
+      base64: btoa(String.fromCharCode(...bytes)),
+    };
+  });
+  expect(decoded).toEqual({ width: 1, height: 1, base64: ONE_PIXEL_PNG_B64 });
+}
+
+export async function expectPendingNewSessionPresentation(page: Page) {
+  const presentation = await page.locator(".new-session-page__starting").evaluate((thread) => {
+    const user = thread.querySelector<HTMLElement>(".chat-group.user")!;
+    const bubble = user.querySelector<HTMLElement>(".chat-bubble")!;
+    const text = bubble.classList.contains("chat-bubble--with-images")
+      ? bubble.querySelector<HTMLElement>(".chat-text, .chat-json-collapse")!
+      : bubble;
+    const claw = thread.querySelector<SVGElement>(".chat-reading-indicator svg")!;
+    const userStyle = getComputedStyle(user);
+    const textStyle = getComputedStyle(text);
+    const clawStyle = getComputedStyle(claw);
+    const row = user.getBoundingClientRect();
+    const content = bubble.getBoundingClientRect();
+    return {
+      direction: userStyle.flexDirection,
+      width: thread.getBoundingClientRect().width,
+      rightGap: Math.abs(row.right - content.right),
+      padding: [textStyle.paddingTop, textStyle.paddingRight],
+      images: bubble.classList.contains("chat-bubble--with-images"),
+      background: textStyle.backgroundColor,
+      clawSize: [clawStyle.width, clawStyle.height],
+      animation: clawStyle.animationName,
+      reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    };
+  });
+  expect(presentation.direction).toBe("row-reverse");
+  expect(presentation.width).toBeLessThanOrEqual(768);
+  expect(presentation.rightGap).toBeLessThanOrEqual(1);
+  expect(presentation.padding).toEqual(presentation.images ? ["10px", "14px"] : ["16px", "16px"]);
+  expect(presentation.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(presentation.clawSize).toEqual(["18px", "18px"]);
+  if (presentation.reducedMotion) {
+    expect(presentation.animation).toBe("none");
+  } else {
+    expect(presentation.animation).toContain("chatWorkingClawFlex");
+  }
+  return presentation;
+}
+
 export function createdSessionListResult(sessionKey: string) {
   return {
     count: 1,
@@ -135,70 +202,139 @@ export function createdSessionListResult(sessionKey: string) {
 }
 
 export async function expectPendingSessionPlacementStartupBeforeRuntime(
+  owner: { readonly artifactDir: string },
   page: Page,
   gateway: MockGatewayControls,
   sessionKey: string,
 ) {
   await waitForCommittedChatRoute(page);
   expect(page.url()).toContain(controlUiSessionPath(sessionKey));
-  const startupStatus = page.locator('.chat-cloud-startup[role="status"]');
+  const startupStatus = page.locator('.chat-thread .chat-working-indicator[role="status"]');
   await expect.poll(() => startupStatus.count()).toBe(1);
-  await pollLocatorText(startupStatus).toContain("Starting…");
+  await pollLocatorText(startupStatus).toContain("Provisioning environment…");
+  expect(await page.locator(".chat-cloud-startup, .agent-chat__composer-status-band").count()).toBe(
+    0,
+  );
   await expect
     .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
     .toBe(true);
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
   expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
-  await captureUiProof(page, "02-cloud-startup-chunk-pending.png");
+  await captureUiProof(owner, page, "02-cloud-startup-chunk-pending.png");
   return startupStatus;
 }
 
-export async function captureUiProof(page: Page, fileName: string) {
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+  presentation?: NewSessionProofSurface,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
-  });
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "cloud-worker-session"),
+    fileName,
+    presentation,
+  );
 }
 
-export async function captureProjectUiProof(page: Page, fileName: string) {
+export async function captureProjectUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+  presentation?: NewSessionProofSurface,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(projectProofArtifactDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(projectProofArtifactDir, fileName),
-  });
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "project-registry"),
+    fileName,
+    presentation,
+  );
 }
 
-export async function captureEnvironmentMetadataUiProof(page: Page) {
+export async function captureNewSessionComposerUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+  presentation?: NewSessionProofSurface,
+) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "new-session-slash-menu"),
+    fileName,
+    presentation,
+  );
+}
+
+export async function captureEnvironmentMetadataUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+) {
   const proofName = process.env.OPENCLAW_ENVIRONMENT_METADATA_PROOF;
   if (proofName !== "before" && proofName !== "after") {
     return;
   }
-  await mkdir(environmentMetadataProofArtifactDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(environmentMetadataProofArtifactDir, `${proofName}.png`),
-  });
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "environment-metadata"),
+    `${proofName}.png`,
+  );
 }
 
-export async function captureDeviceRuntimeUiProof(page: Page, fileName: string) {
+export async function captureDeviceRuntimeUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+  presentation?: NewSessionProofSurface,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(deviceRuntimeProofArtifactDir, { recursive: true });
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "device-runtime-gating"),
+    fileName,
+    presentation,
+  );
+}
+
+async function captureProof(
+  page: Page,
+  artifactDir: string,
+  fileName: string,
+  presentation?: NewSessionProofSurface,
+) {
+  if (page.video()) {
+    await mkdir(artifactDir, { recursive: true });
+    await writeFile(
+      path.join(artifactDir, fileName),
+      await takeControlUiViewportScreenshot(
+        page,
+        presentation?.surface ?? page.locator(".shell"),
+        presentation?.content ?? [
+          page
+            .locator(
+              ".new-session-page__message:visible, .new-session-page__starting .chat-group.user:visible, .agent-chat__composer-combobox textarea:visible",
+            )
+            .first(),
+        ],
+      ),
+    );
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(deviceRuntimeProofArtifactDir, fileName),
+    path: path.join(artifactDir, fileName),
   });
 }
 
@@ -222,67 +358,24 @@ export async function pastePng(target: Locator, count = 1) {
 export async function waitForCommittedNewSessionDraft(
   page: Page,
   expectedText: string | null,
-  expectedAttachmentCount: number,
+  expectedAttachments: number | readonly string[],
 ): Promise<void> {
-  // Filling only proves DOM state. The durable read waits for the IndexedDB
-  // transaction so reload or navigation cannot beat the snapshot write.
-  await waitForCommittedState(
-    page,
-    async (expected) => {
-      const { text, attachmentCount } = expected;
-      if ((typeof text !== "string" && text !== null) || typeof attachmentCount !== "number") {
-        return false;
-      }
-      try {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                connection: { gatewayUrl: string };
-                snapshot: { client: { recoveryScope?: string } | null };
-              };
-            };
-          };
-        };
-        const gateway = app.runtime?.context.gateway;
-        const recoveryScope = gateway?.snapshot.client?.recoveryScope;
-        if (!gateway || !recoveryScope) {
-          return false;
-        }
-        const storeUrl = performance
-          .getEntriesByType("resource")
-          .map((entry) => entry.name)
-          .find((name) => /\/composer-draft-store\.runtime-[^/]+\.js$/u.test(name));
-        if (!storeUrl) {
-          return false;
-        }
-        const draftStore = (await import(
-          /* @vite-ignore */ storeUrl
-        )) as typeof import("../lib/chat/composer-draft-store.runtime.ts");
-        const params = new URLSearchParams(window.location.search);
-        const result = await draftStore.readDurableComposerDraft({
-          gatewayOwner: gateway.connection.gatewayUrl.trim() || "default",
-          recoveryScope,
-          scopeKey: JSON.stringify([
-            params.get("agent")?.trim() ?? "",
-            params.get("catalog")?.trim() ?? "",
-            params.get("group")?.trim() ?? "",
-          ]),
-        });
-        if (text === null) {
-          return result.status === "not-found" && result.revision !== undefined;
-        }
-        return (
-          result.status === "found" &&
-          result.draft.text === text &&
-          result.draft.attachments.length === attachmentCount
-        );
-      } catch {
-        return false;
-      }
-    },
-    { text: expectedText, attachmentCount: expectedAttachmentCount },
-  );
+  const params = new URL(page.url()).searchParams;
+  const scopeKey = JSON.stringify([
+    params.get("agent")?.trim() ?? "",
+    params.get("catalog")?.trim() ?? "",
+    params.get("group")?.trim() ?? "",
+  ]);
+  await waitForCommittedComposerDraft(page, scopeKey, expectedText, expectedAttachments);
+}
+
+export async function waitForGatewayRecoveryScope(page: Page, ready = true) {
+  await page.waitForFunction((expected) => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: ApplicationContext };
+    };
+    return app.runtime?.context.gateway.snapshot.client?.recoveryScopeReady === expected;
+  }, ready);
 }
 
 export async function replaceGatewayClient(page: Page) {
@@ -295,6 +388,14 @@ export async function replaceGatewayClient(page: Page) {
     }
     app.runtime.context.gateway.connect();
   });
+}
+
+export async function openNewSessionPlusMenu(page: Page) {
+  const composer = page.locator(".new-session-page__composer");
+  const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+  await composer.getByRole("button", { name: "Add attachment" }).click();
+  await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
+  return menu;
 }
 
 export async function navigateInApp(page: Page, routeId: string, search = "") {

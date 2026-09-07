@@ -104,11 +104,12 @@ For VM hosts using `systemd`, consider:
 
 - Service env for a stable startup path: `OPENCLAW_NO_RESPAWN=1` and
   `NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache`
-- Explicit restart behavior: `Restart=always`, `RestartSec=2`, `TimeoutStartSec=90`
+- A longer startup timeout for slow hosts: `TimeoutStartSec=90`.
+- The managed unit owns the generic restart policy: `Restart=always`, `RestartSec=5`.
 - SSD-backed disks for state/cache paths to reduce random-I/O cold-start penalties.
 
 The standard `openclaw onboard --install-daemon` path installs a systemd user
-unit; edit it with:
+unit; customize only host-specific startup settings with:
 
 ```bash
 systemctl --user edit openclaw-gateway.service
@@ -118,16 +119,13 @@ systemctl --user edit openclaw-gateway.service
 [Service]
 Environment=OPENCLAW_NO_RESPAWN=1
 Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
-Restart=always
-RestartSec=2
 TimeoutStartSec=90
 ```
 
 If you deliberately installed a system unit instead, edit it via
 `sudo systemctl edit openclaw-gateway.service`.
 
-How `Restart=` policies help automated recovery:
-[systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
+For the canonical managed unit body and its restart policy, see the [Gateway runbook](/gateway).
 
 For Linux OOM behavior, child process victim selection, and `exit 137`
 diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-pressure-and-oom-kills).

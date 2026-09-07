@@ -31,7 +31,6 @@ type SelectionDeps = {
   profile: ResolvedBrowserProfile;
   runtime: ProfileRuntimeState;
   getCdpControlPolicy: () => SsrFPolicy | undefined;
-  ensureBrowserAvailable: (opts?: { headless?: boolean; signal?: AbortSignal }) => Promise<void>;
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (url: string, options?: BrowserOperationOptions) => Promise<BrowserTab>;
 };
@@ -40,7 +39,6 @@ type SelectionOps = {
   ensureTabAvailable: (
     targetId?: string,
     options?: EnsureTabAvailableOptions,
-    browserAlreadyEnsured?: boolean,
   ) => Promise<BrowserTab>;
   focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
   closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<string>;
@@ -75,7 +73,6 @@ export function createProfileSelectionOps({
   profile,
   runtime,
   getCdpControlPolicy,
-  ensureBrowserAvailable,
   listTabs,
   openTab,
 }: SelectionDeps): SelectionOps {
@@ -85,12 +82,7 @@ export function createProfileSelectionOps({
   const ensureTabAvailable = async (
     targetId?: string,
     options?: EnsureTabAvailableOptions,
-    browserAlreadyEnsured = false,
   ): Promise<BrowserTab> => {
-    options?.signal?.throwIfAborted();
-    if (!browserAlreadyEnsured) {
-      await ensureBrowserAvailable({ signal: options?.signal });
-    }
     options?.signal?.throwIfAborted();
     let lastNonEmptyTabs: BrowserTab[] = [];
     let lastListError: unknown;
@@ -114,6 +106,9 @@ export function createProfileSelectionOps({
     };
 
     const openWhenConfirmedEmpty = async (tabs: BrowserTab[]): Promise<void> => {
+      if (targetId !== undefined) {
+        return;
+      }
       if (!openedTab && sawSuccessfulList && lastNonEmptyTabs.length === 0 && tabs.length === 0) {
         openedTab = await openTab("about:blank", options);
       }
@@ -256,6 +251,7 @@ export function createProfileSelectionOps({
     if (capabilities.usesChromeMcp) {
       assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
       const { focusChromeMcpTab } = await getChromeMcpModule();
+      options?.signal?.throwIfAborted();
       await focusChromeMcpTab(profile.name, resolvedTargetId, profile, options);
       runtime.lastTargetId = resolvedTargetId;
       return;
@@ -266,20 +262,23 @@ export function createProfileSelectionOps({
       const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.focusPageByTargetIdViaPlaywright;
       if (typeof focusPageByTargetIdViaPlaywright === "function") {
+        options?.signal?.throwIfAborted();
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
           ssrfPolicy: getCdpControlPolicy(),
+          ...(options?.signal ? { signal: options.signal } : {}),
         });
         runtime.lastTargetId = resolvedTargetId;
         return;
       }
     }
 
+    options?.signal?.throwIfAborted();
     await fetchOk(
       appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`),
       undefined,
-      undefined,
+      options?.signal ? { signal: options.signal } : undefined,
       getCdpControlPolicy(),
     );
     runtime.lastTargetId = resolvedTargetId;
@@ -291,6 +290,7 @@ export function createProfileSelectionOps({
     if (capabilities.usesChromeMcp) {
       assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
       const { closeChromeMcpTab } = await getChromeMcpModule();
+      options?.signal?.throwIfAborted();
       await closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
     } else {
       let closedViaPlaywright = false;
@@ -300,20 +300,23 @@ export function createProfileSelectionOps({
         const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
           ?.closePageByTargetIdViaPlaywright;
         if (typeof closePageByTargetIdViaPlaywright === "function") {
+          options?.signal?.throwIfAborted();
           await closePageByTargetIdViaPlaywright({
             cdpUrl: profile.cdpUrl,
             targetId: resolvedTargetId,
             ssrfPolicy: getCdpControlPolicy(),
+            ...(options?.signal ? { signal: options.signal } : {}),
           });
           closedViaPlaywright = true;
         }
       }
 
       if (!closedViaPlaywright) {
+        options?.signal?.throwIfAborted();
         await fetchOk(
           appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
           undefined,
-          undefined,
+          options?.signal ? { signal: options.signal } : undefined,
           getCdpControlPolicy(),
         );
       }

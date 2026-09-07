@@ -96,6 +96,8 @@ describe("account-scoped conversation binding expiry", () => {
     closeOpenClawStateDatabaseForTest();
 
     const restarted = createManager();
+    manager.stop();
+    expect(createManager()).toBe(restarted);
     expect(restarted.getByConversationId(binding.conversationId)).toEqual(binding);
     expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
       bindingId: "ttl-owner:chat:durable-owner",
@@ -104,42 +106,61 @@ describe("account-scoped conversation binding expiry", () => {
     });
   });
 
-  it("preserves the complete opaque adapter metadata envelope through recreation", async () => {
-    const manager = createManager();
-    const metadata = {
-      agentId: "main",
-      label: "durable label",
-      boundBy: "operator",
-      pluginBindingOwner: "owner-plugin",
-      pluginId: "opaque-plugin",
-      nested: { ownerEpoch: 7, capabilities: ["approve", "resume"] },
-    };
-    const conversation = {
-      channel: "imessage",
-      accountId: manager.accountId,
-      conversationId: "chat:opaque-metadata",
-    };
-    const bound = await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:acp:opaque-session",
-      targetKind: "session",
-      conversation,
-      metadata,
-    });
+  it.each(["agent", "plugin"] as const)(
+    "preserves opaque %s binding metadata through recreation",
+    async (ownerKind) => {
+      const cfg = {
+        ...baseCfg,
+        agents: { entries: { alpha: {}, beta: {} } },
+      } satisfies OpenClawConfig;
+      const manager = createManager({ cfg });
+      const metadata = {
+        ...(ownerKind === "agent" ? { agentId: "alpha" } : {}),
+        label: "durable label",
+        boundBy: "operator",
+        pluginBindingOwner: "plugin",
+        pluginId: "opaque-plugin",
+        pluginRoot: "/plugins/opaque-plugin",
+        nested: { ownerEpoch: 7, capabilities: ["approve", "resume"] },
+      };
+      const conversation = {
+        channel: "imessage",
+        accountId: manager.accountId,
+        conversationId: "chat:opaque-metadata",
+      };
+      const bound = await getSessionBindingService().bind({
+        targetSessionKey:
+          ownerKind === "agent"
+            ? "agent:alpha:acp:opaque-session"
+            : "plugin-binding:opaque-plugin:opaque-session",
+        targetKind: "session",
+        conversation,
+        metadata,
+      });
 
-    expect(bound.bindingId).toBe("ttl-owner:chat:opaque-metadata");
-    expect(bound.metadata).toMatchObject(metadata);
-    expect(manager.getByConversationId(conversation.conversationId)?.targetKind).toBe("acp");
+      expect(bound.bindingId).toBe("ttl-owner:chat:opaque-metadata");
+      expect(bound.metadata).toMatchObject(metadata);
+      expect(bound.metadata?.agentId).toBe(ownerKind === "agent" ? "alpha" : undefined);
+      expect(manager.getByConversationId(conversation.conversationId)?.targetKind).toBe("acp");
+      await expect(
+        getSessionBindingService().bind({
+          conversation,
+          targetSessionKey: bound.targetSessionKey,
+          targetKind: bound.targetKind,
+        }),
+      ).resolves.toMatchObject({ metadata });
 
-    manager.stop();
-    closeOpenClawStateDatabaseForTest();
-    createManager();
+      manager.stop();
+      closeOpenClawStateDatabaseForTest();
+      createManager({ cfg });
 
-    expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
-      bindingId: "ttl-owner:chat:opaque-metadata",
-      targetKind: "session",
-      metadata,
-    });
-  });
+      expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
+        bindingId: "ttl-owner:chat:opaque-metadata",
+        targetKind: "session",
+        metadata,
+      });
+    },
+  );
 
   it("keeps the previously committed account binding visible when its replacement write fails", () => {
     const manager = createManager();
@@ -171,6 +192,63 @@ describe("account-scoped conversation binding expiry", () => {
       })?.targetSessionKey,
     ).toBe(original.targetSessionKey);
   });
+
+  it.each([false, true])(
+    "inherits runtime metadata only when refreshing the same target (replace=%s)",
+    async (replace) => {
+      const manager = createManager();
+      const service = getSessionBindingService();
+      const conversation = {
+        channel: "imessage",
+        accountId: manager.accountId,
+        conversationId: "chat:replacement-owner",
+      };
+      const metadata = {
+        pluginBindingOwner: "plugin",
+        pluginId: "owner-plugin",
+        pluginRoot: "/plugins/owner-plugin",
+        agentId: "previous-agent",
+        boundBy: "previous-user",
+        opaque: { runtimeId: "original" },
+      };
+      const originalTarget = "plugin-binding:owner-plugin:original";
+      await service.bind({
+        targetSessionKey: originalTarget,
+        targetKind: "session",
+        conversation,
+        metadata,
+      });
+      const targetSessionKey = replace ? "agent:main:acp:replacement" : originalTarget;
+
+      await service.bind({
+        targetSessionKey,
+        targetKind: "session",
+        conversation,
+        metadata: { label: "updated" },
+      });
+      manager.stop();
+      closeOpenClawStateDatabaseForTest();
+      createManager();
+
+      expect(service.resolveByConversation(conversation)).toMatchObject({
+        targetSessionKey,
+        metadata: {
+          agentId: replace ? "main" : "previous-agent",
+          label: "updated",
+        },
+      });
+      const resolvedMetadata = service.resolveByConversation(conversation)?.metadata;
+      for (const key of [
+        "pluginBindingOwner",
+        "pluginId",
+        "pluginRoot",
+        "boundBy",
+        "opaque",
+      ] as const) {
+        expect(resolvedMetadata?.[key]).toEqual(replace ? undefined : metadata[key]);
+      }
+    },
+  );
 
   it("expires idle bindings from both manager and session-service lookups", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);

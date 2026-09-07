@@ -1,5 +1,5 @@
 // Maintenance preserve providers protect runtime-owned sessions from pruning/capping.
-import { collectActiveSessionWorkAdmissionIdentities } from "../../sessions/session-lifecycle-admission.js";
+import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
@@ -58,7 +58,8 @@ export function collectActiveSessionWorkAdmissionKeys(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
 }): Set<string> | undefined {
-  const activeIdentities = collectActiveSessionWorkAdmissionIdentities(params.storePath);
+  const activeIdentities =
+    collectActiveSessionWorkAdmissions().get(params.storePath) ?? new Set<string>();
   if (activeIdentities.size === 0) {
     return undefined;
   }

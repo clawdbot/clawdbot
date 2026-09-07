@@ -43,6 +43,10 @@ export class McpAppUnmountGate {
     private readonly selector = "mcp-app-view",
   ) {}
 
+  get retiring(): boolean {
+    return this.pending || this.restartTargets !== null;
+  }
+
   private apply(key: McpAppUnmountKey, renderValue: () => unknown): unknown {
     this.renderedValue = renderValue();
     this.renderedKey = key;

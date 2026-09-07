@@ -23,19 +23,12 @@ import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
-import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
-import {
-  buildActiveImageGenerationTaskPromptContextForSession,
-  buildActiveMusicGenerationTaskPromptContextForSession,
-  buildActiveVideoGenerationTaskPromptContextForSession,
-} from "../../media-generation-task-status.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptBuildHookRunner = {
@@ -113,6 +106,7 @@ export async function resolvePromptBuildHookResult(params: {
     : await drainPluginNextTurnInjectionContext({
         cfg: params.config,
         sessionKey: params.hookCtx.sessionKey,
+        agentId: params.hookCtx.agentId,
       });
   if (runId && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
@@ -194,32 +188,6 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
     return "full";
   }
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
-}
-
-/**
- * Determines whether the default agent's heartbeat run should include the
- * heartbeat prompt contribution. Non-default agents and non-heartbeat triggers
- * keep their normal prompt shape.
- */
-export function shouldInjectHeartbeatPrompt(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  defaultAgentId?: string;
-  isDefaultAgent: boolean;
-  trigger?: EmbeddedRunAttemptParams["trigger"];
-  bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
-}): boolean {
-  return (
-    params.isDefaultAgent &&
-    shouldInjectHeartbeatPromptForTrigger(params.trigger) &&
-    Boolean(
-      resolveHeartbeatPromptForSystemPrompt({
-        config: params.config,
-        agentId: params.agentId,
-        defaultAgentId: params.defaultAgentId,
-      }),
-    )
-  );
 }
 
 /** User-visible runs warn when transcript repair had to merge an orphaned user turn. */
@@ -423,8 +391,12 @@ function shouldDropStaleInternalOrphanedUserPrompt(params: {
 
 /**
  * Merges a trailing user message that was queued in transcript history but not
- * present in the active prompt. The leaf is removed whether merged or already
- * present so the transcript cannot submit the same user turn twice.
+ * present in the active prompt.
+ *
+ * External user leaves are eligible to remain canonical (`removeLeaf: false`).
+ * Session repair preserves them only for producer-tagged main-session restart
+ * recovery; ordinary repair replaces them with the merged prompt. Empty or stale
+ * internal leaves are always detached.
  */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
@@ -435,9 +407,6 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   if (!orphanText) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
-  if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
-    return { prompt: params.prompt, merged: false, removeLeaf: true };
-  }
   if (
     shouldDropStaleInternalOrphanedUserPrompt({
       prompt: params.prompt,
@@ -446,11 +415,15 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
+  if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
+    // Text is already in the active prompt; keep the leaf for later turns.
+    return { prompt: params.prompt, merged: false, removeLeaf: false };
+  }
 
   return {
     prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
     merged: true,
-    removeLeaf: true,
+    removeLeaf: false,
   };
 }
 
@@ -471,31 +444,13 @@ export function prependSystemPromptAddition(params: {
   return prependSystemPromptAdditionAfterCacheBoundary(params);
 }
 
-// Per-turn media-generation task hints depend on live session state, so they must
-// be routed BELOW the system-prompt cache boundary (via prependSystemPromptAddition)
-// rather than placed in the static prepend slot — keeping them above the boundary
-// shifted the cacheable prefix turn-to-turn and broke prompt caching (#85203).
-export function resolveAttemptMediaTaskSystemPromptAddition(params: {
-  sessionKey?: string;
-  agentId?: string;
-  trigger?: EmbeddedRunAttemptParams["trigger"];
-}): string | undefined {
-  if (params.trigger !== "user" && params.trigger !== "manual") {
-    return undefined;
-  }
-  return joinPresentTextSegments([
-    buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey, params.agentId),
-    buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey, params.agentId),
-    buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey, params.agentId),
-  ]);
-}
-
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "sessionTarget"
   | "contextEngineAgentId"
   | "sessionKey"
   | "sandboxSessionKey"
+  | "sandboxAgentId"
   | "messageChannel"
   | "messageProvider"
   | "agentAccountId"
@@ -504,6 +459,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "currentMessageId"
   | "config"
   | "skillsSnapshot"
+  | "toolsAllow"
   | "senderId"
   | "provider"
   | "modelId"
@@ -567,6 +523,8 @@ export function buildAfterTurnRuntimeContext(params: {
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
+      sandboxSessionKey: params.attempt.sandboxSessionKey,
+      sandboxAgentId: params.attempt.sandboxAgentId,
       messageChannel: params.attempt.messageChannel,
       messageProvider: params.attempt.messageProvider,
       agentAccountId: params.attempt.agentAccountId,
@@ -580,6 +538,7 @@ export function buildAfterTurnRuntimeContext(params: {
       cwd: params.cwd,
       agentDir: params.agentDir,
       config: params.attempt.config,
+      toolsAllow: params.attempt.toolsAllow,
       skillsSnapshot: params.attempt.skillsSnapshot,
       senderId: params.attempt.senderId,
       provider: params.attempt.provider,
@@ -593,7 +552,7 @@ export function buildAfterTurnRuntimeContext(params: {
       ownerNumbers: params.attempt.ownerNumbers,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
-          sessionKey: params.attempt.sandboxSessionKey?.trim() || params.attempt.sessionKey,
+          sessionKey: params.attempt.sessionKey,
           sessionId: params.attempt.sessionId,
           agentId: params.activeAgentId,
         }),

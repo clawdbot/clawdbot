@@ -14,9 +14,9 @@ import {
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeConversationKey,
-  normalizeIMessageGuid,
   type IMessageApprovalConversationKey,
 } from "./approval-target-keys.js";
+import { normalizeIMessageGuid } from "./message-guid.js";
 import { getOptionalIMessageRuntime } from "./runtime.js";
 
 const PERSISTENT_POLL_TARGET_NAMESPACE = "imessage.approval-reaction-poll-targets";

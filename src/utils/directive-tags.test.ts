@@ -49,11 +49,25 @@ describe("stripInlineDirectiveTagsForDisplay", () => {
 });
 
 describe("stripInlineDirectiveTagsForDelivery", () => {
+  test("preserves long blank runs around literal markers without stalling", () => {
+    const text = `before${"\n".repeat(60_000)}[[ordinary text]]after`;
+    const started = performance.now();
+    expect(stripInlineDirectiveTagsForDelivery(text)).toEqual({ text, changed: false });
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   test("removes directives and surrounding whitespace for outbound text", () => {
     const input = "hello [[reply_to_current]] world [[audio_as_voice]]";
     const result = stripInlineDirectiveTagsForDelivery(input);
     expect(result.changed).toBe(true);
     expect(result.text).toBe("hello world");
+  });
+
+  test.each([
+    ["reply", "[[[reply_to_current]]hello"],
+    ["audio", "[[[audio_as_voice]]hello"],
+  ])("removes overlapping %s directive openers", (_name, input) => {
+    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: "[ hello", changed: true });
   });
 
   test("preserves intentional multi-space formatting away from directives", () => {
@@ -68,6 +82,16 @@ describe("stripInlineDirectiveTagsForDelivery", () => {
     const result = stripInlineDirectiveTagsForDelivery(input);
     expect(result.changed).toBe(false);
     expect(result.text).toBe(input);
+  });
+
+  test("preserves an ambiguous unterminated explicit reply prefix", () => {
+    const input = "[[reply_to:message-7 Visible reply";
+    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: input, changed: false });
+  });
+
+  test("preserves a malformed reply prefix after visible text", () => {
+    const input = "Visible reply\n[[reply_to_current] literally";
+    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: input, changed: false });
   });
 });
 

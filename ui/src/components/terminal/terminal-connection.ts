@@ -1,6 +1,10 @@
 // Typed terminal RPCs plus per-session event routing; DOM-free for focused tests.
 
-import type { TerminalOpenParams } from "@openclaw/gateway-protocol";
+import type {
+  EventFrame,
+  SessionsCatalogStartTerminalParams,
+  TerminalOpenParams,
+} from "@openclaw/gateway-protocol";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
 type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
@@ -12,19 +16,20 @@ export interface TerminalGatewayClient {
     params?: unknown,
     options?: TerminalRequestOptions,
   ): Promise<T>;
-  addEventListener(listener: (evt: { event: string; payload: unknown }) => void): () => void;
+  addEventListener(listener: (evt: Pick<EventFrame, "event" | "payload">) => void): () => void;
   inboundActivitySeq?: number;
   /** Recovers unreplayable output gaps and half-open terminal streams. */
   forceReconnect(reason: string): void;
 }
 
-type TerminalOpenResult = {
+export type TerminalOpenResult = {
   sessionId: string;
   agentId: string;
   shell: string;
   cwd: string;
   confined: boolean;
   title?: string;
+  owner?: "conn" | `agent:${string}`;
 };
 
 type TerminalAttachResult = TerminalOpenResult & {
@@ -38,6 +43,7 @@ export type TerminalSessionInfo = {
   sessionId: string;
   agentId: string;
   shell: string;
+  title?: string;
   cwd: string;
   confined: boolean;
   attached: boolean;
@@ -121,7 +127,9 @@ function missingTerminalSessionField(result: Partial<TerminalAttachResult>): str
 function isTerminalOpenRequestTimeout(error: unknown): boolean {
   return (
     error instanceof Error &&
-    /^gateway request timed out after \d+ms: terminal\.open$/u.test(error.message)
+    /^gateway request timed out after \d+ms: (?:terminal\.open|sessions\.catalog\.startTerminal)$/u.test(
+      error.message,
+    )
   );
 }
 
@@ -140,6 +148,10 @@ export class TerminalConnection {
   // capped buffer becomes a detectable gap instead of silent output loss.
   private readonly pending = new Map<string, BoundedBuffer<PendingEvent>>();
   private unsubscribe: (() => void) | null = null;
+  // Fence for replies that outlive dispose(): without it a late open/attach
+  // would resurrect stream state and re-arm the liveness loop on a connection
+  // whose panel is gone or was replaced by a reconnect.
+  private disposed = false;
   private pendingOpenCount = 0;
   private livenessTimer: ReturnType<typeof setTimeout> | null = null;
   private livenessProbeInFlight = false;
@@ -216,10 +228,25 @@ export class TerminalConnection {
 
   /** Opens a session and registers its output/exit sinks before returning. */
   async open(params: TerminalOpenParams, sink: SessionSink): Promise<TerminalOpenResult> {
+    return this.openRequest("terminal.open", params, sink);
+  }
+
+  async start(
+    params: SessionsCatalogStartTerminalParams,
+    sink: SessionSink,
+  ): Promise<TerminalOpenResult> {
+    return this.openRequest("sessions.catalog.startTerminal", params, sink);
+  }
+
+  private async openRequest(
+    method: "terminal.open" | "sessions.catalog.startTerminal",
+    params: TerminalOpenParams | SessionsCatalogStartTerminalParams,
+    sink: SessionSink,
+  ): Promise<TerminalOpenResult> {
     let result: TerminalOpenResult;
     try {
       result = await this.requestWhileHoldingStream(() =>
-        this.client.request<TerminalOpenResult>("terminal.open", params, {
+        this.client.request<TerminalOpenResult>(method, params, {
           timeoutMs: TERMINAL_OPEN_WATCHDOG_MS,
         }),
       );
@@ -243,6 +270,9 @@ export class TerminalConnection {
         void this.close(result.sessionId);
       }
       throw new TerminalOpenUnusableSessionError(missingField);
+    }
+    if (this.disposed) {
+      return result;
     }
     const stream = this.setStream(result.sessionId, sink, {
       seqMode: "unknown",
@@ -268,6 +298,9 @@ export class TerminalConnection {
     }
     const offset =
       typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
+    if (this.disposed) {
+      return result;
+    }
     const stream = this.setStream(sessionId, sink, {
       seqMode: offset === null ? "counter" : "offset",
       expectedSeq: offset,
@@ -640,6 +673,7 @@ export class TerminalConnection {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const stream of this.streams.values()) {
       stream.abort.abort();
     }

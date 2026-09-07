@@ -48,7 +48,7 @@ export async function installGatewayDaemonNonInteractive(params: {
   }
 
   if (!isGatewayDaemonRuntime(daemonRuntimeRaw)) {
-    runtime.error('Invalid --daemon-runtime. Use "node"; Bun lacks the required node:sqlite API.');
+    runtime.error('Invalid --daemon-runtime. Use "node" or "bun".');
     runtime.exit(1);
     return { installed: false };
   }
@@ -74,11 +74,13 @@ export async function installGatewayDaemonNonInteractive(params: {
     runtime.exit(1);
     return { installed: false };
   }
+  const existingCommand = await service.readCommand(process.env).catch(() => null);
   const { programArguments, workingDirectory, environment, environmentValueSources } =
     await buildGatewayInstallPlan({
       env: process.env,
       port,
       runtime: daemonRuntimeRaw,
+      existingCommand,
       warn: (message) => runtime.log(message),
       config: params.nextConfig,
     });

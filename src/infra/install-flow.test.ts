@@ -1,6 +1,7 @@
 // Covers install archive extraction and existing install path resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
+import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import * as archive from "./archive.js";
@@ -58,6 +59,36 @@ describe("resolveExistingInstallPath", () => {
 describe("withExtractedArchiveRoot", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("applies optional extraction limits before the callback and leaves installer defaults unchanged", async () => {
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+      const archivePath = path.join(fixtureRoot, "plugin.zip");
+      const zip = new JSZip();
+      const bytes = Buffer.alloc(32, 97);
+      zip.file("package/data.bin", bytes);
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      const onExtracted = vi.fn(async (rootDir: string) => ({
+        ok: true as const,
+        bytes: await fs.readFile(path.join(rootDir, "data.bin")),
+      }));
+      const params = {
+        archivePath,
+        tempDirPrefix: "openclaw-install-flow-",
+        timeoutMs: 1000,
+        onExtracted,
+      };
+      await expect(
+        withExtractedArchiveRoot({ ...params, limits: { maxEntryBytes: bytes.length - 1 } }),
+      ).resolves.toEqual({
+        ok: false,
+        error:
+          "failed to extract archive: ArchiveLimitError: archive entry extracted size exceeds limit",
+      });
+      expect(onExtracted).not.toHaveBeenCalled();
+      await expect(withExtractedArchiveRoot(params)).resolves.toEqual({ ok: true, bytes });
+      expect(onExtracted).toHaveBeenCalledOnce();
+    });
   });
 
   it("extracts archive and passes root directory to callback", async () => {

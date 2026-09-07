@@ -12,7 +12,7 @@ import {
   normalizeSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/secret-provider-alias";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
 import { resolveDefaultTelegramAccountId } from "./account-selection.js";
 
 type CredentialUnavailableDiagnostic = Extract<
@@ -36,28 +36,25 @@ function resolveEnvSecretRefValue(params: {
   cfg?: Pick<OpenClawConfig, "secrets">;
   provider: string;
   id: string;
-  env?: NodeJS.ProcessEnv;
 }): string | undefined {
+  // Share admission with inspection while retaining strict diagnostics below.
+  if (canResolveEnvSecretRefInReadOnlyPath(params)) {
+    return normalizeSecretInputString(process.env[params.id]);
+  }
   const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
-  if (providerConfig) {
-    if (providerConfig.source !== "env") {
-      throw new Error(
-        `Secret provider "${params.provider}" has source "${providerConfig.source}" but ref requests "env".`,
-      );
-    }
-    if (providerConfig.allowlist && !providerConfig.allowlist.includes(params.id)) {
-      throw new Error(
-        `Environment variable "${params.id}" is not allowlisted in secrets.providers.${params.provider}.allowlist.`,
-      );
-    }
-  } else if (
-    params.provider !== resolveDefaultSecretProviderAlias({ secrets: params.cfg?.secrets }, "env")
-  ) {
+  if (!providerConfig) {
     throw new Error(
       `Secret provider "${params.provider}" is not configured (ref: env:${params.provider}:${params.id}).`,
     );
   }
-  return normalizeSecretInputString((params.env ?? process.env)[params.id]);
+  if (providerConfig.source !== "env") {
+    throw new Error(
+      `Secret provider "${params.provider}" has source "${providerConfig.source}" but ref requests "env".`,
+    );
+  }
+  throw new Error(
+    `Environment variable "${params.id}" is not allowlisted in secrets.providers.${params.provider}.allowlist.`,
+  );
 }
 
 function resolveRuntimeTokenValue(params: {

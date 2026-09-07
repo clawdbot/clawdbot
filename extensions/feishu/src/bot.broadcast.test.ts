@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
 import type { FeishuMessageEvent } from "./bot.js";
-import { handleFeishuMessage } from "./bot.js";
+import { handleFeishuMessage as handleFeishuMessageImpl } from "./bot.js";
 import { feishuDedupeState } from "./dedup-state.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
@@ -112,6 +112,7 @@ function createIngressLifecycle() {
   const calls = {
     adopted: vi.fn(async () => {}),
     deferred: vi.fn(),
+    deferredHeartbeat: vi.fn(),
     finalizing: vi.fn(),
     abandoned: vi.fn(async () => {}),
   };
@@ -119,6 +120,7 @@ function createIngressLifecycle() {
     abortSignal: new AbortController().signal,
     onAdopted: calls.adopted,
     onDeferred: calls.deferred,
+    onDeferredHeartbeat: calls.deferredHeartbeat,
     onAdoptionFinalizing: calls.finalizing,
     onAbandoned: calls.abandoned,
   };
@@ -141,7 +143,11 @@ describe("broadcast dispatch", () => {
     path: "/tmp/inbound-clip.mp4",
     contentType: "video/mp4",
   });
+  const mockCurrentConfig = vi.fn(() => createBroadcastConfig());
   const runtimeStub = {
+    config: {
+      current: mockCurrentConfig,
+    },
     system: {
       enqueueSystemEvent: vi.fn(),
     },
@@ -218,6 +224,11 @@ describe("broadcast dispatch", () => {
       detectMime: vi.fn(async () => "application/octet-stream"),
     },
   } as unknown as PluginRuntime;
+
+  async function handleFeishuMessage(params: Parameters<typeof handleFeishuMessageImpl>[0]) {
+    mockCurrentConfig.mockReturnValue(params.cfg);
+    await handleFeishuMessageImpl(params);
+  }
 
   afterAll(() => {
     vi.doUnmock("./reply-dispatcher.js");
@@ -950,7 +961,10 @@ describe("broadcast dispatch", () => {
             : broadcastClaim,
     }));
     let deferredLifecycle:
-      | Pick<FeishuIngressLifecycle, "onAdopted" | "onDeferred" | "onAbandoned">
+      | Pick<
+          FeishuIngressLifecycle,
+          "onAdopted" | "onDeferred" | "onDeferredHeartbeat" | "onAbandoned"
+        >
       | undefined;
     mockDispatchReply.mockImplementation(async ({ ctx, replyOptions }) => {
       if (String(ctx.SessionKey).startsWith("agent:susan:")) {
@@ -976,6 +990,8 @@ describe("broadcast dispatch", () => {
 
     expect(transport.calls.deferred).toHaveBeenCalledTimes(1);
     expect(transport.calls.adopted).not.toHaveBeenCalled();
+    deferredLifecycle?.onDeferredHeartbeat?.();
+    expect(transport.calls.deferredHeartbeat).toHaveBeenCalledOnce();
     expect(broadcastClaim.commit).not.toHaveBeenCalled();
     expect(mainClaim.commit).toHaveBeenCalledTimes(1);
     expect(susanClaim.commit).not.toHaveBeenCalled();

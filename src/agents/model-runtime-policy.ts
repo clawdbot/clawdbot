@@ -11,8 +11,30 @@ import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveAgentEntry } from "./agent-scope-config.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
+
+/** A stored-row owner is already selected; request hints still require normal admission. */
+export type AgentRuntimePolicyScope = { sessionKey?: string } & (
+  | { agentId?: string; agentScope?: never }
+  | { agentId?: never; agentScope: { kind: "prepared"; agentId: string } }
+);
+
+/** Resolve request hints; prepared owner facts never re-admit a canonical sentinel. */
+export function resolveAgentRuntimePolicyAgentId(
+  params: AgentRuntimePolicyScope & { config?: OpenClawConfig },
+): string | undefined {
+  if (params.agentScope?.kind === "prepared") {
+    return params.agentScope.agentId;
+  }
+  return params.config && (params.agentId?.trim() || params.sessionKey?.trim())
+    ? resolveSessionAgentIds({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      }).sessionAgentId
+    : params.agentId;
+}
 
 /** Config surface that supplied a resolved model runtime policy. */
 type ModelRuntimePolicySource = "model" | "provider";
@@ -22,6 +44,7 @@ type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
   source?: ModelRuntimePolicySource;
   matchedProvider?: string;
+  forcedByEnvironment?: true;
 };
 
 type ModelEntryMatchKind = "none" | "exact" | "provider-wildcard";
@@ -146,24 +169,15 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   provider?: string;
   modelId?: string;
   agentId?: string;
-  sessionKey?: string;
   matchKind: Exclude<ModelEntryMatchKind, "none">;
 }): AgentModelRuntimePolicyResolution {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
   if (!params.config || (!modelId && params.matchKind !== "provider-wildcard")) {
     return {};
   }
-  const hasSessionScope = Boolean(params.agentId?.trim() || params.sessionKey?.trim());
-  const sessionAgentId = hasSessionScope
-    ? resolveSessionAgentIds({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      }).sessionAgentId
-    : tryResolveLegacyCompatibilityAgentId(params.config);
-  const agentEntry = sessionAgentId
-    ? listAgentEntries(params.config).find((entry) => normalizeAgentId(entry.id) === sessionAgentId)
-    : undefined;
+  // Point lookup: projecting the whole roster per model ref made runtime
+  // collection O(agents² × models) on large fleets (#135743).
+  const agentEntry = params.agentId ? resolveAgentEntry(params.config, params.agentId) : undefined;
   const modelMaps: Array<Record<string, AgentModelEntryConfig> | undefined> = [
     agentEntry?.models,
     params.config.agents?.defaults?.models,
@@ -209,25 +223,32 @@ function resolveModelConfig(params: {
 }
 
 /** Resolves the effective runtime policy for an agent/model/provider selection. */
-export function resolveModelRuntimePolicy(params: {
-  config?: OpenClawConfig;
-  provider?: string;
-  modelId?: string;
-  agentId?: string;
-  sessionKey?: string;
-}): ResolvedModelRuntimePolicy {
+export function resolveModelRuntimePolicy(
+  params: {
+    config?: OpenClawConfig;
+    provider?: string;
+    modelId?: string;
+  } & AgentRuntimePolicyScope,
+): ResolvedModelRuntimePolicy {
   const callerProvider = normalizeProviderId(params.provider ?? "");
   const effectiveProvider = resolveEffectiveProvider(params.provider, params.modelId);
   const inferredMatchedProvider = callerProvider ? undefined : effectiveProvider;
   if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
     const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
     if (forcedRuntime === "openclaw" || forcedRuntime === "codex") {
-      return { policy: { id: forcedRuntime }, source: "model" };
+      return { policy: { id: forcedRuntime }, source: "model", forcedByEnvironment: true };
     }
   }
 
+  const hasAgentScope = Boolean(
+    params.agentScope || params.agentId?.trim() || params.sessionKey?.trim(),
+  );
+  const agentId = hasAgentScope
+    ? resolveAgentRuntimePolicyAgentId(params)
+    : params.config && tryResolveLegacyCompatibilityAgentId(params.config);
   const agentModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
+    agentId,
     provider: effectiveProvider,
     matchKind: "exact",
   });
@@ -252,6 +273,7 @@ export function resolveModelRuntimePolicy(params: {
   }
   const agentWildcardModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
+    agentId,
     provider: effectiveProvider,
     matchKind: "provider-wildcard",
   });

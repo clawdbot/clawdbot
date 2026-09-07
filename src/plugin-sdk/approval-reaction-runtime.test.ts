@@ -2,8 +2,13 @@
  * Tests approval reaction runtime helper behavior.
  */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import {
+  resolveApprovalOverGateway,
+  type ApprovalResolveResult,
+} from "./approval-gateway-runtime.js";
 import {
   APPROVAL_REACTION_BINDINGS,
   buildApprovalPendingPromptPayload,
@@ -19,10 +24,67 @@ import {
   readApprovalReactionPresentationBinding,
   resolveApprovalReactionDecision,
   resolveTypedApprovalReactionTarget,
+  settleApprovalReaction,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "./approval-reaction-runtime.js";
 
+vi.mock("./approval-gateway-runtime.js", () => ({ resolveApprovalOverGateway: vi.fn() }));
+
 describe("plugin-sdk/approval-reaction-runtime", () => {
+  it.each(["imessage", "signal", "whatsapp"])(
+    "leaves concurrent %s decisions to the Gateway and retires both terminal surfaces",
+    async (channel) => {
+      const winner = createDeferred<ApprovalResolveResult>();
+      const resolver = vi.mocked(resolveApprovalOverGateway).mockReset();
+      resolver.mockReturnValue(winner.promise);
+      const clearTarget = vi.fn();
+      const onResolved = vi.fn();
+      const settle = (decision: "allow-once" | "deny") =>
+        settleApprovalReaction({
+          request: {
+            cfg: {},
+            channel,
+            accountId: "default",
+            senderId: "operator",
+            approvalId: "race",
+            approvalKind: "exec",
+            decision,
+          },
+          approvers: ["operator"],
+          authorizeActorAction: () => ({ authorized: true }),
+          loadResolver: async () => resolveApprovalOverGateway,
+          clearTarget,
+          onResolved,
+        });
+      const attempts = [settle("allow-once"), settle("deny")];
+      await Promise.resolve();
+      expect(resolver).toHaveBeenCalledTimes(2);
+      expect(clearTarget).not.toHaveBeenCalled();
+      const result: ApprovalResolveResult = {
+        applied: false,
+        approval: {
+          id: "race",
+          urlPath: "/approvals/race",
+          createdAtMs: 1,
+          expiresAtMs: 100,
+          resolvedAtMs: 2,
+          status: "denied",
+          decision: "deny",
+          reason: "user",
+          presentation: {
+            kind: "exec",
+            commandText: "echo example",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        },
+      };
+      winner.resolve(result);
+      await expect(Promise.all(attempts)).resolves.toEqual(["resolved", "resolved"]);
+      expect(clearTarget).toHaveBeenCalledTimes(2);
+      expect(onResolved.mock.calls).toEqual([[result], [result]]);
+    },
+  );
+
   const execRequest: ExecApprovalRequest = {
     id: "exec-approval-123",
     request: {
@@ -217,13 +279,22 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
   });
 
   it("builds canonical exec reaction prompts without presentation controls", () => {
-    const payload = buildApprovalReactionPromptPayloadForRequest({
-      request: execRequest,
+    const content = buildApprovalReactionPendingContentForRequest({
+      request: {
+        ...execRequest,
+        request: {
+          ...execRequest.request,
+          scope: { kind: "payment", amount: "49.99", currency: "EUR", target: "Stripe" },
+        },
+      },
       nowMs: 1_000,
     });
+    const payload = content.reactionPayload;
 
     expect(payload.text).toContain("**Exec approval required**\n**ID:** exec-approval-123");
     expect(payload.text).toContain("**Pending command:**\n```sh\ntouch /tmp/foo\n```");
+    expect(payload.text).toContain("**Scope:** Pay 49.99 EUR to Stripe");
+    expect(content.manualFallbackPayload.text).toContain("Scope: Pay 49.99 EUR to Stripe");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny");
     expect(payload.text).toContain("Allow Once: /approve exec-approval-123 allow-once");
     expect(payload.text).toContain("Allow Always: /approve exec-approval-123 allow-always");
@@ -287,6 +358,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
         request: {
           ...pluginRequest.request,
           allowedDecisions: ["allow-once", "deny"],
+          scope: { kind: "external-post", target: "github", visibility: "public" },
         },
       },
       nowMs: 1_000,
@@ -294,6 +366,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
 
     expect(payload.text).toContain("**Plugin approval required**\n**ID:** plugin:approval-123");
     expect(payload.text).toContain("**Title:** Use 1Password");
+    expect(payload.text).toContain("**Scope:** Post publicly to github");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
     expect(payload.text).not.toContain("♾️ Allow Always");
     expect(payload.text).toContain("Allow Once: /approve plugin:approval-123 allow-once");

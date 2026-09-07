@@ -17,12 +17,15 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
-import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
+import { currentRouteLocation, stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
+import { resolveDropIndicator, type DropIndicator } from "./chat-page-drop-indicator.ts";
 import { renderChatPagePaneCell } from "./chat-page-pane-render.ts";
 import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
 import { closeStagedPane, resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
+import { bindChatPageSession } from "./chat-state-route.ts";
 import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
-import "../../styles/chat.css";
+import "../../styles/chat.ts";
+import "../../styles/chat/composer.css";
 import "./chat-pane.ts";
 import { RouteDraftComposerFocus, type ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import { locationWithoutDraft } from "./route-draft.ts";
@@ -30,13 +33,8 @@ import type { SessionChatRouteData } from "./route-loader.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
 import { installSessionPrefetch } from "./session-prefetch.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import {
-  resolveSplitDropZone,
-  splitDropIndicatorRect,
-  type SplitDropRect,
-  type SplitDropZone,
-} from "./split-drop-zone.ts";
-import type { ChatSplitLayout } from "./split-layout-types.ts";
+import type { SplitDropZone } from "./split-drop-zone.ts";
+import type { ChatSplitLayout, SessionSplitHost } from "./split-layout-types.ts";
 import {
   applyUiCommandToSplitLayout,
   closePane,
@@ -52,17 +50,20 @@ import {
   splitWeight,
 } from "./split-layout.ts";
 
-type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
-
-export class ChatPage extends OpenClawLightDomElement {
+export class ChatPage extends OpenClawLightDomElement implements SessionSplitHost {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
   @property({ attribute: false }) data!: SessionChatRouteData;
   @property({ attribute: false }) navDrawerOpen = false;
+  @property({ type: Boolean }) presented = true;
   @state() private layout: ChatSplitLayout | undefined;
   @state() private narrow = false;
   @state() private mergedChrome = false;
   @state() private dropIndicator: DropIndicator | null = null;
+
+  get sessionSplitAvailable(): boolean {
+    return this.presented && !this.narrow && Boolean(this.data?.sessionKey?.trim());
+  }
 
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
@@ -88,7 +89,7 @@ export class ChatPage extends OpenClawLightDomElement {
   private readonly viewerPresence = new ChatViewerPresenceController(this);
   private readonly retainedSessions = new ChatPageRetainedSessions(this, {
     context: () => this.context,
-    face: () => this.data?.face ?? "chat",
+    presented: () => this.presented,
     layout: () => this.layout ?? this.classicLayout(),
     selectReplacement: (paneId, sourceSessionKey, sessionKey) => {
       this.handlePaneSessionChange(paneId, sourceSessionKey, sessionKey);
@@ -116,13 +117,15 @@ export class ChatPage extends OpenClawLightDomElement {
     this.addEventListener("dragover", this.handleDragOver);
     this.addEventListener("dragleave", this.handleDragLeave);
     this.addEventListener("drop", this.handleDrop);
-    window.addEventListener("dragend", this.handleWindowDragEnd);
+    window.addEventListener("dragend", this.clearDropIndicator);
     window.addEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
     this.retainedSessions.connect();
-    this.syncRouteAgent();
     this.syncRouteToActivePane();
+    this.syncRouteBindings();
     const layout = this.layout ?? this.classicLayout();
-    this.viewerPresence.sync(this.context?.gateway, layout, this.narrow);
+    if (this.presented) {
+      this.viewerPresence.sync(this.context?.gateway, layout, this.narrow);
+    }
   }
 
   override disconnectedCallback() {
@@ -138,13 +141,21 @@ export class ChatPage extends OpenClawLightDomElement {
     this.removeEventListener("dragover", this.handleDragOver);
     this.removeEventListener("dragleave", this.handleDragLeave);
     this.removeEventListener("drop", this.handleDrop);
-    window.removeEventListener("dragend", this.handleWindowDragEnd);
+    window.removeEventListener("dragend", this.clearDropIndicator);
     window.removeEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
     this.clearDropIndicator();
     super.disconnectedCallback();
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown>) {
+    if (!this.presented) {
+      this.viewerPresence.dispose();
+      if (changedProperties.has("presented")) {
+        this.retainedSessions.suspend();
+        this.clearDropIndicator();
+      }
+      return;
+    }
     const layout = this.layout ?? this.classicLayout();
     resumeStagedPanes(this, layout, this.narrow);
     if (this.isConnected) {
@@ -158,7 +169,7 @@ export class ChatPage extends OpenClawLightDomElement {
       activeSessionKey,
       this.consumedDraftData,
     );
-    if (changedProperties.has("data")) {
+    if (data && (changedProperties.has("data") || changedProperties.has("presented"))) {
       this.routeHref = window.location.href;
       if (
         data?.canonicalLocation &&
@@ -172,6 +183,7 @@ export class ChatPage extends OpenClawLightDomElement {
         if (
           location &&
           this.isConnected &&
+          this.presented &&
           this.data === data &&
           stillOwnsCanonicalLocation(data.canonicalLocationSource, this.consumedDraftData === data)
         ) {
@@ -182,13 +194,18 @@ export class ChatPage extends OpenClawLightDomElement {
           );
         }
       });
-      this.syncRouteAgent();
       this.syncRouteToActivePane();
+      this.syncRouteBindings();
       this.retainedSessions.settleRoute(data.sessionKey);
     }
     if (data && routeHandoffRendered) {
       queueMicrotask(() => {
-        if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
+        if (
+          this.isConnected &&
+          this.presented &&
+          this.data === data &&
+          this.consumedDraftData !== data
+        ) {
           this.draftFocus.beforeDraftCleanup(data);
           this.consumedDraftData = data;
           this.updateRoute(data.sessionKey, true, data.face ?? "chat");
@@ -214,7 +231,7 @@ export class ChatPage extends OpenClawLightDomElement {
   };
 
   private readonly handleUiCommand = (event: Event) => {
-    if (!(event instanceof CustomEvent)) {
+    if (!this.presented || !(event instanceof CustomEvent)) {
       return;
     }
     const { command, sessionKey: sourceSessionKey } = event.detail as UiCommandDetail;
@@ -291,7 +308,7 @@ export class ChatPage extends OpenClawLightDomElement {
       if (!pending || this.narrow || !this.isConnected) {
         return;
       }
-      const indicator = this.resolveDropIndicator(pending.pane, pending.x, pending.y);
+      const indicator = resolveDropIndicator(this, pending.pane, pending.x, pending.y);
       if (!indicator) {
         return;
       }
@@ -328,7 +345,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
     const indicator =
       (pane && this.contains(pane)
-        ? this.resolveDropIndicator(pane, event.clientX, event.clientY)
+        ? resolveDropIndicator(this, pane, event.clientX, event.clientY)
         : null) ?? this.dropIndicator;
     this.clearDropIndicator();
     if (sessionKey && indicator) {
@@ -336,14 +353,10 @@ export class ChatPage extends OpenClawLightDomElement {
     }
   };
 
-  private readonly handleWindowDragEnd = () => {
-    this.clearDropIndicator();
-  };
-
-  private clearDropIndicator() {
+  private readonly clearDropIndicator = () => {
     this.dragDepth = 0;
     this.clearDropPreview();
-  }
+  };
 
   private clearDropPreview() {
     this.pendingDragOver = null;
@@ -352,28 +365,6 @@ export class ChatPage extends OpenClawLightDomElement {
       this.dragFrame = 0;
     }
     this.dropIndicator = null;
-  }
-
-  private resolveDropIndicator(pane: ChatPaneElement, x: number, y: number): DropIndicator | null {
-    const paneId = pane.paneId;
-    const container = this.querySelector<HTMLElement>(".chat-split-view__drop-container");
-    if (!paneId || !container) {
-      return null;
-    }
-    const paneRect = pane.getBoundingClientRect();
-    const zone = resolveSplitDropZone(paneRect, x, y);
-    const indicatorRect = splitDropIndicatorRect(paneRect, zone);
-    const containerRect = container.getBoundingClientRect();
-    return {
-      paneId,
-      zone,
-      rect: {
-        left: indicatorRect.left - containerRect.left,
-        top: indicatorRect.top - containerRect.top,
-        width: indicatorRect.width,
-        height: indicatorRect.height,
-      },
-    };
   }
 
   private syncRouteToActivePane() {
@@ -389,26 +380,31 @@ export class ChatPage extends OpenClawLightDomElement {
     this.persistLayout(setPaneSession(layout, activePane.id, sessionKey));
   }
 
-  private syncRouteAgent() {
-    const agentId = this.data?.agentId?.trim();
-    if (agentId) {
-      this.context.agentSelection.set(agentId);
+  private syncRouteBindings() {
+    if (!this.presented) {
+      return;
+    }
+    const activePane = this.layout && findPane(this.layout, this.layout.activePaneId)?.pane;
+    const routeKey = (activePane?.sessionKey ?? this.data?.sessionKey)?.trim();
+    if (this.context && routeKey) {
+      bindChatPageSession(this.context, routeKey, this.data?.agentId);
     }
   }
 
   private persistLayout(layout: ChatSplitLayout | undefined) {
     this.layout = layout;
     patchSettings({ chatSplitLayout: layout });
+    this.syncRouteBindings();
   }
 
   private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
+    if (!this.presented) {
+      return;
+    }
     const data = this.data;
-    if (
-      data?.sessionKey === sessionKey &&
-      (data.face ?? "chat") === face &&
-      !data.draft &&
-      !data.focusComposer
-    ) {
+    const sameSession = data && areUiSessionKeysEquivalent(data.sessionKey, sessionKey);
+    if (sameSession && (data.face ?? "chat") === face && !data.draft && !data.focusComposer) {
+      this.syncRouteBindings();
       return;
     }
     const options = sessionNavigationTarget({
@@ -419,7 +415,11 @@ export class ChatPage extends OpenClawLightDomElement {
       shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
     }).options;
     if (replace) {
-      this.context.replace(face, options);
+      const location =
+        sameSession && (data.draft || data.focusComposer)
+          ? locationWithoutDraft(currentRouteLocation(), options)
+          : options;
+      this.context.replace(face, location);
     } else {
       this.context.navigate(face, options);
     }
@@ -430,46 +430,33 @@ export class ChatPage extends OpenClawLightDomElement {
     if (!trimmed) {
       return;
     }
-    const layout = this.layout;
-    if (!layout) {
-      if (zone.kind === "center") {
-        this.updateRoute(trimmed);
-        return;
-      }
-      const currentSessionKey = this.data?.sessionKey?.trim();
-      if (!currentSessionKey) {
-        return;
-      }
-      const next = insertPane(
-        this.classicLayout(currentSessionKey),
-        this.classicPaneId,
-        trimmed,
-        zone.edge,
-      );
-      this.persistLayout(next);
-      this.updateRoute(trimmed, true);
+    if (!this.layout && zone.kind === "center") {
+      this.updateRoute(trimmed);
       return;
     }
-    const pane = findPane(layout, paneId)?.pane;
-    if (!pane) {
+    // A classic edge drop starts a split; both modes then use the same layout operation.
+    const layout = this.layout ?? this.classicLayout();
+    const targetPaneId = this.layout ? paneId : this.classicPaneId;
+    const pane = findPane(layout, targetPaneId)?.pane;
+    if (!pane || (!this.layout && !pane.sessionKey)) {
       return;
     }
     if (zone.kind === "center") {
       if (pane.sessionKey === trimmed) {
         return;
       }
-      const active = setActivePane(layout, paneId);
-      this.persistLayout(setPaneSession(active, paneId, trimmed));
+      const active = setActivePane(layout, targetPaneId);
+      this.persistLayout(setPaneSession(active, targetPaneId, trimmed));
       this.updateRoute(trimmed, true);
       return;
     }
-    this.persistLayout(insertPane(layout, paneId, trimmed, zone.edge));
+    this.persistLayout(insertPane(layout, targetPaneId, trimmed, zone.edge));
     this.updateRoute(trimmed, true);
   }
 
   private readonly handleFocusPane = (paneId: string) => {
     const layout = this.layout;
-    if (!layout || layout.activePaneId === paneId) {
+    if (!this.presented || !layout || layout.activePaneId === paneId) {
       return;
     }
     const pane = findPane(layout, paneId)?.pane;
@@ -487,7 +474,7 @@ export class ChatPage extends OpenClawLightDomElement {
     options?: { replace?: boolean },
   ): boolean => {
     const trimmed = sessionKey.trim();
-    if (!trimmed || window.location.href !== this.routeHref) {
+    if (!this.presented || !trimmed || window.location.href !== this.routeHref) {
       return false;
     }
     const resolvedLayout = this.layout ?? this.classicLayout();
@@ -514,6 +501,9 @@ export class ChatPage extends OpenClawLightDomElement {
     sessionKey: string,
     face: BoardFace,
   ): void => {
+    if (!this.presented) {
+      return;
+    }
     const selectedSessionKey = findPane(this.layout ?? this.classicLayout(), paneId)?.pane
       .sessionKey;
     if (!selectedSessionKey || !areUiSessionKeysEquivalent(selectedSessionKey, sessionKey)) {
@@ -589,10 +579,11 @@ export class ChatPage extends OpenClawLightDomElement {
           (column) => column.id,
           (column, columnIndex) => html`
             <div
-              class="chat-split-view__column ${this.narrow &&
-              !column.panes.some((pane) => pane.id === layout.activePaneId)
-                ? "chat-split-view__column--narrow-hidden"
-                : ""}"
+              class="chat-split-view__column ${
+                this.narrow && !column.panes.some((pane) => pane.id === layout.activePaneId)
+                  ? "chat-split-view__column--narrow-hidden"
+                  : ""
+              }"
               style="flex: ${splitWeight(
                 layout.columnWeights,
                 columnIndex,
@@ -604,7 +595,8 @@ export class ChatPage extends OpenClawLightDomElement {
                 (pane) => pane.id,
                 (pane, paneIndex) => html`
                   ${renderChatPagePaneCell({
-                    active: pane.id === layout.activePaneId,
+                    active: this.presented && pane.id === layout.activePaneId,
+                    presented: this.presented,
                     chatMessagesBySession: this.messageCache,
                     sessionSnapshotStore: this.snapshotStore,
                     consumedDraftData: this.consumedDraftData,
@@ -634,54 +626,59 @@ export class ChatPage extends OpenClawLightDomElement {
                       "rendered split pane weight",
                     ),
                   })}
-                  ${!this.narrow && paneIndex < column.panes.length - 1
-                    ? html`
-                        <resizable-divider
-                          orientation="horizontal"
-                          .splitRatio=${splitRatio(
-                            column.paneWeights,
-                            paneIndex,
-                            "split pane weight",
-                          )}
-                          .minRatio=${0.15}
-                          .maxRatio=${0.85}
-                          .label=${t("nav.resize")}
-                          @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                            const current = this.layout;
-                            if (current) {
-                              this.persistLayout(
-                                resizePanes(current, column.id, paneIndex, event.detail.splitRatio),
-                              );
-                            }
-                          }}
-                        ></resizable-divider>
-                      `
-                    : nothing}
+                  ${
+                    !this.narrow && paneIndex < column.panes.length - 1
+                      ? html`
+                          <resizable-divider
+                            orientation="horizontal"
+                            .splitRatio=${splitRatio(
+                              column.paneWeights,
+                              paneIndex,
+                              "split pane weight",
+                            )}
+                            .minRatio=${0.15}
+                            .maxRatio=${0.85}
+                            .label=${t("nav.resize")}
+                            @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
+                              this.layout = this.layout
+                                ? resizePanes(
+                                    this.layout,
+                                    column.id,
+                                    paneIndex,
+                                    event.detail.splitRatio,
+                                  )
+                                : undefined;
+                            }}
+                            @resize-end=${() => this.persistLayout(this.layout)}
+                          ></resizable-divider>
+                        `
+                      : nothing
+                  }
                 `,
               )}
             </div>
-            ${!this.narrow && columnIndex < layout.columns.length - 1
-              ? html`
-                  <resizable-divider
-                    .splitRatio=${splitRatio(
-                      layout.columnWeights,
-                      columnIndex,
-                      "split column weight",
-                    )}
-                    .minRatio=${0.15}
-                    .maxRatio=${0.85}
-                    .label=${t("nav.resize")}
-                    @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                      const current = this.layout;
-                      if (current) {
-                        this.persistLayout(
-                          resizeColumns(current, columnIndex, event.detail.splitRatio),
-                        );
-                      }
-                    }}
-                  ></resizable-divider>
-                `
-              : nothing}
+            ${
+              !this.narrow && columnIndex < layout.columns.length - 1
+                ? html`
+                    <resizable-divider
+                      .splitRatio=${splitRatio(
+                        layout.columnWeights,
+                        columnIndex,
+                        "split column weight",
+                      )}
+                      .minRatio=${0.15}
+                      .maxRatio=${0.85}
+                      .label=${t("nav.resize")}
+                      @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
+                        this.layout = this.layout
+                          ? resizeColumns(this.layout, columnIndex, event.detail.splitRatio)
+                          : undefined;
+                      }}
+                      @resize-end=${() => this.persistLayout(this.layout)}
+                    ></resizable-divider>
+                  `
+                : nothing
+            }
           `,
         )}
       </div>
@@ -691,37 +688,37 @@ export class ChatPage extends OpenClawLightDomElement {
   override render() {
     const indicator = this.dropIndicator;
     const layout = this.layout ?? this.classicLayout();
-    const renderedPaneOwners = layout.columns.flatMap((column) =>
-      column.panes.map((pane) => ({ columnId: column.id, pane })),
-    );
-    const retainedSessions = this.retainedSessions.retain(
-      renderedPaneOwners.map(({ pane }) => pane),
-    );
-    const nextPaneKeys = new Set(
-      renderedPaneOwners.flatMap(({ columnId, pane }) => {
-        const ownerKey = JSON.stringify([columnId, pane.id]);
-        return (retainedSessions.get(pane.id) ?? []).map((sessionKey) =>
-          JSON.stringify([ownerKey, sessionKey]),
-        );
-      }),
-    );
+    const retainedSessions = this.retainedSessions.retain(panesOf(layout));
+    const nextPaneKeys = new Set<string>();
+    for (const column of layout.columns) {
+      for (const pane of column.panes) {
+        const ownerKey = JSON.stringify([column.id, pane.id]);
+        for (const sessionKey of retainedSessions.get(pane.id) ?? []) {
+          nextPaneKeys.add(JSON.stringify([ownerKey, sessionKey]));
+        }
+      }
+    }
     const renderValue = () => html`
       <div class="chat-split-view__drop-container">
         ${this.renderSplitLayout(layout, Boolean(this.layout), retainedSessions)}
-        ${indicator
-          ? html`<div
-              class="chat-split-view__drop-indicator ${indicator.zone.kind === "center"
-                ? "chat-split-view__drop-indicator--center"
-                : ""}"
-              style=${`left: ${indicator.rect.left}px; top: ${indicator.rect.top}px; width: ${indicator.rect.width}px; height: ${indicator.rect.height}px;`}
-            >
-              <span class="chat-split-view__drop-indicator-label"
-                >${indicator.zone.kind === "center"
-                  ? t("chat.splitView.dropOpenHere")
-                  : t("chat.splitView.dropSplit")}</span
+        ${
+          indicator
+            ? html`<div
+                class="chat-split-view__drop-indicator ${
+                  indicator.zone.kind === "center" ? "chat-split-view__drop-indicator--center" : ""
+                }"
+                style=${`left: ${indicator.rect.left}px; top: ${indicator.rect.top}px; width: ${indicator.rect.width}px; height: ${indicator.rect.height}px;`}
               >
-            </div>`
-          : nothing}
+                <span class="chat-split-view__drop-indicator-label"
+                  >${
+                    indicator.zone.kind === "center"
+                      ? t("chat.splitView.dropOpenHere")
+                      : t("chat.splitView.dropSplit")
+                  }</span
+                >
+              </div>`
+            : nothing
+        }
       </div>
     `;
     return this.mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), renderValue, () =>

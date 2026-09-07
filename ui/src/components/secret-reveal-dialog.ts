@@ -1,11 +1,11 @@
 // Control UI helper reveals a one-time secret in-app. window.prompt cannot do this job:
 // it is unstyled, unlabeled, uncopyable on touch, and never renders at all in a webview
 // without a dialog bridge, which drops the only copy of a freshly issued credential.
-import { html, nothing, render } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import { icons } from "./icons.ts";
-import "./modal-dialog.ts";
+import { withPromiseModalHost } from "./promise-modal-host.ts";
 
 type SecretRevealDialogOptions = {
   title: string;
@@ -31,15 +31,9 @@ type SecretRevealDialogOptions = {
  * settle it; without one there is nothing to lose, so they close it like any dialog.
  */
 export function showSecretRevealDialog(options: SecretRevealDialogOptions): Promise<void> {
-  const host = document.createElement("div");
-  document.body.append(host);
-  return new Promise((resolve) => {
+  return withPromiseModalHost<void>(undefined, ({ render, finish }) => {
     let dismissRefused = false;
-    const acknowledge = () => {
-      render(nothing, host);
-      host.remove();
-      resolve();
-    };
+    const acknowledge = () => finish();
     // The secret is shown once, so a stray Escape or backdrop click must not be the last
     // thing that happens to it. Web Awesome pulses the refused dialog; the hint is the
     // accessible half of that answer, because a silent no-op reads as a broken control.
@@ -62,8 +56,8 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
     // border sits within ~4/255 of --card in dark and vanishes on this surface.
     const acknowledgeClass = options.secret ? "btn primary" : "btn secret-reveal__dismiss";
     const paint = () => {
-      render(
-        html`
+      render(() => {
+        return html`
           <openclaw-modal-dialog
             label=${options.title}
             description=${options.message}
@@ -71,28 +65,36 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
           >
             <div class="exec-approval-card">
               <div class="secret-reveal__header">
-                ${options.status === "success"
-                  ? html`<span class="secret-reveal__status" aria-hidden="true"
-                      >${icons.check}</span
-                    >`
-                  : nothing}
+                ${
+                  options.status === "success"
+                    ? html`<span class="secret-reveal__status" aria-hidden="true"
+                        >${icons.check}</span
+                      >`
+                    : nothing
+                }
                 <div class="exec-approval-title">${options.title}</div>
               </div>
               <div class="secret-reveal__body"><p>${options.message}</p></div>
-              ${options.callout
-                ? html`<div class="callout info secret-reveal__callout">${options.callout}</div>`
-                : nothing}
-              ${options.secret
-                ? html`
-                    <div class="secret-reveal__value">
-                      <code class="secret-reveal__code">${options.secret}</code>
-                      ${renderCopyButton(options.secret, t("common.copy"))}
-                    </div>
-                  `
-                : nothing}
-              ${dismissRefused
-                ? html`<p class="secret-reveal__hint" role="status">${options.dismissHint}</p>`
-                : nothing}
+              ${
+                options.callout
+                  ? html`<div class="callout info secret-reveal__callout">${options.callout}</div>`
+                  : nothing
+              }
+              ${
+                options.secret
+                  ? html`
+                      <div class="secret-reveal__value">
+                        <code class="secret-reveal__code">${options.secret}</code>
+                        ${renderCopyButton(options.secret, t("common.copy"))}
+                      </div>
+                    `
+                  : nothing
+              }
+              ${
+                dismissRefused
+                  ? html`<p class="secret-reveal__hint" role="status">${options.dismissHint}</p>`
+                  : nothing
+              }
               ${options.note ? html`<p class="secret-reveal__note">${options.note}</p>` : nothing}
               <div class="exec-approval-actions">
                 <button type="button" class=${acknowledgeClass} autofocus @click=${acknowledge}>
@@ -101,9 +103,8 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
               </div>
             </div>
           </openclaw-modal-dialog>
-        `,
-        host,
-      );
+        `;
+      });
     };
     paint();
   });

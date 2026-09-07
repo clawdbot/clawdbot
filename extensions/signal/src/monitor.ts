@@ -45,10 +45,15 @@ import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runti
 import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
 import { addSignalApprovalReactionHintToStructuredPayload } from "./approval-reactions.js";
-import { signalRpcRequest, signalCheck } from "./client-adapter.js";
+import { signalRpcRequest } from "./client-adapter.js";
 import type { SignalTransportKind } from "./client-adapter.js";
 import { createSignalDaemonLifecycle } from "./daemon-lifecycle.js";
-import { spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
+import {
+  assertSignalDaemonEndpointAvailable,
+  spawnSignalDaemon,
+  type SignalDaemonHandle,
+  waitForSignalDaemonReady,
+} from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
@@ -67,6 +72,7 @@ import {
   runSignalSseLoop,
   type SignalStatusSink,
 } from "./sse-reconnect.js";
+import { normalizeSignalTransportHost } from "./transport-url.js";
 
 export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
@@ -192,37 +198,6 @@ function buildSignalReactionSystemEventText(params: {
   const base = `Signal reaction added: ${params.emojiLabel} by ${params.actorLabel} msg ${params.messageId}`;
   const withTarget = params.targetLabel ? `${base} from ${params.targetLabel}` : base;
   return params.groupLabel ? `${withTarget} in ${params.groupLabel}` : withTarget;
-}
-
-async function waitForSignalDaemonReady(params: {
-  baseUrl: string;
-  abortSignal?: AbortSignal;
-  timeoutMs: number;
-  logAfterMs: number;
-  logIntervalMs?: number;
-  runtime: RuntimeEnv;
-  waitForTransportReadyFn?: typeof waitForTransportReady;
-}): Promise<void> {
-  const waitForTransportReadyFn = params.waitForTransportReadyFn ?? waitForTransportReady;
-  await waitForTransportReadyFn({
-    label: "signal daemon",
-    timeoutMs: params.timeoutMs,
-    logAfterMs: params.logAfterMs,
-    logIntervalMs: params.logIntervalMs,
-    pollIntervalMs: 150,
-    abortSignal: params.abortSignal,
-    runtime: params.runtime,
-    check: async () => {
-      const res = await signalCheck(params.baseUrl, 1000);
-      if (res.ok) {
-        return { ok: true };
-      }
-      return {
-        ok: false,
-        error: res.error ?? (res.status ? `HTTP ${res.status}` : "unreachable"),
-      };
-    },
-  });
 }
 
 const SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES = 64 * 1024;
@@ -507,14 +482,51 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const monitorTaskRunner = createSignalMonitorTaskRunner(runtime);
   let daemonHandle: SignalDaemonHandle | null = null;
   let ingressMonitor: SignalIngressMonitor | undefined;
+  const startupDeadline = Date.now() + startupTimeoutMs;
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? managedTransport?.cliPath ?? "signal-cli";
     const configPath =
       normalizeOptionalString(opts.configPath) ??
       normalizeOptionalString(managedTransport?.configPath);
-    const httpHost = opts.httpHost ?? managedTransport?.httpHost ?? "127.0.0.1";
+    const httpHost = normalizeSignalTransportHost(
+      opts.httpHost ?? managedTransport?.httpHost ?? "127.0.0.1",
+    );
     const httpPort = opts.httpPort ?? managedTransport?.httpPort ?? 8080;
+    const startupTimeoutSignal = AbortSignal.timeout(startupTimeoutMs);
+    const endpointProbeSignal = opts.abortSignal
+      ? AbortSignal.any([opts.abortSignal, startupTimeoutSignal])
+      : startupTimeoutSignal;
+    // Readiness alone cannot prove ownership: an unrelated service can answer /api/v1/check
+    // while signal-cli exits on EADDRINUSE. Probe the configured bind before starting it.
+    try {
+      await assertSignalDaemonEndpointAvailable({
+        httpHost,
+        httpPort,
+        abortSignal: endpointProbeSignal,
+      });
+    } catch (error) {
+      if (opts.abortSignal?.aborted) {
+        return;
+      }
+      if (startupTimeoutSignal.aborted || Date.now() >= startupDeadline) {
+        throw new Error(
+          `signal daemon startup timed out after ${startupTimeoutMs}ms while checking its endpoint`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    // Abort can land after the probe resolves but before this continuation resumes.
+    // Recheck at the spawn boundary so a cancelled monitor never creates a daemon.
+    if (opts.abortSignal?.aborted) {
+      return;
+    }
+    if (Date.now() >= startupDeadline) {
+      throw new Error(
+        `signal daemon startup timed out after ${startupTimeoutMs}ms before starting`,
+      );
+    }
     daemonHandle = spawnSignalDaemon({
       cliPath,
       ...(configPath ? { configPath } : {}),
@@ -538,7 +550,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       await waitForSignalDaemonReady({
         baseUrl,
         abortSignal: daemonLifecycle.abortSignal,
-        timeoutMs: startupTimeoutMs,
+        startupDeadlineMs: startupDeadline,
         logAfterMs: 10_000,
         logIntervalMs: 10_000,
         runtime,

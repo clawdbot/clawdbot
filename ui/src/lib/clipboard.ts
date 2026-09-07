@@ -5,10 +5,17 @@
 // is undefined, so calling it throws synchronously rather than rejecting. Guard
 // the secure-context path and fall back to the legacy execCommand copy so the
 // copy buttons keep working over HTTP. Returns whether the copy succeeded.
+let clipboardWriteAttempt = 0;
+
+export function beginClipboardCopy(): number {
+  return ++clipboardWriteAttempt;
+}
+
 export async function copyToClipboard(
   text: string,
   shouldFallback?: () => boolean,
 ): Promise<boolean> {
+  const attempt = beginClipboardCopy();
   if (!text) {
     return false;
   }
@@ -21,9 +28,9 @@ export async function copyToClipboard(
       // fall through to the execCommand path before giving up.
     }
   }
-  // A rejected async write can settle after newer caller-owned work. Let that
-  // owner retire this second transport attempt before it mutates the clipboard.
-  if (shouldFallback && !shouldFallback()) {
+  // The clipboard is shared across controls. A newer copy or a retired caller
+  // cancels this second transport before it can overwrite the user's selection.
+  if (attempt !== clipboardWriteAttempt || (shouldFallback && !shouldFallback())) {
     return false;
   }
   return copyWithExecCommand(text);
@@ -46,9 +53,11 @@ function copyWithExecCommand(text: string): boolean {
   } finally {
     document.body.removeChild(textarea);
     if (previouslyFocused?.isConnected) {
+      // Deferred focus must retain its document after that environment's globals retire.
+      const ownerDocument = textarea.ownerDocument;
       window.setTimeout(() => {
-        const activeElement = document.activeElement;
-        if (previouslyFocused.isConnected && (!activeElement || activeElement === document.body)) {
+        const { activeElement, body } = ownerDocument;
+        if (previouslyFocused.isConnected && (!activeElement || activeElement === body)) {
           previouslyFocused.focus({ preventScroll: true });
         }
       }, 0);

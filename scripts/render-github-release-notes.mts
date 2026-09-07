@@ -2,6 +2,12 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import {
+  compactReleaseNotes,
+  OPENCLAW_RELEASE_TAG_PATTERN,
+  validateReleaseNotesRepository as validateRepository,
+  validateReleaseNotesTag as validateTag,
+} from "./lib/release-notes-compaction.mjs";
 
 type ShippedBaselineExclusion = {
   ref: string;
@@ -27,11 +33,8 @@ type ReleaseNotesTarget = {
   repository: unknown;
 };
 
-const CONTRIBUTION_RECORD_HEADING = "### Complete contribution record";
 const RELEASE_VERIFICATION_HEADING = "### Release verification";
 const SHIPPED_BASELINE_EXCLUSIONS_PREFIX = "Shipped baseline exclusions:";
-const OPENCLAW_RELEASE_TAG_PATTERN =
-  /^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:(?:alpha|beta)\.[1-9][0-9]*|[1-9][0-9]*))?$/u;
 const RELEASE_HEADING_PATTERN =
   /^## (?<version>Unreleased|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:(?:alpha|beta)\.[1-9][0-9]*|[1-9][0-9]*))?)\r?$/u;
 
@@ -53,18 +56,6 @@ function joinBody(notes: string, tail: string | undefined) {
   const normalizedNotes = notes.trimEnd();
   const normalizedTail = normalizeTail(tail);
   return normalizedTail ? `${normalizedNotes}\n\n${normalizedTail}` : normalizedNotes;
-}
-
-function validateRepository(repository: string) {
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
-    fail(`invalid GitHub repository: ${repository}`);
-  }
-}
-
-function validateTag(tag: string) {
-  if (!OPENCLAW_RELEASE_TAG_PATTERN.test(tag)) {
-    fail(`invalid release tag: ${tag}`);
-  }
 }
 
 export function formatContributionRecordProvenance(provenance: ContributionRecordProvenance) {
@@ -274,51 +265,6 @@ export function parseShippedBaselineExclusions(section: string) {
   return baselines;
 }
 
-function tagPinnedContributionRecordUrl(repository: string, tag: string) {
-  validateRepository(repository);
-  validateTag(tag);
-  return `https://github.com/${repository}/blob/${tag}/CHANGELOG.md#complete-contribution-record`;
-}
-
-function headingIndexOutsideFences(markdown: string, heading: string) {
-  let offset = 0;
-  let fence: string | undefined;
-  for (const segment of markdown.split(/(?<=\n)/u)) {
-    const line = segment.replace(/\n$/u, "");
-    const fenceMatch = line.match(/^\s*(?<marker>`{3,}|~{3,})/u);
-    if (fenceMatch?.groups?.marker) {
-      const marker = fenceMatch.groups.marker;
-      if (!fence) {
-        fence = marker;
-      } else if (marker.charAt(0) === fence.charAt(0) && marker.length >= fence.length) {
-        fence = undefined;
-      }
-    } else if (!fence && line === heading) {
-      return offset;
-    }
-    offset += segment.length;
-  }
-  return -1;
-}
-
-function compactReleaseNotes(section: string, repository: string, tag: string) {
-  const recordIndex = headingIndexOutsideFences(section, CONTRIBUTION_RECORD_HEADING);
-  if (recordIndex < 0) {
-    fail(
-      "release notes exceed GitHub's body limit and cannot be compacted without a complete contribution record",
-    );
-  }
-  const editorialNotes = section.slice(0, recordIndex).trimEnd();
-  const contributionRecordUrl = tagPinnedContributionRecordUrl(repository, tag);
-  return [
-    editorialNotes,
-    "",
-    CONTRIBUTION_RECORD_HEADING,
-    "",
-    `The full contribution record is available in the tag-pinned [CHANGELOG.md](${contributionRecordUrl}).`,
-  ].join("\n");
-}
-
 export function dedicatedSectionVersionForTag(tag: unknown) {
   // Correction (vX-N) and alpha tags may carry their own exact changelog
   // heading; beta and stable bodies must come from the stable base section.
@@ -374,7 +320,12 @@ export function renderGithubReleaseNotes({
   }
   const section = releaseNotesSectionForTag(changelog, version, tag);
   const mode = fitsGithubReleaseBody(section) ? "full" : "compact";
-  const baseBody = mode === "full" ? section : compactReleaseNotes(section, repository, tag);
+  const baseBody = mode === "full" ? section : compactReleaseNotes(section, repository, tag)?.body;
+  if (baseBody === undefined) {
+    fail(
+      "release notes exceed GitHub's body limit and cannot be compacted without a complete contribution record",
+    );
+  }
   if (!fitsGithubReleaseBody(baseBody)) {
     const size = githubReleaseBodySize(baseBody);
     fail(

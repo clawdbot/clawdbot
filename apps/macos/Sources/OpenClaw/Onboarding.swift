@@ -539,6 +539,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     static let shared = OnboardingController()
     static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
+    var sheetPresentationWindow: NSWindow? {
+        self.window
+    }
+
     /// Human description of work in flight ("Installing the Gateway…").
     /// While set, closing the window asks for confirmation instead of quitting
     /// setup mid-operation.
@@ -601,8 +605,15 @@ final class OnboardingController: NSObject, NSWindowDelegate {
 
     func close() {
         self.busyReason = nil
+        // AppKit ignores close while its modal sheet is still attached.
+        self.dismissAttachedSheet()
         self.window?.close()
         self.window = nil
+    }
+
+    func dismissAttachedSheet() {
+        guard let window, let sheet = window.attachedSheet else { return }
+        window.endSheet(sheet)
     }
 
     func setWindowCloseEnabled(_ enabled: Bool) {
@@ -638,6 +649,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
 struct OnboardingView: View {
     enum CLIInstallPhase {
         case idle
+        case choosingTarget
         case installing
         case startingService
     }
@@ -654,6 +666,7 @@ struct OnboardingView: View {
     @State var cliInstallLocation: String?
     @State var showAdvancedConnection = false
     @State var showRemoteChoices = false
+    @State var showBrowserGateway = false
     @State var preferredGatewayID: String?
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteProbeAttemptID: UUID?
@@ -706,10 +719,12 @@ struct OnboardingView: View {
         requiresCLIInstall: Bool) -> [Int]
     {
         switch mode {
-        case .remote, .local:
+        case .local:
             // Native onboarding ends once inference works: install (when
             // needed) plus AI setup. Successful first run lands in the normal dashboard.
             requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]
+        case .remote:
+            [0, 1, 3]
         case .unconfigured:
             // "Set up later" has no gateway to hand off to; keep the native
             // ready page so the flow still ends with a visible outcome.
@@ -717,8 +732,8 @@ struct OnboardingView: View {
         }
     }
 
-    static func shouldActivateLocalGateway(afterCLIInstallFor mode: AppState.ConnectionMode) -> Bool {
-        mode == .local
+    var requiresLocalCLI: Bool {
+        self.selectedConnectionMode == .local && GatewayProcessManager.shared.installation != .external
     }
 
     var selectedConnectionMode: AppState.ConnectionMode {
@@ -734,8 +749,8 @@ struct OnboardingView: View {
 
     var pageOrder: [Int] {
         Self.pageOrder(
-            for: self.state.connectionMode,
-            requiresCLIInstall: !self.cliInstalled)
+            for: self.selectedConnectionMode,
+            requiresCLIInstall: self.requiresLocalCLI && !self.cliInstalled)
     }
 
     var pageCount: Int {

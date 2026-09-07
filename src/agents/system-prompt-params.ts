@@ -1,11 +1,12 @@
 /**
  * System prompt runtime parameter resolver.
  *
- * Collects repository, time, timezone, channel, shell, and active-process facts for prompt rendering.
+ * Collects repository, time, timezone, channel, and shell facts for prompt rendering.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatType } from "../channels/chat-type.js";
 import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,13 +16,16 @@ import {
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
-import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
+import { resolveAgentIdentity } from "./identity.js";
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
+const MAX_RUNTIME_AGENT_NAME_CHARS = 128;
 const MAX_RUNTIME_SESSION_URL_CHARS = 512;
 
 type RuntimeInfoInput = {
   agentId?: string;
+  agentName?: string;
   sessionKey?: string;
   sessionId?: string;
   sessionUrl?: string;
@@ -38,7 +42,6 @@ type RuntimeInfoInput = {
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];
   repoRoot?: string;
-  activeProcessSessions?: ActiveProcessSessionReference[];
   activeNode?: string;
 };
 
@@ -51,7 +54,7 @@ type SystemPromptRuntimeParams = {
 export function buildSystemPromptParams(params: {
   config?: OpenClawConfig;
   agentId?: string;
-  runtime: Omit<RuntimeInfoInput, "agentId" | "sessionUrl">;
+  runtime: Omit<RuntimeInfoInput, "agentId" | "agentName" | "sessionUrl">;
   workspaceDir?: string;
   cwd?: string;
   preparedRepoRoot?: string | null;
@@ -75,6 +78,10 @@ export function buildSystemPromptParams(params: {
   return {
     runtimeInfo: {
       agentId: params.agentId,
+      agentName:
+        params.config && params.agentId
+          ? resolveRuntimeAgentName(params.config, params.agentId)
+          : undefined,
       ...params.runtime,
       // Published links must be externally usable and bounded before entering model context.
       sessionUrl:
@@ -88,6 +95,12 @@ export function buildSystemPromptParams(params: {
     userTimezone,
     userDate,
   };
+}
+
+export function resolveRuntimeAgentName(config: OpenClawConfig, agentId: string) {
+  const name = sanitizeForPromptLiteral(resolveAgentIdentity(config, agentId)?.name ?? "").trim();
+  const bounded = truncateUtf16Safe(name, MAX_RUNTIME_AGENT_NAME_CHARS).trimEnd();
+  return bounded && bounded !== agentId ? bounded : undefined;
 }
 
 export function resolveSystemPromptRepoRoot(params: {

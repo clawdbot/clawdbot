@@ -60,9 +60,11 @@ const TOOLING_MODULE_PATHS = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/string-coerce.ts",
   "packages/plugin-package-contract/src/index.ts",
+  "scripts/lib/canonical-json.mjs",
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
+  "scripts/lib/pnpm-lockfile-documents.mjs",
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-version.mjs",
   CORE_PATH,
@@ -77,6 +79,8 @@ const YAML_PACKAGE_TREE_SHA256 = "610ccacfe592d226ac1eb04842d1f591c5381f2a68b9f7
 const YAML_PACKAGE_MAX_FILES = 512;
 const YAML_PACKAGE_MAX_ENTRIES = 1024;
 const YAML_PACKAGE_MAX_BYTES = 4 * 1024 * 1024;
+// Keep both comparators local: this one precedes tooling verification, and CHILD_RUNNER's precedes
+// loader-hook registration. Importing either would execute code before its integrity boundary.
 const compareAscii = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
 type ToolingModule = { path: string; bytes: Buffer; imports: Array<[string, string]> };
@@ -227,7 +231,15 @@ function verifyRemoteTooling(params: ReleasePlanSource, runGh: RunGh) {
     args = ["api", `repos/${REPOSITORY}/git/ref/tags/${tagRef}`, "--method", "GET"];
     failure = "protected release tooling tag is missing or unreadable";
   } else if (params.toolingFullRef === "refs/heads/main") {
-    args = ["api", `repos/${REPOSITORY}/compare/${sha}...main`, "--method", "GET"];
+    // Keep this bounded query identical to the verified child's cached identity request.
+    args = [
+      "api",
+      `repos/${REPOSITORY}/compare/${sha}...main`,
+      "--method",
+      "GET",
+      "--jq",
+      "{status}",
+    ];
     failure = "main release tooling ancestry could not be verified";
   } else {
     throw new Error("release tooling identity must be trusted main or an exact protected tag");
@@ -386,6 +398,10 @@ function retainYamlPackage() {
   let totalBytes = 0;
   const walk = (directory: string, relativeDirectory = "") => {
     for (const name of fs.readdirSync(directory).toSorted(compareAscii)) {
+      // Installer-created dependencies and bin shims are not package bytes or retained modules.
+      if (!relativeDirectory && name === "node_modules") {
+        continue;
+      }
       const path = relativeDirectory ? `${relativeDirectory}/${name}` : name;
       assertSafeYamlPath(path);
       if (entries.length >= YAML_PACKAGE_MAX_ENTRIES) {

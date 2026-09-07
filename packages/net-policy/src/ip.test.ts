@@ -17,6 +17,7 @@ import {
   isPrivateOrLoopbackIpAddress,
   isRfc8215LocalUseNat64Ipv6Address,
   isRfc1918Ipv4Address,
+  isUnspecifiedIpAddress,
   normalizeIpAddress,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
@@ -31,13 +32,28 @@ describe("shared ip helpers", () => {
     expect(isLegacyIpv4Literal("example.com")).toBe(false);
   });
 
-  it("matches both IPv4 and IPv6 CIDRs", () => {
-    expect(isIpInCidr("10.42.0.59", "10.42.0.0/24")).toBe(true);
-    expect(isIpInCidr("10.43.0.59", "10.42.0.0/24")).toBe(false);
-    expect(isIpInCidr("2001:db8::1234", "2001:db8::/32")).toBe(true);
-    expect(isIpInCidr("2001:db9::1234", "2001:db8::/32")).toBe(false);
-    expect(isIpInCidr("::ffff:127.0.0.1", "127.0.0.1")).toBe(true);
-    expect(isIpInCidr("127.0.0.1", "::ffff:127.0.0.2")).toBe(false);
+  it.each([
+    ["10.42.0.59", "10.42.0.0/24", true],
+    ["10.43.0.59", "10.42.0.0/24", false],
+    ["2001:db8::1234", "2001:db8::/32", true],
+    ["2001:db9::1234", "2001:db8::/32", false],
+    ["::ffff:127.0.0.1", "127.0.0.1", true],
+    ["127.0.0.1", "::ffff:127.0.0.2", false],
+    ["127.0.0.1", "127.1/8", true],
+    ["127.0.0.1", "127.1", false],
+    ["10.42.0.59", " 10.42.0.0/24 ", true],
+    ["10.42.0.59", "10.42.0.0/33", false],
+    ["2001:db8::1", "2001:db8::/129", false],
+    ["10.42.0.59", "junk", false],
+    ["10.42.0.59", "", false],
+    ["junk", "10.42.0.0/24", false],
+    ["10.42.0.59", "2001:db8::/32", false],
+    ["fe80::1%eth0", "fe80::1%eth1", false],
+    ["fe80::1%eth0", "fe80::1%eth0", true],
+    ["fe80::1%eth0", "fe80::1%eth1/128", true],
+    ["::ffff:127.0.0.1", "::ffff:127.0.0.1/128", true],
+  ])("matches %s against %s: %s", (ip, range, expected) => {
+    expect(isIpInCidr(ip, range)).toBe(expected);
   });
 
   it("extracts embedded IPv4 for transition prefixes", () => {
@@ -120,6 +136,21 @@ describe("shared ip helpers", () => {
     expect(isLinkLocalIpAddress("10.0.0.5")).toBe(false);
     expect(isLinkLocalIpAddress("127.0.0.1")).toBe(false);
     expect(isLinkLocalIpAddress("fd00::1")).toBe(false);
+  });
+
+  it.each([
+    ["[::ffff:0.0.0.0]", "[::ffff:0:0]"],
+    ["[64:ff9b::0.0.0.0]", "[64:ff9b::]"],
+  ])("detects unspecified addresses before and after URL canonicalization", (raw, canonical) => {
+    expect(new URL(`http://${raw}`).hostname).toBe(canonical);
+    expect(isUnspecifiedIpAddress(raw)).toBe(true);
+    expect(isUnspecifiedIpAddress(canonical)).toBe(true);
+  });
+
+  it("does not classify private or loopback addresses as unspecified", () => {
+    expect(isUnspecifiedIpAddress("10.0.0.8")).toBe(false);
+    expect(isUnspecifiedIpAddress("[fd00::8]")).toBe(false);
+    expect(isUnspecifiedIpAddress("[::1]")).toBe(false);
   });
 
   it("detects known non-link-local cloud metadata IPs", () => {

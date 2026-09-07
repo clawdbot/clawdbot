@@ -1,4 +1,6 @@
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { RecordInboundSession } from "../channels/session.types.js";
@@ -38,6 +40,8 @@ import {
 } from "./inbound-reply-dispatch.js";
 
 describe("inbound reply dispatch compatibility", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   it("keeps the deprecated package subpath compatibility exports", () => {
     const callableExports = [
       ["hasFinalInboundReplyDispatch", hasFinalInboundReplyDispatch],
@@ -116,7 +120,7 @@ describe("inbound reply dispatch compatibility", () => {
       channel: "test",
       accountId: "default",
       route: { agentId: "main", sessionKey: "agent:main:test:peer" },
-      storePath: "/tmp/sessions.json",
+      storePath: path.join(tempDirs.make("openclaw-inbound-reply-dispatch-"), "sessions.json"),
       ctxPayload,
       core: {
         channel: {

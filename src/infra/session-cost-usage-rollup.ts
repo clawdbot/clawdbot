@@ -1,3 +1,4 @@
+import { usageDailyModelIdentity, usageModelIdentity } from "../shared/usage-aggregates.js";
 import {
   addCostUsageTotals,
   cloneCostUsageTotals,
@@ -160,10 +161,6 @@ function mergeTools(
   }
 }
 
-function modelKey(provider?: string, model?: string): string {
-  return `${provider ?? "unknown"}\0${model ?? "unknown"}`;
-}
-
 function addModelUsage(
   models: SessionModelUsage[],
   provider: string | undefined,
@@ -173,8 +170,10 @@ function addModelUsage(
   if (!provider && !model) {
     return;
   }
-  const modelRef = modelKey(provider, model);
-  let existing = models.find((entry) => modelKey(entry.provider, entry.model) === modelRef);
+  const modelRef = usageModelIdentity(provider, model);
+  let existing = models.find(
+    (entry) => usageModelIdentity(entry.provider, entry.model) === modelRef,
+  );
   if (!existing) {
     existing = { provider, model, count: 0, totals: createEmptyCostUsageTotals() };
     models.push(existing);
@@ -185,7 +184,7 @@ function addModelUsage(
 
 function mergeModels(target: Map<string, SessionModelUsage>, models: SessionModelUsage[]): void {
   for (const model of models) {
-    const modelRef = modelKey(model.provider, model.model);
+    const modelRef = usageModelIdentity(model.provider, model.model);
     const existing = target.get(modelRef) ?? {
       provider: model.provider,
       model: model.model,
@@ -312,27 +311,208 @@ function addMessageCounts(target: SessionMessageCounts, source: SessionMessageCo
   target.errors += source.errors;
 }
 
-function sortedModelUsage(models: Map<string, SessionModelUsage>): SessionModelUsage[] | undefined {
+function sortedModelUsage(
+  models: Map<string, SessionModelUsage>,
+  sortByUsage = true,
+): SessionModelUsage[] | undefined {
   if (models.size === 0) {
     return undefined;
   }
-  return Array.from(models.values()).toSorted((a, b) => {
-    const costDiff = b.totals.totalCost - a.totals.totalCost;
-    return costDiff || b.totals.totalTokens - a.totals.totalTokens;
-  });
+  const values = Array.from(models.values());
+  return sortByUsage
+    ? values.toSorted((a, b) => {
+        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        return costDiff || b.totals.totalTokens - a.totals.totalTokens;
+      })
+    : values;
 }
 
-function buildToolUsage(tools: Map<string, number>): SessionToolUsage | undefined {
+function buildToolUsage(
+  tools: Map<string, number>,
+  sortTiesByName = true,
+): SessionToolUsage | undefined {
   if (tools.size === 0) {
     return undefined;
   }
-  const entries = Array.from(tools.entries())
-    .map(([name, count]) => ({ name, count }))
-    .toSorted((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  const entries = Array.from(tools, ([name, count]) => ({ name, count })).toSorted(
+    (a, b) => b.count - a.count || (sortTiesByName ? a.name.localeCompare(b.name) : 0),
+  );
   return {
     totalCalls: entries.reduce((sum, entry) => sum + entry.count, 0),
     uniqueTools: entries.length,
     tools: entries,
+  };
+}
+
+function createDatedRowsAccumulator<T extends { date: string; quarterIndex?: number }>(
+  add: (target: T, source: T) => void,
+  options?: {
+    key?: (row: T) => string;
+    clone?: (row: T) => T;
+  },
+) {
+  const rows = new Map<string, T>();
+  const keyOf =
+    options?.key ??
+    ((row: T) => (row.quarterIndex === undefined ? row.date : `${row.date}:${row.quarterIndex}`));
+  const clone = options?.clone ?? ((row: T) => ({ ...row }));
+  return {
+    add(source: T[] | undefined): void {
+      for (const row of source ?? []) {
+        const key = keyOf(row);
+        const existing = rows.get(key);
+        if (existing) {
+          add(existing, row);
+        } else {
+          rows.set(key, clone(row));
+        }
+      }
+    },
+    finish(): T[] | undefined {
+      return rows.size
+        ? Array.from(rows.values()).toSorted(
+            (a, b) => a.date.localeCompare(b.date) || (a.quarterIndex ?? 0) - (b.quarterIndex ?? 0),
+          )
+        : undefined;
+    },
+  };
+}
+
+function mergeMessageCountSummaries(
+  left: SessionMessageCounts | undefined,
+  right: SessionMessageCounts | undefined,
+): SessionMessageCounts | undefined {
+  if (!left) {
+    return right ? { ...right } : undefined;
+  }
+  const counts = { ...left };
+  if (right) {
+    addMessageCounts(counts, right);
+  }
+  return counts;
+}
+
+function mergeLatencyStats(
+  left: SessionLatencyStats | undefined,
+  right: SessionLatencyStats | undefined,
+): SessionLatencyStats | undefined {
+  if (!left && !right) {
+    return undefined;
+  }
+  const leftCount = left?.count ?? 0;
+  const rightCount = right?.count ?? 0;
+  const count = leftCount + rightCount;
+  return {
+    count,
+    avgMs:
+      count > 0 ? ((left?.avgMs ?? 0) * leftCount + (right?.avgMs ?? 0) * rightCount) / count : 0,
+    p95Ms: Math.max(left?.p95Ms ?? 0, right?.p95Ms ?? 0),
+    minMs: Math.min(
+      left?.minMs ?? Number.POSITIVE_INFINITY,
+      right?.minMs ?? Number.POSITIVE_INFINITY,
+    ),
+    maxMs: Math.max(left?.maxMs ?? 0, right?.maxMs ?? 0),
+  };
+}
+
+export function createSessionCostSummaryAccumulator(
+  identity: Pick<SessionCostSummary, "sessionId" | "sessionFile">,
+) {
+  const target: SessionCostSummary = { ...createEmptyCostUsageTotals(), ...identity };
+  const activityDates = new Set<string>();
+  const dailyBreakdown = createDatedRowsAccumulator<
+    NonNullable<SessionCostSummary["dailyBreakdown"]>[number]
+  >(
+    (current, row) => {
+      addCostUsageTotals(current, row);
+      current.tokens += row.tokens;
+      current.cost += row.cost;
+    },
+    { clone: (row) => ({ ...row, ...cloneCostUsageTotals(row) }) },
+  );
+  const dailyMessageCounts =
+    createDatedRowsAccumulator<SessionDailyMessageCounts>(addMessageCounts);
+  const quarterMessages =
+    createDatedRowsAccumulator<SessionUtcQuarterHourMessageCounts>(addMessageCounts);
+  const quarterTokens = createDatedRowsAccumulator<SessionUtcQuarterHourTokenUsage>(
+    (current, row) => {
+      current.input += row.input;
+      current.output += row.output;
+      current.cacheRead += row.cacheRead;
+      current.cacheWrite += row.cacheWrite;
+      current.totalTokens += row.totalTokens;
+      current.totalCost += row.totalCost;
+    },
+  );
+  const dailyLatency = createDatedRowsAccumulator<SessionDailyLatency>((current, row) => {
+    const count = current.count + row.count;
+    current.avgMs = count > 0 ? (current.avgMs * current.count + row.avgMs * row.count) / count : 0;
+    current.count = count;
+    current.p95Ms = Math.max(current.p95Ms, row.p95Ms);
+    current.minMs = Math.min(current.minMs, row.minMs);
+    current.maxMs = Math.max(current.maxMs, row.maxMs);
+  });
+  const dailyModels = createDatedRowsAccumulator<SessionDailyModelUsage>(
+    (current, row) => {
+      current.tokens += row.tokens;
+      current.cost += row.cost;
+      current.count += row.count;
+    },
+    { key: (row) => usageDailyModelIdentity(row.date, row.provider, row.model) },
+  );
+
+  return {
+    add(source: SessionCostSummary): void {
+      addCostUsageTotals(target, source);
+      target.firstActivity =
+        target.firstActivity === undefined
+          ? source.firstActivity
+          : source.firstActivity === undefined
+            ? target.firstActivity
+            : Math.min(target.firstActivity, source.firstActivity);
+      target.lastActivity =
+        target.lastActivity === undefined
+          ? source.lastActivity
+          : source.lastActivity === undefined
+            ? target.lastActivity
+            : Math.max(target.lastActivity, source.lastActivity);
+      if (target.firstActivity !== undefined && target.lastActivity !== undefined) {
+        target.durationMs = Math.max(0, target.lastActivity - target.firstActivity);
+      }
+      for (const date of source.activityDates ?? []) {
+        activityDates.add(date);
+      }
+      dailyBreakdown.add(source.dailyBreakdown);
+      dailyMessageCounts.add(source.dailyMessageCounts);
+      quarterMessages.add(source.utcQuarterHourMessageCounts);
+      quarterTokens.add(source.utcQuarterHourTokenUsage);
+      dailyLatency.add(source.dailyLatency);
+      dailyModels.add(source.dailyModelUsage);
+      target.messageCounts = mergeMessageCountSummaries(target.messageCounts, source.messageCounts);
+
+      // Later count ties inherit the preceding ranking, so tools still fold after each instance.
+      const tools = new Map<string, number>();
+      mergeTools(tools, target.toolUsage?.tools ?? []);
+      mergeTools(tools, source.toolUsage?.tools ?? []);
+      target.toolUsage = buildToolUsage(tools, false);
+      const models = new Map<string, SessionModelUsage>();
+      mergeModels(models, target.modelUsage ?? []);
+      mergeModels(models, source.modelUsage ?? []);
+      target.modelUsage = sortedModelUsage(models, false);
+      target.latency = mergeLatencyStats(target.latency, source.latency);
+    },
+    finish(): SessionCostSummary {
+      if (activityDates.size) {
+        target.activityDates = Array.from(activityDates).toSorted();
+      }
+      target.dailyBreakdown = dailyBreakdown.finish();
+      target.dailyMessageCounts = dailyMessageCounts.finish();
+      target.utcQuarterHourMessageCounts = quarterMessages.finish();
+      target.utcQuarterHourTokenUsage = quarterTokens.finish();
+      target.dailyLatency = dailyLatency.finish();
+      target.dailyModelUsage = dailyModels.finish();
+      return target;
+    },
   };
 }
 
@@ -360,7 +540,7 @@ export function buildSessionCostSummaryFromRollup(params: {
   const tools = new Map<string, number>();
   const models = new Map<string, SessionModelUsage>();
   const activityDates = new Set<string>();
-  const dailyUsage = new Map<string, { tokens: number; cost: number }>();
+  const dailyUsage = new Map<string, CostUsageTotals>();
   const dailyMessages = new Map<string, SessionDailyMessageCounts>();
   const quarterMessages = new Map<string, SessionUtcQuarterHourMessageCounts>();
   const quarterTokens = new Map<string, SessionUtcQuarterHourTokenUsage>();
@@ -386,9 +566,8 @@ export function buildSessionCostSummaryFromRollup(params: {
     mergeTools(tools, bucket.tools);
     mergeModels(models, bucket.models);
 
-    const daily = dailyUsage.get(dayKey) ?? { tokens: 0, cost: 0 };
-    daily.tokens += bucket.totals.totalTokens;
-    daily.cost += bucket.totals.totalCost;
+    const daily = dailyUsage.get(dayKey) ?? createEmptyCostUsageTotals();
+    addCostUsageTotals(daily, bucket.totals);
     dailyUsage.set(dayKey, daily);
 
     const dailyMessage = dailyMessages.get(dayKey) ?? { date: dayKey, ...emptyMessageCounts() };
@@ -422,7 +601,7 @@ export function buildSessionCostSummaryFromRollup(params: {
     quarterTokens.set(quarter.bucketId, quarterUsage);
 
     for (const model of bucket.models) {
-      const modelBucketId = `${dayKey}\0${modelKey(model.provider, model.model)}`;
+      const modelBucketId = usageDailyModelIdentity(dayKey, model.provider, model.model);
       const existing = dailyModels.get(modelBucketId) ?? {
         date: dayKey,
         provider: model.provider,
@@ -453,11 +632,10 @@ export function buildSessionCostSummaryFromRollup(params: {
     mergeModels(models, params.rollup.untimestamped.models);
   }
 
-  const dailyLatency = Array.from(dailyLatencies.entries())
-    .map(([date, aggregate]) => {
-      const stats = computeLatencyStats(aggregate);
-      return stats ? Object.assign({ date }, stats) : null;
-    })
+  const dailyLatency = Array.from(dailyLatencies, ([date, aggregate]) => {
+    const stats = computeLatencyStats(aggregate);
+    return stats ? Object.assign({ date }, stats) : null;
+  })
     .filter((entry): entry is SessionDailyLatency => entry !== null)
     .toSorted((a, b) => a.date.localeCompare(b.date));
   const utcQuarterHourMessageCounts = Array.from(quarterMessages.values()).toSorted(
@@ -477,9 +655,9 @@ export function buildSessionCostSummaryFromRollup(params: {
         ? Math.max(0, lastActivity - firstActivity)
         : undefined,
     activityDates: Array.from(activityDates).toSorted(),
-    dailyBreakdown: Array.from(dailyUsage.entries())
-      .map(([date, usage]) => Object.assign({ date }, usage))
-      .toSorted((a, b) => a.date.localeCompare(b.date)),
+    dailyBreakdown: Array.from(dailyUsage, ([date, usage]) =>
+      Object.assign({ date, tokens: usage.totalTokens, cost: usage.totalCost }, usage),
+    ).toSorted((a, b) => a.date.localeCompare(b.date)),
     dailyMessageCounts: Array.from(dailyMessages.values()).toSorted((a, b) =>
       a.date.localeCompare(b.date),
     ),

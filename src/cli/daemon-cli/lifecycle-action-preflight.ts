@@ -30,7 +30,12 @@ export async function getServiceActionPreflightFailure(
 ): Promise<ServiceActionPreflightFailure | null> {
   let snapshot: ConfigFileSnapshot;
   try {
-    snapshot = await readConfigFileSnapshot({ observe: false });
+    // Stop must remain available before Doctor migrates newly installed plugins.
+    // Core validation and the newer-writer guard still protect service selection.
+    snapshot = await readConfigFileSnapshot({
+      observe: false,
+      pluginValidation: action === "stop" ? "core-only" : undefined,
+    });
     if (snapshot.exists && !snapshot.valid) {
       const message =
         snapshot.issues.length > 0

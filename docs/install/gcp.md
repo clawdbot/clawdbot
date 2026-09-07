@@ -13,8 +13,9 @@ covers GCP provisioning, network access, and machine operations; the shared
 [Docker VM runtime](/install/docker-vm-runtime) page owns container setup,
 persistence, custom binaries, verification, and updates.
 
-Pricing varies by machine type and region. Start with at least 2 GB RAM for a
-source build and resize if the build is OOM-killed.
+Pricing varies by machine type and region. Use at least 6 GB RAM for a source
+image build. On a smaller machine, use the official pre-built image described
+in [Docker VM runtime](/install/docker-vm-runtime).
 
 ## What you need
 
@@ -55,18 +56,18 @@ source build and resize if the build is OOM-killed.
   </Step>
 
   <Step title="Choose a machine">
-    | Type      | Specs                    | Notes                                       |
-    | --------- | ------------------------ | ------------------------------------------- |
-    | e2-medium | 2 vCPU, 4 GB RAM         | Most reliable for local source image builds |
-    | e2-small  | 2 vCPU, 2 GB RAM         | Minimum recommended for a source build      |
-    | e2-micro  | 2 shared vCPU, 1 GB RAM  | Often fails source builds with exit 137     |
+    | Type          | Specs                   | Notes                                  |
+    | ------------- | ----------------------- | -------------------------------------- |
+    | e2-standard-2 | 2 vCPU, 8 GB RAM        | Recommended for source image builds    |
+    | e2-medium     | 2 vCPU, 4 GB RAM        | Use the official pre-built image       |
+    | e2-small      | 2 vCPU, 2 GB RAM        | Use the official pre-built image       |
 
     Create a Debian 12 VM:
 
     ```bash
     gcloud compute instances create openclaw-gateway \
       --zone=us-central1-a \
-      --machine-type=e2-small \
+      --machine-type=e2-standard-2 \
       --boot-disk-size=20GB \
       --image-family=debian-12 \
       --image-project=debian-cloud

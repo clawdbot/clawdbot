@@ -9,6 +9,7 @@ describe("plugin management gateway descriptors", () => {
   it("keeps catalog reads separate from control-plane mutations", () => {
     const descriptors = createCoreGatewayMethodDescriptors({
       "plugins.list": handler,
+      "plugins.inspect": handler,
       "plugins.search": handler,
       "plugins.install": handler,
       "plugins.setEnabled": handler,
@@ -18,6 +19,7 @@ describe("plugin management gateway descriptors", () => {
     const byName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
 
     expect(byName.get("plugins.list")?.scope).toBe("operator.read");
+    expect(byName.get("plugins.inspect")?.scope).toBe("operator.read");
     expect(byName.get("plugins.search")?.scope).toBe("operator.read");
     expect(byName.get("plugins.install")).toMatchObject({
       scope: "operator.admin",

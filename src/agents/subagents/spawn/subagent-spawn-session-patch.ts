@@ -4,15 +4,18 @@ import { buildSessionCreationStamp } from "../../../config/sessions/session-entr
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
+import { resolveUserPath } from "../../../utils.js";
 import {
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "../../inherited-tool-deny.js";
+import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import {
+  loadSessionEntry,
   resolveGatewaySessionStoreTarget,
   upsertSessionEntryCore,
 } from "./subagent-spawn.runtime.js";
@@ -64,6 +67,11 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
     entry.thinkingLevel = patch.thinkingLevel.trim();
   }
+  const authProfileOverride = normalizeOptionalString(patch.authProfileOverride);
+  if (authProfileOverride) {
+    entry.authProfileOverride = authProfileOverride;
+    entry.authProfileOverrideSource = patch.authProfileOverrideSource === "auto" ? "auto" : "user";
+  }
   if (patch.fastMode === true || patch.fastMode === false || patch.fastMode === "auto") {
     entry.fastMode = patch.fastMode;
   }
@@ -108,12 +116,15 @@ export async function createInitialSubagentSession(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
   childSessionKey: string;
+  label?: string;
   incognito: boolean;
   requesterInternalKey: string;
-  requesterAgentId: string;
+  assertActive?: () => void;
+  creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   admissionPatch?: Record<string, unknown>;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
@@ -140,13 +151,21 @@ export async function createInitialSubagentSession(params: {
     ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     ...(params.incognito ? { incognito: true } : {}),
   };
-  // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
-  // launch so it cannot delete a reset successor that reuses the session id.
-  const childSessionIdentity = {
-    sessionId: randomUUID(),
-    lifecycleRevision: randomUUID(),
-  };
   try {
+    const parentTarget = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.requesterInternalKey,
+    });
+    const parentEntry = loadSessionEntry({
+      storePath: parentTarget.storePath,
+      sessionKey: parentTarget.canonicalKey,
+    });
+    // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
+    // launch so it cannot delete a reset successor that reuses the session id.
+    const childSessionIdentity = {
+      sessionId: randomUUID(),
+      lifecycleRevision: randomUUID(),
+    };
     const target = params.incognito
       ? {
           agentId: params.targetAgentId,
@@ -165,46 +184,54 @@ export async function createInitialSubagentSession(params: {
       },
       {
         ...buildDirectChildSessionPatch(initialChildSessionPatch),
+        // Native spawn keeps agent RPC label semantics, not sessions.patch's uniqueness policy.
+        ...(params.label ? { label: params.label } : {}),
+        ...(params.sessionPermissionPolicy
+          ? {
+              permissionMode: params.sessionPermissionPolicy.mode,
+              sessionRoot: resolveUserPath(
+                params.spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root,
+              ),
+            }
+          : {}),
         ...childSessionIdentity,
+        ...(parentEntry?.skillLibrarySelections
+          ? {
+              skillLibrarySelections: parentEntry.skillLibrarySelections.map((selection) => ({
+                ...selection,
+              })),
+            }
+          : {}),
         ...buildSessionCreationStamp({
           via: "spawn",
-          actor: { type: "agent", id: params.requesterAgentId },
+          ...params.creationPolicy,
         }),
+      },
+      {
+        assertCommitAllowed: () => {
+          params.assertActive?.();
+          if (parentEntry?.skillLibrarySelections) {
+            const latest = loadSessionEntry({
+              storePath: parentTarget.storePath,
+              sessionKey: parentTarget.canonicalKey,
+            });
+            if (
+              latest?.sessionId !== parentEntry.sessionId ||
+              latest.lifecycleRevision !== parentEntry.lifecycleRevision ||
+              JSON.stringify(latest.skillLibrarySelections) !==
+                JSON.stringify(parentEntry.skillLibrarySelections)
+            ) {
+              throw new Error(
+                "Parent skill selection changed before spawn; retry from the current turn.",
+              );
+            }
+          }
+        },
       },
     );
     return { status: "ok", entry: entry ?? undefined };
   } catch (err) {
     const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";
     return { status: "error", error: `child session patch failed: ${message}` };
-  }
-}
-
-export async function persistInitialChildSessionRuntimeModel(params: {
-  cfg: OpenClawConfig;
-  childSessionKey: string;
-  resolvedModel?: string;
-}): Promise<string | undefined> {
-  const { provider, model } = splitModelRef(params.resolvedModel);
-  if (!model) {
-    return undefined;
-  }
-  try {
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: params.childSessionKey,
-    });
-    await upsertSessionEntryCore(
-      {
-        storePath: target.storePath,
-        sessionKey: target.canonicalKey,
-      },
-      {
-        model,
-        ...(provider ? { modelProvider: provider } : {}),
-      },
-    );
-    return undefined;
-  } catch (err) {
-    return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
   }
 }

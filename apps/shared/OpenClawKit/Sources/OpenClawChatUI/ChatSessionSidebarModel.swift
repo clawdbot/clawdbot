@@ -372,6 +372,9 @@ public enum ChatSessionSidebarModel {
         if let lastReadAt = change.lastReadAt {
             session.lastReadAt = lastReadAt
         }
+        if change.colorPresent {
+            session.color = change.color
+        }
         if change.agentStatusPresent {
             session.agentStatus = change.agentStatus
         }
@@ -502,9 +505,17 @@ public enum ChatSessionSidebarModel {
             status != "running"
     }
 
-    static func isSessionInActiveAgentScope(key: String, activeAgentID: String?) -> Bool {
+    public static func isSessionInActiveAgentScope(
+        key: String,
+        agentID: String? = nil,
+        activeAgentID: String?) -> Bool
+    {
         let normalizedAgent = activeAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         guard !normalizedAgent.isEmpty else { return true }
+        // Gateway row ownership outranks ambiguous bare/global keys. Missing
+        // metadata is a shipped legacy-cache state and keeps key-only behavior.
+        let rowAgent = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let rowAgent, !rowAgent.isEmpty, rowAgent != normalizedAgent { return false }
         let parts = key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
         guard parts.count == 3, parts[0].lowercased() == "agent" else { return true }
         return parts[1].lowercased() == normalizedAgent
@@ -608,35 +619,12 @@ public enum ChatSessionSidebarModel {
         {
             // Sessions can lag behind a fresh switch/new-session; keep the
             // active row selectable instead of showing an empty selection.
-            entries.append(self.placeholder(key: currentSessionKey))
+            entries.append(OpenClawChatSessionEntry.placeholder(key: currentSessionKey))
         }
         // Gateway, cached lists, iOS, and macOS must share the same pin
         // chronology, stable key ties, and searchable session fields.
         return OpenClawChatSessionListOrganizer.filter(
             OpenClawChatSessionListOrganizer.organize(entries),
             search: query)
-    }
-
-    private static func placeholder(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
-            key: key,
-            kind: nil,
-            displayName: nil,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
-            updatedAt: nil,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
-            modelProvider: nil,
-            model: nil,
-            contextTokens: nil)
     }
 }

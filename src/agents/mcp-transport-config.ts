@@ -1,21 +1,20 @@
 /**
  * Resolves MCP transport command, environment, and timeout configuration.
  */
+import { redactSensitiveUrl } from "@openclaw/net-policy/redact-sensitive-url";
 import {
   asPositiveFiniteNumber,
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
-import {
-  describeHttpMcpServerLaunchConfig,
-  resolveHttpMcpServerLaunchConfig,
-  type HttpMcpTransportType,
-} from "./mcp-http.js";
+import { resolveHttpMcpServerLaunchConfig, type HttpMcpTransportType } from "./mcp-http.js";
 import type { McpOAuthConfig } from "./mcp-oauth-provider.js";
 import {
   describeStdioMcpServerLaunchConfig,
@@ -62,23 +61,31 @@ type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttp
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const MAX_WARNED_DROPPED_STDIO_ENV_KEYS = 4096;
+// Warning state spans repeated MCP transport resolutions in one gateway process;
+// bounding it means evicted server/env pairs can re-warn instead of growing unbounded.
+const warnedDroppedStdioEnvKeys = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_WARNED_DROPPED_STDIO_ENV_KEYS,
+});
 
-function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number | undefined {
-  if (!rawServer || typeof rawServer !== "object") {
-    return undefined;
+function warnDroppedStdioEnvOnce(serverName: string, key: string): void {
+  const logServerName = sanitizeForLog(serverName);
+  const logKey = sanitizeForLog(key);
+  if (warnedDroppedStdioEnvKeys.check(JSON.stringify([serverName, key]))) {
+    return;
   }
-  const record = rawServer as Record<string, unknown>;
-  for (const key of keys) {
-    const value = asPositiveFiniteNumber(record[key]);
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
+  logWarn(
+    `bundle-mcp: server "${logServerName}": env "${logKey}" is blocked for stdio startup safety and was ignored.`,
+  );
+}
+
+function getPositiveNumber(rawServer: unknown, key: string): number | undefined {
+  return asPositiveFiniteNumber(asOptionalObjectRecord(rawServer)?.[key]);
 }
 
 function getConnectionTimeoutMs(rawServer: unknown): number {
-  const milliseconds = getPositiveNumber(rawServer, ["connectionTimeoutMs"]);
+  const milliseconds = getPositiveNumber(rawServer, "connectionTimeoutMs");
   if (milliseconds) {
     return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_CONNECTION_TIMEOUT_MS;
   }
@@ -89,54 +96,21 @@ export function resolveMcpRequestTimeoutMs(
   rawServer: unknown,
   fallbackMs = DEFAULT_REQUEST_TIMEOUT_MS,
 ): number {
-  const milliseconds = getPositiveNumber(rawServer, ["requestTimeoutMs"]);
+  const milliseconds = getPositiveNumber(rawServer, "requestTimeoutMs");
   if (milliseconds) {
     return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
   return resolvePositiveTimerTimeoutMs(fallbackMs, DEFAULT_REQUEST_TIMEOUT_MS);
 }
 
-function getBooleanField(rawServer: unknown, keys: readonly string[]): boolean | undefined {
-  if (!rawServer || typeof rawServer !== "object") {
-    return undefined;
-  }
-  const record = rawServer as Record<string, unknown>;
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "boolean") {
-      return value;
-    }
-  }
-  return undefined;
+function getBooleanField(rawServer: unknown, key: string): boolean | undefined {
+  const value = asOptionalObjectRecord(rawServer)?.[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function getStringField(rawServer: unknown, keys: readonly string[]): string | undefined {
-  if (!rawServer || typeof rawServer !== "object") {
-    return undefined;
-  }
-  return readTrimmedStringAlias(rawServer as Record<string, unknown>, keys);
-}
-
-function getRequestedTransport(rawServer: unknown): string {
-  if (
-    !rawServer ||
-    typeof rawServer !== "object" ||
-    typeof (rawServer as { transport?: unknown }).transport !== "string"
-  ) {
-    return "";
-  }
-  return normalizeLowercaseStringOrEmpty((rawServer as { transport?: string }).transport);
-}
-
-function getRequestedTransportAlias(rawServer: unknown): HttpMcpTransportType | "" {
-  if (
-    !rawServer ||
-    typeof rawServer !== "object" ||
-    typeof (rawServer as { type?: unknown }).type !== "string"
-  ) {
-    return "";
-  }
-  return resolveOpenClawMcpTransportAlias((rawServer as { type?: string }).type) ?? "";
+  const record = asOptionalObjectRecord(rawServer);
+  return record ? readTrimmedStringAlias(record, keys) : undefined;
 }
 
 function resolveHttpTransportConfig(
@@ -183,8 +157,8 @@ function resolveHttpTransportConfig(
     !Array.isArray((rawServer as { oauth?: unknown }).oauth)
       ? { oauth: (rawServer as { oauth: ResolvedMcpOAuthConfig }).oauth }
       : {}),
-    ...(getBooleanField(rawServer, ["sslVerify"]) !== undefined
-      ? { sslVerify: getBooleanField(rawServer, ["sslVerify"]) }
+    ...(getBooleanField(rawServer, "sslVerify") !== undefined
+      ? { sslVerify: getBooleanField(rawServer, "sslVerify") }
       : {}),
     ...(getStringField(rawServer, ["clientCert"])
       ? { clientCert: getStringField(rawServer, ["clientCert"]) }
@@ -192,10 +166,10 @@ function resolveHttpTransportConfig(
     ...(getStringField(rawServer, ["clientKey"])
       ? { clientKey: getStringField(rawServer, ["clientKey"]) }
       : {}),
-    description: describeHttpMcpServerLaunchConfig(launch.config),
+    description: redactSensitiveUrl(launch.config.url),
     connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
     requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-    supportsParallelToolCalls: getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
+    supportsParallelToolCalls: getBooleanField(rawServer, "supportsParallelToolCalls") ?? false,
   };
 }
 
@@ -205,19 +179,20 @@ export function resolveMcpTransportConfig(
   rawServer: unknown,
   options?: { logWarnings?: boolean },
 ): ResolvedMcpTransportConfig | null {
-  const logServerName = sanitizeForLog(serverName);
   const logWarnings = options?.logWarnings !== false;
-  const requestedTransport = getRequestedTransport(rawServer);
-  const requestedTransportAlias = requestedTransport ? "" : getRequestedTransportAlias(rawServer);
+  const requestedTransport = normalizeLowercaseStringOrEmpty(
+    getStringField(rawServer, ["transport"]),
+  );
+  const requestedTransportAlias = requestedTransport
+    ? ""
+    : (resolveOpenClawMcpTransportAlias(getStringField(rawServer, ["type"])) ?? "");
   const effectiveTransport = requestedTransport || requestedTransportAlias;
   const stdioLaunch = resolveStdioMcpServerLaunchConfig(
     rawServer,
     logWarnings
       ? {
           onDroppedEnv: (key: string) => {
-            logWarn(
-              `bundle-mcp: server "${logServerName}": env "${sanitizeForLog(key)}" is blocked for stdio startup safety and was ignored.`,
-            );
+            warnDroppedStdioEnvOnce(serverName, key);
           },
         }
       : undefined,
@@ -235,7 +210,7 @@ export function resolveMcpTransportConfig(
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
       connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
       requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-      supportsParallelToolCalls: getBooleanField(rawServer, ["supportsParallelToolCalls"]) ?? false,
+      supportsParallelToolCalls: getBooleanField(rawServer, "supportsParallelToolCalls") ?? false,
     };
   }
 
@@ -246,34 +221,27 @@ export function resolveMcpTransportConfig(
   ) {
     if (logWarnings) {
       logWarn(
-        `bundle-mcp: skipped server "${logServerName}" because transport "${sanitizeForLog(effectiveTransport)}" is not supported.`,
+        `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because transport "${sanitizeForLog(effectiveTransport)}" is not supported.`,
       );
     }
     return null;
   }
 
-  if (effectiveTransport === "streamable-http") {
-    const httpTransport = resolveHttpTransportConfig(
-      serverName,
-      rawServer,
-      "streamable-http",
-      logWarnings,
-    );
-    if (httpTransport) {
-      return httpTransport;
-    }
-  }
-
-  const sseTransport = resolveHttpTransportConfig(serverName, rawServer, "sse", logWarnings);
-  if (sseTransport) {
-    return sseTransport;
+  const httpTransport = resolveHttpTransportConfig(
+    serverName,
+    rawServer,
+    effectiveTransport === "streamable-http" ? "streamable-http" : "sse",
+    logWarnings,
+  );
+  if (httpTransport) {
+    return httpTransport;
   }
 
   const httpLaunch = resolveHttpMcpServerLaunchConfig(rawServer);
   const httpReason = httpLaunch.ok ? "not an HTTP MCP server" : httpLaunch.reason;
   if (logWarnings) {
     logWarn(
-      `bundle-mcp: skipped server "${logServerName}" because ${stdioLaunch.reason} and ${httpReason}.`,
+      `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because ${stdioLaunch.reason} and ${httpReason}.`,
     );
   }
   return null;

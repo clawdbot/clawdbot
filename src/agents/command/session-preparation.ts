@@ -50,6 +50,8 @@ export async function prepareEmbeddedSessionState(params: {
       lifecycleGeneration: params.lifecycleGeneration,
       verboseLevel: resolvedVerboseLevel,
       isControlUiVisible: !params.suppressVisibleSessionEffects,
+      // Node and local command ingress may not have a separate chat activity owner.
+      projectSessionActive: !params.suppressVisibleSessionEffects,
     });
   }
 
@@ -72,6 +74,7 @@ export async function prepareEmbeddedSessionState(params: {
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,
+    librarySelections: sessionEntry?.skillLibrarySelections,
     skillFilter,
     eligibility: {
       nodeSkills: nodeSkillsEligibility,
@@ -79,7 +82,9 @@ export async function prepareEmbeddedSessionState(params: {
         advertiseExecNode: nodeSkillsEligibility.canExec,
       }),
     },
-    watch: params.watchSkills,
+    // A one-shot caller has no later turn to consume invalidations; persistent
+    // watchers would keep its process alive after the reply has completed.
+    watch: params.watchSkills && params.opts.oneShotCliRun !== true,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
       : {}),

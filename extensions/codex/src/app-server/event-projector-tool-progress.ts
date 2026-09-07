@@ -315,7 +315,11 @@ export class CodexToolProgressProjection {
   }
 
   emitToolResultSummary(item: CodexThreadItem | undefined): void {
-    if (!item || !this.params.onToolResult || !this.shouldEmitToolResult()) {
+    // Dynamic requests own their transcript progress; native notifications only confirm it.
+    if (!item || item.type === "dynamicToolCall") {
+      return;
+    }
+    if (!this.params.onToolResult || !this.shouldEmitToolResult()) {
       return;
     }
     if (this.resultSummaryItemIds.has(item.id)) {
@@ -327,10 +331,9 @@ export class CodexToolProgressProjection {
       return;
     }
     this.resultSummaryItemIds.add(item.id);
-    const meta =
-      this.shouldEmitToolOutput() || !isCommandBearingToolItem(item, args)
-        ? itemMeta(item, this.toolProgressDetailMode())
-        : undefined;
+    const meta = this.shouldIncludeFormattedMeta(isCommandBearingToolItem(item, args))
+      ? itemMeta(item, this.toolProgressDetailMode())
+      : undefined;
     this.emitToolResultMessage({
       itemId: item.id,
       text: formatToolSummary(toolName, meta),
@@ -338,7 +341,10 @@ export class CodexToolProgressProjection {
   }
 
   emitToolResultOutput(item: CodexThreadItem | undefined): void {
-    if (!item || !this.params.onToolResult || !this.shouldEmitToolOutput()) {
+    if (!item || item.type === "dynamicToolCall") {
+      return;
+    }
+    if (!this.params.onToolResult || !this.shouldEmitToolOutput()) {
       return;
     }
     if (this.resultOutputItemIds.has(item.id) || this.resultOutputStreamedItemIds.has(item.id)) {
@@ -349,9 +355,12 @@ export class CodexToolProgressProjection {
     if (!toolName || !output || !shouldEmitTranscriptToolProgress(toolName, itemToolArgs(item))) {
       return;
     }
+    const meta = this.shouldIncludeFormattedMeta(isCommandBearingToolItem(item, itemToolArgs(item)))
+      ? itemMeta(item, this.toolProgressDetailMode())
+      : undefined;
     this.emitToolResultMessage({
       itemId: item.id,
-      text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
+      text: formatToolOutput(toolName, meta, output),
       finalOutput: true,
       isError: isNonSuccessItemStatus(itemStatus(item)),
     });
@@ -457,6 +466,9 @@ export class CodexToolProgressProjection {
       void Promise.resolve(
         this.params.onToolResult?.({
           text,
+          ...((this.params.messageChannel || this.params.messageProvider) && {
+            channelData: { openclawToolProgressId: params.itemId },
+          }),
           ...(params.isError === true ? { isError: true } : {}),
         }),
       ).catch(() => {});
@@ -477,18 +489,27 @@ export class CodexToolProgressProjection {
       : this.params.verboseLevel === "full";
   }
 
+  private shouldIncludeFormattedMeta(commandBearing: boolean): boolean {
+    // Channel command detail comes from structured events, where commandText policy applies.
+    const channel = this.params.messageChannel ?? this.params.messageProvider;
+    return !commandBearing || (!channel && this.shouldEmitToolOutput());
+  }
+
   private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
-    if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
+    // Successful cards use the typed plan stream after the write completes.
+    if (
+      params.name === "progress_card" ||
+      !shouldEmitTranscriptToolProgress(params.name, params.arguments)
+    ) {
       return;
     }
     this.transcriptProgressCallIds.add(params.id);
     const args = normalizeToolTranscriptArguments(params.arguments);
-    const meta =
-      this.shouldEmitToolOutput() || !isCodexCommandBearingToolCall(params.name, args)
-        ? inferToolMetaFromArgs(params.name, args, {
-            detailMode: this.toolProgressDetailMode(),
-          })
-        : undefined;
+    const meta = this.shouldIncludeFormattedMeta(isCodexCommandBearingToolCall(params.name, args))
+      ? inferToolMetaFromArgs(params.name, args, {
+          detailMode: this.toolProgressDetailMode(),
+        })
+      : undefined;
     if (
       !this.params.onToolResult ||
       !this.shouldEmitToolResult() ||
@@ -506,10 +527,18 @@ export class CodexToolProgressProjection {
 
   private emitTranscriptToolResultProgress(params: ToolTranscriptResultInput): void {
     if (
+      (params.name === "progress_card" && !params.isError) ||
       this.transcriptProgressSuppressedIds.has(params.id) ||
       !shouldEmitTranscriptToolProgress(params.name, this.transcriptArgumentsById.get(params.id))
     ) {
       return;
+    }
+    if (params.name === "progress_card" && this.shouldEmitToolResult()) {
+      this.emitToolResultMessage({
+        itemId: params.id,
+        text: formatToolSummary(params.name),
+        isError: true,
+      });
     }
     if (!this.transcriptProgressCallIds.has(params.id)) {
       this.emitTranscriptToolCallProgress({ id: params.id, name: params.name, arguments: {} });

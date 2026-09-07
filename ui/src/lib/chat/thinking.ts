@@ -48,11 +48,9 @@ function resolveThinkingLevelOptionsForSession(
 ): GatewayThinkingLevelOption[] {
   const { provider, model } = resolveThinkingTargetModel({ defaults, session });
   return resolveThinkingLevelOptions({
-    catalog,
+    catalogEntry: resolveThinkingCatalogEntry(catalog, provider, model, session?.agentRuntime?.id),
     defaults,
     fallbackLabels,
-    model,
-    provider,
     session,
   });
 }
@@ -183,23 +181,29 @@ function resolveThinkingCatalogEntry(
   catalog: readonly ModelCatalogEntry[],
   provider: string | null,
   model: string | null,
+  runtimeId?: string,
 ): ModelCatalogEntry | undefined {
-  return provider && model
-    ? catalog.find((entry) => entry.provider === provider && entry.id === model)
-    : undefined;
+  const runtime = runtimeId?.trim();
+  return catalog.find((entry) => {
+    const entryRuntime = entry.agentRuntime?.id?.trim();
+    // Agent-scoped catalogs must not supply another runtime's session thinking profile.
+    return (
+      entry.provider === provider &&
+      entry.id === model &&
+      (!runtime || !entryRuntime || runtime === entryRuntime)
+    );
+  });
 }
 
 function resolveThinkingLevelOptions(params: {
-  catalog: readonly ModelCatalogEntry[];
+  catalogEntry: ModelCatalogEntry | undefined;
   defaults: ThinkingSessionDefaults;
   fallbackLabels?: readonly string[];
   hideUnsupportedOffOnly?: boolean;
-  model: string | null;
-  provider: string | null;
   session: ChatThinkingTarget | undefined;
 }): GatewayThinkingLevelOption[] {
+  const { catalogEntry } = params;
   const modelMatchesDefaults = sessionModelMatchesDefaults(params.session, params.defaults);
-  const catalogEntry = resolveThinkingCatalogEntry(params.catalog, params.provider, params.model);
   const explicitLevels =
     (params.session?.thinkingLevels?.length ? params.session.thinkingLevels : null) ??
     (params.session?.model && catalogEntry?.thinkingLevels?.length
@@ -254,13 +258,16 @@ export function resolveChatThinkingSelectState(params: {
       : "";
   const defaults = params.defaults ?? params.sessionsResult?.defaults;
   const { provider, model } = resolveThinkingTargetModel({ defaults, session });
-  const catalogEntry = resolveThinkingCatalogEntry(params.catalog, provider, model);
+  const catalogEntry = resolveThinkingCatalogEntry(
+    params.catalog,
+    provider,
+    model,
+    session?.agentRuntime?.id,
+  );
   const levels = resolveThinkingLevelOptions({
-    catalog: params.catalog,
+    catalogEntry,
     defaults,
     hideUnsupportedOffOnly: true,
-    model,
-    provider,
     session,
   });
   const defaultFromSessionDefaults =

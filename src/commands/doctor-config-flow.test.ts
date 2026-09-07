@@ -7,6 +7,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
+import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -14,6 +16,7 @@ import {
   getDoctorConfigInputForTest,
   runDoctorConfigWithInput,
 } from "./doctor-config-flow.test-utils.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
@@ -252,7 +255,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
   let partiallyValidOverride: boolean | undefined;
 
   return {
-    migrate,
     migrateLegacyConfig: (raw: unknown) => {
       const { next, changes } = migrate(raw);
       const partiallyValid = partiallyValidOverride;
@@ -725,11 +727,11 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
   };
 
   return {
-    resolveSingleAccountKeysToMove: resolveKeys,
     resolveSingleAccountPromotion: (params: {
       channelKey: string;
       channel: Record<string, unknown>;
     }) => ({
+      kind: "promote",
       keysToMove: resolveKeys(params),
       shouldDeferPromotion:
         !Object.hasOwn(declaredSingleAccountKeys, params.channelKey) &&
@@ -815,13 +817,6 @@ vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
 
 vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
   collectActiveToolSchemaProjectionWarnings: vi.fn(async () => []),
-}));
-
-vi.mock("./doctor/shared/plugin-dependency-cleanup.js", () => ({
-  cleanupLegacyPluginDependencyState: vi.fn(async () => ({
-    changes: [],
-    warnings: [],
-  })),
 }));
 
 vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
@@ -1003,21 +998,23 @@ vi.mock("../plugins/doctor-contract-registry.js", async () => {
     return changes.length > 0 ? { config: next, changes } : { config: cfg, changes: [] };
   }
 
+  const collectRelevantDoctorPluginIds = (raw: unknown): string[] => {
+    const ids = new Set<string>();
+    const root = readNullableRecord(raw);
+    const channels = readNullableRecord(root?.channels);
+    for (const channelId of Object.keys(channels ?? {})) {
+      if (channelId !== "defaults") {
+        ids.add(channelId);
+      }
+    }
+    if (hasLegacyTalkFields(root?.talk)) {
+      ids.add("elevenlabs");
+    }
+    return [...ids].toSorted();
+  };
   return {
-    collectRelevantDoctorPluginIds: (raw: unknown): string[] => {
-      const ids = new Set<string>();
-      const root = readNullableRecord(raw);
-      const channels = readNullableRecord(root?.channels);
-      for (const channelId of Object.keys(channels ?? {})) {
-        if (channelId !== "defaults") {
-          ids.add(channelId);
-        }
-      }
-      if (hasLegacyTalkFields(root?.talk)) {
-        ids.add("elevenlabs");
-      }
-      return [...ids].toSorted();
-    },
+    collectRelevantDoctorPluginIds,
+    collectDoctorConfigRepairPluginIds: collectRelevantDoctorPluginIds,
     applyPluginDoctorCompatibilityMigrations: normalizeDiscordStreamingAliasesForTest,
     listPluginDoctorLegacyConfigRules: () => [
       {
@@ -1376,43 +1373,6 @@ vi.mock("./doctor-config-preflight.js", async () => {
     return process.env.OPENCLAW_CONFIG_PATH || pathLocal.join(stateDir, "openclaw.json");
   }
 
-  function normalizeDiscordStreamingCompat(cfg: Record<string, unknown>): Record<string, unknown> {
-    const channels =
-      cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
-        ? (cfg.channels as Record<string, unknown>)
-        : null;
-    const discord =
-      channels?.discord && typeof channels.discord === "object" && !Array.isArray(channels.discord)
-        ? (channels.discord as Record<string, unknown>)
-        : null;
-    if (
-      !discord ||
-      (!("streamMode" in discord) &&
-        typeof discord.streaming !== "boolean" &&
-        typeof discord.streaming !== "string")
-    ) {
-      return cfg;
-    }
-    const next = structuredClone(cfg);
-    const nextDiscord = ((next.channels as Record<string, unknown> | undefined)?.discord ??
-      {}) as Record<string, unknown>;
-    const nextStreaming =
-      nextDiscord.streaming && typeof nextDiscord.streaming === "object"
-        ? { ...(nextDiscord.streaming as Record<string, unknown>) }
-        : {};
-    if (!("mode" in nextStreaming)) {
-      nextStreaming.mode =
-        nextDiscord.streamMode === "block"
-          ? "partial"
-          : nextDiscord.streaming === false
-            ? "off"
-            : "partial";
-    }
-    delete nextDiscord.streamMode;
-    nextDiscord.streaming = nextStreaming;
-    return next;
-  }
-
   return {
     runDoctorConfigPreflight: vi.fn(async (options: unknown) => {
       runDoctorConfigPreflightOptionsMock(options);
@@ -1448,36 +1408,15 @@ vi.mock("./doctor-config-preflight.js", async () => {
             path: configPath,
             parsed,
             agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
+            ...(injected?.includeProvenance
+              ? { includeProvenance: injected.includeProvenance }
+              : {}),
             sourceConfigBeforeMigrations,
             config: injectedEffectiveConfig,
             sourceConfig: injectedEffectiveConfig,
             valid: true,
             warnings: [],
             legacyIssues: [],
-          },
-          baseConfig: injectedEffectiveConfig,
-        };
-      }
-      if (injected?.preflightMode === "issues") {
-        const legacyIssues = findLegacyConfigIssues(
-          parsed,
-          parsed,
-          listPluginDoctorLegacyConfigRules({
-            pluginIds: collectRelevantDoctorPluginIds(parsed),
-          }),
-        );
-        return {
-          snapshot: {
-            exists,
-            path: configPath,
-            parsed,
-            agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
-            sourceConfigBeforeMigrations,
-            config: injectedEffectiveConfig,
-            sourceConfig: injectedEffectiveConfig,
-            valid: legacyIssues.length === 0,
-            warnings: [],
-            legacyIssues,
           },
           baseConfig: injectedEffectiveConfig,
         };
@@ -1489,22 +1428,22 @@ vi.mock("./doctor-config-preflight.js", async () => {
           pluginIds: collectRelevantDoctorPluginIds(parsed),
         }),
       );
-      const compat = legacyConfigMigrationForTest.migrate(parsed);
-      const effectiveConfig = normalizeDiscordStreamingCompat(compat.next ?? parsed);
+      // The read path does not apply Doctor-only repairs before the migration owner runs.
       return {
         snapshot: {
           exists,
           path: configPath,
           parsed,
           agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
+          ...(injected?.includeProvenance ? { includeProvenance: injected.includeProvenance } : {}),
           sourceConfigBeforeMigrations,
-          config: effectiveConfig,
-          sourceConfig: effectiveConfig,
+          config: injectedEffectiveConfig,
+          sourceConfig: injectedEffectiveConfig,
           valid: legacyIssues.length === 0,
           warnings: [],
           legacyIssues,
         },
-        baseConfig: effectiveConfig,
+        baseConfig: injectedEffectiveConfig,
       };
     }),
   };
@@ -1574,13 +1513,6 @@ vi.mock("./doctor-config-analysis.js", () => {
     }),
   };
 });
-
-vi.mock("./doctor-state-migrations.js", () => ({
-  autoMigrateLegacyState: vi.fn(async () => ({ changes: [], warnings: [] })),
-  autoMigrateLegacyStateDir: vi.fn(async () => ({ changes: [], warnings: [] })),
-  autoMigrateLegacyTaskStateSidecars: vi.fn(async () => ({ changes: [], warnings: [] })),
-  migrateLegacyMediaPersistence: vi.fn(() => ({ changes: [], warnings: [] })),
-}));
 
 function resetTerminalNoteMock() {
   terminalNoteMock.mockClear();
@@ -1738,7 +1670,8 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.explicitSetPaths).toEqual([["agents", "entries"]]);
+    expect(result.persistCanonicalAgentRoster).toBe(true);
+    expect(result.explicitSetPaths).toBeUndefined();
     expect(result.cfg.agents?.entries).toEqual({
       main: { workspace: "/tmp/migrated-main" },
     });
@@ -1825,6 +1758,7 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(false);
+    expect(result.persistCanonicalAgentRoster).toBeUndefined();
     expect(result.explicitSetPaths).toBeUndefined();
   });
 
@@ -1845,10 +1779,8 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.explicitSetPaths).toEqual([
-      ["agents", "entries"],
-      ["agents", "ownership"],
-    ]);
+    expect(result.persistCanonicalAgentRoster).toBe(true);
+    expect(result.explicitSetPaths).toEqual([["agents", "ownership"]]);
     expect(result.cfg.agents?.entries).toEqual({
       ops: { workspace: "/srv/ops" },
       research: { model: "openai/research" },
@@ -1858,9 +1790,58 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents).not.toHaveProperty("list");
   });
 
+  it("skips root wizard metadata when an include boundary owns the repair", async () => {
+    // A retired tuning knob inside an include-owned section is a Doctor repair
+    // whose only changed path lives in that include file. The root already
+    // carries a canonical roster, so Doctor has no root roster write to make.
+    const result = await runDoctorConfigWithInput({
+      config: {
+        agents: { entries: { main: {} } },
+        browser: { enabled: true, actionTimeoutMs: 5000 },
+      },
+      parsedConfig: { agents: { entries: { main: {} } }, browser: { $include: "./browser.json5" } },
+      includeProvenance: [
+        {
+          path: ["browser"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: "/virtual/.openclaw/browser.json5",
+        },
+      ],
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.browser).toEqual({ enabled: true });
+    expect(result.skipWizardMetadataForIncludeWrite).toBe(true);
+  });
+
+  it("keeps root wizard metadata when no include boundary owns the repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        agents: { entries: { main: {} } },
+        browser: { enabled: true, actionTimeoutMs: 5000 },
+      },
+      parsedConfig: {
+        agents: { entries: { main: {} } },
+        browser: { enabled: true, actionTimeoutMs: 5000 },
+      },
+      includeProvenance: [],
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.browser).toEqual({ enabled: true });
+    expect(result.skipWizardMetadataForIncludeWrite).toBeUndefined();
+  });
+
   it("stamps explicit ownership when Doctor migrates a markerless multi-agent list", async () => {
     const rawConfig = {
       agents: {
+        defaults: { workspace: "/srv/legacy-shared" },
         list: [{ id: "ops" }, { id: "research", model: "openai/research" }],
       },
     };
@@ -1872,14 +1853,13 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.explicitSetPaths).toEqual([
-      ["agents", "entries"],
-      ["agents", "ownership"],
-    ]);
+    expect(result.persistCanonicalAgentRoster).toBe(true);
+    expect(result.explicitSetPaths).toEqual([["agents", "ownership"]]);
     expect(result.cfg.agents).toEqual({
+      defaults: { workspace: "/srv/legacy-shared" },
       ownership: "explicit",
       entries: {
-        ops: {},
+        ops: { workspace: "/srv/legacy-shared" },
         research: { model: "openai/research" },
       },
     });
@@ -1972,7 +1952,9 @@ describe("doctor config flow", () => {
     });
 
     expect(secondRun.shouldWriteConfig).toBe(false);
+    expect(secondRun.persistCanonicalAgentRoster).toBeUndefined();
     expect(singleAgent.shouldWriteConfig).toBe(false);
+    expect(singleAgent.persistCanonicalAgentRoster).toBeUndefined();
   });
 
   it("preserves malformed keyed entries for schema validation during repair", async () => {
@@ -2162,6 +2144,49 @@ describe("doctor config flow", () => {
     expect(scopeParams.getBaseSnapshot()?.index.installRecords).not.toHaveProperty("google-meet");
     result.invalidatePluginMetadataSnapshot();
     expect(scopeParams.getBaseSnapshot()).toBeUndefined();
+  });
+
+  it("does not treat noninteractive doctor fix as plugin capability consent", async () => {
+    const review = buildPluginCapabilityConsentReview({
+      pluginId: "demo",
+      manifest: { name: "Demo", contracts: { tools: ["demo.write"] } },
+      record: { source: "npm", spec: "@example/demo" },
+      config: {},
+    });
+    let acknowledgment: unknown = "not reviewed";
+    runDoctorRepairSequenceMock.mockImplementation(
+      async (params: { state: unknown; onCapabilityConsent?: PluginCapabilityConsentHandler }) => {
+        acknowledgment = await expectDefined(
+          params.onCapabilityConsent,
+          "doctor capability handler",
+        )(review);
+        return {
+          state: params.state,
+          changeNotes: [],
+          warningNotes: [],
+          authProfilesRepaired: false,
+        };
+      },
+    );
+    const prompter = createDoctorPrompter({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { repair: true, yes: true, nonInteractive: true },
+    });
+    const confirm = vi.spyOn(prompter, "confirmRuntimeRepair");
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: (params) => loadAndMaybeMigrateDoctorConfig({ ...params, prompter }),
+    });
+
+    expect(acknowledgment).toBeUndefined();
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ requiresInteractiveConfirmation: true, initialValue: false }),
+    );
+    expect(terminalNoteMock).toHaveBeenCalledWith(
+      expect.stringContaining("demo.write"),
+      "Plugin capabilities",
+    );
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {

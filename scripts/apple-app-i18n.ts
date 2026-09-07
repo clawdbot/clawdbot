@@ -1,35 +1,11 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-// Keep this script independent from the translation client loaded by native-app-i18n.
-// Artifact locale assertions below make drift fail instead of silently dropping a language.
-export const APPLE_I18N_LOCALES = [
-  "zh-CN",
-  "zh-TW",
-  "pt-BR",
-  "de",
-  "es",
-  "ja-JP",
-  "ko",
-  "fr",
-  "hi",
-  "ar",
-  "it",
-  "tr",
-  "uk",
-  "id",
-  "pl",
-  "th",
-  "vi",
-  "nl",
-  "fa",
-  "ru",
-  "sv",
-] as const;
-const REQUIRED_LOCALES = ["en", ...APPLE_I18N_LOCALES];
+const REQUIRED_LOCALES = ["en", ...NATIVE_I18N_LOCALES];
 const FORMAT_RE = /%(?:%|(?:\d+\$)?(?:lld|ld|[@a-z]))/giu;
 const INFLECTED_COUNT_INTERPOLATION_RE = /\\\([A-Za-z_][A-Za-z0-9_]*\)/gu;
 const INFLECTED_COUNT_INTERPOLATION_EXACT_RE = /^\\\([A-Za-z_][A-Za-z0-9_]*\)$/u;
@@ -49,16 +25,6 @@ const IOS_SOURCE_PREFIXES = [
   SHARED_CHAT_UI_SOURCE_PREFIX,
   "apps/shared/OpenClawKit/Sources/OpenClawKit/",
 ] as const;
-const APPLE_CATALOG_KINDS = new Set([
-  "conditional-branch",
-  "ui-call",
-  "ui-call-multiline",
-  "ui-localized-call",
-  "ui-localized-call-multiline",
-  "ui-modifier",
-  "ui-named-argument",
-  "ui-named-argument-multiline",
-]);
 const IOS_CATALOG_EXCLUSIONS = new Set([
   // Product names and preview-only single-character fixtures are intentionally verbatim.
   "OpenClaw",
@@ -157,25 +123,21 @@ const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
   "zh-TW": "zh-Hant",
 };
 const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
-  "apps/macos/Sources/OpenClaw/SettingsComponents.swift": [
-    "enum SettingsTextValue: ExpressibleByStringLiteral",
-    "case localized(LocalizedStringKey)",
-    "case verbatim(String)",
-    "static func localized(_ value: String) -> Self",
-    "struct SettingsPageHeader: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
-    "struct SettingsCardGroup<Content: View>: View {\n    let title: SettingsTextValue",
-    "struct SettingsCardRow<Content: View>: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
-    "struct SettingsCardToggleRow: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
-    "Text(verbatim: value)",
+  "apps/macos/Sources/OpenClaw/DeviceSettingsPanels.swift": [
+    'String(localized: "Quick Chat shortcut")',
+    'String(localized: "Microphone Test")',
+    'Button("Done")',
+  ],
+  "apps/macos/Sources/OpenClaw/DeviceMicrophonePanel.swift": [
+    'String(localized: "Stopped")',
+    'String(localized: "Timeout: no trigger heard")',
+    "Text(verbatim: meterError)",
   ],
   "apps/ios/Sources/Design/OpenClawProComponents.swift": [
     "enum OpenClawTextValue: ExpressibleByStringLiteral",
-    "struct ProSectionHeader: View {\n    let title: OpenClawTextValue",
     "struct OpenClawNoticeBanner: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let message: OpenClawTextValue",
     "struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {\n    let title: OpenClawTextValue\n    let subtitle: OpenClawTextValue?",
     "struct OpenClawStatusBadge: View {\n    @Environment(\\.colorScheme) private var colorScheme\n    let label: OpenClawTextValue",
-    "struct ProMetricTile: View {\n    @Environment(\\.colorScheme) private var colorScheme\n    let title: OpenClawTextValue",
-    "struct ProPanelHeader: View {\n    let title: OpenClawTextValue",
     "struct ProStatusRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
   ],
   "apps/ios/Sources/Design/SettingsProTabSupport.swift": [
@@ -187,13 +149,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "self.item.detail.text",
     "self.item.priority.text",
   ],
-  "apps/ios/Sources/Design/SettingsChannelsDestination.swift": [
-    "Text(verbatim: self.summaryDetail)",
-    "Text(verbatim: self.entry.label)",
-    "Text(verbatim: self.entry.detailText)",
-    "Text(verbatim: account.displayName)",
-    "Text(verbatim: account.detailText)",
-  ],
   "apps/ios/Sources/Design/SettingsProTabActions.swift": [
     "func detailStatusCard(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
     "func diagnosticCheckRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
@@ -203,7 +158,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   "apps/ios/Sources/Design/SettingsProTabSections.swift": [
     "func settingsListRow(\n        icon: String,\n        iconColor: Color,\n        title: LocalizedStringKey",
     "func aboutLinkRow(\n        title: LocalizedStringKey",
-    "func toggleCard(title: LocalizedStringKey",
     "func gatewaySecureField(\n        _ placeholder: LocalizedStringKey",
     "func settingsToggle(\n        _ title: LocalizedStringKey",
     ".accessibilityLabel(Text(placeholder))",
@@ -231,30 +185,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     'format: String(localized: "Recognizer error: %@")',
     'self.statusText = String(localized: "Triggered")',
   ],
-  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
-    "subtitle: .verbatim(self.agentTotalText)",
-    'AttributedString(localized: "^[\\(count) agent](inflect: true) total")',
-    "func agentMenuRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue",
-    "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
-  ],
-  "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
-    "private func nodeDetailRow(\n        _ title: OpenClawTextValue,\n        copyLabel: LocalizedStringKey",
-    "private func nodeListCard(title: OpenClawTextValue, values: [String])",
-    "private func detailMetric(label: OpenClawTextValue, value: String)",
-    "title: OpenClawTextValue,\n        detail: OpenClawTextValue",
-  ],
-  "apps/ios/Sources/Design/AgentProDreamingDestination.swift": [
-    "private func detailMetric(label: OpenClawTextValue, value: String)",
-    "label.text",
-    "Text(verbatim: value)",
-  ],
-  "apps/ios/Sources/Design/AgentProTab+DetailComponents.swift": [
-    "func detailMetric(label: OpenClawTextValue, value: String)",
-    "Text(verbatim: value)",
-    "func emptyDetailRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue)",
-    "title.text",
-    "detail.text",
-  ],
   "apps/ios/Sources/Design/CommandCenterSupport.swift": [
     "Text(verbatim: self.item.title)",
     "Text(verbatim: self.item.trailing)",
@@ -262,13 +192,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
     "private func actionButton(\n        _ title: OpenClawTextValue",
     "self.actionButton(.verbatim(category)",
-  ],
-  "apps/ios/Sources/Design/IPadSkillWorkshopScreen.swift": [
-    'format: String(localized: "No proposals in %@")',
-  ],
-  "apps/ios/Sources/Design/IPadWorkboardScreen.swift": [
-    'format: String(localized: "No cards in %@")',
-    'format: String(localized: "Move to %@")',
   ],
   "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift": [
     "fullRowToggle(_ title: LocalizedStringKey",
@@ -280,19 +203,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "title: .verbatim(self.problem.localizedTitle)",
     "message: .verbatim(self.problem.localizedMessage)",
     "Text(verbatim: primaryActionTitle)",
-  ],
-  "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift": [
-    "detail: LocalizedStringResource",
-    "statusLabel: LocalizedStringResource? = nil",
-    "actionTitle: LocalizedStringResource?",
-  ],
-  "apps/ios/Sources/Permissions/DevicePermissionRow.swift": [
-    "title: LocalizedStringResource",
-    "detail: LocalizedStringResource",
-    "statusLabel: LocalizedStringResource?",
-    "actionTitle: LocalizedStringResource?",
-    "Text(self.title)",
-    "Text(actionTitle)",
   ],
   "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
     'String(localized: "Connecting...")',
@@ -320,16 +230,9 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   ],
 };
 const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
-  "apps/macos/Sources/OpenClaw/SettingsComponents.swift": [
-    "let title: String",
-    "let subtitle: String?",
-    "Text(self.title)",
-    "Text(subtitle)",
-  ],
   "apps/ios/Sources/Design/SettingsProTabSections.swift": [
     "func settingsListRow(\n        icon: String,\n        iconColor: Color,\n        title: String",
     "func aboutLinkRow(title: String",
-    "func toggleCard(title: String",
     "func gatewayActionButton(\n        title: String",
     "func gatewaySecureField(_ placeholder: String",
     "func settingsToggle(\n        _ title: String",
@@ -357,37 +260,12 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
     "Text(self.item.detail)",
     "Text(self.item.priority)",
   ],
-  "apps/ios/Sources/Design/SettingsChannelsDestination.swift": [
-    "Text(self.summaryDetail)",
-    "Text(self.entry.label)",
-    "Text(self.entry.detailText)",
-    "Text(account.displayName)",
-    "Text(account.detailText)",
-  ],
-  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
-    'subtitle: .verbatim("\\(self.sortedAgents.count) total")',
-    "func agentMenuRow(\n        icon: String,\n        title: String",
-    "func metricTile(\n        icon: String,\n        title: String",
-  ],
-  "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
-    "private func nodeDetailRow(_ title: String",
-    "private func nodeListCard(title: String",
-    "private func detailMetric(label: String",
-    "private func emptyRow(icon: String, title: String",
-  ],
   "apps/ios/Sources/Design/CommandCenterSupport.swift": [
     "Text(self.item.title)",
     "Text(self.item.trailing)",
     "Text(self.item.detail)",
     "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: String",
     "private func actionButton(\n        _ title: String",
-  ],
-  "apps/ios/Sources/Design/IPadSkillWorkshopScreen.swift": [
-    '"No \\(IPadSkillWorkshopScreen.proposalLaneLabel(self.status).lowercased()) proposals"',
-  ],
-  "apps/ios/Sources/Design/IPadWorkboardScreen.swift": [
-    '"No \\(IPadWorkboardDefaults.label(for: self.status).lowercased()) cards"',
-    'Text("Move to \\(IPadWorkboardDefaults.label(for: status))")',
   ],
   "apps/ios/Sources/Design/SettingsProTabActions.swift": [
     "func detailStatusCard(\n        icon: String,\n        title: String",
@@ -420,8 +298,12 @@ type StringUnit = {
   value?: string;
 };
 
-type CatalogEntry = {
-  localizations?: Record<string, { stringUnit?: StringUnit }>;
+type CatalogLocalization = Record<string, unknown> & {
+  stringUnit?: StringUnit;
+};
+
+type CatalogEntry = Record<string, unknown> & {
+  localizations?: Record<string, CatalogLocalization>;
 };
 
 type Catalog = {
@@ -471,8 +353,28 @@ function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function serializeCatalog(catalog: Catalog): string {
-  return `${JSON.stringify(catalog, null, 2)}\n`;
+export function serializeAppleCatalog(catalog: Catalog): string {
+  const topLevelEntries = Object.entries(catalog);
+  const lines = ["{"];
+
+  for (const [topLevelIndex, [key, value]] of topLevelEntries.entries()) {
+    const comma = topLevelIndex === topLevelEntries.length - 1 ? "" : ",";
+    if (key !== "strings" || !value || typeof value !== "object" || Array.isArray(value)) {
+      lines.push(`  ${JSON.stringify(key)}: ${JSON.stringify(value)}${comma}`);
+      continue;
+    }
+
+    const entries = Object.entries(value);
+    lines.push(`  ${JSON.stringify(key)}: {`);
+    for (const [entryIndex, [entryKey, entry]] of entries.entries()) {
+      const entryComma = entryIndex === entries.length - 1 ? "" : ",";
+      lines.push(`    ${JSON.stringify(entryKey)}: ${JSON.stringify(entry)}${entryComma}`);
+    }
+    lines.push(`  }${comma}`);
+  }
+
+  lines.push("}", "");
+  return lines.join("\n");
 }
 
 function decodeXml(value: string): string {
@@ -580,29 +482,24 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
   }
 }
 
-function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
-  return (
-    entry.surface === "apple" &&
-    entry.sites.some(
-      (site) =>
-        IOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
-        APPLE_CATALOG_KINDS.has(site.kind),
-    ) &&
-    (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
-    !IOS_CATALOG_EXCLUSIONS.has(entry.source)
-  );
+function isAppleCatalogKind(kind: string): boolean {
+  return kind === "conditional-branch" || kind.startsWith("ui-");
 }
 
-function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
+function isAppleCatalogEntry(
+  entry: NativeSourceEntry,
+  sourcePrefixes: readonly string[],
+  exclusions: ReadonlySet<string>,
+): boolean {
   return (
     entry.surface === "apple" &&
     entry.sites.some(
       (site) =>
-        MACOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
-        APPLE_CATALOG_KINDS.has(site.kind),
+        sourcePrefixes.some((prefix) => site.path.startsWith(prefix)) &&
+        isAppleCatalogKind(site.kind),
     ) &&
-    !entry.source.includes("\\(") &&
-    !MACOS_CATALOG_EXCLUSIONS.has(entry.source)
+    (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
+    !exclusions.has(entry.source)
   );
 }
 
@@ -734,7 +631,9 @@ export function buildIosCatalog(
   nativeSource: NativeSourceArtifact,
   translations: readonly NativeTranslationArtifact[],
 ): AppleCatalogBuild {
-  return buildAppleCatalog(existingCatalog, nativeSource, translations, isIosCatalogEntry);
+  return buildAppleCatalog(existingCatalog, nativeSource, translations, (entry) =>
+    isAppleCatalogEntry(entry, IOS_SOURCE_PREFIXES, IOS_CATALOG_EXCLUSIONS),
+  );
 }
 
 export function buildMacosCatalog(
@@ -742,7 +641,9 @@ export function buildMacosCatalog(
   nativeSource: NativeSourceArtifact,
   translations: readonly NativeTranslationArtifact[],
 ): AppleCatalogBuild {
-  return buildAppleCatalog(existingCatalog, nativeSource, translations, isMacosCatalogEntry);
+  return buildAppleCatalog(existingCatalog, nativeSource, translations, (entry) =>
+    isAppleCatalogEntry(entry, MACOS_SOURCE_PREFIXES, MACOS_CATALOG_EXCLUSIONS),
+  );
 }
 
 async function listSwiftFiles(directory: string): Promise<string[]> {
@@ -766,10 +667,21 @@ async function listSwiftFiles(directory: string): Promise<string[]> {
 }
 
 async function validateRuntimeInterpolationPaths(): Promise<void> {
-  const roots = IOS_SOURCE_PREFIXES.map((prefix) => path.join(ROOT, prefix));
-  const files = (await Promise.all(roots.map(listSwiftFiles))).flat();
+  const roots = [...new Set([...IOS_SOURCE_PREFIXES, ...MACOS_SOURCE_PREFIXES])];
+  const files = new Set(
+    (
+      await Promise.all(
+        roots.map((prefix) => {
+          const sourcePath = path.join(ROOT, prefix);
+          return prefix.endsWith(".swift")
+            ? Promise.resolve([sourcePath])
+            : listSwiftFiles(sourcePath);
+        }),
+      )
+    ).flat(),
+  );
   const violations: string[] = [];
-  for (const file of files) {
+  for (const file of [...files].toSorted()) {
     const source = await readFile(file, "utf8");
     for (const label of findAmbiguousRuntimeInterpolations(source)) {
       violations.push(`${path.relative(ROOT, file)}: ${label}`);
@@ -783,7 +695,7 @@ async function validateRuntimeInterpolationPaths(): Promise<void> {
 }
 
 async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
-  const expectedFiles = APPLE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted();
+  const expectedFiles = NATIVE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted();
   const actualFiles = (
     await readdir(path.join(ROOT, NATIVE_TRANSLATIONS_DIR), {
       withFileTypes: true,
@@ -798,7 +710,7 @@ async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
     );
   }
   return Promise.all(
-    APPLE_I18N_LOCALES.map(async (locale) => {
+    NATIVE_I18N_LOCALES.map(async (locale) => {
       const artifact = JSON.parse(
         await readFile(path.join(ROOT, NATIVE_TRANSLATIONS_DIR, `${locale}.json`), "utf8"),
       ) as NativeTranslationArtifact;
@@ -876,7 +788,7 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
     const sourceEntries = parseInfoPlistStrings(
       await readFile(path.join(ROOT, target.sourcePath), "utf8"),
     );
-    for (const locale of APPLE_I18N_LOCALES) {
+    for (const locale of NATIVE_I18N_LOCALES) {
       const localeDir = APPLE_LOCALE_DIRECTORIES[locale] ?? locale;
       const outputPath = path.join(
         ROOT,
@@ -912,7 +824,7 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
 export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild> {
   const build = await readIosCatalogBuild();
   const catalogPath = path.join(ROOT, IOS_CATALOG_PATH);
-  const expected = serializeCatalog(build.catalog);
+  const expected = serializeAppleCatalog(build.catalog);
   const actual = await readFile(catalogPath, "utf8");
   if (actual !== expected) {
     if (!write) {
@@ -928,7 +840,7 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
 export async function syncMacosCatalog(write: boolean): Promise<AppleCatalogBuild> {
   const build = await readMacosCatalogBuild();
   const catalogPath = path.join(ROOT, MACOS_CATALOG_PATH);
-  const expected = serializeCatalog(build.catalog);
+  const expected = serializeAppleCatalog(build.catalog);
   const actual = await readFile(catalogPath, "utf8");
   if (actual !== expected) {
     if (!write) {
@@ -941,7 +853,7 @@ export async function syncMacosCatalog(write: boolean): Promise<AppleCatalogBuil
 }
 
 export function assertMacosCatalogCurrent(actual: string, build: AppleCatalogBuild): void {
-  if (actual !== serializeCatalog(build.catalog)) {
+  if (actual !== serializeAppleCatalog(build.catalog)) {
     throw new Error(
       `Apple catalog ${MACOS_CATALOG_PATH} is stale; run native-app-i18n.ts sync --write`,
     );
@@ -1007,7 +919,7 @@ export async function checkAppleAppI18n() {
       `infoPlistFiles=${infoPlistFiles}`,
       `translationContradictions=${iosBuild.contradictions.length}`,
       `macosTranslationContradictions=${macosBuild.contradictions.length}`,
-      `locales=${APPLE_I18N_LOCALES.join(",")}`,
+      `locales=${NATIVE_I18N_LOCALES.join(",")}`,
       "\n",
     ].join(" "),
   );

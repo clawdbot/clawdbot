@@ -4,11 +4,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 // Covers plugin registry assembly, contribution lookup, and reset behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -30,6 +31,10 @@ import {
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+
+beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
+});
 
 function resolveProviderOwners(
   params: Omit<
@@ -77,6 +82,7 @@ function createCandidate(
   rootDir: string,
   pluginId = "demo",
   installOwner?: string,
+  manifestOverrides: Record<string, unknown> = {},
 ): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
@@ -121,6 +127,7 @@ function createCandidate(
       configContracts: {
         compatibilityRuntimePaths: [`legacyProvider.${pluginId}-search.webhook`],
       },
+      ...manifestOverrides,
     }),
     "utf8",
   );
@@ -231,41 +238,17 @@ describe("plugin registry facade", () => {
       "demo-alias",
     ]);
     expect(resolveProviderOwners({ index, providerId: "demo" })).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "modelCatalogProviders",
-        matches: "demo-alias",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "channels",
-        matches: "demo-chat",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "cliBackends",
-        matches: "demo-cli",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "cliBackends",
-        matches: (contributionId) => contributionId === "demo-cli",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "setupProviders",
-        matches: "demo-setup",
-      }),
-    ).toEqual(["demo"]);
+    for (const [contribution, id] of [
+      ["modelCatalogProviders", "demo-alias"],
+      ["channels", "demo-chat"],
+      ["cliBackends", "demo-cli"],
+      ["setupProviders", "demo-setup"],
+      ["contracts", "tools"],
+    ] as const) {
+      for (const matches of [id, (contributionId: string) => contributionId === id]) {
+        expect(resolvePluginContributionOwners({ index, contribution, matches })).toEqual(["demo"]);
+      }
+    }
     expect(resolveManifestContractPluginIds({ index, contract: "webSearchProviders" })).toEqual([
       "demo",
     ]);
@@ -339,66 +322,99 @@ describe("plugin registry facade", () => {
     });
   });
 
-  it("resolves contribution owners from a plugin lookup table without rereading manifests", () => {
+  it("preserves raw declarations and indexed owners without rereading manifests", () => {
     const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
+    const candidate = createCandidate(rootDir, "demo", undefined, {
+      providers: [" Demo "],
+      cliBackends: [" DEMO-CLI ", "DEMO-CLI"],
+      setup: {
+        providers: [{ id: "demo-setup" }],
+        cliBackends: ["DEMO-CLI", "Other-CLI"],
+      },
+      providerAuthAliases: { " ALIAS ": " dEmO ", BAD: "absent" },
+      contracts: { tools: [], webSearchProviders: ["demo-search"] },
+    });
     const env = hermeticEnv();
     const index = loadPluginRegistrySnapshot({
       candidates: [candidate],
       env,
       preferPersisted: false,
     });
-    const lookUpTable = loadPluginLookUpTable({
-      config: {},
-      env,
-      index,
-    });
-    fs.unlinkSync(path.join(rootDir, "openclaw.plugin.json"));
-
-    expect(listPluginContributionIds({ lookUpTable, contribution: "providers" })).toEqual(["demo"]);
+    const lookUpTable = loadPluginLookUpTable({ config: {}, env, index });
+    for (const indexed of [false, true]) {
+      if (indexed) {
+        fs.unlinkSync(path.join(rootDir, "openclaw.plugin.json"));
+      }
+      const source = indexed ? { lookUpTable } : { index };
+      for (const [contribution, ids] of [
+        ["providers", ["Demo"]],
+        ["cliBackends", ["DEMO-CLI", "Other-CLI"]],
+        ["contracts", ["webSearchProviders"]],
+      ] as const) {
+        expect(listPluginContributionIds({ ...source, contribution })).toEqual(ids);
+      }
+      for (const [contribution, id, indexedOwner, rawOwner] of [
+        ["providers", "Demo", true, true],
+        ["providers", "demo", false, false],
+        ["providers", "alias", true, false],
+        ["providers", "ALIAS", false, false],
+        ["providers", "bad", false, false],
+        ["channels", "demo-chat", true, true],
+        ["channelConfigs", "demo-chat", true, true],
+        ["cliBackends", "demo-cli", true, false],
+        ["cliBackends", "DEMO-CLI", false, true],
+        ["cliBackends", "other-cli", true, false],
+        ["setupProviders", "demo-setup", true, true],
+        ["modelCatalogProviders", "demo-alias", true, true],
+        ["commandAliases", "demo-command", true, true],
+        ["contracts", "tools", false, false],
+        ["contracts", "webSearchProviders", true, true],
+      ] as const) {
+        const query = { ...source, contribution };
+        expect(resolvePluginContributionOwners({ ...query, matches: id })).toEqual(
+          (indexed ? indexedOwner : rawOwner) ? ["demo"] : [],
+        );
+        expect(
+          resolvePluginContributionOwners({ ...query, matches: (value) => value === id }),
+        ).toEqual(rawOwner ? ["demo"] : []);
+        expect(resolvePluginContributionOwners({ ...query, matches: "missing" })).toEqual([]);
+      }
+    }
     expect(resolveProviderOwners({ lookUpTable, providerId: "DEMO" })).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "channels",
-        matches: "demo-chat",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "cliBackends",
-        matches: "demo-cli",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "setupProviders",
-        matches: "demo-setup",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "commandAliases",
-        matches: "demo-command",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "cliBackends",
-        matches: "demo-setup-cli",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "contracts",
-        matches: "tools",
-      }),
-    ).toEqual(["demo"]);
+
+    const policies: Array<[OpenClawConfig["plugins"], boolean]> = [
+      [undefined, true],
+      [{ enabled: false }, false],
+      [{ deny: ["demo"] }, false],
+      [{ allow: ["other"] }, false],
+      [{ allow: ["demo"] }, true],
+      [{ entries: { demo: { enabled: false } } }, false],
+      [{ entries: { demo: { enabled: true } } }, true],
+    ];
+    for (const matches of ["demo-alias", (id: string) => id === "demo-alias"]) {
+      for (const [plugins, enabled] of policies) {
+        const params = {
+          lookUpTable,
+          ...(plugins ? { config: { plugins } } : {}),
+          contribution: "modelCatalogProviders" as const,
+          matches,
+        };
+        expect(resolvePluginContributionOwners(params)).toEqual(enabled ? ["demo"] : []);
+        expect(resolvePluginContributionOwners({ ...params, includeDisabled: true })).toEqual([
+          "demo",
+        ]);
+      }
+    }
+
+    const withoutInstalledOwners = {
+      lookUpTable: { ...lookUpTable, index: { ...index, plugins: [] } },
+      contribution: "modelCatalogProviders" as const,
+      includeDisabled: true,
+    };
+    expect(listPluginContributionIds(withoutInstalledOwners)).toEqual([]);
+    for (const matches of ["demo-alias", (id: string) => id === "demo-alias"]) {
+      expect(resolvePluginContributionOwners({ ...withoutInstalledOwners, matches })).toEqual([]);
+    }
   });
 
   it("normalizes plugin config ids through registry contribution aliases", () => {
@@ -889,7 +905,7 @@ describe("plugin registry facade", () => {
     expectSnapshotPluginIds(result.snapshot, ["demo"]);
   });
 
-  it("derives config-scoped registries for cold callers", () => {
+  it("derives config-scoped registries within a fresh lifecycle generation", () => {
     const stateDir = makeTempDir();
     const workspaceDir = makeTempDir();
     const bundledRoot = makeTempDir();
@@ -898,32 +914,22 @@ describe("plugin registry facade", () => {
     createCandidate(rootDir);
     const env = hermeticEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot });
     const config = { plugins: { entries: { demo: { enabled: true } } } } as const;
-    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
-
     const first = loadPluginRegistrySnapshotWithMetadata({
       stateDir,
       workspaceDir,
       config,
       env,
     });
-    const manifestReadsAfterFirst = readFileSyncSpy.mock.calls.filter((call) =>
-      String(call[0]).endsWith("openclaw.plugin.json"),
-    ).length;
-
     const second = loadPluginRegistrySnapshotWithMetadata({
       stateDir,
       workspaceDir,
       config,
       env,
     });
-    const manifestReadsAfterSecond = readFileSyncSpy.mock.calls.filter((call) =>
-      String(call[0]).endsWith("openclaw.plugin.json"),
-    ).length;
-
     expect(first.source).toBe("derived");
     expect(second.source).toBe("derived");
-    expect(manifestReadsAfterFirst).toBeGreaterThan(0);
-    expect(manifestReadsAfterSecond).toBeGreaterThan(manifestReadsAfterFirst);
+    expectSnapshotPluginIds(first.snapshot, ["demo"]);
+    expectSnapshotPluginIds(second.snapshot, ["demo"]);
   });
 
   it("reloads profile extensions after the metadata lifecycle is cleared", () => {

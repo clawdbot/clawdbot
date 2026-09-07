@@ -1,13 +1,24 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
+import { formatWebUiIconErrorText } from "./error-presentation.ts";
 import { icons } from "./icons.ts";
 import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
+import { renderSessionGlyph } from "./session-glyph.ts";
 
-export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
+function keepQuestionFocusOnTooltip(event: FocusEvent) {
+  // The hand is its own tooltip target; bubbling would also open the row hovercard.
+  event.stopPropagation();
+}
+
+export function renderSessionAttentionIcon(
+  attention: SidebarSessionAttention,
+  showQuestionTooltip = false,
+) {
   if (attention.kind === "none") {
     return nothing;
   }
+  const questionLabel = attention.kind === "question" ? sessionAttentionSubtitle(attention) : null;
   const icon =
     attention.kind === "question"
       ? icons.hand
@@ -16,12 +27,19 @@ export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
         : attention.kind === "agent"
           ? resolveSessionAttentionIcon(attention.icon)
           : icons.alertTriangle;
-  return html`<span
+  const content = html`<span
     class="sidebar-session-attention__icon sidebar-session-attention__icon--${attention.kind}"
     data-session-attention=${attention.kind}
-    aria-hidden="true"
+    role=${questionLabel ? "img" : nothing}
+    aria-label=${questionLabel ?? nothing}
+    aria-hidden=${questionLabel ? nothing : "true"}
+    tabindex=${questionLabel ? "0" : nothing}
+    @focusin=${questionLabel ? keepQuestionFocusOnTooltip : nothing}
     >${icon}</span
   >`;
+  return showQuestionTooltip && questionLabel
+    ? html`<openclaw-tooltip .content=${questionLabel}>${content}</openclaw-tooltip>`
+    : content;
 }
 
 export function sessionAttentionSubtitle(attention: SidebarSessionAttention): string | undefined {
@@ -31,7 +49,9 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
     case "approval":
       return t("sessionsView.waitingForApproval");
     case "error":
-      return t("sessionsView.runFailedReason", { reason: attention.reason });
+      return t("sessionsView.runFailedReason", {
+        reason: formatWebUiIconErrorText(attention.reason),
+      });
     case "agent":
       return attention.note;
     case "none":
@@ -41,33 +61,15 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
   }
 }
 
-export function renderSessionRunSpinner(showTitle = true) {
-  return html`<span
-    class="session-run-spinner sidebar-recent-session__state"
-    role="img"
-    aria-label=${t("sessionsView.activeRun")}
-    title=${showTitle ? t("sessionsView.activeRun") : nothing}
-  ></span>`;
-}
-
-export function renderSessionState(session: SidebarRecentSession, showTitle = true) {
+export function renderSessionState(session: SidebarRecentSession) {
   if (session.hasActiveRun) {
-    if (session.status === "queued") {
-      const label = t("sessionsView.statusQueued");
-      return html`<span
-        class="sidebar-child-session__status sidebar-child-session__status--queued"
-        role="img"
-        aria-label=${label}
-        title=${showTitle ? label : nothing}
-        >${icons.hourglass}</span
-      >`;
-    }
-    return renderSessionRunSpinner(showTitle);
+    const queued = session.hasActiveRun && session.status === "queued";
+    return renderSessionGlyph({ content: nothing, running: true, queued });
   }
   if (!session.isChild) {
     return session.unread
       ? html`<span
-          class="session-unread-dot sidebar-recent-session__unread"
+          class="session-unread-dot"
           role="img"
           aria-label=${t("sessionsView.unread")}
         ></span>`

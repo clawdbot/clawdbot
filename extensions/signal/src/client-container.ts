@@ -22,7 +22,7 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import WebSocket from "ws";
+import { WebSocket } from "./ws-runtime.js";
 
 type ContainerRpcOptions = {
   baseUrl: string;
@@ -176,7 +176,7 @@ async function readSignalRestText(
     onTimeout: signalRestRequestTimeoutError,
     onOverflow: ({ maxBytes }) => new Error(`Signal REST: text response exceeds ${maxBytes} bytes`),
   });
-  return new TextDecoder().decode(bytes);
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 async function readSignalRestErrorText(

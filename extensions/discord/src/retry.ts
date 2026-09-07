@@ -110,6 +110,14 @@ export function hasDiscordMessageCreateAmbiguity(error: unknown): boolean {
   );
 }
 
+export function canFallbackDiscordWebhookSend(error: unknown): boolean {
+  if (hasDiscordMessageCreateAmbiguity(error)) {
+    return false;
+  }
+  const failure = classifyDiscordDeliveryFailure(error);
+  return failure === "rejected" || failure === "pre-connect";
+}
+
 function hasDiscordRateLimitRejection(error: unknown): boolean {
   return (
     error instanceof RateLimitError ||

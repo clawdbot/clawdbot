@@ -25,6 +25,8 @@ export type DoctorDeprecationCompatRecord = {
   deprecated?: string;
   warningStarts?: string;
   removeAfter?: string;
+  previousRemoveAfter?: string;
+  renewedAt?: string;
   source: string;
   migration: string;
   replacement: string;
@@ -35,12 +37,18 @@ export type DoctorDeprecationCompatRecord = {
 
 const DEFAULT_TESTS = ["src/commands/doctor/shared/legacy-config-migrate.test.ts"] as const;
 
-type CompatRecordInput = {
+const DOCTOR_COMPAT_RENEWED_AT = "2026-08-29";
+const DOCTOR_COMPAT_RENEWED_REMOVE_AFTER = "2026-11-29";
+
+type CompatRecordDeadline =
+  | { removeAfter: string; previousRemoveAfter?: never }
+  | { previousRemoveAfter: string; removeAfter?: never };
+
+type CompatRecordInput = CompatRecordDeadline & {
   owner: DoctorDeprecationCompatOwner;
   introduced: string;
   deprecated?: string;
   warningStarts?: string;
-  removeAfter: string;
   source: string;
   migration: string;
   replacement: string;
@@ -54,6 +62,13 @@ function compatRecord(
   status: DoctorDeprecationCompatStatus,
   record: CompatRecordInput,
 ): DoctorDeprecationCompatRecord {
+  const renewedDeadline =
+    record.previousRemoveAfter === undefined
+      ? {}
+      : {
+          renewedAt: DOCTOR_COMPAT_RENEWED_AT,
+          removeAfter: DOCTOR_COMPAT_RENEWED_REMOVE_AFTER,
+        };
   return {
     code,
     status,
@@ -61,6 +76,7 @@ function compatRecord(
     warningStarts: record.introduced,
     tests: DEFAULT_TESTS,
     ...record,
+    ...renewedDeadline,
   };
 }
 
@@ -91,7 +107,7 @@ function removedCompatRecord(
 // architecture because ownership and config footprint can shift during rollout.
 const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord("doctor-context-budget-one-knob", {
-    removeAfter: "2026-11-16",
+    previousRemoveAfter: "2026-11-16",
     owner: "config",
     introduced: "2026-08-16",
     source:
@@ -107,7 +123,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     ],
   }),
   deprecatedCompatRecord("doctor-cli-backends-plugin-registration", {
-    removeAfter: "2026-09-22",
+    previousRemoveAfter: "2026-09-22",
     owner: "agent-runtime",
     introduced: "2026-07-21",
     source: "agents.defaults.cliBackends adapter DSL",
@@ -120,7 +136,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     ],
   }),
   deprecatedCompatRecord("doctor-model-compat-catalog-ownership", {
-    removeAfter: "2026-09-22",
+    previousRemoveAfter: "2026-09-22",
     owner: "provider",
     introduced: "2026-07-21",
     source: "model compat capability ownership moved from known-model config to provider catalogs",
@@ -133,7 +149,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     ],
   }),
   deprecatedCompatRecord("doctor-tier-eval-tranche", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "config",
     introduced: "2026-07-20",
     source: "approved tier-eval tranche 6a and small hookify retirements",
@@ -147,7 +163,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     ],
   }),
   deprecatedCompatRecord("doctor-final-layout-polish", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "config",
     introduced: "2026-07-19",
     source: "final layout renames, removed knobs, and agents.list",
@@ -160,7 +176,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     ],
   }),
   deprecatedCompatRecord("doctor-phase4-product-config-retirements", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "config",
     introduced: "2026-07-19",
     source: "systemAgent; crestodian; marketplaces; cli.banner.taglineMode; commitments",
@@ -173,7 +189,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     ],
   }),
   deprecatedCompatRecord("doctor-media-models-consolidation", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "tools",
     introduced: "2026-07-19",
     source: "tools.media.image/audio/video models",
@@ -186,7 +202,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     ],
   }),
   deprecatedCompatRecord("doctor-runtime-tuning-knobs-purge", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "config",
     introduced: "2026-07-19",
     source: "retired runtime and bundled-channel numeric tuning knobs",
@@ -199,7 +215,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     ],
   }),
   deprecatedCompatRecord("doctor-phase2-channel-dm-aliases", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "channel",
     introduced: "2026-07-18",
     source: "Discord, Slack, and Google Chat dm.policy and dm.allowFrom",
@@ -209,7 +225,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/config/channel-alias-migration.test.ts", "src/config/dead-config-keys.test.ts"],
   }),
   deprecatedCompatRecord("doctor-phase1-retired-runtime-config", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "config",
     introduced: "2026-07-18",
     source:
@@ -221,7 +237,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrations.runtime.retired.test.ts"],
   }),
   deprecatedCompatRecord("doctor-root-default-model", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "config",
     introduced: "2026-07-18",
     source: "defaultModel",
@@ -231,7 +247,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrations.runtime.retired.test.ts"],
   }),
   deprecatedCompatRecord("doctor-session-prune-reset-aliases", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "config",
     introduced: "2026-07-18",
     source: "session.maintenance.pruneDays; session.resetByType.dm",
@@ -241,7 +257,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrations.runtime.retired.test.ts"],
   }),
   deprecatedCompatRecord("doctor-mcp-timeout-aliases", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "config",
     introduced: "2026-07-18",
     source: "mcp.servers.*.connectTimeout; connect_timeout; timeout",
@@ -251,7 +267,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrations.runtime.retired.test.ts"],
   }),
   deprecatedCompatRecord("doctor-cron-webhook-fallback", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "config",
     introduced: "2026-07-18",
     source: "cron.webhook",
@@ -261,7 +277,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrations.runtime.retired.test.ts"],
   }),
   deprecatedCompatRecord("doctor-canvas-host-root", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "plugin",
     introduced: "2026-07-18",
     source: "canvasHost",
@@ -271,7 +287,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/plugins/setup-registry.migrations.test.ts"],
   }),
   deprecatedCompatRecord("doctor-phase1-channel-noops-aliases", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "channel",
     introduced: "2026-07-18",
     source:
@@ -284,7 +300,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-agent-llm-timeout", {
     owner: "agent-runtime",
     introduced: "2026-04-27",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "agents.defaults.llm.idleTimeoutSeconds",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
     replacement: "models.providers.<id>.timeoutSeconds",
@@ -297,7 +313,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "agents.defaults.embeddedHarness; agents.list[].embeddedHarness",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
     replacement: "models.providers.<provider>.agentRuntime or model-scoped agentRuntime",
@@ -308,7 +324,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-agent-embedded-pi-config", {
     owner: "agent-runtime",
     introduced: "2026-05-21",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "agents.defaults.embeddedPi; agents.list[].embeddedPi",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
     replacement: "agents.defaults.embeddedAgent; agents.list[].embeddedAgent",
@@ -319,14 +335,14 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-agent-sandbox-persession", {
     owner: "agent-runtime",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "agents.defaults.sandbox.perSession; agents.list[].sandbox.perSession",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
     replacement: "agents.*.sandbox.scope",
     docsPath: "/cli/doctor",
   }),
   deprecatedCompatRecord("doctor-memory-search-owner-consolidation", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "config",
     introduced: "2026-07-19",
     source: "memorySearch; agents.defaults.memorySearch; agents.list[].memorySearch",
@@ -335,7 +351,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/reference/memory-config",
   }),
   deprecatedCompatRecord("doctor-session-typing-mode-owner", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "agent-runtime",
     introduced: "2026-07-19",
     source: "session.typingMode",
@@ -346,7 +362,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-top-level-heartbeat", {
     owner: "config",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "heartbeat",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
     replacement: "agents.defaults.heartbeat and channels.defaults.heartbeat",
@@ -355,7 +371,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-mcp-server-type-alias", {
     owner: "config",
     introduced: "2026-04-27",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "mcp.servers.*.type",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.mcp.ts",
     replacement: "mcp.servers.*.transport",
@@ -366,7 +382,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-gateway-bind-host-aliases", {
     owner: "gateway",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "gateway.bind host aliases such as 0.0.0.0 and localhost",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.gateway.ts",
     replacement: "gateway.bind.mode values such as lan, loopback, custom, tailnet, and auto",
@@ -375,7 +391,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-audio-transcription-command", {
     owner: "audio",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "audio.transcription",
     migration: "src/commands/doctor/shared/legacy-config-migrations.audio.ts",
     replacement: "capability-tagged tools.media.models",
@@ -384,7 +400,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-channel-thread-binding-ttl", {
     owner: "channel",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "threadBindings.ttlHours",
     migration: "src/commands/doctor/shared/legacy-config-migrations.channels.ts",
     replacement: "threadBindings.idleHours",
@@ -393,7 +409,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-message-queue-steering-modes", {
     owner: "config",
     introduced: "2026-05-04",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "messages.queue.mode and messages.queue.byChannel retired queue modes",
     migration: "src/commands/doctor/shared/legacy-config-migrations.queue.ts",
     replacement: "steer, followup, collect, or interrupt queue modes",
@@ -402,7 +418,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-channel-dm-aliases", {
     owner: "channel",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "channels.<id>.dm.policy and channels.<id>.dm.allowFrom",
     migration: "src/config/channel-compat-normalization.ts",
     replacement: "channels.<id>.dmPolicy and channels.<id>.allowFrom",
@@ -412,7 +428,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-channel-streaming-aliases", {
     owner: "channel",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "streamMode, scalar streaming, chunkMode, blockStreaming, draftChunk, nativeStreaming",
     migration: "src/config/channel-compat-normalization.ts",
     replacement: "channels.<id>.streaming.*",
@@ -426,7 +442,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-05-18",
     deprecated: "2026-05-31",
     warningStarts: "2026-05-31",
-    removeAfter: "2026-08-31",
+    previousRemoveAfter: "2026-08-31",
     source: "channels.webchat",
     migration: "src/commands/doctor/shared/legacy-config-migrations.channels.ts",
     replacement: "chat.history maxChars per-request override when a custom client needs it",
@@ -435,7 +451,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
       "WebChat is an internal control surface, not a configurable outbound channel. Runtime ignores the retired channel key; doctor removes stale config.",
   }),
   deprecatedCompatRecord("doctor-tts-top-level-owner", {
-    removeAfter: "2026-09-18",
+    previousRemoveAfter: "2026-09-18",
     owner: "tts",
     introduced: "2026-07-19",
     source: "messages.tts",
@@ -447,7 +463,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-tts-provider-aliases", {
     owner: "tts",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "messages.tts.openai/elevenlabs/edge and plugins.entries.voice-call.config.tts aliases",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts",
     replacement: "tts.providers.<provider> and microsoft instead of edge",
@@ -456,7 +472,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-tts-enabled-auto-mode", {
     owner: "tts",
     introduced: "2026-04-29",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source:
       "messages.tts.enabled, agents.list[].tts.enabled, supported channel TTS enabled fields, and voice-call plugin tts.enabled",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts",
@@ -468,7 +484,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-tts-speaker-selection-fields", {
     owner: "tts",
     introduced: "2026-05-28",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "TTS provider speaker selection fields named voice, voiceName, and voiceId",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts",
     replacement: "speakerVoice and speakerVoiceId",
@@ -480,10 +496,10 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "plugins.installs in authored config",
     migration: "src/config/plugin-install-config-migration.ts",
-    replacement: "shared SQLite installed_plugin_index install ledger",
+    replacement: "shared SQLite config_machine_state plugins.installedIndex install ledger",
     docsPath: "/cli/plugins#registry",
     tests: [
       "src/config/io.write-config.test.ts",
@@ -495,7 +511,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "plugins.load.paths entries that point at bundled plugin source/dist locations",
     migration: "src/commands/doctor/shared/bundled-plugin-load-paths.ts",
     replacement: "packaged bundled plugins and the persisted plugin registry",
@@ -507,7 +523,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-04-25",
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "plugins.allow configs created before bundled provider discovery was explicit",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.providers.ts",
     replacement: "plugins.bundledDiscovery allowlist mode plus explicit plugin/provider entries",
@@ -520,7 +536,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-05-29",
     deprecated: "2026-07-09",
     warningStarts: "2026-07-09",
-    removeAfter: "2026-10-09",
+    previousRemoveAfter: "2026-10-09",
     source: "plugins.entries.codex-supervisor and codex-supervisor plugin policy references",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.providers.ts",
     replacement: "plugins.entries.codex.config.supervision",
@@ -531,7 +547,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-web-search-plugin-config", {
     owner: "provider",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "tools.web.search.apiKey and tools.web.search.<provider>",
     migration: "src/commands/doctor/shared/legacy-web-tools-migrate.ts",
     replacement: "plugins.entries.<plugin>.config.webSearch",
@@ -543,7 +559,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-web-fetch-plugin-config", {
     owner: "provider",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "tools.web.fetch.firecrawl",
     migration: "src/commands/doctor/shared/legacy-web-tools-migrate.ts",
     replacement: "plugins.entries.firecrawl.config.webFetch",
@@ -553,7 +569,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-x-search-plugin-config", {
     owner: "provider",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "tools.web.x_search.apiKey",
     migration: "src/commands/doctor/shared/legacy-web-tools-migrate.ts",
     replacement: "plugins.entries.xai.config.webSearch.apiKey",
@@ -566,7 +582,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-talk-provider-shape", {
     owner: "tts",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "legacy talk provider scalar fields and provider/provider ids",
     migration: "src/commands/doctor/shared/legacy-talk-config-normalizer.ts",
     replacement: "talk.providers.<provider>",
@@ -575,7 +591,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   removalPendingCompatRecord("doctor-legacy-tools-by-sender", {
     owner: "tools",
     introduced: "2026-04-26",
-    removeAfter: "2026-07-26",
+    previousRemoveAfter: "2026-07-26",
     source: "untyped toolsBySender keys",
     migration: "src/commands/doctor/shared/legacy-tools-by-sender.ts",
     replacement: "typed id:, e164:, username:, or name: sender keys",

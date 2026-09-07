@@ -14,9 +14,22 @@ export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
 export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
 
 /** Public GitHub metadata rendered by Control UI link hover cards. */
+/**
+ * One co-author resolved from a `Co-authored-by` trailer. Only trailers using
+ * GitHub's `<id>+<login>@users.noreply.github.com` form resolve, because the id
+ * yields both the login and the avatar without a per-person API lookup.
+ */
+type ControlUiGitHubPreviewCoAuthor = {
+  login: string;
+  avatarDataUrl?: string;
+};
+
 export type ControlUiGitHubPreview = {
   additions?: number;
   avatarDataUrl?: string;
+  /** Bounded to the faces the card renders; `coAuthorCount` carries the true total. */
+  coAuthors?: ControlUiGitHubPreviewCoAuthor[];
+  coAuthorCount?: number;
   changedFiles?: number;
   closedAt?: string;
   comments?: number;
@@ -66,6 +79,14 @@ type ControlUiSessionPullRequestChecks = {
 /** One GitHub pull request whose head is the session's working branch. */
 export type ControlUiSessionPullRequest = {
   number: number;
+  /**
+   * Author login from the list payload GitHub already returns; no extra call.
+   * Absent for a ghosted or deleted account. Deliberately login-only: the
+   * sibling GitHub-link hovercard inlines avatars server-side rather than
+   * hotlinking them, so a remote <img> here would leak a browser request to
+   * GitHub on every hover.
+   */
+  author?: { login: string };
   owner: string;
   repo: string;
   branch: string;
@@ -104,17 +125,24 @@ export type ControlUiSessionBranch = {
 export type ControlUiSessionPullRequests = {
   pullRequests: ControlUiSessionPullRequest[];
   /**
+   * Present whenever the session's checkout resolves to a GitHub remote,
+   * independent of whether a PR or branch row exists.
+   */
+  repository?: { owner: string; repo: string };
+  /**
    * Present when the session's non-default GitHub branch has a creatable PR
    * on origin or local changed files in the working tree.
    */
   branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;
+  /** A failed PR lookup may still carry independently resolved repository facts. */
+  status?: "ready" | "rate-limited" | "unavailable";
 };
 
 /** Per-session pushed state; unavailable snapshots preserve prior UI state. */
 export type ControlUiSessionPullRequestSnapshot = ControlUiSessionPullRequests & {
-  status: "ready" | "rate-limited" | "unavailable";
+  status: NonNullable<ControlUiSessionPullRequests["status"]>;
 };
 
 /** Targeted delta event for sessions watched by one Control UI connection. */

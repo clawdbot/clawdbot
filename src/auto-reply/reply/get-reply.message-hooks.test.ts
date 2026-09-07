@@ -1,9 +1,13 @@
 // Tests get-reply message hooks before and after agent execution.
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { MsgContext } from "../templating.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import {
@@ -31,41 +35,39 @@ const mocks = vi.hoisted(() => ({
   resolveReplySessionPreprocessingState: vi.fn(),
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../globals.js")>()),
   logVerbose: vi.fn(),
 }));
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: mocks.createInternalHookEvent,
   triggerInternalHook: mocks.triggerInternalHook,
 }));
-vi.mock("../../link-understanding/apply.js", () => ({
-  applyLinkUnderstanding: mocks.applyLinkUnderstanding,
-}));
 vi.mock("../../link-understanding/apply.runtime.js", () => ({
   applyLinkUnderstanding: mocks.applyLinkUnderstanding,
-}));
-vi.mock("../../media-understanding/apply.js", () => ({
-  applyMediaUnderstanding: mocks.applyMediaUnderstanding,
 }));
 vi.mock("../../media-understanding/apply.runtime.js", () => ({
   applyMediaUnderstanding: mocks.applyMediaUnderstanding,
 }));
-vi.mock("./commands-core.js", () => ({
-  emitResetCommandHooks: vi.fn(async () => undefined),
-}));
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let resolveAgentWorkspaceDirMock: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 let stageSandboxMediaMock: typeof import("./stage-sandbox-media.runtime.js").stageSandboxMedia;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock } =
+    await import("../../agents/agent-scope.js"));
   ({ resolveDefaultModel: resolveDefaultModelMock } =
     await import("./directive-handling.defaults.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
   ({ stageSandboxMedia: stageSandboxMediaMock } = await import("./stage-sandbox-media.runtime.js"));
+  const scope = await import("../../agents/agent-scope.js");
+  const actualScope = await vi.importActual<typeof scope>("../../agents/agent-scope.js");
+  vi.mocked(scope.resolveSessionAgentId).mockImplementation(actualScope.resolveSessionAgentId);
 }
 
 function emptyAliasIndex() {
@@ -107,6 +109,18 @@ function buildConfiguredAudioCfg() {
         },
       },
     },
+  });
+}
+
+function buildTextCtx(body: string, overrides: Partial<MsgContext> = {}): MsgContext {
+  return buildCtx({
+    Body: body,
+    BodyForAgent: body,
+    RawBody: body,
+    CommandBody: body,
+    BodyForCommands: body,
+    media: undefined,
+    ...overrides,
   });
 }
 
@@ -198,6 +212,7 @@ async function runLocalPathSelfServeCase(params: {
   provider?: string;
   model?: string;
   senderIsOwner?: boolean;
+  sessionKey?: string;
 }) {
   const ctx = buildCtx(params.ctx);
   const enableLocalPathSelfServe = vi.fn();
@@ -214,7 +229,7 @@ async function runLocalPathSelfServeCase(params: {
   mocks.initSessionState.mockResolvedValueOnce(
     createGetReplySessionState({
       sessionCtx: ctx,
-      sessionKey: ctx.SessionKey,
+      sessionKey: params.sessionKey ?? ctx.SessionKey,
       isGroup: false,
     }),
   );
@@ -426,50 +441,43 @@ describe("getReplyFromConfig message hooks", () => {
     SenderId: "operator",
   } as const;
 
-  it("promotes local document self-service for a host main session", async () => {
-    const enable = await runLocalPathSelfServeCase({ ctx: hostDocumentCtx, cfg: {} });
-    expect(enable).toHaveBeenCalledOnce();
-  });
+  it.each(["agent:main:main", "global"])(
+    "promotes local document self-service for the prepared %s owner",
+    async (sessionKey) => {
+      const enable = await runLocalPathSelfServeCase({
+        ctx: hostDocumentCtx,
+        sessionKey,
+        cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+      });
+      expect(enable).toHaveBeenCalledOnce();
+    },
+  );
 
-  it("promotes the staged document path for a sandboxed external conversation", async () => {
-    const stagedPath = "media/inbound/report.docx";
-    vi.mocked(stageSandboxMediaMock).mockResolvedValueOnce({
-      staged: new Map([[0, stagedPath]]),
-    });
-    const enable = await runLocalPathSelfServeCase({
-      ctx: {
-        ...hostDocumentCtx,
-        OriginatingChannel: "telegram",
-        AccountId: "default",
-        SenderId: "42",
-      },
-      cfg: {
-        agents: {
-          defaults: { sandbox: { mode: "non-main", scope: "agent" } },
-          list: [{ id: "main", default: true }],
+  it.each([true, false])(
+    "enables sandboxed document self-service only after staging succeeds (%s)",
+    async (staged) => {
+      const stagedPaths = new Map(staged ? [[0, "media/inbound/report.docx"]] : []);
+      vi.mocked(stageSandboxMediaMock).mockResolvedValueOnce({ staged: stagedPaths });
+      const enable = await runLocalPathSelfServeCase({
+        ctx: {
+          ...hostDocumentCtx,
+          OriginatingChannel: "telegram",
+          AccountId: "default",
+          SenderId: "42",
         },
-      },
-    });
-    expect(enable).toHaveBeenCalledWith(expect.any(Array), new Map([[0, stagedPath]]));
-  });
-
-  it("withholds local document self-service when sandbox staging fails", async () => {
-    const enable = await runLocalPathSelfServeCase({
-      ctx: {
-        ...hostDocumentCtx,
-        OriginatingChannel: "telegram",
-        AccountId: "default",
-        SenderId: "42",
-      },
-      cfg: {
-        agents: {
-          defaults: { sandbox: { mode: "non-main", scope: "agent" } },
-          list: [{ id: "main", default: true }],
+        cfg: {
+          agents: {
+            defaults: { sandbox: { mode: "non-main", scope: "agent" } },
+            list: [{ id: "main", default: true }],
+          },
         },
-      },
-    });
-    expect(enable).not.toHaveBeenCalled();
-  });
+      });
+      expect(enable.mock.calls).toEqual(staged ? [[expect.any(Array), stagedPaths]] : []);
+      expect(stageSandboxMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "main" }),
+      );
+    },
+  );
 
   it("promotes a remote document staged before media understanding", async () => {
     const remotePath = "/remote/report.docx";
@@ -510,6 +518,9 @@ describe("getReplyFromConfig message hooks", () => {
     });
 
     expect(stageSandboxMediaMock).toHaveBeenCalledOnce();
+    expect(stageSandboxMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
     expect(enable).toHaveBeenCalledWith(expect.any(Array), new Map([[0, stagedPath]]));
   });
 
@@ -610,15 +621,7 @@ describe("getReplyFromConfig message hooks", () => {
     );
 
     await getReplyFromConfig(
-      buildCtx({
-        Body: body,
-        BodyForAgent: body,
-        RawBody: body,
-        CommandBody: body,
-        BodyForCommands: body,
-        SessionKey: sessionKey,
-        media: undefined,
-      }),
+      buildTextCtx(body, { SessionKey: sessionKey }),
       undefined,
       withFastReplyConfig({}),
     );
@@ -630,22 +633,13 @@ describe("getReplyFromConfig message hooks", () => {
 
   it("fails closed before link understanding when the reserved session is missing", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:missing-link";
-    const body = "read https://example.test/page";
     mocks.resolveReplySessionPreprocessingState.mockImplementationOnce(() => {
       throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
     });
 
     await expect(
       getReplyFromConfig(
-        buildCtx({
-          Body: body,
-          BodyForAgent: body,
-          RawBody: body,
-          CommandBody: body,
-          BodyForCommands: body,
-          SessionKey: sessionKey,
-          media: undefined,
-        }),
+        buildTextCtx("read https://example.test/page", { SessionKey: sessionKey }),
         undefined,
         withFastReplyConfig({}),
       ),
@@ -841,66 +835,68 @@ describe("getReplyFromConfig message hooks", () => {
   });
 
   it("stages remaining remote iMessage media in a mixed staged context", async () => {
-    const order: string[] = [];
-    const alreadyStagedPath = "/tmp/already-staged.jpg";
-    const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
-    const stagedPath = "/tmp/openclaw-remote-cache/photo.jpg";
-    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
-      order.push("stage");
-      const stagedFacts = [
-        { path: alreadyStagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
-        { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
-      ];
-      params.ctx.media = stagedFacts;
-      params.sessionCtx.media = stagedFacts;
-      return { staged: new Map([[1, stagedPath]]) };
-    });
-    mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
-      order.push("understand");
-      const { ctx } = args[0] as { ctx: MsgContext };
-      expect(ctx.media).toEqual([
-        { path: alreadyStagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
-        { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
-      ]);
-    });
+    await withOpenClawTestState({ label: "reply-message-hooks-mixed-media" }, async (state) => {
+      const order: string[] = [];
+      const alreadyStagedPath = "/tmp/already-staged.jpg";
+      const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+      const stagedPath = "/tmp/openclaw-remote-cache/photo.jpg";
+      vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
+        order.push("stage");
+        const stagedFacts = [
+          { path: alreadyStagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+          { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+        ];
+        params.ctx.media = stagedFacts;
+        params.sessionCtx.media = stagedFacts;
+        return { staged: new Map([[1, stagedPath]]) };
+      });
+      mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+        order.push("understand");
+        const { ctx } = args[0] as { ctx: MsgContext };
+        expect(ctx.media).toEqual([
+          { path: alreadyStagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+          { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" },
+        ]);
+      });
 
-    await getReplyFromConfig(
-      buildCtx({
-        Provider: "imessage",
-        Surface: "imessage",
-        OriginatingChannel: "imessage",
-        OriginatingTo: "imessage:chat:abc",
-        ChatType: "direct",
-        Body: "please describe this",
-        BodyForAgent: "please describe this",
-        RawBody: "please describe this",
-        CommandBody: "please describe this",
-        BodyForCommands: "please describe this",
-        SessionKey: "agent:main:imessage:direct:user",
-        From: "imessage:user",
-        To: "imessage:chat:abc",
-        media: [
-          {
-            path: alreadyStagedPath,
-            contentType: "image/jpeg",
-            workspaceDir: "/tmp",
-          },
-          { path: remotePath, url: remotePath, contentType: "image/jpeg" },
-        ],
-        MediaRemoteHost: "user@gateway-host",
-      }),
-      undefined,
-      withFastReplyConfig({}),
-    );
+      await getReplyFromConfig(
+        buildCtx({
+          Provider: "imessage",
+          Surface: "imessage",
+          OriginatingChannel: "imessage",
+          OriginatingTo: "imessage:chat:abc",
+          ChatType: "direct",
+          Body: "please describe this",
+          BodyForAgent: "please describe this",
+          RawBody: "please describe this",
+          CommandBody: "please describe this",
+          BodyForCommands: "please describe this",
+          SessionKey: "agent:main:imessage:direct:user",
+          From: "imessage:user",
+          To: "imessage:chat:abc",
+          media: [
+            {
+              path: alreadyStagedPath,
+              contentType: "image/jpeg",
+              workspaceDir: "/tmp",
+            },
+            { path: remotePath, url: remotePath, contentType: "image/jpeg" },
+          ],
+          MediaRemoteHost: "user@gateway-host",
+        }),
+        undefined,
+        withFastReplyConfig({ agents: { defaults: { workspace: state.workspaceDir } } }),
+      );
 
-    expect(order).toEqual(["stage", "understand"]);
-    expect(stageSandboxMediaMock).toHaveBeenCalledTimes(1);
-    expect(stageSandboxMediaMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:imessage:direct:user",
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+      expect(order).toEqual(["stage", "understand"]);
+      expect(stageSandboxMediaMock).toHaveBeenCalledTimes(1);
+      expect(stageSandboxMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:imessage:direct:user",
+          workspaceDir: state.workspaceDir,
+        }),
+      );
+    });
   });
 
   it("emits only preprocessed when no transcript is produced", async () => {
@@ -922,14 +918,26 @@ describe("getReplyFromConfig message hooks", () => {
   });
 
   it("skips message hooks in fast test mode", async () => {
-    process.env.OPENCLAW_TEST_FAST = "1";
+    await withOpenClawTestState(
+      { label: "reply-message-hooks-fast", env: { OPENCLAW_TEST_FAST: "1" } },
+      async (state) => {
+        const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+        const cfg = withFastReplyConfig({
+          agents: { defaults: { workspace: state.workspaceDir } },
+          session: { store: storePath },
+        });
+        const sqliteTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(cfg.session.store);
+        expect(isPathInside(state.root, sqliteTarget.path)).toBe(true);
+        expect(isPathInside(state.root, resolveAgentWorkspaceDirMock(cfg, "main"))).toBe(true);
 
-    await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
+        await getReplyFromConfig(buildCtx(), undefined, cfg);
 
-    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
-    expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
-    expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
-    expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
+        expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+        expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+        expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
+        expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it("skips message hooks when SessionKey is unavailable", async () => {
@@ -945,16 +953,7 @@ describe("getReplyFromConfig message hooks", () => {
 
   it("skips media and link understanding on plain text without attachments or urls", async () => {
     await getReplyFromConfig(
-      buildCtx({
-        Body: "hello there",
-        BodyForAgent: "hello there",
-        RawBody: "hello there",
-        CommandBody: "hello there",
-        BodyForCommands: "hello there",
-        media: undefined,
-        Sticker: undefined,
-        StickerMediaIncluded: undefined,
-      }),
+      buildTextCtx("hello there", { Sticker: undefined, StickerMediaIncluded: undefined }),
       undefined,
       withFastReplyConfig({}),
     );
@@ -1033,42 +1032,56 @@ describe("getReplyFromConfig message hooks", () => {
     expect(preprocessed[1]).toBe("preprocessed");
     expect(preprocessed[2]).toBe("agent:main:telegram:-100123");
     expect(preprocessed[3]).toBeTypeOf("object");
-    expect(
-      verboseMessages().some((message) =>
-        message.includes("media understanding failed, proceeding with raw content"),
-      ),
-    ).toBe(true);
+    expect(verboseMessages()).toContainEqual(
+      expect.stringContaining("media understanding failed, proceeding with raw content"),
+    );
   });
 
-  it("continues dispatching URL messages when link understanding fails before reply routing", async () => {
+  it.each([false, true])("stops canceled replies when link work resolves: %s", async (resolves) => {
+    const controller = new AbortController();
+    const reason = resolves ? new Error("reply canceled") : undefined;
+    mocks.applyLinkUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+      const { signal } = args[0] as { signal?: AbortSignal };
+      controller.abort(reason);
+      if (!resolves) {
+        signal?.throwIfAborted();
+      }
+    });
+
+    await expect
+      .soft(
+        getReplyFromConfig(
+          buildTextCtx("read https://example.test/page"),
+          { abortSignal: controller.signal },
+          withFastReplyConfig({}),
+        ),
+      )
+      .rejects.toMatchObject({ name: "AbortError", ...(reason ? { cause: reason } : {}) });
+
+    expect(mocks.applyLinkUnderstanding).toHaveBeenCalledOnce();
+    expect.soft(mocks.initSessionState).not.toHaveBeenCalled();
+    expect.soft(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect.soft(mocks.createInternalHookEvent).not.toHaveBeenCalled();
+    expect.soft(mocks.triggerInternalHook).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("keeps URL input after link failure (literal: %s)", async (suppressed) => {
+    const ctx = buildTextCtx("read https://example.test/page", {
+      CommandInterpretationSuppressed: suppressed,
+    });
     mocks.applyLinkUnderstanding.mockRejectedValueOnce(
       new Error("Cannot find module '/tmp/openclaw/dist/link-understanding/apply.runtime-old.js'"),
     );
 
-    const reply = await getReplyFromConfig(
-      buildCtx({
-        Body: "read https://example.test/page",
-        BodyForAgent: "read https://example.test/page",
-        RawBody: "read https://example.test/page",
-        CommandBody: "read https://example.test/page",
-        BodyForCommands: "read https://example.test/page",
-        media: undefined,
-        Sticker: undefined,
-        StickerMediaIncluded: undefined,
-      }),
-      undefined,
-      withFastReplyConfig({}),
-    );
+    const reply = await getReplyFromConfig(ctx, undefined, withFastReplyConfig({}));
 
     expect(reply).toEqual({ text: "ok" });
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
     expect(mocks.applyLinkUnderstanding).toHaveBeenCalledTimes(1);
     expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
-    expect(
-      verboseMessages().some((message) =>
-        message.includes("link understanding failed, proceeding with raw content"),
-      ),
-    ).toBe(true);
+    expect(verboseMessages()).toContainEqual(
+      expect.stringContaining("link understanding failed, proceeding with raw content"),
+    );
   });
 });

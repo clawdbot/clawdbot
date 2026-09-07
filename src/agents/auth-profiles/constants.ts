@@ -8,14 +8,12 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 /** Current persisted auth profile store schema version. */
 export const AUTH_STORE_VERSION = 1;
 
-/** @deprecated Anthropic provider-owned CLI profile id; do not use from third-party plugins. */
-export const CLAUDE_CLI_PROFILE_ID = "anthropic:claude-cli";
-/** @deprecated OpenAI provider-owned CLI profile id; do not use from third-party plugins. */
-export const CODEX_CLI_PROFILE_ID = "openai:codex-cli";
-/** Default OpenAI/Codex OAuth profile id used for migrated stores. */
-export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
-/** @deprecated MiniMax provider-owned CLI profile id; do not use from third-party plugins. */
-export const MINIMAX_CLI_PROFILE_ID = "minimax-portal:minimax-cli";
+export {
+  CLAUDE_CLI_PROFILE_ID,
+  CODEX_CLI_PROFILE_ID,
+  OPENAI_CODEX_DEFAULT_PROFILE_ID,
+  MINIMAX_CLI_PROFILE_ID,
+} from "./profile-ids.js";
 
 // Invariant: OAUTH_REFRESH_CALL_TIMEOUT_MS < OAUTH_REFRESH_LOCK_OPTIONS.stale
 // so a legitimate refresh's critical section always finishes well before

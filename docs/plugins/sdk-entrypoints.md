@@ -12,11 +12,44 @@ Every plugin exports a default entry object. The SDK provides a helper for
 each entry shape: `defineToolPlugin`, `definePluginEntry`,
 `defineChannelPluginEntry`, `defineSetupPluginEntry`.
 
+All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
+including these entry helpers. Pin and test the OpenClaw host versions your
+plugin supports.
+
 <Tip>
   **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
   [Channel Plugins](/plugins/sdk-channel-plugins), or
   [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
 </Tip>
+
+## Tool policy vocabulary
+
+`openclaw/plugin-sdk/agent-harness-runtime` exposes core's synchronous policy
+primitives through `toolPolicy`:
+
+- `toolPolicy.expandToolGroups(list?)` normalizes tool aliases, drops blank entries, expands
+  core groups, and returns unique tool ids in first-seen order. Members of each
+  expanded group follow that group's catalog order.
+- `toolPolicy.createToolPolicyMatcher(policy?, writeAllowsApplyPatch = true)` returns a
+  matcher for tool names. Deny entries win, an empty allow list is unrestricted,
+  and `*` patterns and aliases use core normalization. Set the second argument
+  to `false` to disable the runtime compatibility where allowing `write` also
+  allows `apply_patch`.
+
+For conformance coverage, negate a matcher built with `{ deny: entries }`;
+this keeps an empty coverage list false and avoids allow-side compatibility.
+Prepare matchers for one synchronous operation; do not retain an authorization
+decision across awaited work.
+
+## Sandbox bind parsing
+
+`openclaw/plugin-sdk/agent-harness-runtime` exports
+`splitSandboxBindSpec(spec, options?)`. It returns raw `{ host, container, options }`
+segments, or `null` when no host/container separator exists. Windows host drive
+prefixes are always preserved. Pass `{ allowWindowsContainerPath: true }` to
+preserve drive prefixes in container paths too, as Policy does for its existing
+Windows bind grammar. The default keeps POSIX container parsing unchanged.
+This helper splits text; it does not validate or authorize a mount.
 
 ## Package entries
 
@@ -36,17 +69,31 @@ built entries:
 
 - `extensions` and `setupEntry` are source entries, used for workspace and git
   checkout development.
-- `runtimeExtensions` and `runtimeSetupEntry` are preferred for installed
-  packages: they let npm packages skip runtime TypeScript compilation.
+- `runtimeExtensions` and `runtimeSetupEntry` select the built entries instead
+  of the corresponding source entries.
 - `runtimeExtensions`, when present, must match `extensions` in array length
   (entries pair positionally). `runtimeSetupEntry` requires `setupEntry`.
 - If a `runtimeExtensions`/`runtimeSetupEntry` artifact is declared but
-  missing, install/discovery fails with a packaging error; OpenClaw does not
-  silently fall back to source. Source fallback (below) only applies when no
-  runtime entry is declared at all.
-- If an installed package declares only a TypeScript source entry, OpenClaw
-  looks for a matching built `dist/*.js` (or `.mjs`/`.cjs`) peer and uses it;
-  otherwise it falls back to the TypeScript source.
+  missing, installation fails and discovery reports a packaging error for that
+  entry; OpenClaw does not silently fall back to source.
+- Without an explicit runtime entry, package discovery through
+  `plugins.load.paths` or global roots looks for matching JavaScript peers under
+  `dist/` first, then beside the TypeScript source entry. For `src/` entries,
+  it checks both flattened `dist/` output and output retaining `dist/src/`.
+  At each location, `.mts` prefers `.mjs` and `.cts` prefers `.cjs`; `.ts` and
+  `.tsx` try `.js`, `.mjs`, then `.cjs`. Installation, discovery, setup, runtime
+  loading, and published-package verification use the same candidate order.
+- A `plugins.load.paths` entry that resolves inside the host's own bundled
+  plugin tree is discovered as that bundled plugin, so it keeps the bundled
+  entry point and bundled provenance whether or not compiled output exists
+  beside the source. Selecting a bundled plugin's own path never reclassifies it.
+- Package installation and managed installed-package discovery require compiled
+  output for TypeScript extension and setup entries. Missing compiled output is
+  a packaging error, not a reason to fall back to TypeScript.
+- Trusted local/source development paths can use TypeScript when no runtime
+  entry is declared. These include workspace plugins, explicit local load paths,
+  untracked local plugin directories, and linked source checkouts. Workspace
+  discovery keeps the source entry rather than inferring built peers.
 - All entry paths must stay inside the plugin package directory. Runtime
   entries and inferred built-JS peers do not make an escaping `extensions` or
   `setupEntry` source path valid.
@@ -147,19 +194,104 @@ export default definePluginEntry({
   `openclaw/plugin-sdk/session-catalog` and register a
   `SessionCatalogProvider` with `api.registerSessionCatalog(...)`. Required
   provider fields are `id`, `label`, `list`, and `read`; optional hooks are
-  `resolveCreateSession`, `continueSession`, `checkUpstreamActivity`, `archive`,
-  `openTerminal`, and `startTerminalSession`. Core owns the
+  `resolveCreateSession`, `continueSession`, `copyToGatewaySession`,
+  `checkUpstreamActivity`, `archive`, `openTerminal`, and `startTerminalSession`.
+  Core owns the
   `sessions.catalog.*` Gateway methods; providers return host, session,
   transcript, and terminal-plan projections without registering RPCs. A list
   provider should call the optional
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  If a host can finish after `list` returns a fail-soft snapshot, register its
+  bounded completion with the optional `waitUntil(completion: Promise<void>)`
+  hook before `list` settles. Include host mapping and the `onHost` call in that
+  promise. Use `publishSessionCatalogHost({ onHost, waitUntil }, pendingHost)`
+  from the same SDK entry point to publish the host and register the complete
+  callback chain. Registration after `list` settles is rejected. Providers that
+  do not register completion work finish publishing when their `list` settles.
+
+  The optional `signal: AbortSignal` belongs to the catalog operation or provider
+  lifetime. Pass it to cancellable work, including the top-level `signal` field
+  of `api.runtime.nodes.invoke(...)`. A requesting client disconnect only removes
+  that client's subscription; it does not cancel shared discovery. Retaining
+  completion does not extend native invocation or fail-soft response deadlines,
+  grant new authority, or permit starting work after the owner retires. Providers
+  remain responsible for bounded work that settles after cancellation.
+
+  Keep `onHost`, `waitUntil`, and `signal` separate from validated catalog query
+  objects and node command payloads. The request-owned `sessionEntries` snapshot
+  and `listNodes` hook still must not be retained past `list`; prepare any facts
+  needed by late host mapping before returning.
+
+  Transcript items may include a `sender` with a qualified `SessionParticipant`
+  identity and optional display label or avatar. Supply only source-known
+  attribution; the viewer and the session adopter are not transcript authors.
+  Core resolves profile identities against current profile data, including merges.
+  User items without attribution display as **User**.
+
+  A Gateway-hosted catalog may set `audience: "gateway-operators"` when every
+  authenticated operator with `operator.read` may view its rows. Such a provider
+  may implement `copyToGatewaySession(...)` to return a bounded display name and
+  optional preferred model for an independent Gateway-owned continuation. Core
+  owns operator and agent authorization, session creation, model readiness and
+  policy checks, rollback, and untrusted-content wrapping. The provider supplies
+  transcript text through `read(...)`; it must not write the destination session.
+
+  Native source titles are presentation, not unique session labels. When adopting
+  a new source, pass its title as `displayName` to the owner-authorized
+  [session creator](/plugins/sdk-runtime); the host bounds and stores that snapshot
+  with the new row. Keep source identity independent of naming, preserve existing
+  labels and snapshots on reuse or recovery, and do not resync native renames.
+
+  A provider may declare one readable transcript route with `shareRoute`. This
+  is a closed contract, not a free-form routing hint:
+
+  ```ts
+  const shareRoute = {
+    kind: "thread-id-prefix",
+    routeSegment: "my-sessions",
+    hostId: "gateway",
+    identifierAlphabet: "lowercase-hex",
+    fullLength: 32,
+    minPrefixLength: 12,
+    lookup: "catalog-list-search-by-thread-id-prefix",
+    ambiguity: "multiple-results-or-next-cursor",
+  } as const;
+  ```
+
+  The provider must return lowercase hexadecimal `threadId` values of exactly
+  32 characters on the declared host. When `list(...)` receives a `search`
+  value that is a valid 12-32 character prefix, that host must return only rows
+  whose `threadId` starts with the prefix. Return every match up to the requested
+  limit and set `nextCursor` when more may exist. The Control UI resolves only
+  one result with no next page; multiple rows or `nextCursor` are explicitly
+  ambiguous and never select the first row.
+
+  Named share links use `/<routeSegment>/<title-slug>-<id-prefix>` with the same
+  bounded slug as regular session links. Return the title in the catalog row's
+  `name`; the Control UI uses it to refresh the decorative slug. Only the id
+  suffix selects the transcript. Bare-id and stale-title links remain valid,
+  and titles never resolve an ambiguous id.
+
+  `routeSegment` must not use the first segment of a built-in Control UI route
+  or alias, and it must be unique across active session catalogs. Invalid,
+  unsupported, reserved, or multiply owned descriptors fail closed; catalog
+  sessions remain available through the generic
+  `/chat/<agent>?catalog=...&host=...&thread=...` URL. The shared session URL
+  contract owns the built-in reservation decision: its share-path builder
+  returns `null` for reserved segments, and the Gateway omits reserved
+  descriptors before publishing catalogs. Keep one plugin-owned descriptor
+  constant and reuse it for registration, prefix lookup, and URL generation so
+  those obligations cannot drift.
+
   CLI-backed catalogs that expose the same local-plus-paired-node shape can use
   `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
   validation, node payload validation, host projection, adopted-session
-  projection, per-host publication, read routing, single-flight continuation,
-  and terminal plan routing. The provider must supply its local store reads,
+  projection, per-host publication, read routing, single-flight continuation
+  per resolved agent and source, and terminal plan routing. Different agents
+  do not share in-flight adoption results; adopted-source lookup keys remain
+  host/thread pairs. The provider must supply its local store reads,
   identifiers and commands, error text, capability projection, continuation
   availability and persistence operations, upstream-activity check, and terminal
   executable/arguments. There are no default continuation, capability-mutation,
@@ -173,13 +305,25 @@ export default definePluginEntry({
   validation messages into `parseReadParams(...)` and `parseListParams(...)`.
 
   `resolveCreateSession({ agentId })` must return a config-derived model/runtime
-  target before OpenClaw advertises creation or calls `startTerminalSession`.
+  target before OpenClaw advertises model-chat creation. Native terminal readiness
+  is independent of this target.
   Use
   [`api.runtime.agent.resolveSessionCatalogCreateTarget(...)`](/plugins/sdk-runtime#api-runtime-agent)
   to apply the host's runtime and model-allowlist policy instead of duplicating
   it.
 
-  `startTerminalSession({ agentId, cwd, initialMessage?, nodeId? })` creates a
+  `startTerminalSession` advertises `capabilities.startTerminal: true` independently
+  of model-chat creation. Return `canStartTerminal: true` on each eligible host
+  from the ordinary catalog `list` callback, including empty hosts. Publish the
+  same flag in progressive `onHost` frames and final results; explicitly return
+  `false` when readiness changes. A failed transcript listing does not revoke
+  an otherwise available CLI. Node hosts require their exact connected, invocable
+  fresh-start command; start-only nodes must not invoke a missing list command.
+  Preserve local source IDs and process-home isolation. The shipped
+  `createSession.startTerminal` field remains model-chat metadata; new terminal
+  callers use the independent capability and raw catalog hosts.
+
+  `startTerminalSession({ agentId, cwd, initialMessage?, nodeId?, hostId? })` creates a
   fresh CLI terminal plan. Return either a local plan (`kind: "local"`, `argv`,
   and the exact `cwd`, plus optional `env`, `pathEnv`, and `title`) or a paired-node
   plan (`kind: "node"`, `nodeId`, `command`, `paramsJSON`, and the exact `cwd`).
@@ -188,7 +332,19 @@ export default definePluginEntry({
   provisions `cwd`; the Gateway requires an existing absolute local directory,
   rejects a changed plan cwd or host, and applies the normal agent-sandbox,
   node-pairing, deadline, and connection-ownership checks before opening the
-  PTY.
+  PTY. `hostId` carries the selected local source; `nodeId` identifies a node.
+  Initial prompts are bounded to 16,384 characters and cwd to 4,096 characters
+  (4,096 UTF-8 bytes on nodes).
+  Fresh node commands use `decodeNodePtyStartParams` from `node-host` and
+  `runNodePtyCommand({ ..., requiredCwd: true }, io)` to require an existing absolute
+  node directory, including a recheck immediately before spawning. Resume retains
+  its existing cwd fallback contract. Node payloads must not accept executable,
+  argv, environment, credentials, or a Gateway agent as native account selection.
+
+  The terminal manager retains the native title and actual connection/agent owner
+  across attach and reconnect. Clients advertise `terminal-session-metadata` to
+  receive attach title/owner and list titles; older closed response shapes stay
+  unchanged.
 
 - `kind` is deprecated: declare an exclusive slot (`"memory"` or
   `"context-engine"`) in the `openclaw.plugin.json` manifest `kind` field
@@ -202,6 +358,35 @@ export default definePluginEntry({
   node's Gateway declaration. OpenClaw evaluates it against the node-local
   startup config; command handlers should still validate availability when
   invoked.
+
+### Native provider factories
+
+`registerSpeechProvider`, `registerRealtimeTranscriptionProvider`, and
+`registerRealtimeVoiceProvider` accept either a complete provider descriptor or
+a synchronous factory receiving `PluginCapabilityCatalogContext`:
+
+```typescript
+register(api) {
+  api.registerRealtimeTranscriptionProvider((context) =>
+    buildRealtimeTranscriptionProvider(context),
+  );
+}
+```
+
+Use the same plugin-owned factory for full registration and an optional
+capability catalog. The host supplies native auth, request, and transport
+operations; constructing a descriptor should not load execution SDK barrels,
+read credentials, or start sessions. Keep that work in the descriptor's methods.
+Factories must return synchronously; a thrown error or promise fails registration.
+
+Full registration can bind its own broker or logger in the factory closure.
+Do not substitute a catalog-only descriptor for one that requires those bindings.
+Full plugin registration still owns harnesses, hooks, services, and lifecycle
+callbacks; catalog entries alone do not establish runtime readiness.
+
+Object registrations remain supported. Before publishing a plugin that uses
+factory arguments, set its `compat.pluginApi` floor to a host release that
+supports them; a lower `minHostVersion` does not override that API requirement.
 
 ### Computer Use providers
 
@@ -303,9 +488,11 @@ CLI registration:
   `machineOutput({ argv, stdoutIsTTY })` resolver for JSON, JSONL, or other
   machine-readable stdout modes that are not selected solely by `--json`.
   Parse command tokens with `getRootOptionAwareCommandPath` from
-  `openclaw/plugin-sdk/cli-argv`. Keep the resolver in lightweight CLI metadata
-  and share it with full registration. Nested descriptors do not expose this
-  field.
+  `openclaw/plugin-sdk/cli-argv`. Keep the descriptor in a lightweight
+  plugin-local module and reuse it from both `cli-metadata.ts` and full
+  registration; do not import runtime barrels to construct metadata.
+  Meeting runtime shells accept that descriptor through `cli.descriptor`.
+  Nested descriptors do not expose `machineOutput`.
 - Use `api.registerNodeCliFeature(...)` for paired-node feature commands so
   they land under `openclaw nodes` (equivalent to
   `registerCli(registrar, { parentPath: ["nodes"], ... })`).
@@ -344,9 +531,20 @@ Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 | `openclaw/plugin-sdk/channel-setup`     | Optional-install setup surfaces                                                                                                                                                    |
 | `openclaw/plugin-sdk/channel-dm-policy` | Account-aware DM policy descriptors for setup flows                                                                                                                                |
 | `openclaw/plugin-sdk/setup-tools`       | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
-| `openclaw/plugin-sdk/archive`           | Bounded archive extraction and single-entry reads                                                                                                                                  |
+| `openclaw/plugin-sdk/archive`           | Bounded TAR/gzip member inspection, archive extraction, and single-entry reads                                                                                                     |
 | `openclaw/plugin-sdk/root-walk`         | Budgeted, root-bounded directory walking                                                                                                                                           |
 | `openclaw/plugin-sdk/secret-file`       | Pinned secret reads and first-writer-wins creation                                                                                                                                 |
+
+`inspectTarArchive({ archivePath, timeoutMs, limits, entryFilter, onFiltered })`
+returns a bounded, frozen list of accepted `{ path, kind, size }` TAR/gzip members
+without creating an extracted tree. It uses fs-safe's complete admission and
+zero-strip extraction policy, not tar display output. Paths use the existing
+canonical archive identity; LF and Unicode spelling are preserved. Use matching
+filter/limit settings and retain or verify the same archive bytes for subsequent
+extraction: inspection results are not reusable write authority. Only the resolved
+result is complete-admission evidence; a filter callback can precede a later
+policy failure. The member manifest does not synthesize implicit parent directories,
+so whole-tree consumers must authorize those parent paths separately.
 
 Keep heavy SDKs, CLI registration, and long-lived runtime services in the
 full entry.
@@ -391,14 +589,16 @@ limited to config-only routes or methods required by that setup flow.
 
 `api.registrationMode` tells your plugin how it was loaded:
 
-| Mode               | When                                               | What to register                                                                                                |
-| ------------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `"full"`           | Normal gateway startup                             | Everything                                                                                                      |
-| `"discovery"`      | Read-only capability discovery                     | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
-| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Capability/tool registration only; no channel activation                                                        |
-| `"setup-only"`     | Disabled/unconfigured channel                      | Channel registration only                                                                                       |
-| `"setup-runtime"`  | Setup flow with runtime available                  | Channel registration plus only the lightweight runtime needed during setup                                      |
-| `"cli-metadata"`   | Root help / CLI metadata capture                   | CLI descriptors only                                                                                            |
+| Mode               | When                                               | Runtime     | What to register                                                                                                |
+| ------------------ | -------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------- |
+| `"full"`           | Normal gateway startup                             | Live        | Everything                                                                                                      |
+| `"discovery"`      | Read-only capability discovery                     | Live        | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
+| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Live        | Capability/tool registration only; no channel activation                                                        |
+| `"setup-only"`     | Disabled/unconfigured channel                      | Unavailable | Channel registration only                                                                                       |
+| `"setup-runtime"`  | Setup flow with runtime available                  | Live        | Channel registration plus only the lightweight runtime needed during setup                                      |
+| `"cli-metadata"`   | Root help / CLI metadata capture                   | Unavailable | CLI descriptors only                                                                                            |
+
+In `"cli-metadata"` and `"setup-only"` modes, accessing a runtime capability throws an error naming the plugin and mode. Defer runtime access out of `register()` or declare root commands in the manifest's `cliCommands` so CLI metadata can be collected without executing the plugin.
 
 `defineChannelPluginEntry` handles this split automatically. If you use
 `definePluginEntry` directly for a channel, check mode yourself and remember
@@ -480,3 +680,26 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 - [Setup and Config](/plugins/sdk-setup) - manifest and setup entry loading
 - [Channel Plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
 - [Provider Plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
+
+## MCP subprocess runtime
+
+**Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening a connection. Its frozen object lazily loads one factory:
+
+```ts
+const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+const { createMcpStdioClient } = await mcpStdioRuntime.load();
+```
+
+Use `createMcpStdioClient(params)` for a caller-owned MCP proxy subprocess fronting a stateful driver. OpenClaw owns the subprocess and its descendants, newline framing and JSON-RPC validation, initialization, request admission, deadlines, and shutdown. The client starts connecting when the factory returns. Keep this runtime out of plugin registration and paths that do not open MCP connections.
+
+Supply `command`, optional `args`, and an exact `env`; the child inherits no other environment variables. Set `clientInfo` (`name` and `version`), the required `protocolVersion`, `startupTimeoutMs`, `maxPendingRequests`, and `maxFrameBytes`. The server must return exactly the requested protocol version. OpenClaw retains a fixed 32 KiB stderr tail for unexpected-exit diagnostics. The decoder bounds pending bytes plus each incoming chunk before buffering, preserves fragmented UTF-8, skips empty lines, and requires safe integer response IDs.
+
+The caller supplies `errors.unavailable(message, cause?)` and `errors.protocol(message, cause?)`, each returning an `Error`. The first classifies process, lifecycle, admission, deadline, and cancellation failures. The second classifies malformed frames, non-timeout JSON-RPC errors, and handshake contract violations. Plugin-specific tool-result normalization stays with the caller.
+
+The returned client exposes three methods:
+
+- `isAvailable()` synchronously reports whether initialization completed and the connection remains usable.
+- `request(method, params, { timeoutMs, signal? })` waits for startup and returns the object result. An already-aborted signal or a full pending-request limit rejects only that call. After admission, cancellation or timeout retires the entire connection and rejects pending requests with the retained fatal error. The client suppresses SDK cancellation notifications because it terminates the process instead. A non-timeout JSON-RPC error response rejects only its matching request through `errors.protocol`.
+- `stop()` closes admission, retires pending requests, and awaits startup settlement and owned-process cleanup. It rejects through `errors.unavailable` with `proxy cleanup could not be confirmed` if cleanup is uncertain. It never stops a separately started service reached through the proxy's socket.
+
+Malformed frames, incompatible initialization, write failures, and unexpected process exit also retire the whole connection. The first fatal error is retained; create a new client to reconnect. Timeout classification follows the SDK error code, so a timeout-coded server error also retires the connection.

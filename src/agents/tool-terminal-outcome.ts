@@ -5,6 +5,7 @@ import {
   peekPreExecutionBlockedToolCall,
 } from "./agent-tools.before-tool-call.state.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
+import { buildToolEffectReceipt, readToolEffectReceipt } from "./tool-effect-receipt.js";
 import { createToolErrorState } from "./tool-error-state.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import { buildToolMutationState } from "./tool-mutation.js";
@@ -16,6 +17,7 @@ export function createToolTerminalObserver(
   const errors = createToolErrorState();
 
   return (observation) => {
+    const effectReceipt = readToolEffectReceipt(observation.result);
     const trackedExecutionStarted = observation.toolCallId
       ? consumeTrackedToolExecutionStarted(observation.toolCallId, runId)
       : undefined;
@@ -26,7 +28,9 @@ export function createToolTerminalObserver(
       ? peekPreExecutionBlockedToolCall(observation.toolCallId, runId)
       : false;
     const executionStarted =
-      (trackedExecutionStarted ?? observation.executionStarted ?? true) && !executionPrevented;
+      (trackedExecutionStarted ?? observation.executionStarted ?? true) &&
+      !executionPrevented &&
+      effectReceipt?.state !== "not_started";
     const executedArguments = asRecord(trackedArguments) ?? asRecord(observation.arguments);
     const mutation = observation.ownerMutation
       ? buildToolMutationState(observation.toolName, executedArguments, {
@@ -34,6 +38,7 @@ export function createToolTerminalObserver(
         })
       : (observation.nativeMutation ??
         buildToolMutationState(observation.toolName, executedArguments));
+    const replaySafe = observation.replaySafe ?? mutation.replaySafe;
     let lastToolError: ToolErrorSummary | undefined;
     if (observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
@@ -41,6 +46,7 @@ export function createToolTerminalObserver(
         toolName: observation.toolName,
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
+        executionStarted,
         mutatingAction,
       };
       lastToolError = errors.recordFailure(failure).lastToolError;
@@ -52,7 +58,15 @@ export function createToolTerminalObserver(
       ...(lastToolError ? { lastToolError } : {}),
       executionStarted,
       ...(executedArguments ? { executedArguments } : {}),
-      sideEffectEvidence: executionStarted && !mutation.replaySafe,
+      sideEffectEvidence: executionStarted && !replaySafe,
+      effectReceipt:
+        effectReceipt ??
+        buildToolEffectReceipt({
+          executionStarted,
+          mutatingAction: mutation.mutatingAction,
+          replaySafe,
+          outcome: observation.outcome,
+        }),
     };
   };
 }

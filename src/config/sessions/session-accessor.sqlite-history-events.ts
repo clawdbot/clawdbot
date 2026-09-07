@@ -1,27 +1,41 @@
 import { sql } from "kysely";
+import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
 import type {
   SessionTranscriptMessageAnchorPage,
-  SessionTranscriptMessageEvent,
   SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-active-events.js";
 import {
   getActiveTranscriptKysely,
+  readTranscriptProjectionGeneration,
   withCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
+  type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-active-projection.js";
 import type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import { createTranscriptRawDeltaCursor } from "./session-accessor.sqlite-delta.js";
 import {
-  readTranscriptProjectionGeneration,
+  createTranscriptRawDeltaCursor,
+  readTranscriptRawDelta,
+} from "./session-accessor.sqlite-delta.js";
+import {
+  positionTranscriptDisplayEvents,
+  readTranscriptDisplaySource,
+} from "./session-accessor.sqlite-display-position.js";
+import {
+  assertVisibleMessageRangeJson,
+  hasUnindexedVisibleMessages,
+  iterateVisibleMessageRange,
+  readVisibleMessageMetadata,
   readVisibleMessageRange,
-  resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
@@ -36,12 +50,17 @@ type VisibleHistoryBoundary = {
 
 type VisibleHistoryProjection = {
   boundaries: VisibleHistoryBoundary[];
+  displaySource?: string;
   total: number;
 };
 
 function resolveVisibleHistoryProjection(
   projection: CurrentTranscriptProjection,
 ): VisibleHistoryProjection {
+  const displaySource = readTranscriptDisplaySource(projection);
+  if (projection.state.activeEventCount === projection.state.activeMessageCount) {
+    return { boundaries: [], displaySource, total: projection.state.activeMessageCount };
+  }
   const visibleMessages = resolveVisibleMessagePositions(projection);
   const db = getActiveTranscriptKysely(projection.database);
   const rows = executeSqliteQuerySync(
@@ -63,7 +82,7 @@ function resolveVisibleHistoryProjection(
         "identity.event_type",
         "identity.seq",
         /* kysely-allow-raw: history byte caps include each event's JSONL newline. */
-        sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+        sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
       ])
       .select((eb) =>
         eb
@@ -80,18 +99,16 @@ function resolveVisibleHistoryProjection(
       .where("identity.event_type", "in", ["compaction", "reset"])
       .orderBy("active.active_position", "asc"),
   ).rows;
-  const latestBoundaryIsReset = rows.at(-1)?.event_type === "reset";
-  const visibleRows = latestBoundaryIsReset ? rows.slice(-1) : rows;
-  let priorBoundaries = 0;
-  const boundaries = visibleRows.map((row): VisibleHistoryBoundary => {
-    const messagePosition = latestBoundaryIsReset
-      ? visibleMessages.kept.length
-      : Math.min(
-          row.next_message_position ?? projection.state.activeMessageCount,
-          visibleMessages.total,
-        );
+  const resetIndex = rows.findLastIndex((row) => row.event_type === "reset");
+  const visibleRows = rows.slice(Math.max(0, resetIndex));
+  const boundaries = visibleRows.map((row, index): VisibleHistoryBoundary => {
+    // Kept messages precede the latest reset; later markers share its logical window.
+    // Rebase raw positions so discarded messages cannot shift those markers.
+    const nextMessagePosition = row.next_message_position ?? projection.state.activeMessageCount;
+    const messagePosition =
+      visibleMessages.kept.length + Math.max(0, nextMessagePosition - visibleMessages.postStart);
     return {
-      displayPosition: messagePosition + priorBoundaries++,
+      displayPosition: messagePosition + index,
       eventId: row.event_id,
       eventSeq: row.seq,
       messagePosition,
@@ -100,6 +117,7 @@ function resolveVisibleHistoryProjection(
   });
   return {
     boundaries,
+    displaySource,
     total: visibleMessages.total + boundaries.length,
   };
 }
@@ -166,30 +184,47 @@ function readVisibleHistoryRange(
   endExclusive: number,
   history = resolveVisibleHistoryProjection(projection),
 ): SessionTranscriptMessageEvent[] {
-  const { boundedEnd, boundedStart, boundaries, messageEnd, messageStart } =
-    resolveVisibleHistoryRange(history, start, endExclusive);
-  if (boundedEnd <= boundedStart) {
+  const range = resolveVisibleHistoryRange(history, start, endExclusive);
+  if (range.boundedEnd <= range.boundedStart) {
     return [];
   }
-  const messages = readVisibleMessageRange(projection, messageStart, messageEnd);
-  const boundaryEvents = readBoundaryEvents(projection, boundaries.values());
-  let messageIndex = 0;
-  const events: SessionTranscriptMessageEvent[] = [];
-  for (let displayPosition = boundedStart; displayPosition < boundedEnd; displayPosition += 1) {
-    const boundary = boundaries.get(displayPosition);
-    if (boundary) {
-      const event = boundaryEvents.get(boundary.eventSeq);
-      if (event) {
-        events.push({ event, seq: displayPosition + 1 });
+  const messages = readVisibleMessageRange(projection, range.messageStart, range.messageEnd);
+  const boundaryEvents = readBoundaryEvents(projection, range.boundaries.values());
+  return positionTranscriptDisplayEvents(
+    projection,
+    history.displaySource,
+    Array.from(mergeVisibleHistoryEvents(range, messages, boundaryEvents)),
+  );
+}
+
+function* mergeVisibleHistoryEvents(
+  range: ReturnType<typeof resolveVisibleHistoryRange>,
+  messages: Iterable<SessionTranscriptMessageEvent>,
+  boundaryEvents: Map<number, TranscriptEvent>,
+): IterableIterator<SessionTranscriptMessageEvent> {
+  const iterator = messages[Symbol.iterator]();
+  try {
+    for (
+      let displayPosition = range.boundedStart;
+      displayPosition < range.boundedEnd;
+      displayPosition += 1
+    ) {
+      const boundary = range.boundaries.get(displayPosition);
+      if (boundary) {
+        const event = boundaryEvents.get(boundary.eventSeq);
+        if (event) {
+          yield { event, eventSeq: boundary.eventSeq, seq: displayPosition + 1 };
+        }
+        continue;
       }
-      continue;
+      const message = iterator.next();
+      if (!message.done) {
+        yield { ...message.value, seq: displayPosition + 1 };
+      }
     }
-    const message = messages[messageIndex++];
-    if (message) {
-      events.push({ event: message.event, seq: displayPosition + 1 });
-    }
+  } finally {
+    iterator.return?.();
   }
-  return events;
 }
 
 function resolveRecentHistoryStart(
@@ -199,40 +234,20 @@ function resolveRecentHistoryStart(
   history: VisibleHistoryProjection,
   maxBytes: number,
   maxMessages: number,
+  allowOversizedFirst = true,
 ): number {
   const { boundedEnd, boundedStart, boundaries, messageEnd, messageStart } =
     resolveVisibleHistoryRange(history, start, endExclusive);
   // No result can include more than maxMessages events, so older metadata would
-  // only add SQLite bindings and synchronous work before the backward scan stops.
+  // only add synchronous work before the backward scan stops.
   const metadataStart = Math.max(messageStart, messageEnd - maxMessages);
-  const positions = resolveVisibleMessagePositionRange(projection, metadataStart, messageEnd);
-  const db = getActiveTranscriptKysely(projection.database);
   const messageBytes = new Map(
-    positions.length === 0
-      ? []
-      : executeSqliteQuerySync(
-          projection.database.db,
-          db
-            .selectFrom("session_transcript_active_events as active")
-            .innerJoin("transcript_events as event", (join) =>
-              join
-                .onRef("event.session_id", "=", "active.session_id")
-                .onRef("event.seq", "=", "active.event_seq"),
-            )
-            .select([
-              "active.message_position",
-              /* kysely-allow-raw: excluded history payloads must not be fetched or parsed. */
-              sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
-            ])
-            .where("active.session_id", "=", projection.resolved.sessionId)
-            .where("active.message_position", "in", positions),
-        ).rows.flatMap((row) =>
-          row.message_position === null
-            ? []
-            : [[row.message_position, row.serialized_bytes] as const],
-        ),
+    readVisibleMessageMetadata(projection, metadataStart, messageEnd).map((row) => [
+      row.logicalPosition,
+      row.serialized_bytes,
+    ]),
   );
-  let messageIndex = positions.length - 1;
+  let messageIndex = messageEnd - 1;
   let selectedStart = boundedEnd;
   let selectedCount = 0;
   let bytes = 0;
@@ -245,14 +260,14 @@ function resolveRecentHistoryStart(
       break;
     }
     const boundary = boundaries.get(displayPosition);
-    const messagePosition = boundary ? undefined : positions[messageIndex--];
+    const logicalPosition = boundary ? undefined : messageIndex--;
     const serializedBytes =
       boundary?.serializedBytes ??
-      (messagePosition === undefined ? undefined : messageBytes.get(messagePosition));
+      (logicalPosition === undefined ? undefined : messageBytes.get(logicalPosition));
     if (serializedBytes === undefined) {
       continue;
     }
-    if (selectedCount > 0 && bytes + serializedBytes > maxBytes) {
+    if ((!allowOversizedFirst || selectedCount > 0) && bytes + serializedBytes > maxBytes) {
       break;
     }
     selectedStart = displayPosition;
@@ -265,6 +280,7 @@ function resolveRecentHistoryStart(
 function readVisibleMessageById(
   projection: CurrentTranscriptProjection,
   eventId: string,
+  history: VisibleHistoryProjection,
 ): SessionTranscriptMessageEvent | undefined {
   const db = getActiveTranscriptKysely(projection.database);
   const row = executeSqliteQueryTakeFirstSync(
@@ -281,7 +297,7 @@ function readVisibleMessageById(
           .onRef("event.session_id", "=", "active.session_id")
           .onRef("event.seq", "=", "active.event_seq"),
       )
-      .select(["active.message_position", "event.event_json"])
+      .select(["active.event_seq", "active.message_position", "event.event_json"])
       .where("identity.session_id", "=", projection.resolved.sessionId)
       .where("identity.event_id", "=", eventId)
       .where("active.message_position", "is not", null),
@@ -289,14 +305,36 @@ function readVisibleMessageById(
   if (!row || row.message_position === null) {
     return undefined;
   }
-  const visible = resolveVisibleMessagePositions(projection);
-  const logicalPosition =
-    row.message_position >= visible.postStart
-      ? visible.kept.length + row.message_position - visible.postStart
-      : visible.kept.indexOf(row.message_position);
-  return logicalPosition < 0
+  const seq = resolveHistoryMessageSequence(
+    resolveVisibleMessagePositions(projection),
+    history,
+    row.message_position,
+  );
+  return seq === undefined
     ? undefined
-    : { event: JSON.parse(row.event_json) as TranscriptEvent, seq: logicalPosition + 1 };
+    : {
+        event: JSON.parse(row.event_json) as TranscriptEvent,
+        eventSeq: row.event_seq,
+        seq,
+      };
+}
+
+function resolveHistoryMessageSequence(
+  visible: ReturnType<typeof resolveVisibleMessagePositions>,
+  history: VisibleHistoryProjection,
+  messagePosition: number,
+): number | undefined {
+  const logicalPosition =
+    messagePosition >= visible.postStart
+      ? visible.kept.length + messagePosition - visible.postStart
+      : visible.kept.indexOf(messagePosition);
+  if (logicalPosition < 0) {
+    return undefined;
+  }
+  const precedingBoundaries = history.boundaries.filter(
+    (candidate) => candidate.messagePosition <= logicalPosition,
+  ).length;
+  return logicalPosition + 1 + precedingBoundaries;
 }
 
 function resolveHistoryEventById(
@@ -307,20 +345,74 @@ function resolveHistoryEventById(
   const boundary = history.boundaries.find((candidate) => candidate.eventId === eventId);
   if (boundary) {
     const event = readBoundaryEvents(projection, [boundary]).get(boundary.eventSeq);
-    return event ? { event, seq: boundary.displayPosition + 1 } : undefined;
+    return event
+      ? { event, eventSeq: boundary.eventSeq, seq: boundary.displayPosition + 1 }
+      : undefined;
   }
-  const message = readVisibleMessageById(projection, eventId);
-  if (!message) {
-    return undefined;
-  }
-  const messagePosition = message.seq - 1;
-  const precedingBoundaries = history.boundaries.filter(
-    (candidate) => candidate.messagePosition <= messagePosition,
-  ).length;
-  return {
-    event: message.event,
-    seq: message.seq + precedingBoundaries,
-  };
+  return readVisibleMessageById(projection, eventId, history);
+}
+
+type SessionTranscriptRawDeltaPage = Extract<SessionTranscriptRawDeltaResult, { kind: "page" }>;
+
+export type SessionTranscriptDisplayDeltaResult =
+  | (Omit<SessionTranscriptRawDeltaPage, "events"> & {
+      activeLeafEntryId: string | null;
+      events: Array<
+        SessionTranscriptRawDeltaPage["events"][number] & {
+          messageSeq?: number;
+          displayPosition?: TranscriptDisplayPosition;
+        }
+      >;
+    })
+  | Exclude<SessionTranscriptRawDeltaResult, { kind: "page" }>;
+
+/** Raw cursor progress carries the same reset-relative ordinals as pages and live messages. */
+export function readTranscriptDisplayDelta(
+  scope: SessionTranscriptReadScope,
+  limits: SessionTranscriptRawDeltaLimits = {},
+): SessionTranscriptDisplayDeltaResult {
+  const readLimits = { ...limits };
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    // The nested raw read shares this deferred transaction; cursor progress and
+    // display placement must describe the same active branch and generation.
+    const result = readTranscriptRawDelta(scope, readLimits);
+    if (result.kind !== "page") {
+      return result;
+    }
+    const history = resolveVisibleHistoryProjection(projection);
+    const visible = resolveVisibleMessagePositions(projection);
+    const firstSeq = result.events[0]?.seq;
+    const lastSeq = result.events.at(-1)?.seq;
+    const db = getActiveTranscriptKysely(projection.database);
+    const sequences = new Map(
+      firstSeq === undefined || lastSeq === undefined
+        ? []
+        : executeSqliteQuerySync(
+            projection.database.db,
+            db
+              .selectFrom("session_transcript_active_events")
+              .select(["event_seq", "message_position"])
+              .where("session_id", "=", projection.resolved.sessionId)
+              .where("event_seq", ">=", firstSeq)
+              .where("event_seq", "<=", lastSeq)
+              .where("message_position", "is not", null),
+          ).rows.map((row) => [
+            row.event_seq,
+            row.message_position === null
+              ? undefined
+              : resolveHistoryMessageSequence(visible, history, row.message_position),
+          ]),
+    );
+    const events = positionTranscriptDisplayEvents(
+      projection,
+      history.displaySource,
+      result.events.map((row) => {
+        const messageSeq = sequences.get(row.seq);
+        return { ...row, eventSeq: row.seq, ...(messageSeq === undefined ? {} : { messageSeq }) };
+      }),
+    );
+    return { ...result, activeLeafEntryId: projection.state.leafEventId, events };
+  });
 }
 
 export function readSessionTranscriptHistoryEvents(
@@ -360,6 +452,7 @@ export function readRecentSessionTranscriptHistoryEvents(
         activeLeafEntryId: projection.state.leafEventId,
         ...(deltaCursor ? { deltaCursor } : {}),
         events: [],
+        displaySource: history.displaySource,
         totalMessages: history.total,
       };
     }
@@ -379,6 +472,7 @@ export function readRecentSessionTranscriptHistoryEvents(
       activeLeafEntryId: projection.state.leafEventId,
       ...(deltaCursor ? { deltaCursor } : {}),
       events: readVisibleHistoryRange(projection, selectedStart, history.total, history),
+      displaySource: history.displaySource,
       totalMessages: history.total,
     };
   });
@@ -386,7 +480,7 @@ export function readRecentSessionTranscriptHistoryEvents(
 
 export function readSessionTranscriptHistoryEventPage(
   scope: SessionTranscriptReadScope,
-  options: { maxMessages: number; offset: number },
+  options: { maxMessages: number; offset: number; maxBytes?: number },
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const history = resolveVisibleHistoryProjection(projection);
@@ -399,11 +493,35 @@ export function readSessionTranscriptHistoryEventPage(
       Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
     );
     const endExclusive = Math.max(0, history.total - offset);
-    const start = Math.max(0, endExclusive - maxMessages);
+    const requestedStart = Math.max(0, endExclusive - maxMessages);
+    const boundedStart =
+      options.maxBytes === undefined
+        ? requestedStart
+        : resolveRecentHistoryStart(
+            projection,
+            requestedStart,
+            endExclusive,
+            history,
+            Math.max(
+              1024,
+              Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 1024 * 1024),
+            ),
+            maxMessages,
+            false,
+          );
+    // A single oversized event must not defeat the hard limit or trap pagination.
+    // Skip its source position explicitly; callers disclose the omission to readers.
+    const omittedOversized = maxMessages > 0 && endExclusive > 0 && boundedStart === endExclusive;
+    const consumedStart = omittedOversized ? endExclusive - 1 : boundedStart;
     return {
       activeLeafEntryId: projection.state.leafEventId,
-      events: readVisibleHistoryRange(projection, start, endExclusive, history),
+      events: readVisibleHistoryRange(projection, boundedStart, endExclusive, history),
+      displaySource: history.displaySource,
       totalMessages: history.total,
+      ...(options.maxBytes !== undefined && maxMessages > 0 && consumedStart > 0
+        ? { olderOffset: history.total - consumedStart }
+        : {}),
+      ...(omittedOversized ? { omittedOversized: true } : {}),
     };
   });
 }
@@ -419,9 +537,63 @@ export function readSessionTranscriptHistoryEventById(
   scope: SessionTranscriptReadScope,
   eventId: string,
 ): SessionTranscriptMessageEvent | undefined {
-  return withCurrentProjectionSnapshot(scope, (projection) =>
-    resolveHistoryEventById(projection, eventId),
-  );
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const history = resolveVisibleHistoryProjection(projection);
+    const event = resolveHistoryEventById(projection, eventId, history);
+    return event
+      ? positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0]
+      : undefined;
+  });
+}
+
+/** Select ID candidates and projected-history presence from one validated snapshot. */
+export function readSessionTranscriptHistoryEventLookup(
+  scope: SessionTranscriptReadScope,
+  eventId: string,
+): { events: SessionTranscriptMessageEvent[]; hasDisplayMessages: boolean } {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const history = resolveVisibleHistoryProjection(projection);
+    const range = resolveVisibleHistoryRange(history, 0, history.total);
+    if (
+      !eventId.trim() ||
+      hasUnindexedVisibleMessages(projection, range.messageStart, range.messageEnd)
+    ) {
+      // Unindexed stored rows can retain message.__openclaw.id during projection.
+      // Let the full reader select those candidates; the caller matches projected IDs.
+      const events = readVisibleHistoryRange(projection, 0, history.total, history);
+      return {
+        events,
+        hasDisplayMessages: events.some((row) => isVisibleTranscriptRecord(row.event)),
+      };
+    }
+    assertVisibleMessageRangeJson(projection, range.messageStart, range.messageEnd);
+    const boundaryEvents = readBoundaryEvents(projection, range.boundaries.values());
+    let first: SessionTranscriptMessageEvent | undefined;
+    let hasDisplayMessages = false;
+    for (const event of mergeVisibleHistoryEvents(
+      range,
+      iterateVisibleMessageRange(projection, range.messageStart, range.messageEnd),
+      boundaryEvents,
+    )) {
+      first ??= event;
+      if (isVisibleTranscriptRecord(event.event)) {
+        hasDisplayMessages = true;
+        break;
+      }
+    }
+    const event = resolveHistoryEventById(projection, eventId.trim(), history);
+    // Nonempty history validates the current-turn admission even when the requested
+    // ID is absent. Keep that fence while positioning only the selected/first row.
+    const positioned = positionTranscriptDisplayEvents(
+      projection,
+      history.displaySource,
+      event ? [event] : first ? [first] : [],
+    );
+    return {
+      events: event ? positioned : [],
+      hasDisplayMessages,
+    };
+  });
 }
 
 export function readSessionTranscriptHistoryAnchorPage(
@@ -437,6 +609,7 @@ export function readSessionTranscriptHistoryAnchorPage(
         found: false,
         hasOverreadContext: false,
         offset: 0,
+        displaySource: history.displaySource,
         totalMessages: history.total,
       };
     }
@@ -456,6 +629,7 @@ export function readSessionTranscriptHistoryAnchorPage(
       found: true,
       hasOverreadContext: readStart < start,
       offset: history.total - endExclusive,
+      displaySource: history.displaySource,
       totalMessages: history.total,
     };
   });

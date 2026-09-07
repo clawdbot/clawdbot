@@ -306,11 +306,15 @@ for tool in "${required_tools[@]}"; do
 done
 
 plist_value() {
-  plutil -extract "$2" raw -o - "$1/Contents/Info.plist" 2>/dev/null || true
+  plist_file_value "$1/Contents/Info.plist" "$2"
 }
 
 plist_file_value() {
-  plutil -extract "$2" raw -o - "$1" 2>/dev/null || true
+  local value
+  # Some macOS versions write failed-extraction diagnostics to stdout, not stderr.
+  if value="$(plutil -extract "$2" raw -o - "$1" 2>/dev/null)"; then
+    printf '%s\n' "$value"
+  fi
 }
 
 codesign_metadata_value() {
@@ -320,9 +324,21 @@ codesign_metadata_value() {
     local rc=$?
     return "$rc"
   }
+  # Executable/Identifier can contain newlines. Only the final CodeDirectory and
+  # its immediately preceding Format own signature fields; Authority is the leaf.
   awk -F= -v key="$key" '
-    $1 == key && !found { value = $2; found = 1 }
-    END { if (!found) exit 1; print value }
+    /^(Identifier|Format)=/ { active = found = 0 }
+    /^CodeDirectory / {
+      active = 1; found = 0; format = previous; value = ""
+      if (key == "Format" && format ~ /^Format=/) {
+        value = substr(format, 8); found = 1
+      }
+    }
+    active && key != "Format" && $1 == key && (!found || key != "Authority") {
+      value = substr($0, length(key) + 2); found = 1
+    }
+    { previous = $0 }
+    END { if (format !~ /^Format=.*Mach-O / || !active || !found || value == "") exit 1; print value }
   ' <<<"$output"
 }
 
@@ -338,43 +354,240 @@ entitlements_for() {
   codesign -d --entitlements :- "$1" 2>/dev/null || true
 }
 
-verify_no_apple_events() {
-  local app="$1"
-  local signed_path
+elevation_code_is_macho() {
+  local description="${2%%$'\n'*}" magic
+  [[ "$description" == *Mach-O* ]] && return 0
+  # System file misses fat64; recognize native magics without a process per resource.
+  # CAFEBABE is also Java's magic. lipo remains the authority for native slices.
+  [[ "$description" != 'compiled Java class'* ]] || return 1
+  LC_ALL=C IFS= read -r -n 4 magic <"$1" || return 1
+  case "$magic" in
+    $'\xfe\xed\xfa\xce'|$'\xce\xfa\xed\xfe'|$'\xfe\xed\xfa\xcf'|$'\xcf\xfa\xed\xfe'|\
+    $'\xca\xfe\xba\xbe'|$'\xbe\xba\xfe\xca'|$'\xca\xfe\xba\xbf'|$'\xbf\xba\xfe\xca') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+elevation_code_is_resource() {
+  local magic byte index header_size filetype=''
+  LC_ALL=C IFS= read -r -n 4 magic <&4 || return 1
+  case "$magic" in
+    $'\xfe\xed\xfa\xce'|$'\xce\xfa\xed\xfe') header_size=28 ;;
+    $'\xfe\xed\xfa\xcf'|$'\xcf\xfa\xed\xfe') header_size=32 ;;
+    *) return 1 ;;
+  esac
+  # mach_header[_64].filetype is at byte 12. Objects (1), cores (4), stubs (9)
+  # and dSYMs (10) are resource-sealed, not native-signature candidates. Read NULs
+  # individually so Bash 3 preserves byte positions, including a complete header.
+  for ((index=4; index<header_size; index++)); do
+    LC_ALL=C IFS= read -r -d '' -n 1 byte <&4 || return 1
+    if (( index >= 12 && index < 16 )); then
+      printf -v filetype '%s%02x' "$filetype" "'$byte"
+    fi
+  done
+  case "$magic:$filetype" in
+    $'\xce\xfa\xed\xfe':0[149a]000000|$'\xcf\xfa\xed\xfe':0[149a]000000|\
+    $'\xfe\xed\xfa\xce':0000000[149a]|$'\xfe\xed\xfa\xcf':0000000[149a]) return 0 ;;
+    *) return 1 ;;
+  esac
+} 4<"$1"
+
+verify_elevation_code() (
+  local app workers worker arch signed_path resolved description inventory
+  local code_paths=() code_archs=()
+  app="$(cd "$1" && pwd -P)" || fail 'could not resolve elevation app'
+  workers="$app/Contents/Resources/node-worker"
+  # Shared app code stays universal; both private workers own a complete, build-matched
+  # native closure. Directory names alone never exempt code from slice validation.
+  # Filesystem aliases must not move worker paths outside the case-sensitive scope below.
+  for signed_path in "$app/Contents" "$app/Contents/Resources" "$workers" "$workers/arm64" "$workers/x86_64"; do
+    resolved="$(find "${signed_path%/*}" -mindepth 1 -maxdepth 1 -type d -name "${signed_path##*/}" -print)" ||
+      fail 'could not scan elevation code'
+    [[ "$resolved" == "$signed_path" ]] ||
+      fail "elevation worker directory missing or symlinked: $signed_path (canonical directory spelling required)"
+  done
+  inventory="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-elevation-code.XXXXXX")" ||
+    fail 'could not create elevation code inventory'
+  trap 'rm -rf "$inventory"' EXIT
+  find "$app" -print0 >"$inventory/paths" || fail 'could not scan elevation code'
   if grep -q 'com.apple.security.automation.apple-events' <<<"$(entitlements_for "$app")"; then
     fail "Apple Events entitlement remains on elevation app: $app"
   fi
-  while IFS= read -r -d '' signed_path; do
-    if file "$signed_path" | grep -q 'Mach-O'; then
-      if grep -q 'com.apple.security.automation.apple-events' <<<"$(entitlements_for "$signed_path")"; then
-        fail "Apple Events entitlement remains on elevation code: $signed_path"
+  verify_elevation_code_batch() {
+    local index reported_path signed_path description arch archs mode prefix slice slice_arch kind slice_kind
+    local slice_archs=()
+    [[ "${#code_paths[@]}" -gt 0 ]] || return 0
+    file -E -N -r -0 -0 -- "${code_paths[@]}" >"$inventory/classifications" ||
+      fail "could not inspect elevation code: ${code_paths[0]}"
+    # Consume a completed classifier result, with one exact NUL-framed pair per
+    # queued path. Never trust a partial stream or a description's embedded filenames.
+    {
+      for ((index=0; index<${#code_paths[@]}; index++)); do
+        signed_path="${code_paths[index]}"
+        arch="${code_archs[index]}"
+        IFS= read -r -d '' reported_path <&3 &&
+          IFS= read -r -d '' description <&3 &&
+          [[ "$reported_path" == "$signed_path" && -n "$description" ]] ||
+          fail "invalid elevation code classification: $signed_path"
+        [[ -f "$signed_path" && ! -L "$signed_path" ]] ||
+          fail "elevation code changed type during classification: $signed_path"
+        # Fat-binary output repeats filenames after the classifier's first line.
+        description="${description%%$'\n'*}"
+        case "$description" in
+          ELF*|PE32*|*COFF*|MS-DOS\ executable*)
+            [[ -z "$arch" ]] || fail "elevation worker contains non-Mach-O native code: $signed_path"
+            ;;
+        esac
+        prefix=''; LC_ALL=C IFS= read -r -d '' -n 8 prefix <"$signed_path" || true
+        if [[ -n "$arch" && "$prefix" == $'!<thin>\n' ]]; then
+          fail "elevation worker contains unsupported thin archive: $signed_path"
+        fi
+        elevation_code_is_macho "$signed_path" "$description" ||
+          [[ -n "$arch" && "$prefix" == $'!<arch>\n' ]] || continue
+        if grep -q 'com.apple.security.automation.apple-events' <<<"$(entitlements_for "$signed_path")"; then
+          fail "Apple Events entitlement remains on elevation code: $signed_path"
+        fi
+        if [[ -z "$arch" ]]; then
+          mode="$(stat -f '%Lp' -- "$signed_path")" || fail "could not inspect elevation code mode: $signed_path"
+        fi
+        # lipo -archs concatenates fat MH_CORE names. -info keeps separators;
+        # strip the exact input-path prefix so filename text cannot supply slices.
+        archs="$(lipo -info "$signed_path")" || fail "could not inspect elevation code slices: $signed_path"
+        case "$archs" in
+          "Architectures in the fat file: $signed_path are: "*) archs="${archs#"Architectures in the fat file: $signed_path are: "}" ;;
+          "Non-fat file: $signed_path is architecture: "*) archs="${archs#"Non-fat file: $signed_path is architecture: "}" ;;
+          *) fail "could not inspect elevation code slices: $signed_path" ;;
+        esac
+        [[ -n "$archs" && "$archs" != *$'\n'* ]] || fail "invalid elevation code slices: $signed_path"
+        if [[ -n "$arch" ]]; then
+          [[ " $archs " == *" $arch "* ]] ||
+            fail "elevation worker Mach-O lacks $arch: $signed_path ($archs)"
+        elif (( (8#$mode & 0111) == 0111 )); then
+          [[ " $archs " == *' x86_64 '* && " $archs " == *' arm64 '* ]] ||
+            fail "elevation Mach-O is not universal: $signed_path ($archs)"
+        fi
+        # Archives and resource Mach types are sealed, not signable images. Inspect fat
+        # slices in owned scratch space: neither filenames nor file(1) identify
+        # fat64 archives reliably, and mixed archive/native containers are invalid.
+        kind=native
+        [[ "$prefix" != $'!<arch>\n' ]] || kind=archive
+        if elevation_code_is_resource "$signed_path"; then kind=resource; fi
+        read -r -a slice_archs <<<"$archs"
+        case "${prefix:0:4}" in
+          $'\xca\xfe\xba\xbe'|$'\xbe\xba\xfe\xca'|$'\xca\xfe\xba\xbf'|$'\xbf\xba\xfe\xca')
+            kind=''
+            slice="$inventory/slice"
+            for slice_arch in "${slice_archs[@]}"; do
+              lipo "$signed_path" -thin "$slice_arch" -output "$slice" ||
+                fail "could not inspect elevation code slice: $signed_path ($slice_arch)"
+              prefix=''; LC_ALL=C IFS= read -r -d '' -n 8 prefix <"$slice" || true
+              case "$prefix" in
+                $'!<arch>\n') slice_kind=archive ;;
+                $'\xfe\xed\xfa\xce'*|$'\xce\xfa\xed\xfe'*|$'\xfe\xed\xfa\xcf'*|$'\xcf\xfa\xed\xfe'*) slice_kind=native ;;
+                *) fail "invalid elevation code slice: $signed_path ($slice_arch)" ;;
+              esac
+              if elevation_code_is_resource "$slice"; then slice_kind=resource; fi
+              [[ "$(lipo -archs "$slice")" == "$slice_arch" ]] ||
+                fail "invalid elevation code slice: $signed_path ($slice_arch)"
+              if [[ -n "$kind" && "$kind" != "$slice_kind" ]]; then
+                [[ "$kind" != resource && "$slice_kind" != resource ]] ||
+                  fail "mixed resource/native elevation code: $signed_path"
+                fail "mixed archive/native elevation code: $signed_path"
+              fi
+              kind="$slice_kind"
+            done
+            ;;
+        esac
+        if [[ "$kind" == native ]]; then
+          for slice_arch in "${slice_archs[@]}"; do
+            codesign_value_for_arch "$signed_path" Format "$slice_arch" >/dev/null ||
+              fail "elevation code lacks native signature format: $signed_path ($slice_arch)"
+          done
+        fi
+      done
+      if IFS= read -r -d '' reported_path <&3 || [[ -n "$reported_path" ]]; then
+        fail 'unexpected trailing elevation code classification'
       fi
-    fi
-  done < <(find "$app" -type f -print0)
+    } 3<"$inventory/classifications"
+    code_paths=()
+    code_archs=()
+  }
   while IFS= read -r -d '' signed_path; do
-    if codesign -dv "$signed_path" >/dev/null 2>&1 &&
-       grep -q 'com.apple.security.automation.apple-events' <<<"$(entitlements_for "$signed_path")"
-    then
-      fail "Apple Events entitlement remains on elevation bundle: $signed_path"
+    arch=""
+    case "$signed_path" in
+      "$workers") ;;
+      "$workers"/*)
+        arch="${signed_path#"$workers/"}"
+        arch="${arch%%/*}"
+        [[ "$arch" == arm64 || "$arch" == x86_64 ]] ||
+          fail "unexpected elevation worker architecture entry: $signed_path"
+        if [[ -L "$signed_path" ]]; then
+          [[ -e "$signed_path" ]] || fail "broken or cyclic elevation worker symlink: $signed_path"
+          resolved="$(stat -f '%R/' -- "$signed_path")" || fail "could not resolve elevation worker symlink: $signed_path"
+          resolved="${resolved%/}"
+          case "$resolved" in
+            "$workers/$arch"|"$workers/$arch"/*) ;;
+            *) fail "elevation worker symlink escapes its architecture tree: $signed_path" ;;
+          esac
+        fi
+        ;;
+    esac
+    if [[ -f "$signed_path" && ! -L "$signed_path" ]]; then
+      code_paths+=("$signed_path")
+      code_archs+=("$arch")
+      if [[ "${#code_paths[@]}" -ge 64 ]]; then verify_elevation_code_batch; fi
+    elif [[ -d "$signed_path" && ! -L "$signed_path" ]]; then
+      case "$signed_path" in
+        *.app|*.framework|*.xpc)
+          if codesign -dv "$signed_path" >/dev/null 2>&1 &&
+             grep -q 'com.apple.security.automation.apple-events' <<<"$(entitlements_for "$signed_path")"
+          then
+            fail "Apple Events entitlement remains on elevation bundle: $signed_path"
+          fi
+          ;;
+      esac
     fi
-  done < <(find "$app" -type d \( -name '*.app' -o -name '*.framework' -o -name '*.xpc' \) -print0)
+  done <"$inventory/paths"
+  verify_elevation_code_batch
+  # BSD find can silently skip cycles. Canonical traversal ancestors must still
+  # reject a cyclic worker rather than accepting it as a closed payload.
+  find -L "$workers" -type d -print0 | while IFS= read -r -d '' signed_path; do
+    [[ -L "$signed_path" ]] || continue
+    resolved="$(stat -f '%R/' -- "$signed_path")" || fail "could not resolve elevation worker directory: $signed_path"
+    [[ "$signed_path/" != "$resolved"* ]] || fail "cyclic elevation worker directory: $signed_path"
+  done || fail 'cyclic or unreadable elevation worker tree'
+
+  local node entry metadata version commit built_at build_id
+  version="$(plist_value "$app" CFBundleShortVersionString)"
+  commit="$(plist_value "$app" OpenClawGitCommit)"
+  built_at="$(plist_value "$app" OpenClawBuildTimestamp)"
+  build_id="$(plist_value "$app" OpenClawWorkerBuildID)"
+  [[ -n "$version" && -n "$commit" && -n "$built_at" && -n "$build_id" ]] ||
+    fail 'elevation app is missing worker build identity'
+  for arch in arm64 x86_64; do
+    worker="$workers/$arch"
+    node="$worker/bin/node"
+    entry="$worker/lib/node_modules/openclaw/dist/entry.js"
+    metadata="$worker/lib/node_modules/openclaw/dist/build-info.json"
+    [[ -f "$node" && -x "$node" && -f "$entry" && -r "$entry" && -f "$metadata" ]] ||
+      fail "elevation worker payload is incomplete: $worker"
+    resolved="$(stat -f '%R/' -- "$node")" || fail "could not resolve elevation worker Node: $node"
+    resolved="${resolved%/}"
+    description="$(file -b -E "$resolved")" || fail "could not inspect elevation worker Node: $node"
+    elevation_code_is_macho "$resolved" "$description" &&
+      codesign_value_for_arch "$resolved" Format "$arch" >/dev/null ||
+      fail "elevation worker Node must be Mach-O: $node"
+    jq -e -s --arg version "$version" --arg commit "$commit" --arg builtAt "$built_at" --arg buildId "$build_id" '
+      length == 1 and (.[0] |
+        .version == $version and .commit == $commit and .builtAt == $builtAt and .buildId == $buildId)
+    ' "$metadata" >/dev/null 2>&1 || fail "elevation worker build metadata does not match app: $worker"
+  done
 
   local helper="$app/Contents/MacOS/openclaw-mlx-tts"
   if [[ -f "$helper" ]] && grep -q '<key>' <<<"$(entitlements_for "$helper")"; then
     fail "MLX helper must be signed without app entitlements: $helper"
   fi
-}
-
-verify_universal_machos() {
-  local app="$1"
-  local macho_path archs
-  while IFS= read -r -d '' macho_path; do
-    file "$macho_path" | grep -q 'Mach-O' || continue
-    archs="$(lipo -archs "$macho_path")"
-    [[ " $archs " == *' x86_64 '* && " $archs " == *' arm64 '* ]] ||
-      fail "elevation Mach-O is not universal: $macho_path ($archs)"
-  done < <(find "$app" -type f -perm -111 -print0)
-}
+)
 
 elevation_app_is_cua_free() {
   local app="$1"
@@ -568,11 +781,11 @@ verify_elevation_app() {
   [[ "$peekaboo_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'elevation app has invalid PeekabooSourceCommit'
   verify_signed_app_identity "$app" ||
     fail "elevation app must be signed for every architecture by $EXPECTED_AUTHORITY"
-  codesign --verify --strict --test-requirement='=notarized' "$app"
-  xcrun stapler validate "$app" >/dev/null
-  spctl --assess --type execute "$app"
-  verify_no_apple_events "$app"
-  verify_universal_machos "$app"
+  # Conditional callers suppress errexit, so policy failures must return explicitly.
+  codesign --verify --strict --test-requirement='=notarized' "$app" || return $?
+  xcrun stapler validate "$app" >/dev/null || return $?
+  spctl --assess --type execute "$app" || return $?
+  verify_elevation_code "$app"
 }
 
 verify_signed_app_identity() {
@@ -892,7 +1105,7 @@ verify_artifact_receipt() {
   local receipt="$1" archive="$2" app="$3" installer="$4"
   [[ -f "$receipt" && ! -L "$receipt" ]] || fail "artifact receipt not found or symlinked: $receipt"
   [[ -f "$installer" && ! -L "$installer" ]] || fail "elevation installer not found or symlinked: $installer"
-  verify_elevation_app "$app"
+  verify_elevation_app "$app" || return $?
   local receipt_sha
   receipt_sha="$(shasum -a 256 "$receipt" | awk '{print $1}')"
   [[ -n "$EXPECTED_ARTIFACT_RECEIPT_SHA256" &&
@@ -952,32 +1165,30 @@ verify_artifact_set() {
   [[ -n "$ARTIFACT_RECEIPT" ]] || fail 'verify requires --receipt <json>'
   local staged_app
   prepare_authenticated_artifact_inputs "$ARTIFACT_RECEIPT" "$ARCHIVE" "${BASH_SOURCE[0]}"
-  extract_archive "$AUTHENTICATED_ARCHIVE_PATH" staged_app
-  verify_artifact_receipt \
-    "$AUTHENTICATED_RECEIPT_PATH" \
-    "$AUTHENTICATED_ARCHIVE_PATH" \
-    "$staged_app" \
-    "${BASH_SOURCE[0]}"
+  extract_verified_artifact "${BASH_SOURCE[0]}" staged_app
   printf 'Elevation artifact verified: source=%s peekaboo=%s\n' \
     "$(plist_value "$staged_app" OpenClawGitCommit)" "$(plist_value "$staged_app" PeekabooSourceCommit)"
 }
 
-extract_archive() {
-  local archive="$1"
-  local output_variable="$2"
-  [[ -f "$archive" ]] || fail "archive not found: $archive"
+extract_verified_artifact() {
+  local installer="$1" output_variable="$2" candidate_helper candidate_helper_sha entries
+  [[ -f "$AUTHENTICATED_ARCHIVE_PATH" ]] || fail "archive not found: $AUTHENTICATED_ARCHIVE_PATH"
   cleanup_work_root
   WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-elevation.XXXXXX")"
-  ditto -x -k "$archive" "$WORK_ROOT"
-  local entries
+  ditto -x -k "$AUTHENTICATED_ARCHIVE_PATH" "$WORK_ROOT" || return $?
   entries="$(find "$WORK_ROOT" -mindepth 1 -maxdepth 1 -print | sort)"
-  [[ "$entries" == "$WORK_ROOT/OpenClaw.app" ]] ||
-    fail 'elevation archive root must contain exactly OpenClaw.app'
-  verify_elevation_app "$WORK_ROOT/OpenClaw.app"
-  AUTHENTICATED_RENAME_HELPER="$WORK_ROOT/OpenClaw.app/Contents/MacOS/OpenClaw"
-  [[ -f "$AUTHENTICATED_RENAME_HELPER" && ! -L "$AUTHENTICATED_RENAME_HELPER" &&
-    -x "$AUTHENTICATED_RENAME_HELPER" ]] || fail 'authenticated elevation rename helper is unavailable'
-  AUTHENTICATED_RENAME_HELPER_SHA="$(shasum -a 256 "$AUTHENTICATED_RENAME_HELPER" | awk '{print $1}')"
+  [[ "$entries" == "$WORK_ROOT/OpenClaw.app" && -d "$WORK_ROOT/OpenClaw.app" &&
+    ! -L "$WORK_ROOT/OpenClaw.app" ]] || fail 'elevation archive root must contain exactly physical OpenClaw.app'
+  # Capture untrusted helper bytes before the final audit; publish authority only
+  # after the complete app/receipt check. Later helper use rechecks this digest.
+  candidate_helper="$WORK_ROOT/OpenClaw.app/Contents/MacOS/OpenClaw"
+  [[ -f "$candidate_helper" && ! -L "$candidate_helper" && -x "$candidate_helper" ]] ||
+    fail 'authenticated elevation rename helper is unavailable'
+  candidate_helper_sha="$(shasum -a 256 "$candidate_helper" | awk '{print $1}')" || return $?
+  verify_artifact_receipt \
+    "$AUTHENTICATED_RECEIPT_PATH" "$AUTHENTICATED_ARCHIVE_PATH" "$WORK_ROOT/OpenClaw.app" "$installer" || return $?
+  AUTHENTICATED_RENAME_HELPER="$candidate_helper"
+  AUTHENTICATED_RENAME_HELPER_SHA="$candidate_helper_sha"
   printf -v "$output_variable" '%s' "$WORK_ROOT/OpenClaw.app"
 }
 
@@ -987,7 +1198,6 @@ stage_verified_app_for_install() {
   STAGED_APP_CONTAINER="$(mktemp -d "${APP_PATH}.incoming-${source_commit}.XXXXXX")"
   STAGED_INSTALL_APP_PATH="$STAGED_APP_CONTAINER/OpenClaw.app"
   ditto "$source_app" "$STAGED_INSTALL_APP_PATH"
-  verify_elevation_app "$STAGED_INSTALL_APP_PATH"
   [[ "$(plist_value "$STAGED_INSTALL_APP_PATH" OpenClawGitCommit)" == "$source_commit" ]] ||
     fail 'same-filesystem staged app source mismatch'
   [[ "$(plist_value "$STAGED_INSTALL_APP_PATH" PeekabooSourceCommit)" == "$peekaboo_commit" ]] ||
@@ -2037,14 +2247,9 @@ package_host() {
   mv "${installer_checksum_path}.tmp.$$" "$installer_checksum_path"
   prepare_authenticated_artifact_inputs "$receipt_path" "$zip_path" "$installer_path"
   local extracted
-  extract_archive "$AUTHENTICATED_ARCHIVE_PATH" extracted
+  extract_verified_artifact "$installer_path" extracted
   [[ "$(plist_value "$extracted" OpenClawGitCommit)" == "$source_commit" ]] ||
     fail 'extracted elevation source mismatch'
-  verify_artifact_receipt \
-    "$AUTHENTICATED_RECEIPT_PATH" \
-    "$AUTHENTICATED_ARCHIVE_PATH" \
-    "$extracted" \
-    "$installer_path"
   printf 'Elevation archive: %s\nInstaller: %s\nReceipt: %s\nArchive SHA-256: %s\nInstaller SHA-256: %s\nReceipt SHA-256: %s\n' \
     "$zip_path" "$installer_path" "$receipt_path" "$archive_sha" "$installer_sha" \
     "$EXPECTED_ARTIFACT_RECEIPT_SHA256"
@@ -2058,12 +2263,7 @@ install_host() {
   local current_migration_state elevation_state adoption_signal="" commit_signal=""
   local planned_archive_sha planned_arm64_cdhash planned_x86_64_cdhash
   prepare_authenticated_artifact_inputs "$ARTIFACT_RECEIPT" "$ARCHIVE" "${BASH_SOURCE[0]}"
-  extract_archive "$AUTHENTICATED_ARCHIVE_PATH" staged_app
-  verify_artifact_receipt \
-    "$AUTHENTICATED_RECEIPT_PATH" \
-    "$AUTHENTICATED_ARCHIVE_PATH" \
-    "$staged_app" \
-    "${BASH_SOURCE[0]}"
+  extract_verified_artifact "${BASH_SOURCE[0]}" staged_app
   source_commit="$(plist_value "$staged_app" OpenClawGitCommit)"
   peekaboo_commit="$(plist_value "$staged_app" PeekabooSourceCommit)"
   planned_archive_sha="$(shasum -a 256 "$AUTHENTICATED_ARCHIVE_PATH" | awk '{print $1}')"
@@ -2271,7 +2471,6 @@ install_host() {
   path_matches_identity "$APP_PATH" "$staged_install_identity" ||
     fail 'same-filesystem staged app identity changed during install'
   RECOVERY_CURRENT_APP_IDENTITY="$staged_install_identity"
-  verify_elevation_app "$APP_PATH"
   verify_artifact_receipt \
     "$AUTHENTICATED_RECEIPT_PATH" \
     "$AUTHENTICATED_ARCHIVE_PATH" \
@@ -3010,12 +3209,7 @@ recover_host() {
     [[ -n "$ARCHIVE" && -n "$ARTIFACT_RECEIPT" && -n "$EXPECTED_ARTIFACT_RECEIPT_SHA256" ]] ||
       fail 'recovery requires the authenticated elevation archive, receipt, and receipt digest when the current app cannot supply a trusted rename helper'
     prepare_authenticated_artifact_inputs "$ARTIFACT_RECEIPT" "$ARCHIVE" "${BASH_SOURCE[0]}"
-    extract_archive "$AUTHENTICATED_ARCHIVE_PATH" recovery_helper_app
-    verify_artifact_receipt \
-      "$AUTHENTICATED_RECEIPT_PATH" \
-      "$AUTHENTICATED_ARCHIVE_PATH" \
-      "$recovery_helper_app" \
-      "${BASH_SOURCE[0]}"
+    extract_verified_artifact "${BASH_SOURCE[0]}" recovery_helper_app
     if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' ]]; then
       CONFIG_PATH="$STATE_DIR/openclaw.json"
     else
@@ -3067,10 +3261,12 @@ recover_host() {
       then
         fail 'receipt app backup does not pass strict signature and identity validation'
       fi
-    elif [[ "$RECOVERY_PENDING_INSTALL" == "1" && "$current_app_valid" == "1" ]] &&
+    elif [[ "$RECOVERY_PENDING_INSTALL" == "1" ]] &&
       verify_recorded_rollback_app "$APP_PATH"
     then
-      : # The install transaction was persisted before the prior app moved into custody.
+      # Before custody, the prior app is authenticated by its recorded CDHashes, not
+      # the new elevation payload contract. It may legitimately have no bundled worker.
+      :
     elif [[ "$RECOVERY_RESUMED" == "1" ]]; then
       verify_recorded_rollback_app "$APP_PATH" ||
         fail 'resumed recovery has no authenticated prior app at the canonical path'

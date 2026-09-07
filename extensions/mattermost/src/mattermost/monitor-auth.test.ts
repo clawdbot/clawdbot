@@ -13,7 +13,7 @@ describe("mattermost monitor auth", () => {
   let authorizeMattermostCommandInvocation: typeof import("./monitor-auth.js").authorizeMattermostCommandInvocation;
   let formatMattermostDirectMessageDropLog: typeof import("./monitor-auth.js").formatMattermostDirectMessageDropLog;
   let isMattermostSenderAllowed: typeof import("./monitor-auth.js").isMattermostSenderAllowed;
-  let normalizeMattermostAllowEntry: typeof import("./monitor-auth.js").normalizeMattermostAllowEntry;
+  let normalizeMattermostAllowEntry: typeof import("./ingress-identity.js").normalizeMattermostAllowEntry;
   let normalizeMattermostAllowList: typeof import("./monitor-auth.js").normalizeMattermostAllowList;
 
   beforeAll(async () => {
@@ -21,9 +21,9 @@ describe("mattermost monitor auth", () => {
       authorizeMattermostCommandInvocation,
       formatMattermostDirectMessageDropLog,
       isMattermostSenderAllowed,
-      normalizeMattermostAllowEntry,
       normalizeMattermostAllowList,
     } = await import("./monitor-auth.js"));
+    ({ normalizeMattermostAllowEntry } = await import("./ingress-identity.js"));
   });
 
   beforeEach(() => {

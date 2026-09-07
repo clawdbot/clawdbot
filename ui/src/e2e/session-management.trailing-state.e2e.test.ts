@@ -1,13 +1,15 @@
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   actionOpacity,
   captureUiProof,
+  controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
@@ -22,13 +24,19 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     await installMockGateway(page, {
+      mainSessionKey: "agent:main:main",
       methodResponses: {
         "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.now()),
+          sessionRow("agent:main:main", "Main", baseTime),
           Object.assign(
-            sessionRow("agent:main:two-line", "Two-line session", Date.now() - 1, {
+            sessionRow("agent:main:two-line", "Two-line session", baseTime - 1, {
               pinned: true,
+              pinnedAt: baseTime,
             }),
             { lastMessagePreview: "Finishing repository setup review" },
           ),
@@ -38,13 +46,13 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:two-line"));
       const row = page.locator('[data-session-key="agent:main:two-line"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const pin = row.getByRole("button", { name: "Unpin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect.poll(() => actionOpacity(pin)).toBe("1");
-      await captureUiProof(page, "sidebar-session-actions-centered.png");
+      await captureUiProof(suite, page, "sidebar-session-actions-centered.png");
 
       const [rowBounds, subtitleBounds, pinBounds, menuBounds] = await Promise.all([
         row.boundingBox(),
@@ -59,17 +67,27 @@ suite.define(() => {
       expect(subtitleBounds.y).toBeGreaterThan(rowCenter);
       expect(Math.abs(pinBounds.y + pinBounds.height / 2 - rowCenter)).toBeLessThanOrEqual(1);
       expect(Math.abs(menuBounds.y + menuBounds.height / 2 - rowCenter)).toBeLessThanOrEqual(1);
+
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
+      });
+      await expect
+        .poll(async () => {
+          const [title, details] = await Promise.all([
+            row.locator(".sidebar-recent-session__title-row").boundingBox(),
+            row.locator(".sidebar-recent-session__details").boundingBox(),
+          ]);
+          return title && details ? title.y + title.height - details.y : Number.POSITIVE_INFINITY;
+        })
+        .toBeLessThanOrEqual(0.5);
+      await captureUiProof(suite, page, "sidebar-session-text-scale-140.png");
     } finally {
       await context.close();
     }
   });
 
-  it("keeps action-only text widest at rest and swaps active state for actions", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+  it("keeps action-only text stable and active state visible with actions", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -83,6 +101,12 @@ suite.define(() => {
           sessionRow("agent:main:hover-active", "Hover active", Date.now() - 1, {
             hasActiveRun: true,
             status: "running",
+            unread: true,
+          }),
+          sessionRow("agent:main:hover-queued", "Hover queued", Date.now() - 2, {
+            hasActiveRun: true,
+            status: "queued",
+            unread: true,
           }),
         ]),
       },
@@ -126,14 +150,54 @@ suite.define(() => {
 
       const row = page.locator('[data-session-key="agent:main:hover-active"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const state = row.locator(".session-row-state");
+      const accessibility = await context.newCDPSession(page);
+      const { nodes } = await accessibility.send("Accessibility.getFullAXTree");
+      for (const [title, activity] of [
+        ["Hover active", "Active run"],
+        ["Hover queued", "Queued"],
+      ] as const) {
+        const linkNode = nodes.find(
+          (node) => node.role?.value === "link" && node.name?.value.includes(title),
+        );
+        expect(linkNode).toBeDefined();
+        const announced = `${linkNode?.name?.value} ${linkNode?.description?.value ?? ""}`;
+        expect.soft(announced.match(new RegExp(activity, "g"))).toHaveLength(1);
+        expect.soft(announced.match(/Unread/g)).toHaveLength(1);
+      }
+      await accessibility.detach();
+      const state = row.locator(".sidebar-session-indicator .session-glyph__ring");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
-      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
+      await expect.poll(() => state.isVisible()).toBe(true);
       await expect.poll(() => actionOpacity(state)).toBe("1");
+      await page.mouse.move(500, 500);
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await captureUiProof(suite, page, "sidebar-session-title-icon-gap.png");
+
+      await page.addStyleTag({ content: ".session-glyph__ring { animation: none !important; }" });
+      const glyph = row.locator(".sidebar-session-indicator .session-glyph");
+      const [restingNameBounds, restingGlyphBounds, restingStateBounds] = await Promise.all([
+        row.locator(".sidebar-recent-session__name").boundingBox(),
+        glyph.boundingBox(),
+        state.boundingBox(),
+      ]);
+      if (!restingNameBounds || !restingGlyphBounds || !restingStateBounds) {
+        throw new Error("Expected visible title and leading activity geometry");
+      }
+      // A glyph-less row draws the compact 12px ring centered in its 20px lead
+      // slot; the title keeps its 8px distance from the slot, not from the ring.
+      expect(restingStateBounds.width).toBeCloseTo(12, 1);
+      expect(restingStateBounds.x + restingStateBounds.width / 2).toBeCloseTo(
+        restingGlyphBounds.x + restingGlyphBounds.width / 2,
+        1,
+      );
+      expect(restingNameBounds.x - (restingGlyphBounds.x + restingGlyphBounds.width)).toBeCloseTo(
+        8,
+        1,
+      );
 
       await row.hover();
-      await expect.poll(() => actionOpacity(state)).toBe("0");
+      await expect.poll(() => actionOpacity(state)).toBe("1");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
 
@@ -153,7 +217,7 @@ suite.define(() => {
 
       await page.mouse.move(0, 0);
       await pin.focus();
-      await expect.poll(() => actionOpacity(state)).toBe("0");
+      await expect.poll(() => actionOpacity(state)).toBe("1");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
 
@@ -224,9 +288,144 @@ suite.define(() => {
       expect(
         Math.abs(forkBounds.y + forkBounds.height / 2 - (nameBounds.y + nameBounds.height / 2)),
       ).toBeLessThanOrEqual(2);
-      expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(pinBounds.y + pinBounds.height / 2);
+      expect(nameBounds.y + nameBounds.height / 2).toBeCloseTo(
+        pinBounds.y + pinBounds.height / 2,
+        1,
+      );
       expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x + 1);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps unread glyph badges visible while PR icons yield to hover actions", async () => {
+    const plainKey = "agent:main:unread-plain";
+    const pullRequestKey = "agent:main:unread-pr";
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+    });
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+      methodResponses: {
+        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.now()),
+          sessionRow(plainKey, "Inbox triage", Date.now() - 1, { unread: true, icon: "📬" }),
+          sessionRow(pullRequestKey, "Fix login", Date.now() - 2, {
+            unread: true,
+            icon: "📬",
+            worktree: {
+              id: "unread-pr-worktree",
+              branch: "fix/unread-pr",
+              repoRoot: "/tmp/openclaw",
+            },
+          }),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      // Worktree rows land in the Coding zone, which starts collapsed.
+      const codingToggle = page.locator(
+        '[data-session-section="work"] .sidebar-session-group-toggle',
+      );
+      await codingToggle.waitFor({ state: "visible" });
+      await codingToggle.click();
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
+          return requests.some((request) => {
+            const sessionKeys = requireRecord(request.params).sessionKeys;
+            return Array.isArray(sessionKeys) && sessionKeys.includes(pullRequestKey);
+          });
+        })
+        .toBe(true);
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: {
+          [pullRequestKey]: {
+            pullRequests: [
+              {
+                branch: "fix/unread-pr",
+                number: 1,
+                owner: "openclaw",
+                repo: "openclaw",
+                state: "merged",
+                title: "Unread row pull request",
+                url: "https://example.test/openclaw/openclaw/pull/1",
+              },
+            ],
+            rateLimited: false,
+            status: "ready",
+          },
+        },
+      });
+
+      const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
+      const pullRequestRow = page.locator(`[data-session-key="${pullRequestKey}"]`);
+      await plainRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => pullRequestRow.locator("[data-pull-request-state='merged']").isVisible())
+        .toBe(true);
+
+      const badgeInsetFromGlyphRight = async (row: typeof plainRow) => {
+        const [glyphBounds, badgeBounds] = await Promise.all([
+          row.locator(".sidebar-session-indicator .session-glyph").boundingBox(),
+          row.locator(".sidebar-session-indicator .session-glyph__badge--unread").boundingBox(),
+        ]);
+        if (!glyphBounds || !badgeBounds) {
+          throw new Error("Expected visible glyph and unread badge geometry");
+        }
+        expect(badgeBounds.width).toBe(7);
+        expect(badgeBounds.height).toBe(7);
+        expect(badgeBounds.y).toBeCloseTo(glyphBounds.y - 2, 1);
+        return glyphBounds.x + glyphBounds.width - (badgeBounds.x + badgeBounds.width);
+      };
+      // Trailing metadata cannot move unread off the row's own glyph corner.
+      expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(-2, 1);
+      expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(
+        await badgeInsetFromGlyphRight(plainRow),
+        1,
+      );
+      const pullRequestIcon = pullRequestRow.locator("[data-pull-request-state='merged']");
+      const unreadBadge = pullRequestRow.locator(
+        ".sidebar-session-indicator .session-glyph__badge--unread",
+      );
+      expect(await pullRequestRow.locator(".session-row-state").count()).toBe(0);
+      const badgeBounds = await unreadBadge.boundingBox();
+      const accessibility = await context.newCDPSession(page);
+      const { nodes } = await accessibility.send("Accessibility.getFullAXTree");
+      for (const title of ["Inbox triage", "Fix login"]) {
+        const linkNode = nodes.find(
+          (node) => node.role?.value === "link" && node.name?.value.includes(title),
+        );
+        expect(linkNode).toBeDefined();
+        expect(
+          `${linkNode?.name?.value} ${linkNode?.description?.value ?? ""}`.match(/Unread/g),
+        ).toHaveLength(1);
+        expect(linkNode?.description?.value ?? "").not.toContain("Unread");
+      }
+      await accessibility.detach();
+      await captureUiProof(suite, page, "sidebar-pr-before-hover.png");
+      await pullRequestRow.hover();
+      await captureUiProof(suite, page, "sidebar-pr-hover.png");
+      await pullRequestIcon.waitFor({ state: "hidden" });
+      await unreadBadge.waitFor({ state: "visible" });
+      expect(await unreadBadge.boundingBox()).toEqual(badgeBounds);
+      await page.mouse.move(0, 0);
+      await pullRequestIcon.waitFor({ state: "visible" });
+      await unreadBadge.waitFor({ state: "visible" });
+      await pullRequestRow.getByRole("button", { name: "Open session menu" }).focus();
+      await pullRequestIcon.waitFor({ state: "hidden" });
+      await unreadBadge.waitFor({ state: "visible" });
+      expect(await unreadBadge.boundingBox()).toEqual(badgeBounds);
+      await codingToggle.focus();
+      await pullRequestIcon.waitFor({ state: "visible" });
+      await unreadBadge.waitFor({ state: "visible" });
     } finally {
       await context.close();
     }
@@ -257,10 +456,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const row = page.locator('[data-session-key="agent:main:touch-active"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const state = row.locator(".session-row-state");
+      const state = row.locator(".sidebar-session-indicator .session-glyph__ring");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
-      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
+      await expect.poll(() => state.isVisible()).toBe(true);
       await expect.poll(() => actionOpacity(state)).toBe("1");
       await expect.poll(() => pin.isVisible()).toBe(true);
       await expect.poll(() => menu.isVisible()).toBe(true);
@@ -275,13 +474,12 @@ suite.define(() => {
     }
   });
 
-  it("does not widen desktop session text when hover actions replace trailing state", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+  it("does not widen desktop session text when hover actions appear beside trailing state", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
@@ -299,8 +497,8 @@ suite.define(() => {
             Date.now() - 1,
             {
               forkSource: { sessionKey: "agent:main:main", sessionId: "source-session" },
-              hasActiveRun: true,
-              status: "running",
+              hasActiveRun: false,
+              status: "done",
               unread: true,
               worktree: {
                 id: "combined-state-worktree",
@@ -352,30 +550,27 @@ suite.define(() => {
 
       const row = page.locator('[data-session-key="agent:main:combined-state"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const state = row.locator(".session-row-state");
+      const state = row.locator(".sidebar-session-indicator .session-unread-dot");
+      expect(await row.locator(".session-row-state").count()).toBe(0);
       await expect
         .poll(() =>
           row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator").isVisible(),
         )
         .toBe(true);
-      await expect.poll(() => state.locator('[aria-label="Forked session"]').count()).toBe(0);
+      await expect.poll(() => row.locator('[aria-label="Forked session"]').count()).toBe(1);
       await expect
-        .poll(() => state.locator("[data-session-pr-state='open']").isVisible())
+        .poll(() => row.locator("[data-pull-request-state='open']").isVisible())
         .toBe(true);
-      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
-      await expect.poll(() => state.locator(".session-unread-dot").count()).toBe(0);
+      await expect.poll(() => state.isVisible()).toBe(true);
+      await expect.poll(() => row.locator(".session-glyph__ring").count()).toBe(0);
+      const prIcon = row.locator("[data-pull-request-state='open'] svg");
+      expect(
+        await prIcon.evaluate((icon) => {
+          const { width, height } = icon.getBoundingClientRect();
+          return { width, height };
+        }),
+      ).toEqual({ width: 12, height: 12 });
       const stateLayout = await row.evaluate((element) => {
-        const endcap = element.querySelector<HTMLElement>(
-          ".sidebar-recent-session__details-endcap",
-        );
-        const atoms = Array.from(
-          element.querySelectorAll<HTMLElement>(
-            ".session-row-state :is([data-session-pr-state='open'], .session-run-spinner)",
-          ),
-        );
-        if (!endcap || atoms.length !== 2) {
-          throw new Error("Expected visible session state geometry");
-        }
         const layoutLeft = (node: HTMLElement) => {
           let left = 0;
           for (
@@ -387,22 +582,31 @@ suite.define(() => {
           }
           return left;
         };
-        const endcapLeft = layoutLeft(endcap);
-        return {
-          endcapLeft,
-          endcapRight: endcapLeft + endcap.offsetWidth,
-          atoms: atoms.map((atom) => ({
+        return (
+          [
+            [".sidebar-recent-session__details-endcap", "[data-pull-request-state='open']"],
+            [".sidebar-session-indicator", ".session-unread-dot"],
+          ] as const
+        ).map(([containerSelector, atomSelector]) => {
+          const container = element.querySelector<HTMLElement>(containerSelector);
+          const atom = container?.querySelector<HTMLElement>(atomSelector);
+          if (!container || !atom) {
+            throw new Error("Expected visible session state geometry");
+          }
+          return {
+            containerLeft: layoutLeft(container),
+            containerRight: layoutLeft(container) + container.offsetWidth,
             left: layoutLeft(atom),
             right: layoutLeft(atom) + atom.offsetWidth,
-          })),
-        };
+          };
+        });
       });
-      for (const atom of stateLayout.atoms) {
-        expect(atom.left).toBeGreaterThanOrEqual(stateLayout.endcapLeft);
-        expect(atom.right).toBeLessThanOrEqual(stateLayout.endcapRight);
+      for (const atom of stateLayout) {
+        expect(atom.left).toBeGreaterThanOrEqual(atom.containerLeft);
+        expect(atom.right).toBeLessThanOrEqual(atom.containerRight);
       }
       const link = row.locator(".sidebar-recent-session__link");
-      const rowText = row.locator(".sidebar-recent-session__text");
+      const titleRow = row.locator(".sidebar-recent-session__title-row");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect
@@ -412,7 +616,7 @@ suite.define(() => {
       const [restingTextBounds, restingStateBounds, restingPinBounds, restingMenuBounds] =
         await Promise.all([
           row.locator(".sidebar-recent-session__text").boundingBox(),
-          state.boundingBox(),
+          row.locator("[data-pull-request-state='open']").boundingBox(),
           pin.boundingBox(),
           menu.boundingBox(),
         ]);
@@ -431,11 +635,11 @@ suite.define(() => {
         restingStateBounds.y + restingStateBounds.height / 2,
       );
       await row.hover();
-      await expect.poll(() => actionOpacity(state)).toBe("0");
+      await expect.poll(() => actionOpacity(state)).toBe("1");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect
-        .poll(() => rowText.evaluate((element) => getComputedStyle(element).paddingRight))
+        .poll(() => titleRow.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("52px");
 
       const [textBounds, nameBounds, pinBounds, menuBounds] = await Promise.all([
@@ -448,16 +652,19 @@ suite.define(() => {
         throw new Error("Expected visible combined session action geometry");
       }
       expect(textBounds.width).toBeCloseTo(restingTextBounds.width, 1);
-      expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(pinBounds.y + pinBounds.height / 2);
+      expect(nameBounds.y + nameBounds.height / 2).toBeCloseTo(
+        pinBounds.y + pinBounds.height / 2,
+        1,
+      );
       expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x + 1);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
       await page.mouse.move(0, 0);
       await pin.focus();
-      await expect.poll(() => actionOpacity(state)).toBe("0");
+      await expect.poll(() => actionOpacity(state)).toBe("1");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect
-        .poll(() => rowText.evaluate((element) => getComputedStyle(element).paddingRight))
+        .poll(() => titleRow.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("52px");
 
       const [focusedTextBounds, focusedNameBounds, focusedPinBounds, focusedMenuBounds] =
@@ -471,8 +678,9 @@ suite.define(() => {
         throw new Error("Expected visible focused session action geometry");
       }
       expect(focusedTextBounds.width).toBeCloseTo(restingTextBounds.width, 1);
-      expect(focusedNameBounds.y + focusedNameBounds.height / 2).toBeLessThan(
+      expect(focusedNameBounds.y + focusedNameBounds.height / 2).toBeCloseTo(
         focusedPinBounds.y + focusedPinBounds.height / 2,
+        1,
       );
       expect(focusedNameBounds.x + focusedNameBounds.width).toBeLessThanOrEqual(
         focusedPinBounds.x + 1,

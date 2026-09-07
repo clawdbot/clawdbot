@@ -41,6 +41,23 @@ describe("cloud target menu", () => {
     expect(container.querySelector(".session-menu__sub")?.textContent).toBe(expected);
   });
 
+  it("renders the default badge before the machine shape", () => {
+    const container = document.createElement("div");
+    render(
+      renderCloudMachineMenuItems({
+        machines: [{ id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true }],
+        selectedId: "standard",
+        submitting: false,
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+
+    const badge = container.querySelector(".new-session-page__menu-facts");
+    const shape = container.querySelector(".session-menu__sub");
+    expect(badge?.compareDocumentPosition(shape as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
   it("disables cloud profiles with the runtime preflight reason", () => {
     const container = document.createElement("div");
     render(

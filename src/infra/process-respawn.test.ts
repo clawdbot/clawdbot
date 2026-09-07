@@ -354,22 +354,6 @@ describe("respawnGatewayProcessForUpdate", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("actively schedules launchd update relaunch before exiting", () => {
-    clearSupervisorHints();
-    setPlatform("darwin");
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    process.env.OPENCLAW_NO_RESPAWN = "1";
-
-    const result = respawnGatewayProcessForUpdate();
-
-    expect(result.mode).toBe("supervised");
-    expect(result.handoffSpawned).toBeInstanceOf(Promise);
-    expect(scheduleLaunchdHandoffMock).toHaveBeenCalledWith({
-      mode: "start-after-exit",
-      waitForPid: process.pid,
-    });
-  });
-
   it("allows detached respawn on unmanaged Windows during updates", () => {
     clearSupervisorHints();
     setPlatform("win32");
@@ -395,18 +379,6 @@ describe("respawnGatewayProcessForUpdate", () => {
         stdio: "inherit",
       },
     );
-  });
-
-  it("delegates update restarts to external supervision without spawning", () => {
-    clearSupervisorHints();
-    setPlatform("linux");
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-
-    const result = respawnGatewayProcessForUpdate();
-
-    expect(result).toEqual({ mode: "supervised" });
-    expect(spawnMock).not.toHaveBeenCalled();
-    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   });
 
   it("rewrites a pnpm-versioned OpenClaw entry before detached update respawn", () => {
@@ -495,19 +467,6 @@ describe("respawnGatewayProcessForUpdate", () => {
     const onCallOrder = child.on.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
     const unrefCallOrder = child.unref.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY;
     expect(onCallOrder).toBeLessThan(unrefCallOrder);
-  });
-
-  it("exits to a managed supervisor for updates even when respawn is disabled", () => {
-    clearSupervisorHints();
-    setPlatform("linux");
-    process.env.OPENCLAW_NO_RESPAWN = "1";
-    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    process.env.OPENCLAW_SERVICE_KIND = "gateway";
-
-    const result = respawnGatewayProcessForUpdate();
-
-    expect(result).toEqual({ mode: "supervised" });
-    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("returns failed when update detached respawn throws", () => {

@@ -62,6 +62,17 @@ describe("extractMarkdownFormatRuns", () => {
         { start: 19, length: 4, styles: ["strikethrough"] },
       ],
     });
+    expect(
+      extractMarkdownFormatRuns(
+        "😀\ud800 **bold `a😀` mid 😀\udfff `b` tail** then _italics `c😀` end \ud800_.",
+      ),
+    ).toEqual({
+      text: "😀\ud800 bold `a😀` mid 😀\udfff `b` tail then italics `c😀` end \ud800.",
+      ranges: [
+        { start: 4, length: 27, styles: ["bold"] },
+        { start: 37, length: 19, styles: ["italic"] },
+      ],
+    });
   });
 
   it("keeps literal markers that CommonMark does not treat as emphasis", () => {
@@ -144,17 +155,47 @@ describe("extractMarkdownFormatRuns", () => {
     });
   });
 
-  it("does not confuse an earlier matching bold span with a protected dunder", () => {
+  it("does not confuse an earlier matching bold span with a dunder call", () => {
     expect(extractMarkdownFormatRuns("**init**() then __init__()")).toEqual({
       text: "init() then __init__()",
       ranges: [{ start: 0, length: 4, styles: ["bold"] }],
     });
   });
 
-  it("searches past unrelated declarations for the matching dunder range", () => {
+  it("keeps dunder declarations literal after ordinary declarations", () => {
     expect(extractMarkdownFormatRuns("def init():\ndef __init__(self):")).toEqual({
       text: "def init():\ndef __init__(self):",
       ranges: [],
+    });
+  });
+
+  it("resolves reference labels that contain different dunder identifiers", () => {
+    expect(
+      extractMarkdownFormatRuns(
+        "[Class][obj.__class__]\n\n[obj.__class__]: https://example.org/python",
+      ),
+    ).toEqual({
+      text: "Class (https://example.org/python)",
+      ranges: [],
+    });
+  });
+
+  it("preserves every repeated destination containing a dunder identifier", () => {
+    expect(
+      extractMarkdownFormatRuns(
+        [
+          "[Class][docs] and [Type][docs] **done**",
+          "",
+          "[docs]: https://docs.python.org/3/library/stdtypes.html#instance.__class__",
+        ].join("\n"),
+      ),
+    ).toEqual({
+      text: [
+        "Class (https://docs.python.org/3/library/stdtypes.html#instance.__class__)",
+        "and Type (https://docs.python.org/3/library/stdtypes.html#instance.__class__)",
+        "done",
+      ].join(" "),
+      ranges: [{ start: 153, length: 4, styles: ["bold"] }],
     });
   });
 });

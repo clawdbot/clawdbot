@@ -1,28 +1,40 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
 
-export function resolveChatTranscriptInteractionRow(event: Event): HTMLElement | null {
+export type ChatTranscriptInteractionAnchor = {
+  row: HTMLElement;
+  top: number;
+};
+
+export function resolveChatTranscriptInteractionAnchor(
+  event: Event,
+): ChatTranscriptInteractionAnchor | null {
   const target = event.target;
   const geometryControl =
     target instanceof Element
       ? target.closest("button[aria-expanded], button[aria-pressed], summary")
       : null;
-  return geometryControl?.closest<HTMLElement>(".chat-virtual-row") ?? null;
+  const row = geometryControl?.closest<HTMLElement>(".chat-virtual-row");
+  return row ? { row, top: row.getBoundingClientRect().top } : null;
 }
 
 export function reconcileChatTranscriptInteractionResize(
-  row: HTMLElement | null,
+  anchor: ChatTranscriptInteractionAnchor | null,
   sidebarCommitTarget: EventTarget | null | undefined,
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): boolean {
-  const sidebarRuntime = row?.closest(".sidebar-region__right-runtime");
+  if (!anchor) {
+    return true;
+  }
+  const row = anchor.row;
+  const sidebarRuntime = row.closest(".sidebar-region__right-runtime");
   if (
     sidebarRuntime &&
     !(sidebarCommitTarget instanceof Element && sidebarCommitTarget.contains(row))
   ) {
     return false;
   }
-  if (!row?.isConnected || !scrollElement?.contains(row)) {
+  if (!row.isConnected || !scrollElement?.contains(row)) {
     return true;
   }
   const index = virtualizer.indexFromElement(row);
@@ -32,5 +44,6 @@ export function reconcileChatTranscriptInteractionResize(
   virtualizer.setOptions({ ...options, anchorTo: "start" });
   virtualizer.resizeItem(index, row.offsetHeight);
   virtualizer.setOptions(options);
+  scrollElement.scrollTop += row.getBoundingClientRect().top - anchor.top;
   return true;
 }

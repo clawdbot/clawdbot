@@ -1,5 +1,8 @@
 // Qa Channel plugin module implements accounts behavior.
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import {
+  createAccountListHelpers,
+  resolveChannelMediaMaxBytes,
+} from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig, QaChannelAccountConfig, ResolvedQaChannelAccount } from "./types.js";
@@ -24,7 +27,9 @@ export function resolveQaChannelAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
 }): ResolvedQaChannelAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultQaChannelAccountId(params.cfg),
+  );
   const merged = resolveMergedQaAccountConfig(params.cfg, accountId);
   const baseEnabled = params.cfg.channels?.["qa-channel"]?.enabled !== false;
   const enabled = baseEnabled && merged.enabled !== false;
@@ -40,6 +45,11 @@ export function resolveQaChannelAccount(params: {
     botUserId,
     botDisplayName,
     pollTimeoutMs: merged.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+    mediaMaxBytes: resolveChannelMediaMaxBytes({
+      cfg: params.cfg,
+      accountId,
+      resolveChannelLimitMb: () => merged.mediaMaxMb,
+    }),
     config: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],

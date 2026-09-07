@@ -5,58 +5,30 @@ import type {
 import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createAssistantReasoningMessage } from "./event-projector-assistant-message.js";
+import type { CodexAssistantProjection } from "./event-projector-assistant.js";
+import { applyCodexTranscriptTaint } from "./transcript-mirror-attestation.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 import { promptSnapshot } from "./user-prompt-message.js";
-
-type TurnTaintMetadata = { resultContentSource?: "network"; turnTainted?: true };
-const CODEX_META_KEY = "__openclaw";
-
-function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
-  const metadata = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  return asOptionalRecord(metadata) as TurnTaintMetadata | undefined;
-}
-
-function applyStickyTurnTaint(messages: readonly AgentMessage[]): AgentMessage[] {
-  let tainted = false;
-  return messages.map((message) => {
-    if (message.role === "user") {
-      tainted = false;
-      return message;
-    }
-    const metadata = readTurnTaintMetadata(message);
-    tainted ||= metadata?.turnTainted === true || metadata?.resultContentSource === "network";
-    return message.role === "assistant" && tainted
-      ? ({ ...message, __openclaw: { ...metadata, turnTainted: true } } as AgentMessage)
-      : message;
-  });
-}
 
 export function buildCodexMessagesSnapshot(params: {
   runParams: EmbeddedRunAttemptParams;
   turnId: string;
   upstreamUserText: string | undefined;
   reasoningText: string | undefined;
-  planText: string | undefined;
+  asyncMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   commentaryMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
+  assistantMessages?: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   toolMessages: readonly AgentMessage[];
   lastAssistant: AssistantMessage | undefined;
-  createAssistantMirrorMessage: (title: string, text: string) => AssistantMessage;
+  turnTainted?: boolean;
 }): AgentMessage[] {
   const messages = promptSnapshot(params.runParams, params.turnId, params.upstreamUserText);
   if (params.reasoningText) {
     messages.push(
       attachCodexMirrorIdentity(
-        params.createAssistantMirrorMessage("Codex reasoning", params.reasoningText),
+        createAssistantReasoningMessage(params.runParams, params.reasoningText),
         `${params.turnId}:reasoning`,
-      ),
-    );
-  }
-  if (params.planText) {
-    messages.push(
-      attachCodexMirrorIdentity(
-        params.createAssistantMirrorMessage("Codex plan", params.planText),
-        `${params.turnId}:plan`,
       ),
     );
   }
@@ -66,18 +38,67 @@ export function buildCodexMessagesSnapshot(params: {
       : params.commentaryMessages.map(({ itemId, message }) =>
           attachCodexMirrorIdentity(message, `${params.turnId}:commentary:${itemId}`),
         );
-  const visibleWorkMessages = [...commentaryMessages, ...params.toolMessages].toSorted(
+  const asyncMessages = params.asyncMessages.map(({ itemId, message }) =>
+    attachCodexMirrorIdentity(message, `${params.turnId}:async:${itemId}`),
+  );
+  const visibleWorkMessages = [
+    ...commentaryMessages,
+    ...asyncMessages,
+    ...(params.assistantMessages ?? []).map(({ itemId, message }) =>
+      attachCodexMirrorIdentity(message, `${params.turnId}:assistant:${itemId}`),
+    ),
+    ...params.toolMessages,
+  ].toSorted(
     (left, right) =>
       (asDateTimestampMs(left.timestamp) ?? 0) - (asDateTimestampMs(right.timestamp) ?? 0),
   );
   messages.push(...visibleWorkMessages);
   if (params.lastAssistant) {
-    messages.push(attachCodexMirrorIdentity(params.lastAssistant, `${params.turnId}:assistant`));
+    const assistant = applyCodexTranscriptTaint(params.lastAssistant, {
+      tainted: params.turnTainted === true,
+    });
+    messages.push(attachCodexMirrorIdentity(assistant, `${params.turnId}:assistant`));
   }
-  return applyStickyTurnTaint(messages).map((message) =>
+  const taint = { tainted: false };
+  return messages.map((message) =>
     projectAgentHarnessTranscriptMessageForDisplay({
       hidden: params.runParams.trigger === "memory",
-      message,
+      message: applyCodexTranscriptTaint(message, taint),
     }),
   );
+}
+
+export function buildCodexSteeringMessagesSnapshot(params: {
+  runParams: EmbeddedRunAttemptParams;
+  turnId: string;
+  upstreamUserText: string | undefined;
+  completedItemIds: ReadonlySet<string>;
+  assistantProjection: CodexAssistantProjection;
+  toolMessages: readonly AgentMessage[];
+}): { messages: AgentMessage[]; assistantBoundaryItemId?: string } {
+  const asyncMessages = params.assistantProjection
+    .collectAsyncMessages()
+    .filter(({ itemId }) => params.completedItemIds.has(itemId));
+  const commentaryMessages = params.assistantProjection
+    .collectCommentaryMessages()
+    .filter(({ itemId }) => params.completedItemIds.has(itemId));
+  const assistantMessages = params.assistantProjection.collectCompletedAssistantMessages(
+    params.completedItemIds,
+    { tokenUsage: undefined, aborted: false, promptError: undefined },
+  );
+  const messages = buildCodexMessagesSnapshot({
+    runParams: params.runParams,
+    turnId: params.turnId,
+    upstreamUserText: params.upstreamUserText,
+    reasoningText: undefined,
+    asyncMessages,
+    commentaryMessages,
+    assistantMessages,
+    toolMessages: params.toolMessages,
+    lastAssistant: undefined,
+  }).filter((message) => message.role !== "user");
+  return {
+    messages,
+    assistantBoundaryItemId: assistantMessages.at(-1)?.itemId,
+  };
 }

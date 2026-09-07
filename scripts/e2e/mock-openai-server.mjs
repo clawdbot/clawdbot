@@ -15,9 +15,11 @@ import {
 } from "./lib/mock-openai-http.mjs";
 
 const port =
-  process.env.MOCK_PORT != null
-    ? readTcpPortEnv("MOCK_PORT")
-    : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
+  process.env.MOCK_PORT?.trim() === "0"
+    ? 0
+    : process.env.MOCK_PORT != null
+      ? readTcpPortEnv("MOCK_PORT")
+      : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const bindHost = process.env.MOCK_BIND_HOST ?? "127.0.0.1";
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
@@ -183,8 +185,12 @@ function readResponseEntry(value, label) {
     if (value.fail.mode === "drop" && value.fail.status !== undefined) {
       throw new Error(`${label} fail cannot combine status and drop`);
     }
+    const message = value.fail.message ?? "mantis injected fault";
+    if (typeof message !== "string" || !message.trim() || message.length > 2_000) {
+      throw new Error(`${label} fail message is invalid`);
+    }
     return {
-      fail: value.fail.mode === "drop" ? { mode: "drop" } : { status },
+      fail: value.fail.mode === "drop" ? { mode: "drop" } : { status, message },
       chunkDelayMs,
     };
   }
@@ -276,7 +282,7 @@ function writeInjectedFailure(res, fail) {
     res.destroy();
     return;
   }
-  writeJson(res, fail.status, { error: { message: "mantis injected fault" } });
+  writeJson(res, fail.status, { error: { message: fail.message } });
 }
 
 function splitResponseText(text) {
@@ -294,6 +300,7 @@ function responseEvents(text, deltas = [text]) {
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "message",
         id: itemId,
@@ -318,6 +325,7 @@ function responseEvents(text, deltas = [text]) {
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
       item: {
         type: "message",
         id: itemId,
@@ -414,6 +422,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "message",
         id: messageItemId,
@@ -438,6 +447,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
       item: {
         type: "message",
         id: messageItemId,
@@ -497,7 +507,7 @@ function progressDraftEvents(body, bodyText) {
       return null;
     }
     return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
-      command: ["bash", "-lc", "sleep 3 && echo openclaw-draft-proof"],
+      command: "sleep 3 && echo openclaw-draft-proof",
     });
   }
   return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
@@ -651,6 +661,14 @@ function writeImageGeneration(res) {
 }
 
 function resolveResponseText(bodyText) {
+  const servingChecks = Array.from(
+    bodyText.matchAll(
+      /This is an OpenClaw update serving check\. Do not use tools\. Reply with exactly: (update-verified-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gu,
+    ),
+  );
+  if (servingChecks.length > 0) {
+    return servingChecks.at(-1)[1];
+  }
   const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
 }
@@ -713,6 +731,10 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
+    const catalogExpression =
+      process.env.OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE === "legacy"
+        ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
+        : "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
       language: "javascript",
       code: [
@@ -726,7 +748,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
         "  rootHasFixture: root.content.includes('fixture'),",
         "  headerHasLookup: api.content.includes('function lookupNote'),",
         "  resultText: result.content?.[0]?.text,",
-        "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
+        `  allHasMcp: ${catalogExpression},`,
         "};",
       ].join("\n"),
     });
@@ -909,7 +931,7 @@ const server = http.createServer((req, res) => {
             body.stream !== false,
             "Checking the workspace before answering.",
             "exec",
-            { command: ["bash", "-lc", "sleep 3 && echo openclaw-draft-proof"] },
+            { command: "sleep 3 && echo openclaw-draft-proof" },
           );
           return;
         }
@@ -964,5 +986,9 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, bindHost, () => {
-  console.log(`mock-openai listening on ${port}`);
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("mock OpenAI did not bind a TCP listener");
+  }
+  console.log(`mock-openai listening on ${address.port}`);
 });

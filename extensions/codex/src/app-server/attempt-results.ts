@@ -7,70 +7,28 @@ import type {
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexSystemPromptReport } from "./attempt-context.js";
+import type { CodexAttemptTimeout } from "./attempt-deadlines.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
-import type { CodexAttemptTurnWatchTimeoutKind } from "./attempt-turn-watches.js";
-
-const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE =
-  "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
-const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE =
-  "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
-const CODEX_APP_SERVER_TERMINAL_IDLE_USER_MESSAGE =
-  "Codex stopped responding: no activity arrived for the turn's liveness window, so the turn was ended and the connection was replaced. Retry to continue on a fresh session.";
 
 /** Joins terminal assistant text blocks into the final attempt answer. */
 export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
   return result.assistantTexts.join("\n\n").trim();
 }
 
-/**
- * Builds the user-facing timeout outcome when Codex stops without a terminal
- * turn event.
- */
-export function buildCodexAppServerPromptTimeoutOutcome(params: {
-  result: EmbeddedRunAttemptResult;
-  turnCompletionIdleTimedOut: boolean;
-  turnWatchTimeoutKind?: CodexAttemptTurnWatchTimeoutKind;
-}): EmbeddedRunAttemptResult["promptTimeoutOutcome"] {
-  if (!params.turnCompletionIdleTimedOut) {
+/** Reports the owner's deadline without guessing whether native work finished. */
+export function buildCodexAppServerPromptTimeoutOutcome(
+  timeout: CodexAttemptTimeout | undefined,
+): EmbeddedRunAttemptResult["promptTimeoutOutcome"] {
+  if (!timeout) {
     return undefined;
   }
-  // Terminal-idle kills are dead-client events, not slow turns: the generic
-  // "increase agents.defaults.timeoutSeconds" advice would be wrong because
-  // that watch deliberately ignores the agent budget. Salvaged assistant
-  // output still wins over any timeout notice.
-  if (params.turnWatchTimeoutKind === "terminal") {
-    if (collectTerminalAssistantText(params.result)) {
-      return undefined;
-    }
-    const terminalReplayBlockedReason = resolveCodexAppServerReplayBlockedReason(params.result);
-    return {
-      message: CODEX_APP_SERVER_TERMINAL_IDLE_USER_MESSAGE,
-      ...(terminalReplayBlockedReason
-        ? {
-            replayInvalid: true,
-            livenessState: "abandoned" as const,
-          }
-        : {}),
-    };
-  }
-  if (params.turnWatchTimeoutKind !== undefined && params.turnWatchTimeoutKind !== "completion") {
-    return undefined;
-  }
-  const replayBlockedReason = resolveCodexAppServerReplayBlockedReason(params.result);
-  const completionIdleTimeoutHadPotentialSideEffects =
-    replayBlockedReason === "tool_activity" ||
-    replayBlockedReason === "potential_side_effect" ||
-    replayBlockedReason === "active_item";
   return {
-    message: completionIdleTimeoutHadPotentialSideEffects
-      ? CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE
-      : CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE,
-    ...(replayBlockedReason
-      ? {
-          replayInvalid: true,
-          livenessState: "abandoned" as const,
-        }
-      : {}),
+    message:
+      timeout.kind === "execution"
+        ? "Codex reached the configured execution time limit. Some work may already have been performed; verify the current state before continuing."
+        : "Codex finished its turn, but OpenClaw could not finish processing the result. Some work may already have been performed; verify the current state before continuing.",
+    replayInvalid: true,
+    livenessState: "abandoned",
   };
 }
 

@@ -4,9 +4,6 @@ import {
   type WorkboardAttemptStatus,
   type WorkboardCard,
   type WorkboardDiagnostic,
-  type WorkboardDiagnosticAction,
-  type WorkboardDiagnosticKind,
-  type WorkboardDiagnosticSeverity,
   type WorkboardEvent,
   type WorkboardExecution,
   type WorkboardMetadata,
@@ -16,7 +13,6 @@ import {
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
@@ -26,6 +22,7 @@ import {
 } from "./store-constants.js";
 import type { WorkboardMutationScope } from "./store-inputs.js";
 import {
+  capText,
   metadataIsEmpty,
   normalizeEvents,
   normalizeTimestamp,
@@ -131,12 +128,25 @@ export function appendEvent(
   ].slice(-MAX_CARD_EVENTS);
 }
 
-function latestMetadataIdChanged(
-  existing: readonly { id: string }[] | undefined,
-  next: readonly { id: string }[] | undefined,
+function metadataEntriesChanged(
+  existing: WorkboardCard,
+  next: WorkboardCard,
+  key:
+    | "comments"
+    | "links"
+    | "proof"
+    | "artifacts"
+    | "attachments"
+    | "workerLogs"
+    | "notifications",
 ): boolean {
-  const latestId = next?.at(-1)?.id;
-  return Boolean(latestId && latestId !== existing?.at(-1)?.id);
+  const previous = existing.metadata?.[key];
+  const current = next.metadata?.[key];
+  const latestId = current?.at(-1)?.id;
+  return (
+    (previous?.length ?? 0) !== (current?.length ?? 0) ||
+    Boolean(latestId && latestId !== previous?.at(-1)?.id)
+  );
 }
 
 export function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): number | undefined {
@@ -258,34 +268,17 @@ export function updateEvent(
       ...(cardRunId(next) ? { runId: cardRunId(next) } : {}),
     };
   }
-  if (
-    (existing.metadata?.comments?.length ?? 0) !== (next.metadata?.comments?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.comments, next.metadata?.comments)
-  ) {
-    return { kind: "comment_added" };
+  for (const [key, kind] of [
+    ["comments", "comment_added"],
+    ["links", "link_added"],
+    ["proof", "proof_added"],
+    ["artifacts", "artifact_added"],
+  ] as const) {
+    if (metadataEntriesChanged(existing, next, key)) {
+      return { kind };
+    }
   }
-  if (
-    (existing.metadata?.links?.length ?? 0) !== (next.metadata?.links?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.links, next.metadata?.links)
-  ) {
-    return { kind: "link_added" };
-  }
-  if (
-    (existing.metadata?.proof?.length ?? 0) !== (next.metadata?.proof?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.proof, next.metadata?.proof)
-  ) {
-    return { kind: "proof_added" };
-  }
-  if (
-    (existing.metadata?.artifacts?.length ?? 0) !== (next.metadata?.artifacts?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.artifacts, next.metadata?.artifacts)
-  ) {
-    return { kind: "artifact_added" };
-  }
-  if (
-    (existing.metadata?.attachments?.length ?? 0) !== (next.metadata?.attachments?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.attachments, next.metadata?.attachments)
-  ) {
+  if (metadataEntriesChanged(existing, next, "attachments")) {
     return (next.metadata?.attachments?.length ?? 0) > (existing.metadata?.attachments?.length ?? 0)
       ? { kind: "attachment_added" }
       : { kind: "edited" };
@@ -293,20 +286,13 @@ export function updateEvent(
   if (existing.metadata?.workerProtocol?.state !== next.metadata?.workerProtocol?.state) {
     return { kind: "orchestration" };
   }
-  if (
-    (existing.metadata?.workerLogs?.length ?? 0) !== (next.metadata?.workerLogs?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.workerLogs, next.metadata?.workerLogs)
-  ) {
+  if (metadataEntriesChanged(existing, next, "workerLogs")) {
     return { kind: "orchestration" };
   }
   if ((existing.metadata?.diagnostics?.length ?? 0) !== (next.metadata?.diagnostics?.length ?? 0)) {
     return { kind: "diagnostic" };
   }
-  if (
-    (existing.metadata?.notifications?.length ?? 0) !==
-      (next.metadata?.notifications?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.notifications, next.metadata?.notifications)
-  ) {
+  if (metadataEntriesChanged(existing, next, "notifications")) {
     return { kind: "notification" };
   }
   if (
@@ -374,24 +360,6 @@ export function retryBudgetExhausted(card: WorkboardCard): boolean {
   return Boolean(maxRetries && (card.metadata?.failureCount ?? 0) > maxRetries);
 }
 
-function diagnostic(
-  params: {
-    kind: WorkboardDiagnosticKind;
-    severity: WorkboardDiagnosticSeverity;
-    title: string;
-    detail: string;
-    actions: WorkboardDiagnosticAction[];
-  },
-  now: number,
-): WorkboardDiagnostic {
-  return {
-    ...params,
-    firstSeenAt: now,
-    lastSeenAt: now,
-    count: 1,
-  };
-}
-
 export function mergeDiagnostics(
   previous: readonly WorkboardDiagnostic[] | undefined,
   next: WorkboardDiagnostic[],
@@ -410,26 +378,26 @@ export function mergeDiagnostics(
 }
 
 export function computeCardDiagnostics(card: WorkboardCard, now: number): WorkboardDiagnostic[] {
+  const diagnostics: WorkboardDiagnostic[] = [];
+  const addDiagnostic = (
+    params: Omit<WorkboardDiagnostic, "firstSeenAt" | "lastSeenAt" | "count">,
+  ): void => {
+    diagnostics.push({ ...params, firstSeenAt: now, lastSeenAt: now, count: 1 });
+  };
   if (card.metadata?.archivedAt) {
     // Archived cards intentionally skip automation. Keep nonterminal cards
     // visible as a transient diagnostic without rewriting archived metadata.
     if (card.status !== "done") {
-      return [
-        diagnostic(
-          {
-            kind: "archived_but_active",
-            severity: "warning",
-            title: "Archived card is still in an active status",
-            detail: `Card status is "${card.status}" but it is archived, so it is excluded from dispatch without any start failure or error. Unarchive it or move it to "done" to stop the silent skip.`,
-            actions: [],
-          },
-          now,
-        ),
-      ];
+      addDiagnostic({
+        kind: "archived_but_active",
+        severity: "warning",
+        title: "Archived card is still in an active status",
+        detail: `Card status is "${card.status}" but it is archived, so it is excluded from dispatch without any start failure or error. Unarchive it or move it to "done" to stop the silent skip.`,
+        actions: [],
+      });
     }
-    return [];
+    return diagnostics;
   }
-  const diagnostics: WorkboardDiagnostic[] = [];
   const claim = card.metadata?.claim;
   const lastHeartbeatAt = claim?.lastHeartbeatAt ?? card.execution?.updatedAt ?? card.updatedAt;
   if (
@@ -437,63 +405,43 @@ export function computeCardDiagnostics(card: WorkboardCard, now: number): Workbo
     card.agentId &&
     now - card.updatedAt > READY_STRANDED_MS
   ) {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "stranded_ready",
-          severity: "warning",
-          title: "Assigned card is waiting",
-          detail: "The card has an assigned agent but has not been claimed recently.",
-          actions: [{ kind: "claim", label: "Claim card" }],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "stranded_ready",
+      severity: "warning",
+      title: "Assigned card is waiting",
+      detail: "The card has an assigned agent but has not been claimed recently.",
+      actions: [{ kind: "claim", label: "Claim card" }],
+    });
   }
   if (card.status === "running" && now - lastHeartbeatAt > RUNNING_HEARTBEAT_STALE_MS) {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "running_without_heartbeat",
-          severity: "error",
-          title: "Running card has no recent heartbeat",
-          detail: "The linked run or claim has not reported recent activity.",
-          actions: [
-            { kind: "open_session", label: "Open session" },
-            { kind: "reassign", label: "Reassign card" },
-          ],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "running_without_heartbeat",
+      severity: "error",
+      title: "Running card has no recent heartbeat",
+      detail: "The linked run or claim has not reported recent activity.",
+      actions: [
+        { kind: "open_session", label: "Open session" },
+        { kind: "reassign", label: "Reassign card" },
+      ],
+    });
   }
   if (card.status === "blocked" && now - card.updatedAt > BLOCKED_TOO_LONG_MS) {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "blocked_too_long",
-          severity: "warning",
-          title: "Blocked card needs attention",
-          detail: "The card has been blocked for more than a day.",
-          actions: [{ kind: "unblock", label: "Move to todo" }],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "blocked_too_long",
+      severity: "warning",
+      title: "Blocked card needs attention",
+      detail: "The card has been blocked for more than a day.",
+      actions: [{ kind: "unblock", label: "Move to todo" }],
+    });
   }
   if ((card.metadata?.failureCount ?? 0) >= 2) {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "repeated_failures",
-          severity: "error",
-          title: "Repeated run failures",
-          detail: "Multiple attempts failed or blocked on this card.",
-          actions: [{ kind: "reassign", label: "Reassign card" }],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "repeated_failures",
+      severity: "error",
+      title: "Repeated run failures",
+      detail: "Multiple attempts failed or blocked on this card.",
+      actions: [{ kind: "reassign", label: "Reassign card" }],
+    });
   }
   if (
     card.status === "done" &&
@@ -503,41 +451,24 @@ export function computeCardDiagnostics(card: WorkboardCard, now: number): Workbo
       card.metadata?.attachments?.length
     )
   ) {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "missing_proof",
-          severity: "warning",
-          title: "Done card has no proof",
-          detail: "The card is marked done without proof or an attached artifact.",
-          actions: [{ kind: "add_proof", label: "Add proof" }],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "missing_proof",
+      severity: "warning",
+      title: "Done card has no proof",
+      detail: "The card is marked done without proof or an attached artifact.",
+      actions: [{ kind: "add_proof", label: "Add proof" }],
+    });
   }
   if (card.sessionKey && !card.execution && card.status === "running") {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "orphaned_session",
-          severity: "warning",
-          title: "Running card has only a loose session link",
-          detail: "The card is running but has no execution record for lifecycle handoff.",
-          actions: [{ kind: "open_session", label: "Open session" }],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "orphaned_session",
+      severity: "warning",
+      title: "Running card has only a loose session link",
+      detail: "The card is running but has no execution record for lifecycle handoff.",
+      actions: [{ kind: "open_session", label: "Open session" }],
+    });
   }
   return diagnostics;
-}
-
-export function capText(value: string | undefined, max: number): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  return value.length <= max ? value : `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }
 
 export function cardBoardId(card: WorkboardCard): string {
@@ -550,6 +481,19 @@ function cardResultSummary(card: WorkboardCard): string | undefined {
     card.metadata?.comments?.findLast((comment) => comment.body.trim())?.body ??
     card.metadata?.proof?.findLast((proof) => proof.note?.trim())?.note
   );
+}
+
+function appendWorkerContextSection<T>(
+  lines: string[],
+  heading: string,
+  entries: readonly T[] | undefined,
+  format: (entry: T) => string,
+  maxEntries = 8,
+): void {
+  const recent = entries?.slice(-maxEntries) ?? [];
+  if (recent.length) {
+    lines.push("", `## ${heading}`, ...recent.map(format));
+  }
 }
 
 export function buildWorkerContext(
@@ -567,85 +511,69 @@ export function buildWorkerContext(
   if (card.notes) {
     lines.push("", "## Notes", capText(card.notes, 4000) ?? "");
   }
-  const attempts = card.metadata?.attempts?.slice(-8) ?? [];
-  if (attempts.length) {
-    lines.push("", "## Recent attempts");
-    for (const attempt of attempts) {
-      lines.push(
-        `- ${attempt.status} ${attempt.model ?? ""} ${attempt.error ? `error=${capText(attempt.error, 240)}` : ""}`.trim(),
-      );
-    }
-  }
-  const comments = card.metadata?.comments?.slice(-12) ?? [];
-  if (comments.length) {
-    lines.push("", "## Recent comments");
-    for (const comment of comments) {
-      lines.push(`- ${capText(comment.body, 400)}`);
-    }
-  }
-  const proof = card.metadata?.proof?.slice(-8) ?? [];
-  if (proof.length) {
-    lines.push("", "## Proof");
-    for (const entry of proof) {
-      lines.push(
-        `- ${entry.status}: ${capText(entry.label ?? entry.command ?? entry.url ?? entry.note, 400)}`,
-      );
-    }
-  }
-  const artifacts = card.metadata?.artifacts?.slice(-8) ?? [];
-  if (artifacts.length) {
-    lines.push("", "## Artifacts");
-    for (const artifact of artifacts) {
-      lines.push(`- ${capText(artifact.label ?? artifact.url ?? artifact.path, 400)}`);
-    }
-  }
-  const attachments = card.metadata?.attachments?.slice(-8) ?? [];
-  if (attachments.length) {
-    lines.push("", "## Attachments");
-    for (const attachment of attachments) {
-      const detail = [
-        attachment.fileName,
-        `${attachment.byteSize} bytes`,
-        attachment.mimeType,
-        attachment.note,
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      lines.push(`- ${capText(detail, 500)}`);
-    }
-  }
+  appendWorkerContextSection(lines, "Recent attempts", card.metadata?.attempts, (attempt) =>
+    `- ${attempt.status} ${attempt.model ?? ""} ${attempt.error ? `error=${capText(attempt.error, 240)}` : ""}`.trim(),
+  );
+  appendWorkerContextSection(
+    lines,
+    "Recent comments",
+    card.metadata?.comments,
+    (comment) => `- ${capText(comment.body, 400)}`,
+    12,
+  );
+  appendWorkerContextSection(
+    lines,
+    "Proof",
+    card.metadata?.proof,
+    (entry) =>
+      `- ${entry.status}: ${capText(entry.label ?? entry.command ?? entry.url ?? entry.note, 400)}`,
+  );
+  appendWorkerContextSection(
+    lines,
+    "Artifacts",
+    card.metadata?.artifacts,
+    (artifact) => `- ${capText(artifact.label ?? artifact.url ?? artifact.path, 400)}`,
+  );
+  appendWorkerContextSection(lines, "Attachments", card.metadata?.attachments, (attachment) => {
+    const detail = [
+      attachment.fileName,
+      `${attachment.byteSize} bytes`,
+      attachment.mimeType,
+      attachment.note,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return `- ${capText(detail, 500)}`;
+  });
   if (card.metadata?.workerProtocol) {
     const protocol = card.metadata.workerProtocol;
     lines.push("", "## Worker protocol");
     lines.push(`${protocol.state}: ${capText(protocol.detail, 500) ?? "no detail"}`);
   }
-  const workerLogs = card.metadata?.workerLogs?.slice(-8) ?? [];
-  if (workerLogs.length) {
-    lines.push("", "## Worker logs");
-    for (const log of workerLogs) {
-      lines.push(`- ${log.level}: ${capText(log.message, 500)}`);
-    }
-  }
-  const links = card.metadata?.links?.slice(-8) ?? [];
-  if (links.length) {
-    lines.push("", "## Links");
-    for (const link of links) {
-      lines.push(`- ${link.type}: ${link.title ?? link.url ?? link.targetCardId ?? ""}`);
-    }
-  }
+  appendWorkerContextSection(
+    lines,
+    "Worker logs",
+    card.metadata?.workerLogs,
+    (log) => `- ${log.level}: ${capText(log.message, 500)}`,
+  );
+  appendWorkerContextSection(
+    lines,
+    "Links",
+    card.metadata?.links,
+    (link) => `- ${link.type}: ${link.title ?? link.url ?? link.targetCardId ?? ""}`,
+  );
   const cardsById = new Map(cards.map((entry) => [entry.id, entry]));
   const parentResults = cardParentIds(card)
     .map((parentId) => cardsById.get(parentId))
     .filter((parent): parent is WorkboardCard => parent !== undefined && parent.status === "done")
     .slice(-6);
-  if (parentResults.length) {
-    lines.push("", "## Parent results");
-    for (const parent of parentResults) {
-      lines.push(
-        `- ${parent.id} ${parent.title}: ${capText(cardResultSummary(parent), 500) ?? "done"}`,
-      );
-    }
-  }
+  appendWorkerContextSection(
+    lines,
+    "Parent results",
+    parentResults,
+    (parent) =>
+      `- ${parent.id} ${parent.title}: ${capText(cardResultSummary(parent), 500) ?? "done"}`,
+  );
   const recentAgentWork =
     card.agentId && cards.length
       ? cards
@@ -659,14 +587,12 @@ export function buildWorkerContext(
           .toSorted((a, b) => b.updatedAt - a.updatedAt)
           .slice(0, 5)
       : [];
-  if (recentAgentWork.length) {
-    lines.push("", `## Recent done work by ${card.agentId}`);
-    for (const entry of recentAgentWork) {
-      lines.push(
-        `- ${entry.id} ${entry.title}: ${capText(cardResultSummary(entry), 300) ?? "done"}`,
-      );
-    }
-  }
+  appendWorkerContextSection(
+    lines,
+    `Recent done work by ${card.agentId}`,
+    recentAgentWork,
+    (entry) => `- ${entry.id} ${entry.title}: ${capText(cardResultSummary(entry), 300) ?? "done"}`,
+  );
   const automation = card.metadata?.automation;
   if (automation) {
     lines.push("", "## Automation");
@@ -689,12 +615,13 @@ export function buildWorkerContext(
     }
   }
   const diagnostics = computeCardDiagnostics(card, Date.now());
-  if (diagnostics.length) {
-    lines.push("", "## Active diagnostics");
-    for (const entry of diagnostics) {
-      lines.push(`- ${entry.severity}: ${entry.title}`);
-    }
-  }
+  appendWorkerContextSection(
+    lines,
+    "Active diagnostics",
+    diagnostics,
+    (entry) => `- ${entry.severity}: ${entry.title}`,
+    diagnostics.length,
+  );
   return lines.join("\n");
 }
 
@@ -777,4 +704,3 @@ export function compareNotifications(a: WorkboardNotification, b: WorkboardNotif
   }
   return a.id.localeCompare(b.id);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

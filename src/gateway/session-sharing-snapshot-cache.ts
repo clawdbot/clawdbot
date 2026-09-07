@@ -1,9 +1,10 @@
 import type { SessionVisibility } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 
 const SNAPSHOT_CACHE_LIMIT = 2_048;
 
 export type SessionSharingSnapshot = {
-  creatorId?: string;
+  createdActor?: SessionCreatedActor;
   incognito: boolean;
   visibility: SessionVisibility;
 };
@@ -127,11 +128,11 @@ export function loadCachedSessionSharingSnapshot(params: {
   const resolved = params.resolve();
   const canonicalKey = snapshotKey(resolved.canonicalKey, resolved.canonicalAgentId);
   const canonicalCached = snapshotCache.get(canonicalKey);
-  if (canonicalCached) {
-    rememberSnapshotAlias(requestedKey, canonicalKey);
-    return canonicalCached;
+  if (!canonicalCached) {
+    rememberSnapshot(canonicalKey, resolved.snapshot);
   }
-  rememberSnapshot(canonicalKey, resolved.snapshot);
-  rememberSnapshotAlias(requestedKey, canonicalKey);
-  return resolved.snapshot;
+  if (requestedKey !== canonicalKey) {
+    rememberSnapshotAlias(requestedKey, canonicalKey);
+  }
+  return canonicalCached ?? resolved.snapshot;
 }

@@ -4,6 +4,7 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { preserveRosterPresentationMetadata } from "../lib/sessions/reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
+  normalizeDefaultMainSessionAliasForUi,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 export { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
@@ -16,13 +17,11 @@ export function collectKnownSessionRows(
 ): Map<string, GatewaySessionRow> {
   const rows = new Map<string, GatewaySessionRow>();
   for (const row of [...Object.values(childRowsByParent).flat(), ...rootRows]) {
-    const previous = [...rows.keys()].find((key) => areUiSessionKeysEquivalent(key, row.key));
-    if (previous) {
-      rows.delete(previous);
-    }
-    rows.set(row.key, row);
+    const key = normalizeDefaultMainSessionAliasForUi(row.key) || row.key;
+    rows.delete(key);
+    rows.set(key, row);
   }
-  return rows;
+  return new Map([...rows.values()].map((row) => [row.key, row]));
 }
 
 export async function fetchSessionLineage(params: {
@@ -45,9 +44,11 @@ export async function fetchSessionLineage(params: {
     // malformed cycle cannot leave direct child routes spinning forever.
     for (let depth = 0; depth < MAX_SESSION_LINEAGE_DEPTH && !visited.has(currentKey); depth += 1) {
       visited.add(currentKey);
-      let row = [...params.knownRows.values()].find((candidate) =>
-        areUiSessionKeysEquivalent(candidate.key, currentKey),
-      );
+      let row =
+        params.knownRows.get(currentKey) ??
+        [...params.knownRows.values()].find((candidate) =>
+          areUiSessionKeysEquivalent(candidate.key, currentKey),
+        );
       if (!row) {
         const described = await params.client.request<{ session?: GatewaySessionRow | null }>(
           "sessions.describe",
@@ -98,8 +99,8 @@ function mergeChildSessionRows(
   return merged;
 }
 
-/** Retain only the routed ancestry while a canonical refresh invalidates other child snapshots. */
-export function preserveActiveSessionLineageRows(
+/** Retain only the routed ancestry when a refreshed child list omits it (archived or filtered). */
+function preserveActiveSessionLineageRows(
   sessionKey: string | null,
   rowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,
 ): Readonly<Record<string, readonly GatewaySessionRow[]>> {
@@ -118,6 +119,59 @@ export function preserveActiveSessionLineageRows(
     childKey = parent[0];
   }
   return preserved;
+}
+
+export function mergeRefreshedChildSessionRows(
+  sessionKey: string | null,
+  rowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,
+  parentKey: string,
+  rows: GatewaySessionRow[],
+): Readonly<Record<string, readonly GatewaySessionRow[]>> {
+  const lineage = preserveActiveSessionLineageRows(sessionKey, rowsByParent)[parentKey] ?? [];
+  return {
+    ...rowsByParent,
+    ...mergeChildSessionRows({ [parentKey]: rows }, { [parentKey]: lineage }),
+  };
+}
+
+export function retireStaleChildSessionRows(
+  owner: {
+    childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+    loadedChildSessionKeys: ReadonlySet<string>;
+    loadingChildSessionKeys: ReadonlySet<string>;
+    childSessionErrorsByParent: ReadonlyMap<string, string>;
+    requestSessionDataUpdate(): void;
+  },
+  sessionKey: string | null,
+  revalidating: ReadonlySet<string>,
+): void {
+  const lineage = preserveActiveSessionLineageRows(sessionKey, owner.childSessionRowsByParent);
+  const next = { ...owner.childSessionRowsByParent };
+  let changed = false;
+  for (const [parentKey, rows] of Object.entries(next)) {
+    if (
+      owner.loadedChildSessionKeys.has(parentKey) ||
+      owner.loadingChildSessionKeys.has(parentKey) ||
+      owner.childSessionErrorsByParent.has(parentKey) ||
+      revalidating.has(parentKey)
+    ) {
+      continue;
+    }
+    const retained = lineage[parentKey];
+    if (retained?.length === rows.length) {
+      continue;
+    }
+    if (retained) {
+      next[parentKey] = retained;
+    } else {
+      delete next[parentKey];
+    }
+    changed = true;
+  }
+  if (changed) {
+    owner.childSessionRowsByParent = next;
+    owner.requestSessionDataUpdate();
+  }
 }
 
 export function publishActiveSessionLineage(

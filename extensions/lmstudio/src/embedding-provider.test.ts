@@ -4,10 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "../memory-embedding-adapter.js";
 import { createLmstudioEmbeddingProvider } from "./embedding-provider.js";
 
-const ensureLmstudioModelLoadedMock = vi.hoisted(() =>
-  vi.fn(
-    async (_params?: { requestedContextLength?: number }) => "text-embedding-nomic-embed-text-v1.5",
-  ),
+const prepareLmstudioModelForInferenceMock = vi.hoisted(() =>
+  vi.fn(async (_params?: { requestedContextLength?: number }) => ({
+    modelKey: "text-embedding-nomic-embed-text-v1.5",
+  })),
 );
 const fetchLmstudioModelsMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => ({
@@ -35,7 +35,7 @@ const createRemoteEmbeddingProviderMock = vi.hoisted(() =>
     return {
       id: "lmstudio",
       model: providerModel,
-      embedQuery: vi.fn(async () => {
+      embed: vi.fn(async () => {
         embeddedModels.push(params.client.model);
         return [1, 0];
       }),
@@ -60,8 +60,8 @@ vi.mock("./models.fetch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./models.fetch.js")>();
   return {
     ...actual,
-    ensureLmstudioModelLoaded: (params: { requestedContextLength?: number }) =>
-      ensureLmstudioModelLoadedMock(params),
+    prepareLmstudioModelForInference: (params: { requestedContextLength?: number }) =>
+      prepareLmstudioModelForInferenceMock(params),
     fetchLmstudioModels: (params: unknown) => fetchLmstudioModelsMock(params),
   };
 });
@@ -101,13 +101,13 @@ async function readRequestedContextLength(config: OpenClawConfig): Promise<unkno
     model: EMBEDDING_MODEL,
     fallback: "none",
   });
-  expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
-  return ensureLmstudioModelLoadedMock.mock.calls[0]?.[0]?.requestedContextLength;
+  expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(1);
+  return prepareLmstudioModelForInferenceMock.mock.calls[0]?.[0]?.requestedContextLength;
 }
 
 describe("createLmstudioEmbeddingProvider preload context length", () => {
   beforeEach(() => {
-    ensureLmstudioModelLoadedMock.mockClear();
+    prepareLmstudioModelForInferenceMock.mockClear();
     fetchLmstudioModelsMock.mockClear();
     fetchLmstudioModelsMock.mockResolvedValue({ reachable: true, status: 200, models: [] });
     createRemoteEmbeddingProviderMock.mockClear();
@@ -159,11 +159,11 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
         acquireLocalService,
       });
 
-      expect(ensureLmstudioModelLoadedMock).not.toHaveBeenCalled();
+      expect(prepareLmstudioModelForInferenceMock).not.toHaveBeenCalled();
       expect(fetchLmstudioModelsMock).not.toHaveBeenCalled();
       expect(acquireLocalService).not.toHaveBeenCalled();
 
-      await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
 
       expect(acquireLocalService).toHaveBeenCalledOnce();
       expect(acquireLocalService).toHaveBeenCalledWith(
@@ -173,6 +173,68 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       expect(release).toHaveBeenCalledOnce();
     },
   );
+
+  it("keeps each query-batch service lease until its request settles", async () => {
+    const firstRelease = vi.fn();
+    const secondRelease = vi.fn();
+    const acquireLocalService = vi
+      .fn()
+      .mockResolvedValueOnce({ release: firstRelease })
+      .mockResolvedValueOnce({ release: secondRelease });
+    let resolveSecond: (value: number[]) => void = () => {};
+    const secondResult = new Promise<number[]>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const remoteEmbed = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("first query failed"))
+      .mockImplementationOnce(async () => await secondResult);
+    const remoteEmbedBatch = vi.fn(
+      async (inputs: unknown[]) =>
+        await Promise.all(
+          inputs.map(async (input) => await remoteEmbed(input, { inputType: "query" })),
+        ),
+    );
+    createRemoteEmbeddingProviderMock.mockReturnValueOnce({
+      id: "lmstudio",
+      model: EMBEDDING_MODEL,
+      embed: remoteEmbed,
+      embedBatch: remoteEmbedBatch,
+    });
+    const { provider } = await createLmstudioEmbeddingProvider({
+      config: buildConfig({
+        provider: {
+          params: { preload: false },
+          localService: { command: "/usr/bin/lms" },
+        },
+      }),
+      provider: "lmstudio",
+      model: EMBEDDING_MODEL,
+      fallback: "none",
+      acquireLocalService,
+    });
+
+    const pending = provider.embedBatch(["first", "second"], { inputType: "query" });
+    await expect(pending).rejects.toThrow("first query failed");
+
+    expect(acquireLocalService).toHaveBeenCalledTimes(2);
+    expect(acquireLocalService).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ providerId: "lmstudio", baseUrl: "http://localhost:1234/v1" }),
+      undefined,
+    );
+    expect(acquireLocalService).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ providerId: "lmstudio", baseUrl: "http://localhost:1234/v1" }),
+      undefined,
+    );
+    expect(firstRelease).toHaveBeenCalledOnce();
+    expect(secondRelease).not.toHaveBeenCalled();
+    expect(remoteEmbedBatch).not.toHaveBeenCalled();
+
+    resolveSecond([2]);
+    await vi.waitFor(() => expect(secondRelease).toHaveBeenCalledOnce());
+  });
 
   it("resolves a JIT variant before freezing provider and cache identity", async () => {
     const requestedVariant = `${EMBEDDING_MODEL}@q4_k_m`;
@@ -210,14 +272,14 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       throw new Error("expected LM Studio embedding provider");
     }
 
-    expect(ensureLmstudioModelLoadedMock).not.toHaveBeenCalled();
+    expect(prepareLmstudioModelForInferenceMock).not.toHaveBeenCalled();
     expect(fetchLmstudioModelsMock).toHaveBeenCalledOnce();
     expect(acquireLocalService).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(result.provider.model).toBe(EMBEDDING_MODEL);
     expect(result.runtime?.cacheKeyData).toMatchObject({ model: EMBEDDING_MODEL });
 
-    await expect(result.provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+    await expect(result.provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
 
     expect(embeddedModels).toEqual([EMBEDDING_MODEL]);
     expect(acquireLocalService).toHaveBeenCalledTimes(2);
@@ -233,7 +295,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       fallback: "none",
     });
 
-    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith(
+    expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledWith(
       expect.objectContaining({ modelKey: requestedVariant }),
     );
     expect(createRemoteEmbeddingProviderMock).toHaveBeenCalledWith(
@@ -245,7 +307,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
 
   it("retains the discovered canonical model when its preload subsequently fails", async () => {
     const requestedVariant = `${EMBEDDING_MODEL}@q4_k_m`;
-    ensureLmstudioModelLoadedMock.mockRejectedValueOnce(
+    prepareLmstudioModelForInferenceMock.mockRejectedValueOnce(
       Object.assign(new Error("fixture preload rejected"), { resolvedModelKey: EMBEDDING_MODEL }),
     );
 
@@ -265,7 +327,9 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
 
   it("keeps the requested model when preload fails before discovering its identity", async () => {
     const requestedVariant = `${EMBEDDING_MODEL}@q4_k_m`;
-    ensureLmstudioModelLoadedMock.mockRejectedValueOnce(new Error("fixture discovery unavailable"));
+    prepareLmstudioModelForInferenceMock.mockRejectedValueOnce(
+      new Error("fixture discovery unavailable"),
+    );
 
     const { client } = await createLmstudioEmbeddingProvider({
       config: buildConfig({ model: { id: requestedVariant } }),
@@ -308,9 +372,9 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     };
 
     const { provider } = await createLmstudioEmbeddingProvider(options);
-    await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+    await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
 
-    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith(
+    expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "spark-key" }),
     );
     expect(resolveLmstudioRuntimeApiKeyMock).not.toHaveBeenCalled();
@@ -350,6 +414,8 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
           providers: {
             "lmstudio-spark": {
               baseUrl: "http://spark.local:1234/v1",
+              apiKey: "provider-host-key",
+              headers: { "X-Provider-Tenant": "provider-a" },
               localService: { command: process.execPath },
               models: [{ id: EMBEDDING_MODEL }],
             },
@@ -359,13 +425,42 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       provider: "lmstudio-spark",
       model: `lmstudio-spark/${EMBEDDING_MODEL}`,
       fallback: "none",
-      remote: { baseUrl: "http://memory.local:1234/v1" },
+      remote: {
+        baseUrl: "http://memory.local:1234/v1",
+        headers: { "X-Remote-Tenant": "remote-b" },
+      },
       acquireLocalService,
     };
-    const { provider } = await createLmstudioEmbeddingProvider(options);
+    const { provider, client } = await createLmstudioEmbeddingProvider(options);
 
-    await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+    await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
     expect(acquireLocalService).not.toHaveBeenCalled();
+    expect(client.headers).toEqual({
+      "Content-Type": "application/json",
+      "X-Remote-Tenant": "remote-b",
+    });
+  });
+
+  it("does not inherit primary remote headers when LM Studio activates as a fallback", async () => {
+    const { client } = await createLmstudioEmbeddingProvider({
+      config: buildConfig({
+        provider: {
+          params: { preload: false },
+          headers: { "X-Provider-Tenant": "provider-a" },
+        },
+      }),
+      provider: "google",
+      model: EMBEDDING_MODEL,
+      fallback: "lmstudio",
+      remote: {
+        baseUrl: "http://memory.local:1234/v1",
+        apiKey: "primary-provider-key",
+        headers: { "X-Remote-Tenant": "remote-b" },
+      },
+    });
+
+    expect(client.baseUrl).toBe("http://localhost:1234/v1");
+    expect(client.headers).toEqual({ "Content-Type": "application/json" });
   });
 
   it("preserves a scheme-added /api/v1 local service target", async () => {
@@ -422,6 +517,50 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       provider: "lmstudio-spark",
       baseUrl: "http://spark.local:1234/v1",
       model: EMBEDDING_MODEL,
+    });
+  });
+
+  it("keeps API key rotation out of memory identity without dropping tenant headers", async () => {
+    const readIdentity = async (headers: Record<string, string>) =>
+      (
+        await lmstudioMemoryEmbeddingProviderAdapter.create({
+          config: buildConfig({ provider: { params: { preload: false } } }),
+          provider: "lmstudio",
+          model: EMBEDDING_MODEL,
+          fallback: "none",
+          remote: { headers },
+        })
+      ).runtime?.cacheKeyData;
+
+    const defaultIdentity = await readIdentity({});
+    const firstTenant = await readIdentity({
+      Authorization: "Bearer synthetic-before",
+      "X-API-KEY": "synthetic-key-before",
+      "X-Tenant": "tenant-a",
+    });
+    const rotatedTenant = await readIdentity({
+      Authorization: "Bearer synthetic-after",
+      "x-Api-Key": "synthetic-key-after",
+      "X-Tenant": "tenant-a",
+    });
+    const otherTenant = await readIdentity({
+      "X-Api-Key": "synthetic-key-after",
+      "X-Tenant": "tenant-b",
+    });
+
+    expect(defaultIdentity).toEqual({
+      provider: "lmstudio",
+      baseUrl: "http://localhost:1234/v1",
+      model: EMBEDDING_MODEL,
+      headers: [["Content-Type", "application/json"]],
+    });
+    expect(firstTenant).toEqual(rotatedTenant);
+    expect(firstTenant).not.toEqual(otherTenant);
+    expect(firstTenant).toMatchObject({
+      headers: [
+        ["Content-Type", "application/json"],
+        ["X-Tenant", "tenant-a"],
+      ],
     });
   });
 });

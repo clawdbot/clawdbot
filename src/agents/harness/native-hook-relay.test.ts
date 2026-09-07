@@ -1616,6 +1616,44 @@ describe("native hook relay registry", () => {
     ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
   });
 
+  it("rejects fresh connections to the retired locator during replacement", async () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: uniqueNativeHookRelayIdForTests("retired-listener"),
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const firstRecord = await waitForNativeHookRelayBridgeRecord(first.relayId);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      registerNativeHookRelay({
+        provider: "codex",
+        relayId: first.relayId,
+        sessionId: "session-1",
+        runId: "run-2",
+        allowedEvents: ["pre_tool_use"],
+      });
+      const staleRequest = openDeferredNativeHookRelayBridgeRequest(firstRecord, {
+        provider: "codex",
+        relayId: first.relayId,
+        generation: first.generation,
+        event: "pre_tool_use",
+        rawPayload: { hook_event_name: "PreToolUse", tool_name: "Bash" },
+      });
+      const response = Promise.all([staleRequest.connected, staleRequest.response]);
+      staleRequest.sendBody();
+      await expect(response).resolves.toEqual([
+        undefined,
+        { ok: false, error: "native hook relay bridge stale registration" },
+      ]);
+      expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+    } finally {
+      await vi.advanceTimersByTimeAsync(250);
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects late stale direct bridge commands after stable relay id replacement", async () => {
     const first = registerNativeHookRelay({
       provider: "codex",
@@ -1942,6 +1980,38 @@ describe("native hook relay registry", () => {
 
     expect(kill).toHaveBeenCalledWith(9_999_994, 0);
     expect(testing.getNativeHookRelayBridgeRecordForTests(liveRelayId)).toBeDefined();
+  });
+
+  it("treats direct bridge records with a dead owning pid as absent", async () => {
+    const relayId = await writeForeignNativeHookRelayBridgeRecordForTests(
+      uniqueNativeHookRelayIdForTests("codex-dead-pid-bridge"),
+      {
+        pid: 9_999_996,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    );
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid === 9_999_996) {
+        throw Object.assign(new Error("missing process"), { code: "ESRCH" });
+      }
+      return true;
+    });
+
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId,
+        event: "pre_tool_use",
+        registrationTimeoutMs: 1,
+        timeoutMs: 50,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge not found");
+    expect(kill).toHaveBeenCalledWith(9_999_996, 0);
   });
 
   it("accepts only loopback direct bridge records", async () => {
@@ -3318,7 +3388,7 @@ describe("native hook relay registry", () => {
 
       const relay = registerNativeHookRelay({
         provider: "codex",
-        agentId: "agent-1",
+        agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
         config: config as never,
@@ -3884,13 +3954,6 @@ describe("native hook relay registry", () => {
         tool_use_id: "native-call-1",
         tool_input: { command: "git status" },
       },
-    });
-    relay.unregister();
-    registerNativeHookRelay({
-      provider: "codex",
-      relayId: "codex-stable-permission-cache",
-      sessionId: "session-1",
-      runId: "run-2",
     });
     const second = await invokeNativeHookRelay({
       provider: "codex",

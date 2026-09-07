@@ -12,9 +12,9 @@ inside that container exactly like any other Linux install, so the [Linux
 guide](/platforms/linux) applies in full. This page covers the ChromeOS
 specific setup and the gotchas that differ from a plain Linux host.
 
-OpenClaw requires Node because its canonical state store uses `node:sqlite`.
-Bun can install dependencies or run package scripts, but it cannot run the
-OpenClaw CLI or Gateway.
+Node is the primary, default, and recommended runtime. Bun 1.4+ builds with
+WAL-reset-safe `node:sqlite` can run the CLI and Gateway as an explicit opt-in,
+and Bun can also run package scripts. The installation path below uses Node.
 
 ## Enable the Linux container
 
@@ -66,7 +66,7 @@ filesystem directly, so a Docker image rebuild cannot wipe it.
 ## Node version
 
 The Node version available in a Crostini container may be below OpenClaw's
-minimum. OpenClaw requires Node 22.22.3+, Node 24.15+, or Node 25.9+; Node 26
+minimum. OpenClaw requires Node 24.16+ or Node 26.1+; Node 26
 is the recommended default. The installer script detects a missing or
 unsupported Node version and provisions a supported release automatically.
 

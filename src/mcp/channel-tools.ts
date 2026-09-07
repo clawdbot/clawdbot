@@ -4,7 +4,6 @@ import { z } from "zod";
 import type { OpenClawChannelBridge } from "./channel-bridge.js";
 import {
   extractAttachmentsFromMessage,
-  resolveMessageId,
   summarizeResult,
   summarizeStructuredResult,
   toText,
@@ -94,8 +93,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
       limit: z.number().int().min(1).max(200).optional(),
     },
     async ({ session_key, message_id, limit }) => {
-      const messages = await bridge.readMessages(session_key, limit ?? 100);
-      const message = messages.find((entry) => resolveMessageId(entry) === message_id);
+      const message = await bridge.readMessage(session_key, message_id, limit ?? 100);
       if (!message) {
         return {
           content: [{ type: "text", text: `message not found: ${message_id}` }],

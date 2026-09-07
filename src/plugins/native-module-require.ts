@@ -2,10 +2,27 @@
 import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 
 const nodeRequire = createRequire(import.meta.url);
+// Resolution and Jiti must accept the same source family, including typed JSX variants.
+export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".mtsx",
+  ".ctsx",
+];
+
+export function isPluginSourceModulePath(modulePath: string): boolean {
+  return PLUGIN_SOURCE_MODULE_EXTENSIONS.includes(path.extname(modulePath).toLowerCase());
+}
+
+// Failed ESM jobs survive require-cache eviction. Preserve an observed terminal error
+// if a retry hits that job, rather than transforming its rejected graph through Jiti.
+const nativeModuleLoadFailures = new Map<string, unknown>();
 type ResolveFilename = (
   request: string,
   parent: NodeJS.Module | undefined,
@@ -54,16 +71,30 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
     code === "ERR_REQUIRE_ESM" ||
     code === "ERR_REQUIRE_ASYNC_MODULE" ||
     code === "ERR_REQUIRE_ESM_RACE_CONDITION" ||
+    code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" ||
+    code === "ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING" ||
+    code === "ERR_UNKNOWN_FILE_EXTENSION" ||
     isMissingTargetModuleError(candidate, modulePath)
   );
 }
 
 /** Attempts native require before falling back to source transform paths. */
 export function tryNativeRequireJavaScriptModule(
-  modulePath: string,
+  moduleSpecifier: string,
+  options: Parameters<typeof tryNativeRequireModule>[1] = {},
+): { ok: true; moduleExport: unknown } | { ok: false } {
+  if (!isJavaScriptModulePath(toNativeRequirePath(moduleSpecifier))) {
+    return { ok: false };
+  }
+  return tryNativeRequireModule(moduleSpecifier, options);
+}
+
+/** Loads prepared host aliases, including source SDK paths supported by the runtime. */
+export function tryNativeRequireModule(
+  moduleSpecifier: string,
   options: {
     allowWindows?: boolean;
-    aliasMap?: Record<string, string>;
+    aliasMap?: Record<string, string> | ((specifier: string) => string | undefined);
     fallbackOnMissingDependency?: boolean;
     fallbackOnNativeError?: boolean;
   } = {},
@@ -71,14 +102,35 @@ export function tryNativeRequireJavaScriptModule(
   if (process.platform === "win32" && options.allowWindows !== true) {
     return { ok: false };
   }
-  if (!isJavaScriptModulePath(modulePath)) {
+  const modulePath = toNativeRequirePath(moduleSpecifier);
+  if (
+    isPluginSourceModulePath(modulePath) &&
+    !process.features.typescript &&
+    typeof nodeRequire.extensions?.[path.extname(modulePath)] !== "function"
+  ) {
     return { ok: false };
   }
+  let resolvedPath = modulePath;
   try {
-    return { ok: true, moduleExport: requireWithOptionalAliases(modulePath, options.aliasMap) };
+    const moduleExport = withNativeRequireAliases(options.aliasMap, () => {
+      // A process-wide require retains evicted graphs through its parent's children.
+      // Keep that parent scoped to this load so retired graphs can be collected.
+      const require = createRequire(import.meta.url);
+      resolvedPath = require.resolve(modulePath);
+      // Requiring the resolved target could apply a second alias to the same request.
+      return require(modulePath);
+    });
+    nativeModuleLoadFailures.delete(resolvedPath);
+    return { ok: true, moduleExport };
   } catch (error) {
     const code =
       error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+    if (
+      nativeModuleLoadFailures.has(resolvedPath) &&
+      (code === "ERR_REQUIRE_ESM_RACE_CONDITION" || code === "ERR_INTERNAL_ASSERTION")
+    ) {
+      throw nativeModuleLoadFailures.get(resolvedPath);
+    }
     if (
       isSourceTransformFallbackError(error, modulePath) ||
       options.fallbackOnNativeError ||
@@ -87,27 +139,34 @@ export function tryNativeRequireJavaScriptModule(
     ) {
       return { ok: false };
     }
+    nativeModuleLoadFailures.set(resolvedPath, error);
     throw error;
   }
 }
 
-/** Clears a native-loaded module and dependency subtree under the plugin dependency root. */
-export function clearNativeRequireJavaScriptModuleCache(
+/** Clears native and source-transformed modules within the plugin dependency root. */
+export function clearPluginModuleRequireCache(
   modulePath: string,
   options: { dependencyRoot?: string } = {},
 ): void {
-  if (!isJavaScriptModulePath(modulePath)) {
-    return;
-  }
   try {
-    const resolved = nodeRequire.resolve(modulePath);
+    const resolved = nodeRequire.resolve(toNativeRequirePath(modulePath));
     clearRequireCacheSubtree(
       resolved,
       resolveRequireCachePath(options.dependencyRoot ?? path.dirname(resolved)),
       new Set(),
     );
   } catch {
-    // Best-effort lifecycle cleanup: unresolved paths were not native-loaded.
+    // Best-effort lifecycle cleanup: unresolved paths were not loaded.
+  }
+}
+
+// Native require and cache keys use paths; ESM/source loaders keep URL specifiers.
+function toNativeRequirePath(specifier: string): string {
+  try {
+    return /^file:\/\//iu.test(specifier) ? fileURLToPath(specifier) : specifier;
+  } catch {
+    return specifier;
   }
 }
 
@@ -139,25 +198,20 @@ function clearRequireCacheSubtree(
   delete nodeRequire.cache[resolvedPath];
 }
 
-function requireWithOptionalAliases(
-  modulePath: string,
-  aliasMap: Record<string, string> | undefined,
-): unknown {
-  return withNativeRequireAliases(aliasMap, () => nodeRequire(modulePath));
-}
-
 /** Runs a native require block with temporary CJS/ESM alias hooks and restores both afterward. */
 function withNativeRequireAliases<T>(
-  aliasMap: Record<string, string> | undefined,
+  aliasMap: Record<string, string> | ((specifier: string) => string | undefined) | undefined,
   run: () => T,
 ): T {
-  if (!aliasMap || Object.keys(aliasMap).length === 0 || !moduleWithResolver["_resolveFilename"]) {
+  if (!aliasMap || !moduleWithResolver["_resolveFilename"]) {
     return run();
   }
+  const resolveAlias =
+    typeof aliasMap === "function" ? aliasMap : (specifier: string) => aliasMap[specifier];
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
   const esmHooks = moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {
-      const aliasTarget = aliasMap[specifier];
+      const aliasTarget = resolveAlias(specifier);
       if (aliasTarget) {
         return {
           shortCircuit: true,
@@ -168,7 +222,7 @@ function withNativeRequireAliases<T>(
     },
   });
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
-    const aliasTarget = aliasMap[request];
+    const aliasTarget = resolveAlias(request);
     if (aliasTarget) {
       return aliasTarget;
     }

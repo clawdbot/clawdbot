@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import {
   createMessageUpdateContext,
   updateMessage,
 } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
-import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-subscribe.handlers.messages.test-support.js";
 import { createOpenAiResponsesTextEvent as createTextUpdateEvent } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 
 describe("handleMessageUpdate current-source message-tool previews", () => {
@@ -37,7 +37,7 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
     expect(state.currentSourceMessagingToolHeldPartial).toBeUndefined();
   });
 
-  it("holds automatic partial prefixes and exact duplicates after source delivery", () => {
+  it("holds automatic partial prefixes and exact duplicates after source delivery", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
     const sentText = "QA-MSTEAMS-DM-OK";
@@ -50,7 +50,7 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
       },
     });
 
-    updateMessage(
+    await updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_delta",
@@ -58,7 +58,7 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
         id: "msg_source_duplicate",
       }),
     );
-    updateMessage(
+    await updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_end",
@@ -71,7 +71,7 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
   });
 
-  it("releases the full cumulative snapshot when automatic text diverges", () => {
+  it("releases the full cumulative snapshot when automatic text diverges", async () => {
     const onPartialReply = vi.fn();
     const sentText = "QA-MSTEAMS-DM-OK";
     const context = createMessageUpdateContext({
@@ -82,7 +82,7 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
       },
     });
 
-    updateMessage(
+    await updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_delta",
@@ -90,7 +90,7 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
         id: "msg_source_diverges",
       }),
     );
-    updateMessage(
+    await updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_end",
@@ -105,7 +105,7 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
     );
   });
 
-  it("keeps unrelated automatic partial text visible", () => {
+  it("keeps unrelated automatic partial text visible", async () => {
     const onPartialReply = vi.fn();
     const context = createMessageUpdateContext({
       onPartialReply,
@@ -115,7 +115,7 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
       },
     });
 
-    updateMessage(
+    await updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_end",

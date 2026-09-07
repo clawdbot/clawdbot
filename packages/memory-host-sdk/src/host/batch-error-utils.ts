@@ -1,4 +1,3 @@
-// Memory Host SDK helper module supports batch error utils behavior.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EmbeddingBatchOutputLine } from "./batch-output.js";
 import { formatErrorMessage } from "./error-utils.js";

@@ -1,5 +1,8 @@
 import remend, { type RemendOptions } from "remend";
-import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/reasoning-tags.js";
+import {
+  findMarkdownCodeSpans,
+  findMarkdownCodeRegions,
+} from "../../../packages/markdown-core/src/reasoning-tags.js";
 import {
   markdownDisclosureTagKind,
   MAX_MARKDOWN_DETAILS_DEPTH,
@@ -150,7 +153,22 @@ function scanStableStreamingMarkdown(
   let lineMode = cursor.lineMode;
   let openFence = cursor.openFence;
   const detailsStack: DetailsFrame[] = [];
-  let codeSpans: ReturnType<typeof findMarkdownCodeSpans> | undefined;
+  // Completed fences cannot gain indentation ownership from later prose. Keep
+  // list containers and unfinished fences intact when parsing the retained suffix.
+  const codeStart = cursor.openFence
+    ? 0
+    : Math.min(cursor.lastFenceOffset, cursor.firstListOffset ?? cursor.lastFenceOffset);
+  const codeInput = markdownLocal.slice(codeStart);
+  const codeRegions = / {4}|\t/u.test(codeInput)
+    ? findMarkdownCodeRegions(codeInput).map((region) => ({
+        start: region.start + codeStart,
+        end: region.end + codeStart,
+        block: region.block,
+      }))
+    : [];
+  let codeSpans: ReturnType<typeof findMarkdownCodeSpans> | undefined = codeRegions.length
+    ? codeRegions.map(({ start, end }) => [start, end])
+    : undefined;
   let resumeCursor = cursor;
 
   while (index < markdownLocal.length) {
@@ -239,11 +257,24 @@ function scanStableStreamingMarkdown(
     boundary = Math.min(boundary, firstListOffset);
   }
 
+  // Blank lines inside indented code do not retire the block, and prose repair
+  // must never complete punctuation in any parser-owned code block.
+  let lastCodeEnd = lastFenceOffset;
+  for (const region of codeRegions) {
+    if (!region.block) {
+      continue;
+    }
+    if (region.start < boundary && boundary < region.end) {
+      boundary = region.start;
+    }
+    lastCodeEnd = Math.max(lastCodeEnd, region.end);
+  }
+
   return {
     cursor: resumeCursor,
     result: {
       boundary,
-      tailRepairStart: openFence ? null : Math.max(boundary, lastFenceOffset),
+      tailRepairStart: openFence ? null : Math.max(boundary, lastCodeEnd),
     },
   };
 }
@@ -294,6 +325,9 @@ const streamingRemendOptions = { katex: false, linkMode: "text-only" } satisfies
 export function repairStreamingMarkdownTail(tail: string, repairStart = 0): string {
   const repaired =
     tail.slice(0, repairStart) + remend(tail.slice(repairStart), streamingRemendOptions);
+  if (!repaired.includes("<")) {
+    return repaired;
+  }
   const detailsStack: DetailsFrame[] = [];
   const codeSpans = findMarkdownCodeSpans(repaired);
   let openFence: FenceMarker | null = null;

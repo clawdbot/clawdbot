@@ -24,7 +24,7 @@ const resolveOwningPluginIdsForProviderMock = vi.hoisted(() =>
   vi.fn<ResolveOwningPluginIdsForProvider>(() => undefined),
 );
 const resolveCatalogHookProviderPluginIdsMock = vi.hoisted(() =>
-  vi.fn<ResolveCatalogHookProviderPluginIds>((_) => [] as string[]),
+  vi.fn<ResolveCatalogHookProviderPluginIds>((_params) => [] as string[]),
 );
 
 vi.mock("openclaw/plugin-sdk/provider-catalog-runtime", async () => {

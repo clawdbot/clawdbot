@@ -5,8 +5,11 @@ import type {
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 
 export type TrustedSessionCreation = {
+  skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
+  /** Creator-owned isolation requirement resolved only by the trusted Gateway boundary. */
+  sandbox?: "required";
   /** Exact spawning session retained separately from the stable actor identity. */
   requesterSessionKey?: string;
   /** Immutable completion recipient for a spawn-owned visible session. */
@@ -59,7 +62,9 @@ export function resolveOperatorSessionCreation(
   // ownership follows the live trusted profile while audit keeps its frozen facts.
   return {
     via: "operator",
-    ...(profileId ? { actor: { type: "human" as const, id: profileId } } : {}),
+    ...(profileId
+      ? { actor: { type: "human" as const, source: "profile" as const, id: profileId } }
+      : {}),
   };
 }
 

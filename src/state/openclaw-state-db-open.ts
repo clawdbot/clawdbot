@@ -10,7 +10,7 @@ import {
   assertSqliteIntegrity,
   isTerminalSqliteIntegrityError,
 } from "../infra/sqlite-integrity.js";
-import { isSqliteSchemaVersionError, readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -21,8 +21,9 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
-import { assertSupportedSchemaVersion } from "./openclaw-state-db-maintenance.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
+import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
 
@@ -30,21 +31,21 @@ function assertStateDatabaseIntegrityBeforeMutation(
   database: DatabaseSync,
   pathname: string,
 ): void {
-  const userVersion = readSqliteUserVersion(database);
+  const contentVersion = readStateSchemaContentVersion(database);
   const hasApplicationSchema = database // sqlite-allow-raw -- Cold-open schema presence probe before Kysely exposure.
     .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
     .get();
   const migrationPending =
-    (userVersion === 0 && hasApplicationSchema) ||
-    (userVersion > 0 && userVersion < OPENCLAW_STATE_SCHEMA_VERSION);
+    (contentVersion === 0 && hasApplicationSchema) ||
+    (contentVersion > 0 && contentVersion < OPENCLAW_STATE_SCHEMA_VERSION);
   if (migrationPending) {
     stateDbLog.info("state database schema migration pending; verifying integrity first", {
-      fromVersion: userVersion,
+      fromVersion: contentVersion,
       path: pathname,
       toVersion: OPENCLAW_STATE_SCHEMA_VERSION,
     });
   }
-  if (userVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  if (contentVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
   }
@@ -56,7 +57,6 @@ export function openUnpublishedStateDatabase(params: {
   busyTimeoutMs: number;
   lockFailureReporting: SqliteLockFailureReporting;
   ensureSchema: (database: DatabaseSync) => void;
-  onWalSplitBrain: () => void;
   recordOpenFailure: (pathname: string, error: Error) => void;
 }): OpenClawStateDatabase {
   const { busyTimeoutMs, lockFailureReporting } = params;
@@ -70,7 +70,7 @@ export function openUnpublishedStateDatabase(params: {
     () => {
       let maintenance: SqliteWalMaintenance | undefined;
       try {
-        assertSupportedSchemaVersion(db, params.pathname);
+        assertSupportedStateSchemaVersion(db, params.pathname);
         assertStateDatabaseIntegrityBeforeMutation(db, params.pathname);
         configureSqlitePreSchemaPragmas(db, { busyTimeoutMs });
         maintenance = configureSqliteConnectionPragmas(db, {
@@ -78,7 +78,6 @@ export function openUnpublishedStateDatabase(params: {
           databaseLabel: "openclaw-state",
           databasePath: params.pathname,
           foreignKeys: true,
-          onWalSplitBrain: params.onWalSplitBrain,
           synchronous: "NORMAL",
         });
         params.ensureSchema(db);

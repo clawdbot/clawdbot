@@ -69,6 +69,8 @@ export TOKENPLAN_API_KEY=...
   </Step>
 </Steps>
 
+Onboarding preserves your model entries and leaves generated catalog rows to discovery. With `models.mode: "replace"`, it also writes the built-in catalog because that mode skips discovery.
+
 ## Non-interactive setup
 
 ```bash

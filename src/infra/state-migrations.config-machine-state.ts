@@ -2,11 +2,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
+import { clearBundledDiscoveryModeMemo } from "../plugins/bundled-discovery-state.js";
 import {
   importConfigMachineState,
-  readConfigMachineState,
   updateConfigMachineState,
-} from "../state/config-machine-state.js";
+} from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 
 const BUNDLED_DISCOVERY_STATE_CUTOVER_VERSION = "2026.7.2";
 
@@ -64,6 +65,11 @@ export function migrateLegacyConfigMachineState(params: {
     return { changes: [], warnings: [] };
   }
   const result = importConfigMachineState(entries, { env: params.env });
+  if (entries.some(([key]) => key === "plugins.bundledDiscovery")) {
+    // Same-process readers must not keep the pre-migration absent mode cached,
+    // or doctor rebuilds plugin indexes against stale strict-gate decisions.
+    clearBundledDiscoveryModeMemo();
+  }
   const changes = result.imported.map((key) => `Migrated ${key} → shared SQLite state`);
   changes.push(...result.kept.map((key) => `Kept existing shared SQLite ${key} state`));
   if (installs && hasInstalls) {

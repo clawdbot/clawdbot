@@ -2,12 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { InternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
+  CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
@@ -1014,6 +1016,52 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     ]);
   });
 
+  it("admits only marked Cron delivery context when explicitly requested", async () => {
+    await writeTranscriptStore();
+    await persistSessionTranscriptTurn(createFixtureTranscriptScope(), {
+      updateMode: "none",
+      messages: [
+        { eventId: "user", message: { role: "user", content: "ordinary user" } },
+        { eventId: "assistant", message: { role: "assistant", content: "ordinary assistant" } },
+      ],
+    });
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      text: "scheduled result",
+      idempotencyKey: "cron-delivery",
+      deliveryMirror: { kind: CRON_DIRECT_DELIVERY_CONTEXT_KIND },
+    });
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      text: "ordinary delivery mirror",
+      idempotencyKey: "channel-delivery",
+      deliveryMirror: { kind: "channel-final" },
+    });
+    const params = {
+      agentId: "main",
+      sessionKey,
+      storePath: fixture.storePath(),
+      limit: 10,
+    };
+
+    await expect(readRecentUserAssistantTextForSession(params)).resolves.toEqual([
+      expect.objectContaining({ role: "user", text: "ordinary user" }),
+      expect.objectContaining({ role: "assistant", text: "ordinary assistant" }),
+    ]);
+    await expect(
+      readRecentUserAssistantTextForSession({
+        ...params,
+        includeCronDirectDeliveryContext: true,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ role: "user", text: "ordinary user" }),
+      expect.objectContaining({ role: "assistant", text: "ordinary assistant" }),
+      expect.objectContaining({ role: "assistant", text: "scheduled result" }),
+    ]);
+  });
+
   it("reads recent context only from the active transcript branch", async () => {
     await writeTranscriptStore();
     await persistSessionTranscriptTurn(
@@ -1810,6 +1858,48 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       ok: false,
       code: "session-rebound",
     });
+  });
+
+  it("rejects revision materialization between the initial check and SQLite append", async () => {
+    await writeTranscriptStore({ lifecycleRevision: undefined });
+    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath(), {
+      agentId: "main",
+    }).path;
+    let revisionMaterialized = false;
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      expectedLifecycleRevision: null,
+      expectedSessionId: sessionId,
+      storePath: fixture.storePath(),
+      beforeMessageWrite: ({ message }) => {
+        const external = new DatabaseSync(databasePath);
+        try {
+          const row = external
+            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+            .get(sessionKey) as { entry_json: string };
+          const replacement = {
+            ...(JSON.parse(row.entry_json) as SessionEntry),
+            lifecycleRevision: "replacement-revision",
+            updatedAt: 2,
+          };
+          external
+            .prepare(
+              "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
+            )
+            .run(JSON.stringify(replacement), replacement.updatedAt, sessionKey);
+          revisionMaterialized = true;
+        } finally {
+          external.close();
+        }
+        return message;
+      },
+      message: createExactAssistantMessage({ text: "late output" }),
+    });
+
+    expect(revisionMaterialized).toBe(true);
+    expect(result).toMatchObject({ ok: false, code: "session-rebound" });
+    expect(await loadFixtureMessages()).toEqual([]);
   });
 
   it("rejects a superseded writer claim and accepts the admitted writer", async () => {

@@ -6,11 +6,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ChannelOnboardingPostWriteHook } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -334,57 +334,58 @@ describe("agents add command", () => {
     );
   }
 
-  it("requires --workspace when flags are present", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
-
-    await agentsAddCommand({ name: "Work" }, runtime, { hasAutomationFlags: true });
-
-    expect(runtime.error).toHaveBeenCalledOnce();
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
-  });
-
-  it("requires --workspace in non-interactive mode", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
-
-    await agentsAddCommand({ name: "Work", nonInteractive: true }, runtime, {
-      hasAutomationFlags: false,
-    });
-
-    expect(runtime.error).toHaveBeenCalledOnce();
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
-  });
-
-  it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(
-    "rejects reserved system-agent id %s",
-    async (name) => {
-      readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
-
-      await agentsAddCommand({ name, workspace: "/tmp/reserved" }, runtime, {
-        hasAutomationFlags: true,
-      });
-
-      expect(runtime.error).toHaveBeenCalledWith(
-        `"${name}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(writeConfigFileMock).not.toHaveBeenCalled();
+  it.each([
+    {
+      name: "a missing workspace with automation flags",
+      options: { name: "Work" },
+      flags: { hasAutomationFlags: true },
+      message: `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
     },
-  );
+    {
+      name: "a missing workspace with explicit non-interactive mode",
+      options: { name: "Work", nonInteractive: true },
+      flags: { hasAutomationFlags: false },
+      message: `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
+    },
+    {
+      name: "a missing name after a valid workspace",
+      options: { workspace: "/tmp/work" },
+      flags: { hasAutomationFlags: true },
+      message: `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
+    },
+    {
+      name: "an unrepresentable non-interactive name",
+      options: { name: "агент✨", workspace: "/tmp/work" },
+      flags: { hasAutomationFlags: true },
+      message:
+        'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
+    },
+    ...RESERVED_SYSTEM_AGENT_IDS_FOR_TEST.map((agentId) => ({
+      name: `reserved system-agent id ${agentId}`,
+      options: { name: agentId, workspace: "/tmp/reserved" },
+      flags: { hasAutomationFlags: true },
+      message: `"${agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
+    })),
+  ])("rejects $name through the root failure owner before mutation", async (testCase) => {
+    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await expect(agentsAddCommand(testCase.options, runtime, testCase.flags)).rejects.toMatchObject(
+      {
+        name: "ExpectedCliError",
+        message: testCase.message,
+        humanOutput: testCase.message,
+        machineOutput: testCase.message,
+      },
+    );
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(createAgentMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
 
   it("rejects an unrepresentable positional name before targeting an existing agent", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: {} } } },
-      sourceConfig: { agents: { entries: { main: {} } } },
-    });
+    setConfigSnapshot({ agents: { entries: { main: {} } } });
     const prompter = {
       intro: vi.fn(),
       text: vi.fn(),
@@ -459,14 +460,20 @@ describe("agents add command", () => {
         outro: vi.fn(),
       });
 
-      await agentsAddCommand({ json }, runtime);
+      const message =
+        "Agent creation needs an interactive TTY. Use `openclaw agents add <id> --non-interactive --workspace <dir>` for automation.";
+      await expect(agentsAddCommand({ json }, runtime)).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message,
+        humanOutput: message,
+        machineOutput: message,
+      });
 
-      expect(runtime.error).toHaveBeenCalledWith(
-        "Agent creation needs an interactive TTY. Use `openclaw agents add <id> --non-interactive --workspace <dir>` for automation.",
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
       expect(runtime.log).not.toHaveBeenCalled();
       expect(terminalMocks.isTerminalInteractive).toHaveBeenCalledWith(output);
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
       expect(wizardMocks.createClackPrompter).not.toHaveBeenCalled();
       expect(createAgentMock).not.toHaveBeenCalled();
       expect(writeConfigFileMock).not.toHaveBeenCalled();
@@ -474,11 +481,7 @@ describe("agents add command", () => {
   );
 
   it("uses the explicit agent target and skips catalog validation", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { list: [{ id: "main", default: true }] } },
-      sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
-    });
+    setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
     const prompter = {
       intro: vi.fn(),
       text: vi.fn().mockResolvedValueOnce("Jon").mockResolvedValueOnce("/tmp/openclaw-jon"),
@@ -516,11 +519,7 @@ describe("agents add command", () => {
   it("keeps guided JSON stdout isolated while wizard logs and UI use stderr", async () => {
     const config = { agents: { entries: { work: { id: "work" } } } };
     setConfigSnapshot(config);
-    const wizard = createQueuedWizardPrompter({
-      textValues: ["/tmp/workspace-work"],
-      confirmValues: [true, false],
-    });
-    wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+    useExistingAgentWizard();
     onboardChannelsMocks.setupChannels.mockImplementationOnce(
       async (nextConfig, wizardRuntime, _prompter, options) => {
         wizardRuntime.log("channel log");
@@ -558,11 +557,7 @@ describe("agents add command", () => {
   });
 
   it("surfaces the canonical main gate before guided auth or workspace side effects", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { robby: { id: "robby" } } } },
-      sourceConfig: { agents: { entries: { robby: { id: "robby" } } } },
-    });
+    setConfigSnapshot({ agents: { entries: { robby: { id: "robby" } } } });
     const prompter = {
       intro: vi.fn(),
       text: vi.fn(),
@@ -633,6 +628,47 @@ describe("agents add command", () => {
     },
   );
 
+  it.each([
+    { source: "__skip__", copy: false, systemAgent: undefined },
+    { source: "ops", copy: true, systemAgent: { agentId: "main" } },
+    { source: "ops", copy: false, systemAgent: undefined },
+  ])("adds to an explicit fleet with optional auth copy: %j", async (testCase) => {
+    await withAgentsAddStateRoot("openclaw-agents-add-explicit-", async (root) => {
+      const workspaceDir = path.join(root, "workspace-work");
+      const sourceAgentDir = await seedAgentAuthStore(root, "ops", {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:portable": { type: "api_key", provider: "openai", key: "fixture-only-key" },
+        },
+      });
+      setConfigSnapshot({
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: testCase.systemAgent },
+          entries: { main: {}, ops: { agentDir: sourceAgentDir } },
+        },
+      });
+      const wizard = createQueuedWizardPrompter({
+        textValues: ["work", workspaceDir],
+        selectValues: [testCase.source],
+        confirmValues: testCase.source === "__skip__" ? [false] : [testCase.copy, false],
+      });
+      wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+
+      await agentsAddCommand({}, runtime);
+
+      expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
+      const copied = loadPersistedAuthProfileStore(path.join(root, "agents", "work", "agent"));
+      expect(copied?.profiles["openai:portable"] !== undefined).toBe(testCase.copy);
+      expect(onboardChannelsMocks.setupChannels).toHaveBeenCalledWith(
+        expect.any(Object),
+        runtime,
+        wizard.prompter,
+        expect.objectContaining({ workspaceDir, deferStatusUntilSelection: true }),
+      );
+    });
+  });
+
   it("fails before config mutation when the source auth store is unreadable", async () => {
     await withAgentsAddStateRoot("openclaw-agents-add-auth-unreadable-", async (root) => {
       const sourceAgentDir = path.join(root, "agents", "main", "agent");
@@ -643,26 +679,15 @@ describe("agents add command", () => {
         "CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json;",
       );
       database.close();
-      readConfigFileSnapshotMock.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: { agents: { list: [{ id: "main", default: true }] } },
-        sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
-      });
-      const prompter = {
-        intro: vi.fn(),
-        text: vi.fn().mockResolvedValueOnce("work").mockResolvedValueOnce(workspaceDir),
-        confirm: vi.fn().mockResolvedValue(false),
-        note: vi.fn(),
-        outro: vi.fn(),
-      };
-      wizardMocks.createClackPrompter.mockReturnValue(prompter);
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      const wizard = useFreshAgentWizard({ workspaceDir });
 
       await expect(agentsAddCommand({}, runtime)).rejects.toThrow(
         /auth profile store .* is unreadable; run .*doctor --fix/i,
       );
 
       expect(writeConfigFileMock).not.toHaveBeenCalled();
-      expect(prompter.outro).not.toHaveBeenCalled();
+      expect(wizard.outro).not.toHaveBeenCalled();
     });
   });
 
@@ -982,11 +1007,7 @@ describe("agents add command", () => {
 
   describe("non-interactive config mutation", () => {
     it("creates with explicit non-interactive inputs without a usable terminal", async () => {
-      readConfigFileSnapshotMock.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: { agents: { list: [{ id: "main", default: true }] } },
-        sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
-      });
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
       terminalMocks.isTerminalInteractive.mockReturnValue(false);
 
       await agentsAddCommand(
@@ -1006,26 +1027,45 @@ describe("agents add command", () => {
       expect(terminalMocks.isTerminalInteractive).not.toHaveBeenCalled();
     });
 
-    it("reports a duplicate rejected by the canonical service", async () => {
-      readConfigFileSnapshotMock.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: { agents: { list: [{ id: "main", default: true }] } },
-        sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
-      });
-      createAgentMock.mockResolvedValueOnce({
-        status: "error",
-        reason: "already-exists",
-        agentId: "work",
-        message: 'agent "work" already exists',
-      });
+    it.each([
+      {
+        name: "a duplicate agent",
+        result: {
+          status: "error" as const,
+          reason: "already-exists",
+          agentId: "work",
+          message: 'agent "work" already exists',
+        },
+        message: 'Agent "work" already exists.',
+      },
+      {
+        name: "a rejected binding",
+        result: {
+          status: "error" as const,
+          reason: "invalid-bindings",
+          agentId: "work",
+          message: 'Invalid binding "telegram:". Account id is empty.',
+        },
+        message: 'Invalid binding "telegram:". Account id is empty.',
+      },
+    ])("reports $name through the root failure owner", async (testCase) => {
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      createAgentMock.mockResolvedValueOnce(testCase.result);
 
-      await agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
-        hasAutomationFlags: true,
+      await expect(
+        agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
+          hasAutomationFlags: true,
+        }),
+      ).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message: testCase.message,
+        humanOutput: testCase.message,
+        machineOutput: testCase.message,
       });
 
       expect(writeConfigFileMock).not.toHaveBeenCalled();
-      expect(runtime.error).toHaveBeenCalledWith('Agent "work" already exists.');
-      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
     });
 
     it("reports binding conflicts from the committed mutation", async () => {

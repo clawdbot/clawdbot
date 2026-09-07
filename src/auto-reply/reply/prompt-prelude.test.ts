@@ -59,6 +59,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("what changed?");
     expect(envelope.currentInboundContext).toEqual({
       text: "Current message:\nchat_id=C123",
+      fragments: [{ kind: "conversation-data", text: "Current message:\nchat_id=C123" }],
       promptJoiner: " ",
     });
   });
@@ -151,6 +152,8 @@ describe("buildReplyPromptEnvelope", () => {
       startupAction: "new",
       inboundEventKind: "room_event",
       sourceReplyDeliveryMode: "message_tool_only",
+      threadContextNote: "Thread note",
+      systemEventBlocks: ["System event"],
     });
 
     // The active room-event prompt is the attributed transcript row itself, so
@@ -174,7 +177,9 @@ describe("buildReplyPromptEnvelope", () => {
           "#35674 Other: I wish I could enjoy 5.5",
           "#35675 User ->#35674: Are you fr fr",
         ].join("\n"),
-        "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
+        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
+        "Thread note",
+        "System event",
       ].join("\n\n"),
     );
     // Each room-event fact appears exactly once per request: kind lives in the
@@ -191,8 +196,16 @@ describe("buildReplyPromptEnvelope", () => {
           JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
           "```",
         ].join("\n"),
-        "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
+        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
+        "Thread note",
+        "System event",
       ].join("\n\n"),
+    );
+    expect(envelope.currentInboundContext?.fragments).toEqual(
+      expect.arrayContaining([
+        { kind: "conversation-data", text: "Thread note" },
+        { kind: "conversation-data", text: "System event" },
+      ]),
     );
     expect(envelope.currentInboundContext?.resumableText).not.toContain(
       "Conversation context (chronological, selected for current message):",
@@ -256,7 +269,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.currentInboundContext?.text).toContain("Alice: old context");
     expect(envelope.queuedBody).toBe("#2002 Bob: current note");
     expect(envelope.currentInboundContext?.text).toContain(
-      "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Reply only when you are directly addressed or have concrete value to add.",
+      "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.",
     );
     expect(envelope.currentInboundContext?.text).not.toContain("message(action=send)");
     expect(envelope.currentInboundContext?.text).not.toContain(
@@ -314,6 +327,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.prefixedCommandBody).toBe(body);
     expect(envelope.queuedBody).toBe(body);
     expect(envelope.transcriptCommandBody).toBe(body);
+    expect(envelope.inboundMediaIndexes).toEqual([]);
     expect(envelope.media).toEqual([
       {
         path: "/tmp/tlon.png",
@@ -323,6 +337,54 @@ describe("buildReplyPromptEnvelope", () => {
         transcribed: false,
         messageId: undefined,
       },
+    ]);
+  });
+
+  it("keeps sparse inbound positions separate from appended preprojected media", () => {
+    const sharedPath = "/tmp/shared.png";
+    const sessionCtx = finalizeInboundContext({
+      Body: "inspect these",
+      media: [
+        {},
+        { path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true },
+        { path: sharedPath, contentType: "image/png" },
+        { path: sharedPath, contentType: "image/png" },
+      ],
+    });
+    const params = {
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "inspect these",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new" as const,
+      media: [{ path: "/tmp/preprojected.pdf", contentType: "application/pdf" }],
+    };
+    const first = buildReplyPromptEnvelope(params);
+    const rebuilt = buildReplyPromptEnvelope({
+      ...params,
+      ctx: { ...sessionCtx, media: [...(sessionCtx.media ?? []), { path: "/tmp/later.png" }] },
+      systemEventBlocks: ["context changed"],
+    });
+
+    expect(first.inboundMediaIndexes).toEqual([2, 3]);
+    expect(first.media?.map((fact) => fact.path)).toEqual([
+      sharedPath,
+      sharedPath,
+      "/tmp/preprojected.pdf",
+    ]);
+    expect(rebuilt.inboundMediaIndexes).toEqual([2, 3, 4]);
+    expect(first.prefixedCommandBody).toBe(
+      `[media attached: 2 files]\n[media attached 1/2: ${sharedPath} (image/png)]\n[media attached 2/2: ${sharedPath} (image/png)]\ninspect these`,
+    );
+    expect(first.queuedBody).toBe(first.prefixedCommandBody);
+    expect(first.transcriptCommandBody).toBe(first.prefixedCommandBody);
+    expect(sessionCtx.media?.map((fact) => fact.path)).toEqual([
+      undefined,
+      "/tmp/voice.ogg",
+      sharedPath,
+      sharedPath,
     ]);
   });
 

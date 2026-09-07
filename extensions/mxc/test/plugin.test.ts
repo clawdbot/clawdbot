@@ -1,37 +1,40 @@
 import type {
   OpenClawPluginApi,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  PluginRuntimeLifecycleRegistration,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRegistryFixture } from "openclaw/plugin-sdk/plugin-test-contracts";
+import {
+  createEmptyPluginRegistry,
+  createPluginRecord,
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  getSandboxBackendFactory,
+  getSandboxBackendManager,
+  getSandboxBackendWorkdirResolver,
+} from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const {
   assertMxcReadinessMock,
   warnMxcHostPrepIfNeededMock,
   createMxcSandboxBackendFactoryMock,
-  factoryMock,
   mxcSandboxBackendManagerMock,
-  registerSandboxBackendMock,
   resolveMxcBinaryPathMock,
-  unregisterMock,
 } = vi.hoisted(() => {
-  const factory = { id: "factory" };
-  const unregister = vi.fn();
   return {
     assertMxcReadinessMock: vi.fn(),
     warnMxcHostPrepIfNeededMock: vi.fn(),
-    createMxcSandboxBackendFactoryMock: vi.fn(() => factory),
-    factoryMock: factory,
-    mxcSandboxBackendManagerMock: { id: "manager" },
-    registerSandboxBackendMock: vi.fn(() => unregister),
+    createMxcSandboxBackendFactoryMock: vi.fn(() => async () => {
+      throw new Error("MXC provider must not run in registration tests");
+    }),
+    mxcSandboxBackendManagerMock: { describeRuntime: vi.fn(), removeRuntime: vi.fn() },
     resolveMxcBinaryPathMock: vi.fn(() => "mxc-test-binary"),
-    unregisterMock: unregister,
   };
 });
-
-vi.mock("openclaw/plugin-sdk/sandbox", () => ({
-  registerSandboxBackend: registerSandboxBackendMock,
-}));
 
 vi.mock("../src/binary-resolver.js", () => ({
   resolveMxcBinaryPath: resolveMxcBinaryPathMock,
@@ -54,10 +57,15 @@ import { registerMxcPlugin } from "../src/plugin.js";
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 
-type MxcPluginApiForTest = Pick<
-  OpenClawPluginApi,
-  "pluginConfig" | "registerService" | "registrationMode"
->;
+function readBackend() {
+  return {
+    factory: getSandboxBackendFactory("mxc"),
+    manager: getSandboxBackendManager("mxc"),
+    resolveWorkdir: getSandboxBackendWorkdirResolver("mxc"),
+  };
+}
+
+const stops: Array<() => Promise<void>> = [];
 
 const nonFullRegistrationModes = [
   "discovery",
@@ -84,26 +92,27 @@ function restoreProcessPlatformForTest(): void {
 function createApi(
   pluginConfig: Record<string, unknown> | undefined = {},
   registrationMode: OpenClawPluginApi["registrationMode"] = "full",
-): {
-  api: OpenClawPluginApi;
-  registerService: ReturnType<typeof vi.fn>;
-  services: OpenClawPluginService[];
-} {
-  const services: OpenClawPluginService[] = [];
-  const registerService = vi.fn((service: OpenClawPluginService): void => {
-    services.push(service);
-  });
-  const api = {
+) {
+  const lifecycles: PluginRuntimeLifecycleRegistration[] = [];
+  const registerService = vi.fn();
+  const api = createTestPluginApi({
+    id: "mxc",
     pluginConfig,
     registrationMode,
     registerService,
-  } satisfies MxcPluginApiForTest;
-
-  return {
-    api: api as unknown as OpenClawPluginApi,
-    registerService,
-    services,
+    registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle),
+  });
+  const cleanup = async (
+    context: Parameters<NonNullable<PluginRuntimeLifecycleRegistration["cleanup"]>>[0],
+  ) => {
+    for (const lifecycle of lifecycles.toReversed()) {
+      await lifecycle.cleanup?.(context);
+    }
   };
+  const stop = () => cleanup({ reason: "disable" });
+  stops.push(stop);
+
+  return { api, registerService, lifecycles, cleanup, stop };
 }
 
 describe("registerMxcPlugin", () => {
@@ -113,22 +122,24 @@ describe("registerMxcPlugin", () => {
     assertMxcReadinessMock.mockClear();
     warnMxcHostPrepIfNeededMock.mockClear();
     createMxcSandboxBackendFactoryMock.mockClear();
-    registerSandboxBackendMock.mockClear();
     resolveMxcBinaryPathMock.mockReset();
     resolveMxcBinaryPathMock.mockReturnValue("mxc-test-binary");
-    unregisterMock.mockClear();
     setProcessPlatformForTest("win32");
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const stop of stops.splice(0).toReversed()) {
+      await stop();
+    }
     warnSpy.mockRestore();
     restoreProcessPlatformForTest();
   });
 
   test("warns and stays dormant on non-Windows platforms", () => {
     setProcessPlatformForTest("darwin");
-    const { api, registerService } = createApi();
+    const original = readBackend();
+    const { api, registerService, lifecycles } = createApi();
 
     registerMxcPlugin(api);
 
@@ -137,14 +148,19 @@ describe("registerMxcPlugin", () => {
     );
     expect(resolveMxcBinaryPathMock).not.toHaveBeenCalled();
     expect(assertMxcReadinessMock).not.toHaveBeenCalled();
-    expect(registerSandboxBackendMock).not.toHaveBeenCalled();
+    expect(readBackend()).toEqual(original);
+    expect(lifecycles).toEqual([]);
     expect(registerService).not.toHaveBeenCalled();
   });
 
   test.each(nonFullRegistrationModes)(
     "does not register runtime hooks during %s registration",
     (registrationMode) => {
-      const { api, registerService } = createApi({ timeoutSeconds: 60 }, registrationMode);
+      const original = readBackend();
+      const { api, registerService, lifecycles } = createApi(
+        { timeoutSeconds: 60 },
+        registrationMode,
+      );
 
       registerMxcPlugin(api);
 
@@ -153,39 +169,114 @@ describe("registerMxcPlugin", () => {
       expect(assertMxcReadinessMock).not.toHaveBeenCalled();
       expect(warnMxcHostPrepIfNeededMock).not.toHaveBeenCalled();
       expect(createMxcSandboxBackendFactoryMock).not.toHaveBeenCalled();
-      expect(registerSandboxBackendMock).not.toHaveBeenCalled();
+      expect(readBackend()).toEqual(original);
+      expect(lifecycles).toEqual([]);
       expect(registerService).not.toHaveBeenCalled();
     },
   );
 
-  test("registers the sandbox backend on Windows when feature probes pass", () => {
-    const { api, services } = createApi({ timeoutSeconds: 60 });
+  test.each(["disable", "restart"] as const)(
+    "registers eagerly on Windows and restores hooks on global %s",
+    async (reason) => {
+      const original = readBackend();
+      const { api, cleanup, stop } = createApi({ timeoutSeconds: 60 });
 
-    registerMxcPlugin(api);
+      registerMxcPlugin(api);
 
-    expect(resolveMxcBinaryPathMock).toHaveBeenCalledWith(undefined);
-    expect(assertMxcReadinessMock).toHaveBeenCalledWith();
-    expect(warnMxcHostPrepIfNeededMock).toHaveBeenCalledWith();
-    expect(createMxcSandboxBackendFactoryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutSeconds: 60,
-      }),
-    );
-    expect(registerSandboxBackendMock).toHaveBeenCalledWith("mxc", {
-      factory: factoryMock,
-      manager: mxcSandboxBackendManagerMock,
-    });
-    expect(services).toHaveLength(1);
+      expect(resolveMxcBinaryPathMock).toHaveBeenCalledWith(undefined);
+      expect(assertMxcReadinessMock).toHaveBeenCalledWith();
+      expect(warnMxcHostPrepIfNeededMock).toHaveBeenCalledWith();
+      expect(createMxcSandboxBackendFactoryMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutSeconds: 60,
+        }),
+      );
+      expect(readBackend()).toEqual({
+        factory: expect.any(Function),
+        manager: mxcSandboxBackendManagerMock,
+        resolveWorkdir: null,
+      });
+      await cleanup({ reason });
+      expect(readBackend()).toEqual(original);
+      await stop();
+      expect(readBackend()).toEqual(original);
+    },
+  );
 
-    void services[0]?.stop?.({} as OpenClawPluginServiceContext);
-    expect(unregisterMock).toHaveBeenCalledTimes(1);
+  test.each(["disable", "restart", "reset", "delete"] as const)(
+    "preserves backend hooks during scoped %s cleanup",
+    async (reason) => {
+      const generation = createApi();
+      registerMxcPlugin(generation.api);
+      const backend = readBackend();
+      for (const scope of [
+        { sessionKey: "agent:other:main" },
+        { runId: "other-run" },
+        { sessionKey: "" },
+        { runId: "" },
+      ]) {
+        await generation.cleanup({ reason, ...scope });
+        expect(readBackend()).toEqual(backend);
+      }
+      if (reason === "reset" || reason === "delete") {
+        await generation.cleanup({ reason });
+        expect(readBackend()).toEqual(backend);
+      }
+    },
+  );
+
+  test.each(["older-first", "newer-first"] as const)(
+    "preserves live registrations when generations retire %s",
+    async (order) => {
+      const original = readBackend();
+      const older = createApi();
+      registerMxcPlugin(older.api);
+      const olderBackend = readBackend();
+      const newer = createApi();
+      registerMxcPlugin(newer.api);
+      const newerBackend = readBackend();
+      expect(newerBackend.factory).not.toBe(olderBackend.factory);
+      const first = order === "older-first" ? older : newer;
+      const last = order === "older-first" ? newer : older;
+      await first.stop();
+      expect(readBackend()).toEqual(order === "older-first" ? newerBackend : olderBackend);
+      await last.stop();
+      expect(readBackend()).toEqual(original);
+      await first.stop();
+      expect(readBackend()).toEqual(original);
+    },
+  );
+
+  test("retires a registered backend even when no plugin services ever start", async () => {
+    const original = readBackend();
+    const originalRegistry = getActivePluginRegistry();
+    const { registry } = createPluginRegistryFixture();
+    const record = createPluginRecord({ id: "mxc" });
+    registry.registry.plugins.push(record);
+    registerMxcPlugin(registry.createApi(record, { config: {}, pluginConfig: {} }));
+    try {
+      expect(readBackend().factory).toEqual(expect.any(Function));
+      setActivePluginRegistry(registry.registry);
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      await expect.poll(readBackend).toEqual(original);
+    } finally {
+      for (const { lifecycle } of registry.registry.runtimeLifecycles.toReversed()) {
+        await lifecycle.cleanup?.({ reason: "disable" });
+      }
+      if (originalRegistry) {
+        setActivePluginRegistry(originalRegistry);
+      } else {
+        resetPluginRuntimeStateForTest();
+      }
+    }
   });
 
   test("keeps the existing binary-resolution failure path after host support passes", () => {
     resolveMxcBinaryPathMock.mockImplementation(() => {
       throw new Error("missing binary");
     });
-    const { api, registerService } = createApi();
+    const original = readBackend();
+    const { api, registerService, lifecycles } = createApi();
 
     expect(() => registerMxcPlugin(api)).toThrow(
       "[mxc] MXC sandbox backend cannot load: missing binary. Install @microsoft/mxc-sdk or set mxcBinaryPath.",
@@ -193,7 +284,8 @@ describe("registerMxcPlugin", () => {
 
     expect(warnSpy).not.toHaveBeenCalled();
     expect(assertMxcReadinessMock).not.toHaveBeenCalled();
-    expect(registerSandboxBackendMock).not.toHaveBeenCalled();
+    expect(readBackend()).toEqual(original);
+    expect(lifecycles).toEqual([]);
     expect(registerService).not.toHaveBeenCalled();
   });
 });

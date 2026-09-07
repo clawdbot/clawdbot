@@ -127,7 +127,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
           hint: "/Applications/OpenClaw.app",
         },
       ],
-      initialValues: ["service", "state", "workspace"],
+      initialValues: ["service"],
     });
     if (isCancel(selection)) {
       cancel(stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.");

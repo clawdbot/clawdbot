@@ -2,6 +2,7 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { showToast } from "../lib/toast.ts";
 import {
   getRenderedModalDialog,
@@ -9,6 +10,10 @@ import {
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
 import { OpenClawModalDialog } from "./modal-dialog.ts";
+
+vi.mock("../app/native-browser-host.ts", () => ({
+  hasNativeBrowserBridge: () => true,
+}));
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
@@ -48,7 +53,7 @@ describe("openclaw-modal-dialog", () => {
   });
 
   it("opens a labelled modal dialog with an optional description", async () => {
-    const { webAwesomeDialog, dialog } = await renderModal();
+    const { modal, webAwesomeDialog, dialog } = await renderModal();
 
     expect(dialog.open).toBe(true);
     expect(dialog.localName).toBe("dialog");
@@ -57,6 +62,51 @@ describe("openclaw-modal-dialog", () => {
     expect(dialog.getAttribute("aria-label")).toBe("Confirm action");
     expect(dialog.getAttribute("aria-description")).toBe("Review the operation before continuing.");
     expect(dialog.getRootNode()).toBe(webAwesomeDialog.shadowRoot);
+    expect(document.openClawModalLayers?.has(modal)).toBe(true);
+
+    modal.hide();
+    await modal.updateComplete;
+    expect(document.openClawModalLayers?.has(modal)).toBe(false);
+
+    modal.show();
+    await modal.updateComplete;
+    expect(document.openClawModalLayers?.has(modal)).toBe(true);
+
+    modal.remove();
+    expect(document.openClawModalLayers?.has(modal)).toBe(false);
+  });
+
+  it("occludes native tabs through nested dialogs, closing animations, and removal", async () => {
+    const changes = vi.fn();
+    const unsubscribe = subscribeNativeOverlayOcclusion(changes);
+    try {
+      const { modal, webAwesomeDialog } = await renderModal();
+      const nested = document.createElement("openclaw-modal-dialog");
+      modal.append(nested);
+      await getRenderedModalDialog(modal);
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+
+      nested.remove();
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+      modal.hide();
+      await modal.updateComplete;
+      // The platform view must stay hidden until the dialog leaves the top layer.
+      expect(changes.mock.calls).toEqual([[false], [true]]);
+      webAwesomeDialog.dispatchEvent(new Event("wa-after-hide"));
+      expect(changes.mock.calls).toEqual([[false], [true], [false]]);
+      await modal.updateComplete;
+      modal.show();
+      await modal.updateComplete;
+      expect(changes).toHaveBeenLastCalledWith(true);
+      modal.remove();
+      expect(changes).toHaveBeenLastCalledWith(false);
+      container.append(modal);
+      expect(changes).toHaveBeenLastCalledWith(true);
+      modal.remove();
+      expect(changes).toHaveBeenLastCalledWith(false);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("focuses the dialog container first", async () => {
@@ -130,17 +180,22 @@ describe("openclaw-modal-dialog", () => {
     }
   });
 
-  it("keeps the navigation drawer sidebar in a full-height, shrinkable flex column", () => {
+  it("assigns overlay motion by interaction type", () => {
     const styles = OpenClawModalDialog.styles.cssText;
 
     expect(styles).toMatch(
-      /:host\(\.nav-drawer\)\s+wa-dialog::part\(body\)\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*min-height:\s*0;/u,
+      /:host\(\.palette\)\s+wa-dialog\s*\{[^}]*--show-duration:\s*0ms;[^}]*--hide-duration:\s*0ms;/u,
     );
     expect(styles).toMatch(
-      /::slotted\(\.shell-nav-modal__content\)\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1\s+1\s+auto;[^}]*flex-direction:\s*column;[^}]*height:\s*100%;[^}]*min-height:\s*0;/u,
+      /:host\(\.drawer\)\s+wa-dialog\s*\{[^}]*--show-duration:\s*200ms;[^}]*--hide-duration:\s*0ms;/u,
+    );
+    expect(styles).toMatch(
+      /:host\(\.drawer\)\s+wa-dialog\[open\]::part\(dialog\)\s*\{[^}]*animation:\s*openclaw-drawer-in 200ms cubic-bezier\(0\.32, 0\.72, 0, 1\);/u,
+    );
+    expect(styles).toMatch(
+      /@keyframes openclaw-drawer-in\s*\{\s*from\s*\{\s*transform:\s*translateX\(100%\);\s*\}\s*to\s*\{\s*transform:\s*translateX\(0\);/u,
     );
   });
-
   it("emits modal-cancel on Escape", async () => {
     const { modal, dialog } = await renderModal();
     const onCancel = vi.fn();

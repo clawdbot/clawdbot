@@ -79,7 +79,6 @@ export const LEGACY_CONFIG_MIGRATIONS_QUEUE: LegacyConfigMigrationSpec[] = [
             changes,
           });
         }
-        queue.byChannel = byChannel;
       }
     },
   }),

@@ -6,7 +6,7 @@ import {
   isoToPerplexityDate,
   MAX_SEARCH_COUNT,
   normalizeFreshness,
-  normalizeToIsoDate,
+  parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readPositiveIntegerParam,
@@ -25,15 +25,14 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  DEFAULT_PERPLEXITY_BASE_URL,
-  inferPerplexityBaseUrlFromApiKey,
   isDirectPerplexityBaseUrl,
-  PERPLEXITY_DIRECT_BASE_URL,
-  type PerplexityTransport,
+  resolvePerplexityConfig,
+  resolvePerplexityRuntime,
+  type PerplexityAuth,
+  type PerplexityConfig,
 } from "./perplexity-web-search-provider.shared.js";
 
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
-const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
 const PERPLEXITY_SEARCH_CONTEXT_SIZES = ["low", "medium", "high"] as const;
 
 type PerplexitySearchContextSize = (typeof PERPLEXITY_SEARCH_CONTEXT_SIZES)[number];
@@ -41,12 +40,6 @@ type PerplexitySearchContextSize = (typeof PERPLEXITY_SEARCH_CONTEXT_SIZES)[numb
 function isPerplexitySearchContextSize(value: string): value is PerplexitySearchContextSize {
   return value === "low" || value === "medium" || value === "high";
 }
-
-type PerplexityConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-};
 
 type PerplexitySearchResponse = {
   choices?: Array<{
@@ -80,17 +73,7 @@ function normalizePerplexitySearchContextSize(
   return normalized && isPerplexitySearchContextSize(normalized) ? normalized : undefined;
 }
 
-function resolvePerplexityConfig(searchConfig?: SearchConfigRecord): PerplexityConfig {
-  const perplexity = searchConfig?.perplexity;
-  return perplexity && typeof perplexity === "object" && !Array.isArray(perplexity)
-    ? (perplexity as PerplexityConfig)
-    : {};
-}
-
-function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
-  apiKey?: string;
-  source: "config" | "perplexity_env" | "openrouter_env" | "none";
-} {
+function resolvePerplexityApiKey(perplexity?: PerplexityConfig): PerplexityAuth {
   const fromConfig = readConfiguredSecretString(
     perplexity?.apiKey,
     "plugins.entries.perplexity.config.webSearch.apiKey",
@@ -109,34 +92,6 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   return { apiKey: undefined, source: "none" };
 }
 
-function resolvePerplexityBaseUrl(
-  perplexity?: PerplexityConfig,
-  authSource: "config" | "perplexity_env" | "openrouter_env" | "none" = "none",
-  configuredKey?: string,
-): string {
-  const fromConfig = normalizeOptionalString(perplexity?.baseUrl) ?? "";
-  if (fromConfig) {
-    return fromConfig;
-  }
-  if (authSource === "perplexity_env") {
-    return PERPLEXITY_DIRECT_BASE_URL;
-  }
-  if (authSource === "openrouter_env") {
-    return DEFAULT_PERPLEXITY_BASE_URL;
-  }
-  if (authSource === "config") {
-    return inferPerplexityBaseUrlFromApiKey(configuredKey) === "openrouter"
-      ? DEFAULT_PERPLEXITY_BASE_URL
-      : PERPLEXITY_DIRECT_BASE_URL;
-  }
-  return DEFAULT_PERPLEXITY_BASE_URL;
-}
-
-function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
-  const model = normalizeOptionalString(perplexity?.model) ?? "";
-  return model || DEFAULT_PERPLEXITY_MODEL;
-}
-
 function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
   if (!isDirectPerplexityBaseUrl(baseUrl)) {
     return model;
@@ -151,28 +106,6 @@ function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Reco
     Authorization: `Bearer ${apiKey}`,
     "HTTP-Referer": "https://openclaw.ai",
     "X-Title": "OpenClaw Web Search",
-  };
-}
-
-function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
-  apiKey?: string;
-  source: "config" | "perplexity_env" | "openrouter_env" | "none";
-  baseUrl: string;
-  model: string;
-  transport: PerplexityTransport;
-} {
-  const auth = resolvePerplexityApiKey(perplexity);
-  const baseUrl = resolvePerplexityBaseUrl(perplexity, auth.source, auth.apiKey);
-  const model = resolvePerplexityModel(perplexity);
-  const hasLegacyOverride = Boolean(
-    normalizeOptionalString(perplexity?.baseUrl) || normalizeOptionalString(perplexity?.model),
-  );
-  return {
-    ...auth,
-    baseUrl,
-    model,
-    transport:
-      hasLegacyOverride || !isDirectPerplexityBaseUrl(baseUrl) ? "chat_completions" : "search_api",
   };
 }
 
@@ -252,6 +185,7 @@ async function runPerplexitySearchApi(params: {
     body.max_tokens_per_page = params.maxTokensPerPage;
   }
 
+  const headers = buildPerplexityRequestHeaders(params.apiKey, true);
   return withTrustedWebSearchEndpoint(
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
@@ -259,13 +193,16 @@ async function runPerplexitySearchApi(params: {
       signal: params.signal,
       init: {
         method: "POST",
-        headers: buildPerplexityRequestHeaders(params.apiKey, true),
+        headers,
         body: JSON.stringify(body),
       },
     },
     async (res) => {
       if (!res.ok) {
-        return await throwWebSearchApiError(res, "Perplexity Search");
+        return await throwWebSearchApiError(res, "Perplexity Search", {
+          headers,
+          signal: params.signal,
+        });
       }
       const data = await readProviderJsonResponse<PerplexitySearchApiResponse>(
         res,
@@ -306,6 +243,7 @@ async function runPerplexitySearch(params: {
     };
   }
 
+  const headers = buildPerplexityRequestHeaders(params.apiKey);
   return withTrustedWebSearchEndpoint(
     {
       url: endpoint,
@@ -313,13 +251,13 @@ async function runPerplexitySearch(params: {
       signal: params.signal,
       init: {
         method: "POST",
-        headers: buildPerplexityRequestHeaders(params.apiKey),
+        headers,
         body: JSON.stringify(body),
       },
     },
     async (res) => {
       if (!res.ok) {
-        return await throwWebSearchApiError(res, "Perplexity");
+        return await throwWebSearchApiError(res, "Perplexity", { headers, signal: params.signal });
       }
       const data = await readProviderJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
       const content = data.choices?.[0]?.message?.content;
@@ -342,7 +280,10 @@ export async function executePerplexitySearch(
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const perplexityConfig = resolvePerplexityConfig(searchConfig);
-  const runtime = resolvePerplexityTransport(perplexityConfig);
+  const runtime = resolvePerplexityRuntime(
+    perplexityConfig,
+    resolvePerplexityApiKey(perplexityConfig),
+  );
   if (!runtime.apiKey) {
     return {
       error: "missing_perplexity_api_key",
@@ -394,45 +335,26 @@ export async function executePerplexitySearch(
   });
 
   if (!structured) {
-    if (country) {
-      return {
-        error: "unsupported_country",
-        message:
-          "country filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it.",
-        docs: "https://docs.openclaw.ai/tools/web",
-      };
-    }
-    if (language) {
-      return {
-        error: "unsupported_language",
-        message:
-          "language filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it.",
-        docs: "https://docs.openclaw.ai/tools/web",
-      };
-    }
-    if (rawDateAfter || rawDateBefore) {
-      return {
-        error: "unsupported_date_filter",
-        message:
-          "date_after/date_before are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them.",
-        docs: "https://docs.openclaw.ai/tools/web",
-      };
-    }
-    if (domainFilter?.length) {
-      return {
-        error: "unsupported_domain_filter",
-        message:
-          "domain_filter is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it.",
-        docs: "https://docs.openclaw.ai/tools/web",
-      };
-    }
-    if (maxTokens !== undefined || maxTokensPerPage !== undefined) {
-      return {
-        error: "unsupported_content_budget",
-        message:
-          "max_tokens and max_tokens_per_page are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them.",
-        docs: "https://docs.openclaw.ai/tools/web",
-      };
+    const unsupportedOptions = [
+      [country, "unsupported_country", "country filtering", "it"],
+      [language, "unsupported_language", "language filtering", "it"],
+      [rawDateAfter || rawDateBefore, "unsupported_date_filter", "date_after/date_before", "them"],
+      [domainFilter?.length, "unsupported_domain_filter", "domain_filter", "it"],
+      [
+        maxTokens !== undefined || maxTokensPerPage !== undefined,
+        "unsupported_content_budget",
+        "max_tokens and max_tokens_per_page",
+        "them",
+      ],
+    ] as const;
+    for (const [value, error, option, pronoun] of unsupportedOptions) {
+      if (value) {
+        return {
+          error,
+          message: `${option} ${pronoun === "them" ? "are" : "is"} only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable ${pronoun}.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        };
+      }
     }
   }
 
@@ -455,37 +377,20 @@ export async function executePerplexitySearch(
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
-  if (rawFreshness && (rawDateAfter || rawDateBefore)) {
-    return {
-      error: "conflicting_time_filters",
-      message:
-        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
+  const parsedTimeFilters = parseWebSearchTimeFilters({
+    rawFreshness,
+    rawDateAfter,
+    rawDateBefore,
+    freshnessProvider: "perplexity",
+    invalidFreshnessMessage: "freshness must be day, week, month, or year.",
+    invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
+    invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
+    invalidDateRangeMessage: "date_after must be before date_before.",
+  });
+  if ("error" in parsedTimeFilters) {
+    return parsedTimeFilters;
   }
-  const dateAfter = rawDateAfter ? normalizeToIsoDate(rawDateAfter) : undefined;
-  const dateBefore = rawDateBefore ? normalizeToIsoDate(rawDateBefore) : undefined;
-  if (rawDateAfter && !dateAfter) {
-    return {
-      error: "invalid_date",
-      message: "date_after must be YYYY-MM-DD format.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
-  if (rawDateBefore && !dateBefore) {
-    return {
-      error: "invalid_date",
-      message: "date_before must be YYYY-MM-DD format.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
-  if (dateAfter && dateBefore && dateAfter > dateBefore) {
-    return {
-      error: "invalid_date_range",
-      message: "date_after must be before date_before.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
+  const { dateAfter, dateBefore } = parsedTimeFilters;
   if (domainFilter?.length) {
     const hasDeny = domainFilter.some((entry) => entry.startsWith("-"));
     const hasAllow = domainFilter.some((entry) => !entry.startsWith("-"));
@@ -523,90 +428,63 @@ export async function executePerplexitySearch(
     maxTokens,
     maxTokensPerPage,
   ]);
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-  const payload =
+  const result =
     runtime.transport === "chat_completions"
-      ? {
+      ? await runPerplexitySearch({
           query,
-          provider: "perplexity",
+          apiKey: runtime.apiKey,
+          baseUrl: runtime.baseUrl,
           model: runtime.model,
-          tookMs: Date.now() - start,
-          externalContent: {
-            untrusted: true,
-            source: "web_search",
-            provider: "perplexity",
-            wrapped: true,
-          },
-          ...(await (async () => {
-            const result = await runPerplexitySearch({
-              query,
-              apiKey: runtime.apiKey!,
-              baseUrl: runtime.baseUrl,
-              model: runtime.model,
-              timeoutSeconds,
-              signal,
-              freshness,
-              searchContextSize,
-            });
-            return {
-              content: wrapWebContent(result.content, "web_search"),
-              citations: result.citations,
-            };
-          })()),
-        }
-      : {
+          timeoutSeconds,
+          signal,
+          freshness,
+          searchContextSize,
+        })
+      : await runPerplexitySearchApi({
           query,
-          provider: "perplexity",
-          count: 0,
-          tookMs: Date.now() - start,
-          externalContent: {
-            untrusted: true,
-            source: "web_search",
-            provider: "perplexity",
-            wrapped: true,
-          },
-          results: await runPerplexitySearchApi({
-            query,
-            apiKey: runtime.apiKey,
-            count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-            timeoutSeconds,
-            signal,
-            country: country ?? undefined,
-            searchDomainFilter: domainFilter,
-            searchRecencyFilter: freshness,
-            searchLanguageFilter: language ? [language] : undefined,
-            searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
-            searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
-            searchContextSize,
-            maxTokens: maxTokens ?? undefined,
-            maxTokensPerPage: maxTokensPerPage ?? undefined,
-          }),
-        };
-
-  if (Array.isArray((payload as { results?: unknown[] }).results)) {
-    (payload as { count: number }).count = (payload as { results: unknown[] }).results.length;
-    (payload as { tookMs: number }).tookMs = Date.now() - start;
-  } else {
-    (payload as { tookMs: number }).tookMs = Date.now() - start;
-  }
+          apiKey: runtime.apiKey,
+          count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+          timeoutSeconds,
+          signal,
+          country: country ?? undefined,
+          searchDomainFilter: domainFilter,
+          searchRecencyFilter: freshness,
+          searchLanguageFilter: language ? [language] : undefined,
+          searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
+          searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
+          searchContextSize,
+          maxTokens: maxTokens ?? undefined,
+          maxTokensPerPage: maxTokensPerPage ?? undefined,
+        });
+  const resultFields = Array.isArray(result)
+    ? { results: result }
+    : {
+        content: wrapWebContent(result.content, "web_search"),
+        citations: result.citations,
+      };
+  const payload = {
+    query,
+    provider: "perplexity",
+    ...(Array.isArray(result) ? { count: result.length } : { model: runtime.model }),
+    tookMs: Date.now() - start,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: "perplexity",
+      wrapped: true,
+    },
+    ...resultFields,
+  };
 
   signal?.throwIfAborted();
-  writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  inferPerplexityBaseUrlFromApiKey,
-  resolvePerplexityBaseUrl,
-  resolvePerplexityModel,
-  resolvePerplexityTransport,
-  resolvePerplexityRequestModel,
-  resolvePerplexityApiKey,
-  normalizePerplexitySearchContextSize,
-} as const;

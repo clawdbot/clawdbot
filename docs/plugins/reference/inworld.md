@@ -2,21 +2,24 @@
 summary: "Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony)."
 read_when:
   - You are installing, configuring, or auditing the inworld plugin
-title: "Inworld plugin"
+title: "Inworld plugin reference"
 ---
 
-# Inworld plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).
 
 ## Distribution
 
 - Package: `@openclaw/inworld-speech`
-- Install route: npm; ClawHub: `clawhub:@openclaw/inworld-speech`
+- Install route: npm or ClawHub: `clawhub:@openclaw/inworld-speech`
 
 ## Surface
 
-contracts: `speechProviders`
+- Contracts: `speechProviders`
 
 ## Related docs
 

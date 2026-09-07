@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
+import { showToast } from "../lib/toast.ts";
 import "./login-gate.ts";
 
 type LoginGateElement = HTMLElement & {
@@ -9,18 +11,21 @@ type LoginGateElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-async function mountFailure(lastError: string, lastErrorCode: string | null) {
+async function mountFailure(
+  lastError: string,
+  lastErrorCode: string | null,
+  credentials = { token: "", password: "" },
+) {
   const element = document.createElement("openclaw-login-gate") as LoginGateElement;
   element.props = {
     resourceBasePath: "",
     connected: false,
     lastError,
     lastErrorCode,
-    hasToken: false,
-    hasPassword: false,
+    hasToken: Boolean(credentials.token),
+    hasPassword: Boolean(credentials.password),
     gatewayUrl: "ws://127.0.0.1:18789",
-    token: "",
-    password: "",
+    ...credentials,
     showGatewayToken: false,
     showGatewayPassword: false,
     onGatewayUrlChange: vi.fn(),
@@ -43,6 +48,168 @@ afterEach(() => {
 });
 
 describe("login gate failure recovery", () => {
+  it("explains how to reconnect with a verified user identity", async () => {
+    const element = await mountFailure(
+      "operator role policies require a verified user identity for this authentication method",
+      ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    const steps = failure?.querySelector(".login-gate__failure-steps")?.textContent;
+
+    expect(failure?.getAttribute("data-kind")).toBe("verified-user-required");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "Verified identity required",
+    );
+    expect(steps).toMatch(/trusted proxy or Tailscale/iu);
+    expect(steps).toMatch(/shared Gateway token or password/iu);
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/operator-scopes",
+    );
+  });
+
+  it.each([
+    { name: "empty", token: "", password: "" },
+    { name: "populated", token: "test-token", password: "test-password" },
+  ])("explains missing identity headers with $name credentials", async ({ token, password }) => {
+    const element = await mountFailure(
+      "unauthorized",
+      ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+      { token, password },
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    const steps = failure?.querySelector(".login-gate__failure-steps")?.textContent;
+
+    expect(failure?.getAttribute("data-kind")).toBe("trusted-proxy");
+    expect(steps).toMatch(/(?:open|use|sign in).*?(?:authenticated proxy|SSO).*?URL/iu);
+    expect(steps).toMatch(/configured/iu);
+    expect(failure?.textContent).toMatch(
+      /missing.*?identity[- ]headers?|identity[- ]headers?.*?missing/iu,
+    );
+    expect(steps).toMatch(/forward/iu);
+    expect(steps).toMatch(/WebSocket upgrade/iu);
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
+    );
+    expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe("unauthorized");
+    expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
+    expect(steps).not.toMatch(/generate.*?token|replace.*?(?:token|password)|Gateway is running/iu);
+  });
+
+  it.each([
+    "Authenticated profile verification is unavailable; retry the request.",
+    "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",
+  ])(
+    "explains profile verification failures without credential or network recovery: %s",
+    async (error) => {
+      const element = await mountFailure(
+        error,
+        ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE,
+      );
+      const failure = element.querySelector(".login-gate__failure");
+
+      expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
+      expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+        "Profile verification unavailable",
+      );
+      expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
+      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
+      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
+        "Gateway administrator",
+      );
+      expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
+      expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
+    },
+  );
+
+  it("renders every auth recovery command exactly once", async () => {
+    const element = await mountFailure(
+      "unauthorized: gateway token required",
+      ConnectErrorDetailCodes.AUTH_REQUIRED,
+    );
+
+    expect(
+      Array.from(element.querySelectorAll(".login-gate__failure-steps code"), (entry) =>
+        entry.textContent?.trim(),
+      ),
+    ).toEqual(["openclaw gateway auth-token --show", "openclaw doctor --generate-gateway-token"]);
+  });
+
+  it("keeps the visible credential mode while a token is being replaced", async () => {
+    const onTokenChange = vi.fn();
+    const onPasswordChange = vi.fn();
+    const element = document.createElement("openclaw-login-gate") as LoginGateElement;
+    const render = (token: string) => {
+      element.props = {
+        resourceBasePath: "",
+        connected: false,
+        lastError: "unauthorized: gateway token mismatch",
+        lastErrorCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+        hasToken: Boolean(token),
+        hasPassword: true,
+        gatewayUrl: "ws://127.0.0.1:18789",
+        token,
+        password: "shared-password",
+        showGatewayToken: false,
+        showGatewayPassword: false,
+        onGatewayUrlChange: vi.fn(),
+        onTokenChange,
+        onPasswordChange,
+        onToggleGatewayToken: vi.fn(),
+        onToggleGatewayPassword: vi.fn(),
+        onConnect: vi.fn(),
+      };
+    };
+    render("stale-token");
+    document.body.append(element);
+    await element.updateComplete;
+    const input = element.querySelector<HTMLInputElement>("#login-gate-credential")!;
+    expect(input.value).toBe("stale-token");
+
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    render("");
+    await element.updateComplete;
+    input.value = "fresh-token";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(onTokenChange.mock.calls.map(([value]) => value)).toEqual(["", "fresh-token"]);
+    expect(onPasswordChange).not.toHaveBeenCalled();
+    expect(
+      element.querySelector('.login-gate__segmented [aria-checked="true"]')?.textContent?.trim(),
+    ).toBe("Token");
+  });
+
+  it("selects the password field when the Gateway asks for a password despite a saved token", async () => {
+    const element = await mountFailure(
+      "password missing",
+      ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+      { token: "saved-token", password: "" },
+    );
+
+    expect(
+      element.querySelector('.login-gate__segmented [aria-checked="true"]')?.textContent?.trim(),
+    ).toBe("Password");
+    expect(element.querySelector<HTMLInputElement>("#login-gate-credential")?.value).toBe("");
+    expect(element.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
+      "Password needed",
+    );
+  });
+
+  it("keeps Connect available beside Refresh for a protocol mismatch", async () => {
+    const element = await mountFailure(
+      "protocol mismatch",
+      ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    );
+    const actions = element.querySelector(".login-gate__actions");
+
+    expect(actions?.querySelector(".login-gate__failure-refresh")).not.toBeNull();
+    expect(actions?.querySelector("button.login-gate__connect")?.textContent?.trim()).toBe(
+      "Connect",
+    );
+    actions?.querySelector<HTMLButtonElement>("button.login-gate__connect")?.click();
+    expect(element.props.onConnect).toHaveBeenCalledOnce();
+  });
+
   it("offers page refresh for a protocol mismatch and reloads when selected", async () => {
     const element = await mountFailure(
       "protocol mismatch",
@@ -64,6 +231,42 @@ describe("login gate failure recovery", () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
+  it("shows an explicit recovery choice when reconnect leaves unsaved starts behind the login gate", async () => {
+    const element = await mountFailure(
+      "protocol mismatch",
+      ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    );
+    const reload = vi.fn();
+    const discard = vi.fn();
+    vi.stubGlobal("window", { location: { reload } });
+    const release = registerControlUiReloadGuard(
+      () => false,
+      () => {
+        showToast({
+          message: "Recovery needs a reload. Unsaved starts will be lost.",
+          actionLabel: "Discard unsaved starts and reload",
+          onAction: discard,
+        });
+      },
+    );
+    try {
+      element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")?.click();
+      expect(reload).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(element.querySelector(".app-toast__message")?.textContent).toContain(
+          "Unsaved starts will be lost.",
+        );
+      });
+      const action = element.querySelector<HTMLButtonElement>(".app-toast__action");
+      expect(action?.textContent?.trim()).toBe("Discard unsaved starts and reload");
+      expect(discard).not.toHaveBeenCalled();
+      action?.click();
+      expect(discard).toHaveBeenCalledOnce();
+    } finally {
+      release();
+    }
+  });
+
   it.each([
     [
       "auth-required",
@@ -83,22 +286,103 @@ describe("login gate failure recovery", () => {
     expect(element.querySelector(".login-gate__failure-refresh")).toBeNull();
   });
 
-  it("offers a one-command recovery before manual pairing approval", async () => {
+  it("leads pairing recovery with one approve command and folds the form away", async () => {
     const element = await mountFailure(
       "pairing required",
       ConnectErrorDetailCodes.PAIRING_REQUIRED,
     );
+    const failure = element.querySelector<HTMLElement>(".login-gate__failure");
 
+    expect(failure?.getAttribute("data-kind")).toBe("pairing-required");
+    expect(failure?.getAttribute("data-tone")).toBe("pending");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "Approve this browser",
+    );
+    expect(failure?.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
+      "openclaw devices approve --latest",
+    );
     const steps = Array.from(
       element.querySelectorAll<HTMLElement>(".login-gate__failure-steps li"),
-      (entry) => entry.textContent?.trim(),
+      (entry) => entry.textContent?.replace(/\s+/g, " ").trim(),
     );
-    expect(steps).toEqual([
-      "On the Gateway host, run openclaw dashboard to open a secure one-time pairing link.",
-      "Run openclaw devices list on the Gateway host.",
-      "Approve the pending browser/device request from that list.",
-      "Reconnect after the approval completes.",
-    ]);
+    expect(steps).toHaveLength(3);
+    expect(steps[0]).toContain("prints the exact approve command");
+    expect(steps[1]).toContain("Prefer a link? Run openclaw dashboard");
+    expect(steps[1]).toContain("on the Gateway host and open the one-time URL");
+    expect(steps[2]).toBe("Once approved, click Connect.");
+    // The form stays reachable but folded; its summary names the target without a credential.
+    const connection = failure?.querySelector<HTMLDetailsElement>(".login-gate__connection");
+    expect(connection?.open).toBe(false);
+    expect(connection?.querySelector("summary")?.textContent?.replace(/\s+/g, " ")).toContain(
+      "Connecting to 127.0.0.1:18789 · no credential Change",
+    );
+    expect(element.querySelectorAll("button.login-gate__connect")).toHaveLength(1);
+  });
+
+  it("shows automatic pairing recovery only while reconnect is pending", async () => {
+    const element = await mountFailure(
+      "pairing required",
+      ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    );
+    element.props = { ...element.props, reconnectPending: true };
+    await element.updateComplete;
+
+    expect(element.textContent).toContain(
+      "Waiting for approval… this page connects on its own once the request is approved.",
+    );
+    expect(element.textContent).not.toContain("Once approved, click Connect.");
+    expect(element.querySelector('[aria-hidden="true"].session-run-spinner')).not.toBeNull();
+    const checkNow = element.querySelector<HTMLButtonElement>(".login-gate__connect")!;
+    expect(checkNow.textContent?.trim()).toBe("Check now");
+    checkNow.click();
+    expect(element.props.onConnect).toHaveBeenCalledOnce();
+
+    element.props = { ...element.props, reconnectPending: false };
+    await element.updateComplete;
+    expect(element.textContent).toContain("Once approved, click Connect.");
+    expect(element.textContent).not.toContain("Waiting for approval…");
+    expect(element.querySelector(".session-run-spinner")).toBeNull();
+    expect(checkNow.textContent?.trim()).toBe("Connect");
+  });
+
+  it("renders only a normalized pairing request in the approve command", async () => {
+    const safe = await mountFailure(
+      "scope upgrade pending approval (requestId: req-123)",
+      ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    );
+
+    expect(safe.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "Approve the new access level",
+    );
+    expect(safe.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
+      "openclaw devices approve req-123",
+    );
+    expect(safe.querySelectorAll(".login-gate__failure-steps li")).toHaveLength(2);
+    safe.remove();
+
+    const unsafe = await mountFailure(
+      "scope upgrade pending approval (requestId: req-123;touch-owned)",
+      ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    );
+
+    expect(unsafe.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
+      "openclaw devices approve --latest",
+    );
+    // Only the redacted raw-error disclosure may echo the rejected id.
+    expect(unsafe.querySelector(".login-gate__hero")?.textContent).not.toContain("touch-owned");
+    expect(unsafe.querySelector(".login-gate__failure-steps")?.textContent).not.toContain(
+      "touch-owned",
+    );
+  });
+
+  it("preserves command order when one recovery sentence contains multiple commands", async () => {
+    const element = await mountFailure("WebSocket connection failed", null);
+
+    expect(
+      Array.from(element.querySelectorAll(".login-gate__failure-steps code"), (entry) =>
+        entry.textContent?.trim(),
+      ),
+    ).toEqual(["openclaw status", "openclaw gateway run", "openclaw dashboard --no-open"]);
   });
 
   it("offers only supported recovery for an insecure browser context", async () => {
@@ -139,17 +423,45 @@ describe("login gate failure recovery", () => {
       }
 
       await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copy failed"));
-      expect(button?.dataset.error).toBe("1");
+      expect(command?.querySelector('[role="status"]')?.textContent).toBe("Copy failed");
       expect(writeText).toHaveBeenCalledOnce();
+      expect(writeText).toHaveBeenCalledWith("openclaw status");
       expect(execCommand).toHaveBeenCalledOnce();
     },
   );
 
+  it("keeps recovery command copy state isolated per button", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const element = await mountFailure("WebSocket connection failed", null);
+    const buttons = Array.from(
+      element.querySelectorAll<HTMLButtonElement>(
+        ".login-gate__failure-steps .login-gate__command .chat-copy-btn",
+      ),
+    );
+
+    buttons[0]?.click();
+    buttons[1]?.click();
+
+    await vi.waitFor(() => {
+      expect(buttons[0]?.getAttribute("aria-label")).toBe("Copied!");
+      expect(buttons[1]?.getAttribute("aria-label")).toBe("Copied!");
+    });
+    expect(writeText.mock.calls).toEqual([["openclaw status"], ["openclaw gateway run"]]);
+    expect(buttons[2]?.getAttribute("aria-label")).toBe("Copy command");
+  });
+
   it("keeps the latest command-copy feedback until its own reset", async () => {
+    let finishCopy!: () => void;
     const writeText = vi
       .fn()
       .mockRejectedValueOnce(new DOMException("Clipboard access denied"))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishCopy = resolve;
+          }),
+      );
     const execCommand = vi.fn(() => false);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
@@ -166,13 +478,18 @@ describe("login gate failure recovery", () => {
     }
 
     command?.click();
+    expect(button?.disabled).toBe(true);
+    expect(button?.getAttribute("aria-label")).toBe("Copy command");
+    expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(true);
+    failedReset();
+    expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(true);
+    finishCopy();
     await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copied!"));
-    expect(button?.dataset.error).toBeUndefined();
-    expect(button?.dataset.copied).toBe("1");
+    expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(false);
 
     failedReset();
     expect(button?.getAttribute("aria-label")).toBe("Copied!");
-    expect(button?.dataset.copied).toBe("1");
+    expect(command?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
 
     const successfulReset = schedule.mock.calls.find(([, delay]) => delay === 1_500)?.[0];
     if (typeof successfulReset !== "function") {
@@ -181,7 +498,7 @@ describe("login gate failure recovery", () => {
     successfulReset();
 
     expect(button?.getAttribute("aria-label")).toBe("Copy command");
-    expect(button?.dataset.copied).toBeUndefined();
+    expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(true);
     expect(writeText).toHaveBeenCalledTimes(2);
     expect(execCommand).toHaveBeenCalledOnce();
   });

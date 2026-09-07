@@ -22,16 +22,20 @@ import {
 } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+import {
+  addClientToolsToToolCatalog,
+  compactToolSearchCatalogEntry,
+} from "./tool-search-catalog.js";
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
+  ToolSearchRuntime,
 } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import {
-  addClientToolsToToolCatalog,
-  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
@@ -39,7 +43,6 @@ import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  ToolSearchRuntime,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createWebSearchTool } from "./tools/web-search.js";
@@ -343,14 +346,7 @@ describe("Tool Search dispatcher argument preparation", () => {
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
         timestamp: 1,
       };
@@ -877,24 +873,36 @@ describe("Tool Search catalog indexing", () => {
     ]);
   });
 
-  it("rebuilds the search index when a parameter description changes in place", async () => {
-    const parameters = {
-      type: "object",
-      description: "Search an orchard",
-      properties: {},
-    };
-    const { runtime } = createRuntime([fakeTool("indexed_resource", parameters as never)]);
+  it.each(["root", "property", "items"])(
+    "rebuilds the search index when a %s description changes in place",
+    async (location) => {
+      const described = {
+        type: "object",
+        description: "Search an orchard",
+        properties: {},
+      };
+      const parameters =
+        location === "root"
+          ? described
+          : location === "property"
+            ? { type: "object", properties: { resource: described } }
+            : {
+                type: "object",
+                properties: { resources: { type: "array", items: described } },
+              };
+      const { runtime } = createRuntime([fakeTool("indexed_resource", parameters as never)]);
 
-    await expect(runtime.search("orchard")).resolves.toEqual([
-      expect.objectContaining({ name: "indexed_resource" }),
-    ]);
-    parameters.description = "Search a meteor";
+      await expect(runtime.search("orchard")).resolves.toEqual([
+        expect.objectContaining({ name: "indexed_resource" }),
+      ]);
+      described.description = "Search a meteor";
 
-    await expect(runtime.search("meteor")).resolves.toEqual([
-      expect.objectContaining({ name: "indexed_resource" }),
-    ]);
-    await expect(runtime.search("orchard")).resolves.toEqual([]);
-  });
+      await expect(runtime.search("meteor")).resolves.toEqual([
+        expect.objectContaining({ name: "indexed_resource" }),
+      ]);
+      await expect(runtime.search("orchard")).resolves.toEqual([]);
+    },
+  );
 });
 
 describe("Tool Search network error boundaries", () => {

@@ -338,6 +338,12 @@ openclaw message send \
 
 OpenClaw loads the attachment through the shared outbound-media policy, stores it temporarily in plugin-scoped SQLite state, and gives Twilio a tokenized HTTPS URL on the configured `publicWebhookUrl` path. Media-only sends are supported.
 
+`channels.sms.mediaMaxMb` limits each inbound and outbound attachment in MiB.
+The selected account's `mediaMaxMb` overrides the channel root, then
+`agents.defaults.mediaMaxMb` supplies the fallback. This per-attachment setting
+does not replace Twilio's total-message or media-type ceilings below. Outbound
+images may be optimized before sending.
+
 The generated media URL is a bearer capability that expires after 10 minutes. Treat its full query string as a secret: configure reverse-proxy and access logs to omit the query string or redact every query value. OpenClaw Gateway route diagnostics record only the pathname, but cannot control upstream proxy logs.
 
 Outbound OpenClaw deliveries attach one media item. OpenClaw caps JPEG, JPG, PNG, and GIF attachments at 5,000,000 bytes; other supported media types are capped at 500,000 bytes. `application/vcard` attachments must be media-only; Twilio does not accept them with a caption. Destination carriers may enforce smaller limits or reject unsupported formats. Twilio must be able to fetch the generated URL without HTTP authentication, so `publicWebhookUrl` cannot contain embedded userinfo; query-based reverse-proxy tokens are preserved.

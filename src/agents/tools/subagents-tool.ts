@@ -9,8 +9,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import { resolveTaskSessionAgentId } from "../../tasks/task-session-identity.js";
 import { TASK_STATUS_DETAIL_MAX_CHARS, sanitizeTaskStatusText } from "../../tasks/task-status.js";
-import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import {
   DEFAULT_RECENT_MINUTES,
@@ -48,6 +48,11 @@ const STATUS_MAP: Record<TaskStatus, string> = {
 
 type SubagentsToolOptions = {
   agentSessionKey?: string;
+  /** Policy/sandbox key retained task rows may still carry from pre-change code, when it
+   * differs from the durable {@link agentSessionKey}. Lets split-key callers (e.g. Telegram
+   * DM) keep seeing and cancelling retained media/spawn tasks created before the durable-key
+   * alignment. Undefined and equal-to-agentSessionKey values are no-ops. */
+  callerPolicySessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
   listTasks?: typeof listTaskRecordsUnsorted;
@@ -58,29 +63,28 @@ function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 
-function resolveTaskRequesterAgentId(task: TaskRecord, cfg: OpenClawConfig): string | undefined {
-  if (task.requesterAgentId) {
-    return task.requesterAgentId;
-  }
-  return resolveSessionAgentId({ sessionKey: task.ownerKey, config: cfg });
-}
-
 function taskOwnerMatches(
   task: TaskRecord,
-  sessionKey: string,
+  allowedOwnerKeys: ReadonlySet<string>,
   agentId: string,
   cfg: OpenClawConfig,
 ): boolean {
-  return task.ownerKey === sessionKey && resolveTaskRequesterAgentId(task, cfg) === agentId;
+  return (
+    allowedOwnerKeys.has(task.ownerKey) &&
+    resolveTaskSessionAgentId(task.ownerKey, task.requesterAgentId, cfg) === agentId
+  );
 }
 
 function listTreeTasks(
   tasks: TaskRecord[],
-  rootSessionKey: string,
+  rootSessionKeys: ReadonlySet<string>,
   rootAgentId: string,
   cfg: OpenClawConfig,
 ): TaskRecord[] {
-  const visibleSessions = new Set([`${rootAgentId}\0${rootSessionKey}`]);
+  const visibleSessions = new Set<string>();
+  for (const key of rootSessionKeys) {
+    visibleSessions.add(`${rootAgentId}\0${key}`);
+  }
   const visibleTasks = new Set<string>();
   let changed = true;
   while (changed) {
@@ -89,7 +93,11 @@ function listTreeTasks(
       if (task.scopeKind !== "session" || visibleTasks.has(task.taskId)) {
         continue;
       }
-      const taskRequesterAgentId = resolveTaskRequesterAgentId(task, cfg);
+      const taskRequesterAgentId = resolveTaskSessionAgentId(
+        task.ownerKey,
+        task.requesterAgentId,
+        cfg,
+      );
       if (!visibleSessions.has(`${taskRequesterAgentId ?? ""}\0${task.ownerKey}`)) {
         continue;
       }
@@ -152,6 +160,17 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       if (!controllerAgentId) {
         throw new ToolInputError("subagent controller agent required");
       }
+      // Owner keys this caller may match task rows against: the durable controller key plus
+      // the retained policy key, so rows created before the durable-key alignment stay
+      // reachable and cancellable for split-key callers (e.g. Telegram DM).
+      const allowedOwnerKeys = new Set<string>();
+      if (controller.controllerSessionKey) {
+        allowedOwnerKeys.add(controller.controllerSessionKey);
+      }
+      const callerPolicySessionKey = opts?.callerPolicySessionKey?.trim();
+      if (callerPolicySessionKey) {
+        allowedOwnerKeys.add(callerPolicySessionKey);
+      }
       // The caller only sees subagents controlled by its effective controller session.
       const runs = listControlledSubagentRuns(
         controller.controllerSessionKey,
@@ -160,7 +179,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       );
       const treeTasks = listTreeTasks(
         (opts.listTasks ?? listTaskRecordsUnsorted)(),
-        controller.controllerSessionKey,
+        allowedOwnerKeys,
         controllerAgentId,
         cfg,
       );
@@ -206,7 +225,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         // control-scope gate every other cross-session subagent mutation enforces.
         if (
           controller.controlScope !== "children" &&
-          !taskOwnerMatches(target, controller.callerSessionKey, controllerAgentId, cfg)
+          !taskOwnerMatches(target, allowedOwnerKeys, controllerAgentId, cfg)
         ) {
           return jsonResult({
             status: "forbidden",

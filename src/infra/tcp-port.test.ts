@@ -22,7 +22,9 @@ describe("parseTcpPort", () => {
 });
 
 describe("parseTcpPortFromArgs", () => {
-  it("uses the last valid port flag from repeated CLI arguments", () => {
+  it("accepts inline and spaced flags and uses the last valid port", () => {
+    expect(parseTcpPortFromArgs(["--port=14720"])).toBe(14_720);
+    expect(parseTcpPortFromArgs(["--port", "14721"])).toBe(14_721);
     expect(parseTcpPortFromArgs(["gateway", "--port", "18789", "--port", "19001"])).toBe(19001);
     expect(parseTcpPortFromArgs(["gateway", "--port=18789", "--port=19002"])).toBe(19002);
     expect(parseTcpPortFromArgs(["gateway", "--port", "18789", "--port=19003"])).toBe(19003);
@@ -31,6 +33,7 @@ describe("parseTcpPortFromArgs", () => {
   it("keeps best-effort parsing when repeated flags contain invalid values", () => {
     expect(parseTcpPortFromArgs(["gateway", "--port=invalid", "--port", "19004"])).toBe(19004);
     expect(parseTcpPortFromArgs(["gateway", "--port", "19005", "--port=invalid"])).toBe(19005);
+    expect(parseTcpPortFromArgs(["--port=123=bad"])).toBeNull();
   });
 
   it("does not reinterpret a consumed port value as another flag", () => {

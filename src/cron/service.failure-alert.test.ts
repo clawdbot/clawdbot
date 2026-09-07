@@ -8,6 +8,7 @@ type CronServiceParams = ConstructorParameters<typeof CronService>[0];
 type RunIsolatedAgentJob = NonNullable<CronServiceParams["runIsolatedAgentJob"]>;
 type IsolatedAgentRunResult = Awaited<ReturnType<RunIsolatedAgentJob>>;
 type FailureAlertConfig = NonNullable<CronServiceParams["cronConfig"]>["failureAlert"];
+type SendCronFailureAlert = NonNullable<CronServiceParams["sendCronFailureAlert"]>;
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-failure-alert-",
@@ -43,12 +44,12 @@ async function withFailureAlertCron(
     cron: CronService;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
     requestHeartbeat: ReturnType<typeof vi.fn>;
-    sendCronFailureAlert: ReturnType<typeof vi.fn>;
+    sendCronFailureAlert: ReturnType<typeof vi.fn<SendCronFailureAlert>>;
     addJob: (name: string, overrides?: Partial<CronJobCreate>) => ReturnType<CronService["add"]>;
   }) => Promise<void>,
 ): Promise<void> {
   const store = await makeStorePath();
-  const sendCronFailureAlert = vi.fn(async () => undefined);
+  const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
   const runResult = params.runResult ?? {
@@ -123,6 +124,61 @@ function expectAlertTextContaining(
 }
 
 describe("CronService failure alerts", () => {
+  it.each([
+    { name: "default", global: undefined, job: undefined, cooldownMs: 3_600_000 },
+    {
+      name: "global",
+      global: { after: 8, cooldownMs: 60_000 },
+      job: undefined,
+      cooldownMs: 60_000,
+    },
+    {
+      name: "job override",
+      global: { cooldownMs: 60_000 },
+      job: { after: 8, cooldownMs: 120_000 },
+      cooldownMs: 120_000,
+    },
+    { name: "zero", global: undefined, job: { after: 8, cooldownMs: 0 }, cooldownMs: 0 },
+  ])("honors $name cooldown for delivery failures without an after gate", async (testCase) => {
+    await withFailureAlertCron(
+      {
+        failureAlert: testCase.global,
+        runResult: { status: "ok", delivered: false, deliveryError: "primary rejected" },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("delivery cooldown", {
+          delivery: {
+            ...createTelegramDelivery(),
+            failureDestination: { mode: "webhook", to: "https://alerts.example.test/cron" },
+          },
+          failureAlert: testCase.job,
+        });
+        const firstAt = Date.now();
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+
+        if (testCase.cooldownMs > 0) {
+          vi.setSystemTime(firstAt + testCase.cooldownMs - 1);
+          await cron.run(job.id, "force");
+          expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+          expect(cron.getJob(job.id)?.state).toMatchObject({
+            lastRunStatus: "ok",
+            lastDeliveryStatus: "not-delivered",
+            lastDeliveryError: "primary rejected",
+            consecutiveErrors: 0,
+            lastFailureAlertAtMs: firstAt,
+            lastFailureNotificationDeliveryStatus: "not-requested",
+          });
+        }
+
+        vi.setSystemTime(firstAt + testCase.cooldownMs);
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+        expect(cron.getJob(job.id)?.state.lastFailureAlertAtMs).toBe(Date.now());
+      },
+    );
+  });
+
   it("defaults route-backed jobs to two failures and a one-hour cooldown", async () => {
     await withFailureAlertCron({}, async ({ cron, sendCronFailureAlert, addJob }) => {
       const job = await addJob("default routed alert", { delivery: createTelegramDelivery() });
@@ -169,15 +225,66 @@ describe("CronService failure alerts", () => {
 
         expect(enqueueSystemEvent).toHaveBeenCalledWith(
           expect.stringContaining('Automation "work-owned failure" failed 1 times'),
-          { agentId: "work", sessionKey },
+          { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
         );
         expect(requestHeartbeat).toHaveBeenCalledWith({
-          source: "cron",
+          source: "notifications-event",
           intent: "immediate",
-          reason: `cron:${job.id}:failure-alert`,
+          reason: "wake",
           agentId: "work",
           sessionKey,
         });
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "was not delivered",
+      outcome: { delivered: false, status: "not-delivered" as const },
+      rejects: false,
+      fallbackCalls: 1,
+    },
+    {
+      name: "has an unknown outcome",
+      outcome: { status: "unknown" as const },
+      rejects: false,
+      fallbackCalls: 0,
+    },
+    {
+      name: "was delivered",
+      outcome: { delivered: true, status: "delivered" as const },
+      rejects: false,
+      fallbackCalls: 0,
+    },
+    {
+      name: "failed after settling as not delivered",
+      outcome: {
+        delivered: false,
+        status: "not-delivered" as const,
+        error: "failure alert delivery failed",
+      },
+      rejects: true,
+      fallbackCalls: 1,
+    },
+  ])("falls back exactly once only when an alert $name", async (testCase) => {
+    await withFailureAlertCron(
+      { failureAlert: { enabled: true, after: 1 } },
+      async ({ cron, sendCronFailureAlert, enqueueSystemEvent, addJob }) => {
+        sendCronFailureAlert.mockImplementationOnce(async (alert) => {
+          await alert.onDeliverySettled(testCase.outcome);
+          if (testCase.rejects) {
+            throw new Error("failure alert delivery failed");
+          }
+        });
+        const job = await addJob("recipient custody", { delivery: createTelegramDelivery() });
+
+        await cron.run(job.id, "force");
+
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+        await vi.waitFor(() =>
+          expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls),
+        );
       },
     );
   });
@@ -756,6 +863,7 @@ describe("CronService failure alerts", () => {
 
         const alert = alertCallArg(sendCronFailureAlert);
         expect(alert.text).toContain("Cause: auth_permanent");
+        expect(alert.text).toContain("/login codex");
         expect(alert.presentation).toEqual({
           blocks: [
             {

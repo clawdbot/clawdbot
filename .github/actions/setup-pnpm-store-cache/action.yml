@@ -100,14 +100,23 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        store_path="$(pnpm store path --silent)"
+        store_path=""
+        for attempt in 1 2 3; do
+          if store_path="$(pnpm store path --silent)"; then
+            break
+          fi
+          if [[ "$attempt" -eq 3 ]]; then
+            exit 1
+          fi
+          sleep $((attempt * 5))
+        done
         node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "$store_path"
         echo "path=$store_path" >> "$GITHUB_OUTPUT"
 
     - name: Restore pnpm store cache
       id: pnpm-store-cache
       if: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' }}
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
         key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-${{ hashFiles(inputs.lockfile-path) }}

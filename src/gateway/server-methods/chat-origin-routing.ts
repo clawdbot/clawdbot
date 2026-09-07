@@ -2,13 +2,12 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema/primitives.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
-import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
+import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
+import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   deliveryContextFromSession,
@@ -23,6 +22,7 @@ import {
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -57,18 +57,13 @@ export type ChatSendExplicitOrigin = {
   messageThreadId?: string;
 };
 
-function normalizeOptionalText(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 export function normalizeExplicitChatSendOrigin(
   params: ChatSendExplicitOrigin,
 ): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
-  const originatingChannel = normalizeOptionalText(params.originatingChannel);
-  const originatingTo = normalizeOptionalText(params.originatingTo);
-  const accountId = normalizeOptionalText(params.accountId);
-  const messageThreadId = normalizeOptionalText(params.messageThreadId);
+  const originatingChannel = normalizeOptionalChatText(params.originatingChannel);
+  const originatingTo = normalizeOptionalChatText(params.originatingTo);
+  const accountId = normalizeOptionalChatText(params.accountId);
+  const messageThreadId = normalizeOptionalChatText(params.messageThreadId);
   const hasAnyExplicitOriginField = Boolean(
     originatingChannel || originatingTo || accountId || messageThreadId,
   );
@@ -112,26 +107,6 @@ export function validateChatSelectedAgent(params: {
   return resolved.ok
     ? { ok: true, agentId: resolved.agentId }
     : { ok: false, error: resolved.error.message };
-}
-
-export function resolveRequestedChatAgentId(params: {
-  cfg?: OpenClawConfig;
-  requestedSessionKey: string;
-  agentId?: string;
-}): { ok: true; agentId?: string } | { ok: false; error: ErrorShape } {
-  const explicitAgentId = normalizeOptionalText(params.agentId);
-  if (!params.cfg) {
-    return { ok: true, ...(explicitAgentId ? { agentId: normalizeAgentId(explicitAgentId) } : {}) };
-  }
-  const resolved = resolveRequestedSessionAgentId(
-    params.cfg,
-    params.requestedSessionKey,
-    explicitAgentId,
-  );
-  if (!resolved.ok) {
-    return resolved;
-  }
-  return { ok: true, ...(resolved.agentId ? { agentId: resolved.agentId } : {}) };
 }
 
 export function resolveChatSendActiveScopeKey(params: {

@@ -21,12 +21,14 @@ export type MessagingToolSend = {
 export type MessagingToolSourceReplyPayload = Pick<
   ReplyPayload,
   | "audioAsVoice"
+  | "attachments"
   | "channelData"
   | "interactive"
   | "mediaUrl"
   | "mediaUrls"
   | "presentation"
   | "text"
+  | "trustedLocalMedia"
 > & {
   idempotencyKey?: string;
   transcriptOwner?: true;

@@ -1,19 +1,39 @@
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
-import { SessionPermissionModeSchema } from "./sessions-row.js";
+import {
+  SessionPermissionModeSchema,
+  SessionRepositorySourceSchema,
+  SessionToolOverridesSchema,
+} from "./sessions-row.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
-/** Creates or adopts a session with optional model, thinking, label, and parent linkage. */
+export const SESSION_CREATE_RETRY_WINDOW_MS = 4 * 60_000;
+export const SESSION_CREATE_IDEMPOTENCY_RETENTION_MS = 5 * 60_000;
+
+/** Creates or adopts a session with optional model, thinking, fast mode, label, and parent linkage. */
 export const SessionsCreateParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
+  idempotencyKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
+  displayName: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 500,
+      description:
+        "Prepared presentation title for a newly created session. Unlike label it is not unique and never claims a label; ignored when adopting an existing key.",
+    }),
+  ),
   category: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
+  contextWindow: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
+  fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
   permissionMode: Type.Optional(SessionPermissionModeSchema),
+  toolOverrides: Type.Optional(SessionToolOverridesSchema),
   incognito: Type.Optional(Type.Boolean()),
   visibility: Type.Optional(SessionVisibilitySchema),
   catalogId: Type.Optional(NonEmptyString),
@@ -43,6 +63,7 @@ export const SessionsCreateParamsSchema = closedObject({
   ),
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
+  mentions: Type.Optional(HumanMentionsSchema),
   attachments: Type.Optional(ChatAttachmentsSchema),
   projectId: Type.Optional(
     Type.String({
@@ -50,6 +71,15 @@ export const SessionsCreateParamsSchema = closedObject({
       description: "Start in a registered project; operator.write.",
     }),
   ),
+  projectGitUrl: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 2048,
+      description: "Prepare a remote project before the initial agent turn; operator.write.",
+    }),
+  ),
+  /** Remote-owned source; create, dispatch, then send the initial turn. */
+  repository: Type.Optional(SessionRepositorySourceSchema),
   worktree: Type.Optional(Type.Boolean()),
   worktreeBaseRef: Type.Optional(
     Type.String({

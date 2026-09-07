@@ -6,6 +6,8 @@
   "include": [
     "../../src/cron/**/*.test.ts",
     "../../src/cron/**/*.test.tsx",
+    "../../src/daemon/**/*.test.ts",
+    "../../src/daemon/**/*.test.tsx",
     "../../src/plugin-sdk/**/*.test.ts",
     "../../src/plugin-sdk/**/*.test.tsx",
     "../../src/skills/**/*.test.ts",
