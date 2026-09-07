@@ -134,18 +134,31 @@ class DeviceHandlerTest {
         .putExtra(BatteryManager.EXTRA_LEVEL, 50)
         .putExtra(BatteryManager.EXTRA_SCALE, 100)
         .putExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_DISCHARGING)
-    shadowOf(app)
-      .sendStickyBroadcast(batteryIntent)
+    // Seed the sticky ACTION_BATTERY_CHANGED broadcast that readBatterySnapshot()
+    // consumes via registerReceiver(null, ...). Context.sendStickyBroadcast is the
+    // only non-reflection way to populate that sticky state under Robolectric.
+    @Suppress("DEPRECATION")
+    app.sendStickyBroadcast(batteryIntent)
     val handler = DeviceHandler(app)
 
     val result = handler.handleDeviceStatus(null)
 
     assertTrue(result.ok)
-    val battery = parsePayload(result.payloadJson).getValue("battery").jsonObject
+    val battery =
+      parsePayload(result.payloadJson)
+        .getValue("battery")
+        .jsonObject
     // level is a normalized 0.0–1.0 fraction (50/100 -> 0.5), never a raw level (50).
     assertEquals(0.5, battery.getValue("level").jsonPrimitive.double, 1.0e-9)
     // levelPercent mirrors the fraction as an integer percentage (0.5 -> 50).
-    assertEquals(50L, battery.getValue("levelPercent").jsonPrimitive.content.toLong())
+    assertEquals(
+      50L,
+      battery
+        .getValue("levelPercent")
+        .jsonPrimitive
+        .content
+        .toLong(),
+    )
   }
 
   @Test

@@ -18,7 +18,6 @@ import android.os.Environment
 import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
-import kotlin.math.roundToInt
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObjectBuilder
@@ -28,6 +27,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private const val DEFAULT_DEVICE_APPS_LIMIT = 100
 private const val MAX_DEVICE_APPS_LIMIT = 200
