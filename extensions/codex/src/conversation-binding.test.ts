@@ -1,5 +1,4 @@
 // Codex tests cover conversation binding plugin behavior.
-import type { ReadFileSyncOptions } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -66,7 +65,7 @@ vi.mock("node:fs", async (importOriginal) => {
     ...actual,
     readFileSync(
       filePath: string | URL | number,
-      options?: BufferEncoding | ReadFileSyncOptions | null,
+      options?: Parameters<typeof import("node:fs").readFileSync>[1],
     ) {
       if (filePath === "/etc/codex/requirements.toml") {
         const content = codexRequirementsTomlMock();

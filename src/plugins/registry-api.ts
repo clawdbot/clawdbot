@@ -75,7 +75,32 @@ export function createPluginApiFactory(
     return guard;
   };
 
+  // Registrations that live in process globals rather than the registry object.
+  // Registry rollback only splices registry-owned arrays, so these need explicit
+  // teardown or a failed/disabled plugin's callbacks stay reachable.
+  const pluginGlobalTeardowns = new Map<string, Set<() => void>>();
+
+  const addPluginGlobalTeardown = (pluginId: string, teardown: () => void): (() => void) => {
+    const teardowns = pluginGlobalTeardowns.get(pluginId) ?? new Set<() => void>();
+    teardowns.add(teardown);
+    pluginGlobalTeardowns.set(pluginId, teardowns);
+    return () => {
+      teardowns.delete(teardown);
+    };
+  };
+
   const deactivatePluginSideEffectGuards = (pluginId: string): void => {
+    const teardowns = pluginGlobalTeardowns.get(pluginId);
+    if (teardowns) {
+      pluginGlobalTeardowns.delete(pluginId);
+      for (const teardown of teardowns) {
+        try {
+          teardown();
+        } catch {
+          // Teardown is best effort; one failing owner must not strand the rest.
+        }
+      }
+    }
     const guards = pluginSideEffectGuards.get(pluginId);
     if (!guards) {
       return;
@@ -166,6 +191,17 @@ export function createPluginApiFactory(
               },
               registerNodeInvokePolicy: (policy) =>
                 bound.registerNodeInvokePolicy(policy, params.pluginConfig),
+              registerGatewaySuspensionParticipant: (participant) => {
+                // Bind to the plugin lifecycle so rollback or deactivation drops
+                // the process-global entry instead of leaving a dead plugin's
+                // callback inside the suspension fence.
+                const unregister = bound.registerGatewaySuspensionParticipant(participant);
+                const forgetTeardown = addPluginGlobalTeardown(record.id, unregister);
+                return () => {
+                  forgetTeardown();
+                  unregister();
+                };
+              },
               onConversationBindingResolved: bound.registerConversationBindingResolvedHandler,
               registerContextEngine: (id, factory) =>
                 bound.registerContextEngine(id, factory, registrationMode),

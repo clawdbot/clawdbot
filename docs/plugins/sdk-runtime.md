@@ -1371,6 +1371,61 @@ late callback from an old generation cannot overwrite current health. Prefer ret
 promise when the service is not usable until that promise settles; use the reporter only for
 deliberately nonblocking work that owns its own stop path.
 
+## Host suspension participants
+
+A hosting controller can ask the Gateway to fence new work and confirm it is
+idle before a snapshot, freeze, or restart — see
+[cooperative host suspension](/gateway/host-suspension). That accounting only
+covers work the Gateway tracks itself. A plugin that owns its own background
+queue registers a participant so its work is fenced and counted too:
+
+```typescript
+const unregister = api.registerGatewaySuspensionParticipant({
+  id: "delivery-queue",
+  prepare() {
+    // Close your own admission, then report what is still in flight.
+    queue.stopAcceptingWork();
+    return { activeCount: queue.activeCount, message: `${queue.activeCount} queued deliveries` };
+  },
+  status() {
+    return { activeCount: queue.activeCount };
+  },
+  resume() {
+    queue.startAcceptingWork();
+  },
+});
+```
+
+`prepare` runs inside the Gateway's atomic fence and must be **synchronous** —
+returning a promise or awaiting would let new work slip in between closing
+admission and taking the authoritative snapshot.
+
+- Report `activeCount: 0` only when the participant is genuinely idle. Any
+  nonzero count returns a `plugin-participant` blocker to the controller, which
+  refuses the suspension outright or holds it draining, depending on the
+  controller's request.
+- `resume` is called on explicit resume, on a refused (rolled-back) prepare, at
+  lease expiry, and on in-process restart. It must be safe to call when the
+  participant is already open.
+- Only an exact non-negative integer `activeCount` may report idle. The host
+  fails closed on anything else — a returned promise, a missing or fractional
+  count, `NaN`, or a non-object — and treats the participant as busy, because
+  such a report proves the participant did not actually fence its queue.
+- A participant that throws from `prepare` or `status` is treated as busy, and
+  one that throws from `resume` holds the Gateway fail-closed until it
+  succeeds. Never swallow an error to report idle.
+- Registrations are bound to the plugin lifecycle. If a plugin throws later in
+  `register()`, the host tears its participants down during rollback, so a
+  failed plugin cannot leave a callback inside the suspension fence.
+- Participant ids are namespaced by plugin id, so `delivery-queue` above is
+  reported as `<plugin-id>:delivery-queue`.
+
+Keep the returned unregister handle and call it during plugin teardown so a
+reloaded plugin does not leave a stale closure owning the fence. Unregistering
+or replacing a participant while a suspension is held is safe: the host reopens
+the exact instance whose `prepare` closed the queue, so teardown mid-lease
+cannot strand that queue closed.
+
 ## Storing runtime references
 
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:

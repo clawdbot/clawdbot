@@ -15,6 +15,10 @@ import {
   type GatewayActiveWorkInspectors,
   type GatewayActiveWorkSnapshot,
 } from "./gateway-active-work.js";
+import {
+  prepareGatewaySuspensionParticipants,
+  resumeGatewaySuspensionParticipants,
+} from "./gateway-suspension-participants.js";
 
 const GATEWAY_SUSPEND_TTL_MS = 2 * 60_000;
 const GATEWAY_SUSPEND_RETRY_AFTER_MS = 20_000;
@@ -293,6 +297,13 @@ export function prepareGatewaySuspend(params: {
   const activeWorkOptions = {
     ignoreTerminalSessions: terminalPolicy === "terminate",
   };
+  // Participants reopen with the scheduler so every rollback, resume, expiry, and
+  // lifecycle reset path releases them without a second recovery state machine.
+  // A throwing participant surfaces here and enters the existing fail-closed retry.
+  const resumeScheduling = () => {
+    resumeGatewaySuspensionParticipants();
+    params.resumeScheduling();
+  };
   const nowMs = (params.nowMs ?? Date.now)();
   const current = COORDINATOR_STATE.current;
   if (current?.kind === "recovering") {
@@ -348,11 +359,18 @@ export function prepareGatewaySuspend(params: {
   try {
     params.pauseScheduling();
     schedulingPaused = true;
-    const snapshot = createGatewayActiveWorkSnapshot(params.inspect, activeWorkOptions);
+    // Close participant admission inside the same synchronous fence, then report
+    // exactly what that close observed instead of re-reading their status.
+    // Drain polls fall back to the live participant inspector.
+    const participantBlockers = prepareGatewaySuspensionParticipants();
+    const snapshot = createGatewayActiveWorkSnapshot(
+      { ...params.inspect, getPluginParticipants: () => participantBlockers },
+      activeWorkOptions,
+    );
     if (!snapshot.idle && !drain) {
       const resumed = resumeSchedulingBeforeReopen({
         owner,
-        resumeScheduling: params.resumeScheduling,
+        resumeScheduling,
         reopenAdmission: admission.rollback,
         isInvalidated: () => suspensionInvalidated,
         warn: params.warn,
@@ -392,7 +410,7 @@ export function prepareGatewaySuspend(params: {
             commitAdmission: admission.commit,
           },
       reopenAdmission: admission.release,
-      resumeScheduling: params.resumeScheduling,
+      resumeScheduling,
       nowMs: params.nowMs ?? Date.now,
       warn: params.warn,
     });
@@ -402,7 +420,7 @@ export function prepareGatewaySuspend(params: {
     if (schedulingPaused) {
       const resumed = resumeSchedulingBeforeReopen({
         owner,
-        resumeScheduling: params.resumeScheduling,
+        resumeScheduling,
         reopenAdmission: admissionHeld ? admission.release : admission.rollback,
         isInvalidated: () => suspensionInvalidated,
         warn: params.warn,

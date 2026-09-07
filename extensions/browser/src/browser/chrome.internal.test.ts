@@ -290,7 +290,7 @@ function mockLinuxManagedChromeOwnership(params: {
   ];
   const readFileSync = fs.readFileSync.bind(fs);
   vi.spyOn(fs, "readFileSync").mockImplementation(
-    (filePath, options?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
+    (filePath, options?: Parameters<typeof fs.readFileSync>[1]) => {
       const s = String(filePath);
       if (s === `/proc/${params.pid}/cmdline`) {
         return Buffer.from(`${argv.join("\0")}\0`);

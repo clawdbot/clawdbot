@@ -83,6 +83,7 @@ export const validateWorkerLiveEventParams = compile(
   checkWorkerProtocolJson,
 );
 export const validateGatewaySuspendPrepareParams = compile(S.GatewaySuspendPrepareParamsSchema);
+export const validateGatewaySuspendPreflightParams = compile(S.GatewaySuspendPreflightParamsSchema);
 export const validateGatewaySuspendStatusParams = compile(S.GatewaySuspendStatusParamsSchema);
 export const validateGatewaySuspendResumeParams = compile(S.GatewaySuspendResumeParamsSchema);
 export const validateGatewaySuspendHandoffParams = compile(S.GatewaySuspendHandoffParamsSchema);

@@ -45,7 +45,7 @@ describe("writeConfigFile canonical reread", () => {
       });
       const realReadFileSync = fsNode.readFileSync.bind(fsNode);
       vi.spyOn(fsNode, "readFileSync").mockImplementation(
-        (target, options?: BufferEncoding | fsNode.ReadFileSyncOptions | null) => {
+        (target, options?: Parameters<typeof fsNode.readFileSync>[1]) => {
           if (corrupted && target === configPath) {
             return "{ definitely not json";
           }

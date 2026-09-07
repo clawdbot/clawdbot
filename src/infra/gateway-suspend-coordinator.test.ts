@@ -31,6 +31,8 @@ import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "./gateway-suspend-coordinator.js";
+import { registerGatewaySuspensionParticipant } from "./gateway-suspension-participants.js";
+import { resetGatewaySuspensionParticipantsForTest } from "./gateway-suspension-participants.test-support.js";
 
 const SUSPEND_TTL_MS = 2 * 60_000;
 const SUSPEND_RETRY_AFTER_MS = 20_000;
@@ -53,6 +55,7 @@ function inspectors(
     getQueuedTurns: () => 0,
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
+    getPluginParticipants: () => [],
     ...overrides,
   };
 }
@@ -61,12 +64,14 @@ beforeEach(() => {
   resetProcessRegistryForTests();
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
+  resetGatewaySuspensionParticipantsForTest();
 });
 
 afterEach(() => {
   resetProcessRegistryForTests();
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
+  resetGatewaySuspensionParticipantsForTest();
 });
 
 describe("gateway suspend coordinator", () => {
@@ -785,6 +790,120 @@ describe("gateway suspend coordinator", () => {
       }
     },
   );
+
+  it("refuses preparation while a plugin participant still owns work", () => {
+    const resume = vi.fn();
+    registerGatewaySuspensionParticipant({
+      id: "delivery-queue",
+      prepare: () => ({ activeCount: 2, message: "2 queued plugin deliveries" }),
+      status: () => ({ activeCount: 2 }),
+      resume,
+    });
+    const resumeScheduling = vi.fn();
+
+    const result = prepareGatewaySuspend({
+      requestId: "request-participant-busy",
+      pauseScheduling: vi.fn(),
+      resumeScheduling,
+      inspect: inspectors(),
+    });
+
+    expect(result).toMatchObject({ status: "busy", reason: "active-work", activeCount: 2 });
+    expect(result).toMatchObject({
+      blockers: [
+        {
+          kind: "plugin-participant",
+          count: 2,
+          message: "2 queued plugin deliveries",
+          participantId: "delivery-queue",
+        },
+      ],
+    });
+    // The refused attempt must leave the participant and the gateway open.
+    expect(resume).toHaveBeenCalled();
+    expect(resumeScheduling).toHaveBeenCalledOnce();
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
+  it("holds an idle participant closed until the suspension resumes", () => {
+    const participantResume = vi.fn();
+    registerGatewaySuspensionParticipant({
+      id: "delivery-queue",
+      prepare: () => ({ activeCount: 0 }),
+      status: () => ({ activeCount: 0 }),
+      resume: participantResume,
+    });
+
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-participant-idle",
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        inspect: inspectors(),
+        createSuspensionId: () => "suspension-participant",
+      }),
+    ).toMatchObject({ status: "ready", activeCount: 0 });
+    expect(participantResume).not.toHaveBeenCalled();
+    expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+    expect(resumeGatewaySuspend("suspension-participant")).toMatchObject({ resumed: true });
+
+    expect(participantResume).toHaveBeenCalledOnce();
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
+  it("reopens a participant at lease expiry without any polling", () => {
+    vi.useFakeTimers();
+    try {
+      const participantResume = vi.fn();
+      registerGatewaySuspensionParticipant({
+        id: "delivery-queue",
+        prepare: () => ({ activeCount: 0 }),
+        status: () => ({ activeCount: 0 }),
+        resume: participantResume,
+      });
+      prepareGatewaySuspend({
+        requestId: "request-participant-expiry",
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        inspect: inspectors(),
+        createSuspensionId: () => "suspension-participant-expiry",
+      });
+
+      vi.advanceTimersByTime(SUSPEND_TTL_MS);
+
+      expect(participantResume).toHaveBeenCalledOnce();
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stays fail-closed when a participant cannot reopen", () => {
+    registerGatewaySuspensionParticipant({
+      id: "delivery-queue",
+      prepare: () => ({ activeCount: 0 }),
+      status: () => ({ activeCount: 0 }),
+      resume: () => {
+        throw new Error("queue unavailable");
+      },
+    });
+    prepareGatewaySuspend({
+      requestId: "request-participant-recovery",
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+      inspect: inspectors(),
+      createSuspensionId: () => "suspension-participant-recovery",
+      warn: vi.fn(),
+    });
+
+    expect(resumeGatewaySuspend("suspension-participant-recovery")).toMatchObject({
+      ok: false,
+      reason: "scheduler-resume-failed",
+    });
+    // Admission must not reopen over a participant that is still fenced.
+    expect(isGatewayWorkAdmissionClosed()).toBe(true);
+  });
 
   it.each([false, true])("auto-resumes an abandoned lease at expiry (drain: %s)", (drain) => {
     vi.useFakeTimers();

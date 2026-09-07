@@ -17,16 +17,27 @@ type SafeGatewayRestartCounts = {
   activeTasks: number;
   totalActive: number;
 };
+const SAFE_RESTART_BLOCKER_KINDS = [
+  "queue",
+  "reply",
+  "embedded-run",
+  "cron-run",
+  "background-exec",
+  "root-request",
+  "task",
+] as const satisfies readonly GatewayActiveWorkBlocker["kind"][];
+
+const SAFE_RESTART_BLOCKER_KIND_SET: ReadonlySet<string> = new Set(SAFE_RESTART_BLOCKER_KINDS);
+
 type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
-  kind:
-    | "queue"
-    | "reply"
-    | "embedded-run"
-    | "cron-run"
-    | "background-exec"
-    | "root-request"
-    | "task";
+  kind: (typeof SAFE_RESTART_BLOCKER_KINDS)[number];
 };
+
+function isSafeRestartBlocker(
+  blocker: GatewayActiveWorkBlocker,
+): blocker is SafeGatewayRestartBlocker {
+  return SAFE_RESTART_BLOCKER_KIND_SET.has(blocker.kind);
+}
 
 type SafeRestartInspectors = Pick<
   GatewayActiveWorkInspectors,
@@ -39,6 +50,21 @@ type SafeRestartInspectors = Pick<
   | "getActiveTasks"
   | "getTaskBlockers"
 >;
+
+// Restart preflight reports a restart-specific inventory, so every activity
+// category outside SafeRestartInspectors is neutralized. Typing this as the exact
+// complement makes a new category added to the shared snapshot fail to compile
+// here until restart decides how to treat it, instead of silently appearing in
+// this deprecated surface.
+const NON_RESTART_INSPECTORS: Omit<GatewayActiveWorkInspectors, keyof SafeRestartInspectors> = {
+  getSessionAdmissions: () => 0,
+  getSessionMutations: () => 0,
+  getChatRuns: () => 0,
+  getQueuedTurns: () => 0,
+  getTerminalPersistence: () => 0,
+  getTerminalSessions: () => 0,
+  getPluginParticipants: () => [],
+};
 
 type SafeGatewayRestartPreflight = {
   safe: boolean;
@@ -59,12 +85,7 @@ export function createSafeGatewayRestartPreflight(
 ): SafeGatewayRestartPreflight {
   const snapshot = createGatewayActiveWorkSnapshot({
     ...inspectors,
-    getSessionAdmissions: () => 0,
-    getSessionMutations: () => 0,
-    getChatRuns: () => 0,
-    getQueuedTurns: () => 0,
-    getTerminalPersistence: () => 0,
-    getTerminalSessions: () => 0,
+    ...NON_RESTART_INSPECTORS,
   });
   const counts: SafeGatewayRestartCounts = {
     queueSize: snapshot.counts.queueSize,
@@ -83,7 +104,10 @@ export function createSafeGatewayRestartPreflight(
       snapshot.counts.rootRequests +
       snapshot.counts.activeTasks,
   };
-  const blockers = snapshot.blockers as SafeGatewayRestartBlocker[];
+  // Neutralized categories above cannot produce blockers, so this narrows rather
+  // than filters. It replaces an unchecked cast that would have passed any future
+  // blocker kind straight into this result.
+  const blockers = snapshot.blockers.filter(isSafeRestartBlocker);
 
   const summary =
     blockers.length === 0
