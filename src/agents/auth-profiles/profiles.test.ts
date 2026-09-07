@@ -244,7 +244,7 @@ describe("promoteAuthProfileInOrder", () => {
           getRuntimeAuthProfileStoreSnapshot(customAgentDir)?.profiles["openai:default"],
         ).toMatchObject({ access: "old" });
 
-        await upsertAuthProfileWithLock({
+        await upsertAuthProfileAfterLoginWithLockOrThrow({
           profileId: "openai:default",
           credential: {
             type: "oauth",
@@ -316,7 +316,7 @@ describe("promoteAuthProfileInOrder", () => {
           throw new Error("external auth hook must not run during postcommit rebuild");
         });
         try {
-          await upsertAuthProfileWithLock({
+          await upsertAuthProfileAfterLoginWithLockOrThrow({
             agentDir: customAgentDir,
             profileId: "openai:local",
             credential: {
