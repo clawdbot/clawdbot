@@ -823,7 +823,7 @@ The SUT manifest below intentionally narrows the bundled Slack plugin's
 production install (`extensions/slack/src/setup-shared.ts:12`) to the
 permissions and events covered by the live Slack QA suite. For the
 production-channel setup as users see it, see
-[Slack channel quick setup](/channels/slack#quick-setup); the QA Driver/SUT
+[Slack channel quick setup](/channels/slack/setup#quick-setup); the QA Driver/SUT
 pair is intentionally separate because the lane needs two distinct bot user
 ids in one workspace.
 

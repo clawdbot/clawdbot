@@ -95,6 +95,8 @@ channels:
   channels render the closing fence correctly.
 - List and blockquote prefixes are part of the IR text, so chunking never
   splits mid-prefix.
+- Paragraphs, headings, and code blocks inside a list item stay separated in
+  the IR, including paragraphs nested inside a quoted list item.
 - Inline styles never split across chunks; the renderer reopens an open
   style at the start of the next chunk.
 
@@ -147,6 +149,10 @@ content is hidden or lost.
   lands on its own line.
 - Code-span parsing preserves all-space content. It removes one surrounding
   space from each end only when both are present and the content is not all spaces.
+- Assistant-reply cleanup removes valid `<final>` markers outside Markdown code,
+  including nested or stray markers, while keeping their enclosed answer text.
+  Put literal `<final>payload</final>` examples in inline code or fenced code
+  blocks so their tags are preserved.
 
 ## Related
 

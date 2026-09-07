@@ -35,6 +35,13 @@ import {
   type WorkerWorkspaceOperationCoordinator,
 } from "./workspace-operation-coordinator.js";
 
+const runReclaimPreparation: Parameters<
+  typeof createWorkerPlacementDispatchService
+>[0]["runReclaimPreparation"] = async ({ run, authorize, pendingOperations }) => {
+  await pendingOperations?.settled;
+  return await run(authorize);
+};
+
 export function createHarness(
   placementStore: PlacementStore,
   options: {
@@ -421,8 +428,7 @@ export function createHarness(
     environments,
     isShuttingDown: options.isShuttingDown,
     prepareGatewayMove: options.prepareGatewayMove,
-    runReclaimPreparation:
-      options.runReclaimPreparation ?? (async ({ run, authorize }) => await run(authorize)),
+    runReclaimPreparation: options.runReclaimPreparation ?? runReclaimPreparation,
     runnerAvailability: createWorkerPlacementRunnerAvailabilityReader({
       environments,
       hasCurrentDeviceRunner: () => options.deviceRunnerAvailable === true,
@@ -624,7 +630,7 @@ export const createRecoveryService = (
     runActivationBarrier: async ({ activate }) => activate(),
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,
-    runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
+    runReclaimPreparation,
     runReclaimBarrier: async ({ begin, reclaim }) =>
       await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
+import { resolveHomePath } from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
 
@@ -27,16 +28,6 @@ const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnvWithEmptyFallback(
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const normalizedPath = (filePath) => filePath.replaceAll("\\", "/");
-
-function resolveHomePath(value) {
-  if (value === "~") {
-    return process.env.HOME;
-  }
-  if (value?.startsWith("~/") || value?.startsWith("~\\")) {
-    return path.join(process.env.HOME, value.slice(2));
-  }
-  return value;
-}
 
 function readTextFileBounded(file, maxBytes, label) {
   const stats = fs.statSync(file);

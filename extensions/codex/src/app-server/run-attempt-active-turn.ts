@@ -547,7 +547,13 @@ export function activateCodexAttemptTurn(
     abort: () => abortExplicitly("aborted"),
   };
   params.replyOperation?.attachBackend(handle);
-  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  setActiveEmbeddedRun(
+    params.sessionId,
+    handle,
+    params.sessionKey,
+    params.sessionFile,
+    sessionAgentId,
+  );
   const freezeRunTerminalOutcome = () => {
     if (terminalState.terminalOutcomeFrozen) {
       return;

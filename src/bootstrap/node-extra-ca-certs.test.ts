@@ -17,6 +17,7 @@ const VERSION_MANAGER_EXEC_PATHS = [
   ["nodenv", "/home/test/.nodenv/versions/22.14.0/bin/node"],
   ["nodebrew", "/home/test/.nodebrew/node/v22.14.0/bin/node"],
   ["nvs", "/home/test/nvs/node/22.14.0/x64/bin/node"],
+  ["raw path before normalization", "/home/test/.nvm/../system/bin/node"],
 ] as const;
 
 function allowOnly(path: string) {
@@ -73,12 +74,20 @@ describe("resolveAutoNodeExtraCaCerts", () => {
     ).toBeUndefined();
   });
 
-  it("returns undefined when node is not nvm-managed", () => {
+  it.each([
+    ["/usr/bin/node", undefined],
+    ["/usr/bin/node", ""],
+    ["/usr/bin/node", " \t "],
+    ["/home/test/.NVM/versions/node/v22/bin/node", undefined],
+    ["/home/test/library/application support/fnm/bin/node", undefined],
+    ["/home/test/.local/share/pnpm/node", undefined],
+    ["/home/test/.nvm\\versions\\node\\v22\\bin\\node", undefined],
+  ] as const)("does not infer Linux CA settings for %s with NVM_DIR=%j", (execPath, NVM_DIR) => {
     expect(
       resolveAutoNodeExtraCaCerts({
-        env: {},
+        env: { NVM_DIR },
         platform: "linux",
-        execPath: "/usr/bin/node",
+        execPath,
         accessSync: allowOnly(DEBIAN_CA_BUNDLE_PATH),
       }),
     ).toBeUndefined();

@@ -1,12 +1,12 @@
 // Summarizes channel token/account credential fields for `openclaw status --all`.
 // The display path is intentionally secret-safe unless the caller explicitly requests disclosure.
 
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { sha256HexPrefix } from "../../logging/redact-identifier.js";
 
 export type ChannelAccountTokenSummaryRow = {
   account: unknown;
@@ -38,7 +38,7 @@ function formatTokenHint(token: string, opts: { showSecrets: boolean }): string 
   }
   if (!opts.showSecrets) {
     // Show a stable fingerprint and length so operators can compare tokens without leaking them.
-    return `sha256:${sha256HexPrefix(t, 8)} · len ${t.length}`;
+    return `sha256:${sha256HexPrefixCore(t, 8)} · len ${t.length}`;
   }
   const head = sliceUtf16Safe(t, 0, 4);
   const tail = sliceUtf16Safe(t, -4);

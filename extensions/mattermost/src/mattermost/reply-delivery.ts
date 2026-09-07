@@ -1,13 +1,10 @@
 // Mattermost plugin module implements reply delivery behavior.
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  createMessageReceiptFromOutboundResults,
-  listMessageReceiptPlatformIds,
-  type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -118,22 +115,16 @@ export async function deliverMattermostReplyPayload(params: {
     if (results.length === 0 && failedPartial?.visibleReplySent !== true) {
       throw error;
     }
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        ...results.map((result) => ({ receipt: result.receipt })),
-        ...(failedPartial?.receipt
-          ? [{ receipt: failedPartial.receipt }]
-          : (failedPartial?.messageIds ?? []).map((messageId) => ({ messageId }))),
-      ],
-      kind: reply.mediaUrls.length > 0 ? "media" : "text",
-      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    });
-    throw createChannelPartialDeliveryError(error, {
-      messageIds: listMessageReceiptPlatformIds(receipt),
-      receipt,
-      visibleReplySent: true,
-      content: joinMattermostVisibleContent([...acceptedContents, failedPartial?.content]),
-    });
+    throw createChannelPartialDeliveryError(
+      error,
+      createAcceptedChannelDeliveryResult({
+        results: results.map((result) => ({ receipt: result.receipt })),
+        deliveryResults: failedPartial ? [failedPartial] : [],
+        kind: reply.mediaUrls.length > 0 ? "media" : "text",
+        ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+        content: joinMattermostVisibleContent([...acceptedContents, failedPartial?.content]),
+      }),
+    );
   }
 
   if (outcome === "empty") {
@@ -143,16 +134,13 @@ export async function deliverMattermostReplyPayload(params: {
       suppression: { reason: "no_visible_result" },
     };
   }
-  const receipt = createMessageReceiptFromOutboundResults({
-    results: results.map((result) => ({ receipt: result.receipt })),
-    kind: outcome,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-  });
   return {
     outcome,
-    messageIds: listMessageReceiptPlatformIds(receipt),
-    receipt,
-    visibleReplySent: true,
-    content: joinMattermostVisibleContent(acceptedContents),
+    ...createAcceptedChannelDeliveryResult({
+      results: results.map((result) => ({ receipt: result.receipt })),
+      kind: outcome,
+      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+      content: joinMattermostVisibleContent(acceptedContents),
+    }),
   };
 }

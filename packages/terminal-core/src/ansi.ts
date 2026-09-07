@@ -147,6 +147,13 @@ export function stripAnsiForStreamChunk(
   });
 }
 
+/** Let sequential renderers consume graphemes without retaining a full-run array. */
+export function* iterateGraphemes(input: string): Generator<string, void> {
+  for (const { segment } of graphemeSegmenter.segment(input)) {
+    yield segment;
+  }
+}
+
 export function splitGraphemes(input: string): string[] {
   if (!input) {
     return [];

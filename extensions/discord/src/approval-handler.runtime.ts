@@ -1,12 +1,13 @@
 // Discord plugin module implements approval handler behavior.
 import { ButtonStyle } from "discord-api-types/v10";
-import type {
-  ApprovalViewModel,
-  ChannelApprovalCapabilityHandlerContext,
-  PendingApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  type ApprovalViewModel,
+  type ChannelApprovalCapabilityHandlerContext,
+  type PendingApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { formatChannelApprovalResolvedLabel } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
@@ -266,19 +267,15 @@ function createApprovalContainer(params: {
         pending ? 500 : 300,
       );
   const decisionLabel =
-    view.phase !== "resolved"
-      ? undefined
-      : systemAgent && view.terminalStatus === "cancelled"
-        ? "Cancelled"
-        : systemAgent && view.applicationStatus === "applied"
-          ? "Applied"
-          : systemAgent && view.applicationStatus === "not-applied"
-            ? "Not applied"
-            : view.decision === "allow-once"
-              ? "Allowed (once)"
-              : view.decision === "allow-always"
-                ? "Allowed (always)"
-                : "Denied";
+    view.phase === "resolved"
+      ? formatChannelApprovalResolvedLabel(view, (decision) =>
+          decision === "allow-once"
+            ? "Allowed (once)"
+            : decision === "allow-always"
+              ? "Allowed (always)"
+              : "Denied",
+        )
+      : undefined;
   const title = pending
     ? `${approvalLabel} Approval Required`
     : `${approvalLabel} Approval: ${view.phase === "expired" ? "Expired" : decisionLabel}`;

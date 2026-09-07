@@ -9,6 +9,8 @@ export type UsageAccumulator = {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  cacheReadReported?: true;
+  cacheWriteReported?: true;
   cacheWrite1h: number;
   reasoningTokens: number;
   total: number;
@@ -53,6 +55,12 @@ export const mergeUsageIntoAccumulator = (
   const callTotal =
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  if (usage.cacheRead !== undefined) {
+    target.cacheReadReported = true;
+  }
+  if (usage.cacheWrite !== undefined) {
+    target.cacheWriteReported = true;
+  }
   target.input += usage.input ?? 0;
   target.output += usage.output ?? 0;
   target.cacheRead += usage.cacheRead ?? 0;
@@ -105,8 +113,8 @@ export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | un
   return {
     input: usage.input || undefined,
     output: usage.output || undefined,
-    cacheRead: usage.cacheRead || undefined,
-    cacheWrite: usage.cacheWrite || undefined,
+    cacheRead: usage.cacheReadReported ? usage.cacheRead : usage.cacheRead || undefined,
+    cacheWrite: usage.cacheWriteReported ? usage.cacheWrite : usage.cacheWrite || undefined,
     ...(usage.cacheWrite1h > 0 ? { cacheWrite1h: usage.cacheWrite1h } : {}),
     ...(usage.reasoningTokens > 0 ? { reasoningTokens: usage.reasoningTokens } : {}),
     total: usage.total || derivedTotal || undefined,
