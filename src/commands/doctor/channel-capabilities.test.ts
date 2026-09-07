@@ -11,6 +11,20 @@ const channelPluginMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(() => undefined),
 }));
 
+// Doctor runs without starting channels, so the plugin registry can still be
+// empty. This flag reproduces that state without unregistering real channels.
+const registryState = vi.hoisted(() => ({ forceUnregistered: false }));
+
+const readOnlyMocks = vi.hoisted(() => ({
+  resolveReadOnlyChannelPluginsForConfig: vi.fn(() => ({ plugins: [] })),
+}));
+
+vi.mock("../../channels/plugins/read-only.js", () => ({
+  resolveReadOnlyChannelPluginsForConfig: (
+    ...args: Parameters<typeof readOnlyMocks.resolveReadOnlyChannelPluginsForConfig>
+  ) => readOnlyMocks.resolveReadOnlyChannelPluginsForConfig(...args),
+}));
+
 vi.mock("../../channels/plugins/bundled.js", () => ({
   getBundledChannelPlugin: channelPluginMocks.getBundledChannelPlugin,
 }));
@@ -19,10 +33,23 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: channelPluginMocks.getChannelPlugin,
 }));
 
+vi.mock("../../channels/registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../channels/registry.js")>();
+  return {
+    ...actual,
+    normalizeAnyChannelId: (raw?: string | null) =>
+      registryState.forceUnregistered ? null : actual.normalizeAnyChannelId(raw),
+  };
+});
+
 describe("doctor channel capabilities", () => {
   beforeEach(() => {
     channelPluginMocks.getBundledChannelPlugin.mockReset().mockReturnValue(undefined);
     channelPluginMocks.getChannelPlugin.mockReset().mockReturnValue(undefined);
+    registryState.forceUnregistered = false;
+    readOnlyMocks.resolveReadOnlyChannelPluginsForConfig.mockReset().mockReturnValue({
+      plugins: [],
+    });
   });
 
   it("returns canonical top-level route semantics from googlechat plugin metadata", () => {
@@ -138,5 +165,46 @@ describe("doctor channel capabilities", () => {
       configured: ["work"],
       runtime: ["default", "work"],
     });
+  });
+
+  it("resolves account ids through the bundled catalog when no channel is registered", () => {
+    registryState.forceUnregistered = true;
+    channelPluginMocks.getBundledChannelPlugin.mockReturnValue({
+      config: {
+        listAccountIds: () => ["default", "work"],
+        resolveAccount: (_cfg: unknown, accountId?: string | null) => ({ accountId }),
+      },
+    } as never);
+
+    expect(resolveDoctorChannelAccountIds("telegram", {}, ["default"])).toEqual({
+      configured: ["default"],
+      runtime: ["default", "work"],
+    });
+  });
+
+  it("resolves account ids for a configured external plugin through the read-only loader", () => {
+    registryState.forceUnregistered = true;
+    readOnlyMocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [
+        {
+          id: "acme-chat",
+          config: {
+            listAccountIds: () => ["default", "team"],
+            resolveAccount: (_cfg: unknown, accountId?: string | null) => ({ accountId }),
+          },
+        },
+      ],
+    } as never);
+
+    expect(resolveDoctorChannelAccountIds("acme-chat", {}, ["default"])).toEqual({
+      configured: ["default"],
+      runtime: ["default", "team"],
+    });
+  });
+
+  it("still returns undefined for channels no loader can resolve", () => {
+    registryState.forceUnregistered = true;
+
+    expect(resolveDoctorChannelAccountIds("not-a-real-channel", {}, ["default"])).toBeUndefined();
   });
 });

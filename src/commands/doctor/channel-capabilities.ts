@@ -1,8 +1,13 @@
-import { findBundledChannelCatalogMetadata } from "../../channels/bundled-channel-catalog-read.js";
+import {
+  findBundledChannelCatalogId,
+  findBundledChannelCatalogMetadata,
+} from "../../channels/bundled-channel-catalog-read.js";
 // Doctor capability lookup for channel-specific policy and migration behavior.
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import type { ChannelDmAllowFromMode } from "../../channels/plugins/dm-access.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { resolveReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginPackageChannelDoctorCapabilities } from "../../plugins/manifest.js";
@@ -85,18 +90,41 @@ function readResolvedAccountId(account: unknown): string | undefined {
   return typeof accountId === "string" && accountId ? accountId : undefined;
 }
 
+function findReadOnlyChannelPlugin(
+  cfg: OpenClawConfig,
+  channelName: string,
+): ChannelPlugin | undefined {
+  try {
+    const { plugins } = resolveReadOnlyChannelPluginsForConfig(cfg, {
+      includePersistedAuthState: false,
+      includeSetupFallbackPlugins: true,
+    });
+    return plugins.find((plugin) => plugin.id === channelName);
+  } catch {
+    // Doctor stays conservative when configured plugins cannot be loaded.
+    return undefined;
+  }
+}
+
 /** Resolve configured and runtime account ids through the channel plugin's own semantics. */
 export function resolveDoctorChannelAccountIds(
   channelName: string,
   cfg: OpenClawConfig,
   configuredAccountIds: string[],
 ): DoctorChannelAccountIds | undefined {
-  const channelId = normalizeAnyChannelId(channelName);
-  if (!channelId) {
-    return undefined;
-  }
+  // The plugin registry is only populated once channels start. Doctor inspects
+  // config without starting them, so fall back to the bundled catalog instead of
+  // treating every channel as unknown and returning undefined for all of them.
+  const channelId = normalizeAnyChannelId(channelName) ?? findBundledChannelCatalogId(channelName);
   try {
-    const plugin = getChannelPlugin(channelId) ?? getBundledChannelPlugin(channelId);
+    const plugin =
+      (channelId
+        ? (getChannelPlugin(channelId) ?? getBundledChannelPlugin(channelId))
+        : undefined) ??
+      // Configured external plugins are absent from both the registry and the
+      // bundled catalog, so reuse the config-driven loader doctor already uses
+      // to find their adapters.
+      findReadOnlyChannelPlugin(cfg, channelName);
     if (!plugin) {
       return undefined;
     }
