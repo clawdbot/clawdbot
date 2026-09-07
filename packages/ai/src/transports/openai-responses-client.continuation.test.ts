@@ -40,14 +40,38 @@ vi.mock("openai", () => {
       this.baseURL = options.baseURL ?? "https://api.openai.com/v1";
       sseState.clientHeaders.push(options.defaultHeaders ?? {});
     }
+
+    withOptions(options: { apiKey?: string }) {
+      return new MockOpenAI({ apiKey: options.apiKey ?? this.apiKey, baseURL: this.baseURL });
+    }
   }
 
   return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({
-  ResponsesWS: function UnexpectedResponsesWS() {
-    throw new Error("SSE continuation tests must not construct a WebSocket");
+  ResponsesWS: class MockResponsesWS {
+    socket = { readyState: 1 };
+    private outcome?: Error | SdkResponse;
+    send(request: Record<string, unknown>) {
+      sseState.requests.push(request);
+      this.outcome = sseState.outcomes.shift();
+    }
+    close() {
+      this.socket.readyState = 3;
+    }
+    on() {
+      return this;
+    }
+    async *stream() {
+      yield { type: "open" };
+      if (!this.outcome || this.outcome instanceof Error) {
+        throw this.outcome ?? new Error("Unexpected WebSocket request");
+      }
+      for await (const message of this.outcome.data) {
+        yield { type: "message", message };
+      }
+    }
   },
 }));
 
@@ -111,7 +135,6 @@ function completedEvent(responseId: string, content: string) {
         },
       ],
       role: "assistant",
-      phase: "final_answer",
     },
   ];
   return {
@@ -145,6 +168,8 @@ async function run(
     onPayload: (payload: Record<string, unknown>) => Record<string, unknown>;
     signal?: AbortSignal;
     reasoningEffort?: "low" | "medium" | "high";
+    transport?: "sse" | "websocket-cached";
+    authProfileId?: string;
     asyncToolExecution?: boolean;
     openclawCodeModeToolSurface?: boolean;
   },
@@ -153,7 +178,8 @@ async function run(
   const stream = await createOpenAIResponsesTransportStreamFn()(requestModel, context, {
     apiKey: "test-key",
     sessionId: options.sessionId ?? "session-1",
-    transport: "sse",
+    transport: options.transport ?? "sse",
+    authProfileId: options.authProfileId,
     reasoningEffort: options.reasoningEffort ?? "low",
     asyncToolExecution: options.asyncToolExecution,
     openclawCodeModeToolSurface: options.openclawCodeModeToolSurface,
@@ -188,6 +214,7 @@ describe("native OpenAI Responses SSE continuation", () => {
               openclaw_turn_attempt: "1",
               openclaw_transport: context.transport,
             },
+            websocket: { headers: { "x-openclaw-session-id": context.sessionId ?? "" } },
           };
         },
       },
@@ -197,6 +224,7 @@ describe("native OpenAI Responses SSE continuation", () => {
   afterEach(() => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+    vi.useRealTimers();
   });
 
   it("continues stateful literal SSE turns with only appended input", async () => {
@@ -246,47 +274,134 @@ describe("native OpenAI Responses SSE continuation", () => {
     expect(sseState.requests[1]?.input).toHaveLength(3);
   });
 
-  it("preserves Astra effort updates on the wire across unstored SSE turns", async () => {
+  it.each([
+    { transport: "sse", reset: "warm" },
+    { transport: "sse", reset: "cleanup" },
+    { transport: "sse", reset: "expiry" },
+    { transport: "websocket-cached", reset: "cleanup" },
+    { transport: "websocket-cached", reset: "expiry" },
+  ] as const)(
+    "preserves effort controls through $transport $reset and transcript reload",
+    async ({ transport, reset }) => {
+      vi.useFakeTimers();
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+        sdkCompletion("resp_3", "third answer"),
+      );
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
+      const options = { onPayload, transport };
+      const messages: Context["messages"] = [userMessage("first question", 1)];
+      const first = await run({ messages }, options, astra);
+      messages.push(first, userMessage("second question", 2));
+      const second = await run({ messages }, { ...options, reasoningEffort: "high" }, astra);
+      messages.push(second, userMessage("third question", 3));
+      if (reset === "cleanup") {
+        cleanupSessionResources();
+      } else if (reset === "expiry") {
+        vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      }
+      const serialized = JSON.stringify(messages);
+      const third = await run(
+        { messages: JSON.parse(serialized) },
+        { ...options, reasoningEffort: "medium" },
+        astra,
+      );
+      expect([first.stopReason, second.stopReason, third.stopReason]).toEqual([
+        "stop",
+        "stop",
+        "stop",
+      ]);
+      const configuration = { type: "configuration_update", reasoning: { effort: "high" } };
+      const input = sseState.requests[2]?.input;
+      expect(sseState.requests[1]).toMatchObject({ reasoning: { effort: "low" } });
+      expect(sseState.requests[1]?.input).toContainEqual(configuration);
+      expect(sseState.requests[2]).toMatchObject({
+        reasoning: { effort: "low", summary: "auto" },
+        input: [
+          { role: "user", content: [{ text: "first question" }] },
+          { role: "assistant", content: [{ text: "first answer" }] },
+          configuration,
+          { role: "user", content: [{ text: "second question" }] },
+          { role: "assistant", content: [{ text: "second answer" }] },
+          { type: "configuration_update", reasoning: { effort: "medium" } },
+          { role: "user", content: [{ text: "third question" }] },
+        ],
+      });
+      expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+      if (transport === "websocket-cached") {
+        expect(sseState.requests[1]).toHaveProperty("previous_response_id", "resp_1");
+        expect(sseState.requests[2]).toHaveProperty("type", "response.create");
+      }
+      if (transport === "sse" && Array.isArray(input)) {
+        expect(input.slice(0, 4)).toEqual(sseState.requests[1]?.input);
+      }
+    },
+  );
+
+  it.each([
+    "model",
+    "mode",
+    "multi-agent",
+    "truncation",
+    "server compaction",
+    "compacted history",
+    "edited history",
+    "route",
+    "session",
+    "auth",
+    "request settings",
+  ])("resets durable effort controls after %s changes", async (change) => {
     sseState.outcomes.push(
       sdkCompletion("resp_1", "first answer"),
       sdkCompletion("resp_2", "second answer"),
       sdkCompletion("resp_3", "third answer"),
     );
     const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
-    const messages: Context["messages"] = [userMessage("first question", 1)];
+    let messages: Context["messages"] = [userMessage("first question", 1)];
     const first = await run({ messages }, { onPayload }, astra);
     messages.push(first, userMessage("second question", 2));
     const second = await run({ messages }, { onPayload, reasoningEffort: "high" }, astra);
     messages.push(second, userMessage("third question", 3));
-    const third = await run({ messages }, { onPayload, reasoningEffort: "high" }, astra);
-
-    expect([first.stopReason, second.stopReason, third.stopReason]).toEqual([
-      "stop",
-      "stop",
-      "stop",
-    ]);
-    const configuration = { type: "configuration_update", reasoning: { effort: "high" } };
-    expect(sseState.requests).toEqual([
-      expect.objectContaining({ store: false, reasoning: { effort: "low", summary: "auto" } }),
-      expect.objectContaining({
-        store: false,
-        reasoning: { effort: "low", summary: "auto" },
-        input: [expect.anything(), expect.anything(), configuration, expect.anything()],
-      }),
-      expect.objectContaining({
-        store: false,
-        reasoning: { effort: "low", summary: "auto" },
-        input: [
-          expect.anything(),
-          expect.anything(),
-          configuration,
-          expect.anything(),
-          expect.anything(),
-          expect.anything(),
-        ],
-      }),
-    ]);
-    expect(sseState.requests.every((request) => !request.previous_response_id)).toBe(true);
+    expect(sseState.requests[1]?.input).toContainEqual({
+      type: "configuration_update",
+      reasoning: { effort: "high" },
+    });
+    cleanupSessionResources();
+    if (change === "compacted history") {
+      messages = [userMessage("compacted summary", 0), ...messages.slice(3)];
+    } else if (change === "edited history") {
+      messages[0] = userMessage("edited question", 1);
+    }
+    const serialized = JSON.stringify(messages);
+    const third = await run(
+      { messages: JSON.parse(serialized) },
+      {
+        reasoningEffort: "medium",
+        sessionId: change === "session" ? "session-2" : undefined,
+        authProfileId: change === "auth" ? "profile-2" : undefined,
+        onPayload: (payload) => ({
+          ...onPayload(payload),
+          ...(change === "mode" ? { reasoning: { effort: "medium", mode: "pro" } } : {}),
+          ...(change === "multi-agent" ? { multi_agent: { enabled: true } } : {}),
+          ...(change === "truncation" ? { truncation: "auto" } : {}),
+          ...(change === "server compaction"
+            ? { context_management: [{ type: "compaction", compact_threshold: 1000 }] }
+            : {}),
+          ...(change === "request settings" ? { max_output_tokens: 512 } : {}),
+        }),
+      },
+      change === "model"
+        ? model
+        : change === "route"
+          ? { ...astra, baseUrl: "https://example.test/v1" }
+          : astra,
+    );
+    expect(third.stopReason).toBe("stop");
+    expect(sseState.requests[2]).toMatchObject({ reasoning: { effort: "medium" } });
+    expect(sseState.requests[2]?.input).not.toContainEqual(
+      expect.objectContaining({ type: "configuration_update" }),
+    );
   });
 
   it("executes an Astra tool before SSE completes and returns its result once", async () => {
