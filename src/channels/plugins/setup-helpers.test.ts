@@ -541,6 +541,32 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     expect(channel.account).toBeUndefined();
   });
 
+  it("case-folds a padded key the way the case-insensitive lookup does", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          signal: { account: "+15555550100", accounts: { " Default ": { name: "Primary" } } },
+        },
+      }),
+      channelKey: "signal",
+      setupSurface: signalSetupSurface,
+    });
+
+    // resolveAccountEntry compares keys through normalizeLowercaseStringOrEmpty, which trims
+    // before it lowercases (src/routing/account-lookup.ts:18-22,
+    // packages/normalization-core/src/string-coerce.ts:7-17,65-68), so Signal selects " Default "
+    // for the id "default". A writer that only lowercased would miss that key and seed a canonical
+    // twin holding the number, and the twin would win the reader's exact-key branch and hide the
+    // authored name.
+    const channel = channelRecord(next, "signal");
+    expect(accountRecord(channel, " Default ")).toEqual({
+      name: "Primary",
+      account: "+15555550100",
+    });
+    expect(accountsRecord(channel).default).toBeUndefined();
+    expect(channel.account).toBeUndefined();
+  });
+
   it("keeps promoting into a key the normalized lookup selects when the channel declares nothing", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({

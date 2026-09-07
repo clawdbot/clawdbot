@@ -164,7 +164,7 @@ describe("signalSetupAdapter account keys", () => {
     // The guided wizard promotes before any Signal hook runs (src/channels/plugins/setup-wizard.ts:63,
     // then validateInput at :167 and applyAccountConfig at :175), so no guard can refuse this add.
     // Before this change the promotion wrote into "Default.", whose own empty account kept the root
-    // number from being copied while the root key was still deleted (setup-helpers.ts:312-318), so
+    // number from being copied while the root key was still deleted (setup-helpers.ts:313-319), so
     // the number was gone for good. The writer now lands on the canonical key Signal's resolver
     // looks up, through the setup contract the wizard passes (setup-wizard.ts:313), which forwards
     // the adapter's accountEntryLookup declaration.
@@ -198,6 +198,34 @@ describe("signalSetupAdapter account keys", () => {
     );
   });
 
+  it("adds a named account when promotion lands on a padded key the reader case-folds", () => {
+    const cfg = rootNumberConfig({
+      accounts: { " Default ": { name: "Primary" } },
+    });
+    const authored = structuredClone(cfg);
+
+    // The lookup Signal declares trims before it lowercases
+    // (packages/normalization-core/src/string-coerce.ts:7-17,65-68), so resolveSignalAccount
+    // selects " Default " for the id "default" and the promotion has to land there. A writer that
+    // only lowercased the key would miss it and seed a canonical twin holding the root number, and
+    // that twin would win the reader's exact-key branch and hide the authored name.
+    expect(
+      signalSetupAdapter.validateInput?.({ cfg, accountId: "work", input: externalNativeInput }),
+    ).toBeNull();
+    const reloaded = reload(addNamedAccount(cfg, "work"));
+    const accounts = reloaded.channels?.signal?.accounts;
+
+    const resolved = resolveSignalAccount({ cfg: reloaded, accountId: "default" });
+    expect(resolved.config.name).toBe("Primary");
+    expect(resolved.config.account).toBe(ROOT_NUMBER);
+    expect(Object.keys(accounts ?? {})).toEqual([" Default ", "work"]);
+    expect(accounts?.[" Default "]).toEqual({
+      ...authored.channels?.signal?.accounts?.[" Default "],
+      account: ROOT_NUMBER,
+    });
+    expect(reloaded.channels?.signal?.account).toBeUndefined();
+  });
+
   it("sends a named add to doctor when promotion would write the configured default alias", () => {
     const cfg = rootNumberConfig({
       transport: { kind: "container", url: "http://signal-container:8080" },
@@ -205,7 +233,7 @@ describe("signalSetupAdapter account keys", () => {
       accounts: { "Work Phone": { name: "Work" }, personal: { name: "Personal" } },
     });
 
-    // The promotion writer targets the configured defaultAccount (setup-helpers.ts:346-358), so
+    // The promotion writer targets the configured defaultAccount (setup-helpers.ts:375-384), so
     // the oracle has to see the original config to preview this write into "Work Phone".
     expect(
       signalSetupAdapter.validateInput?.({
@@ -226,7 +254,7 @@ describe("signalSetupAdapter account keys", () => {
 
     // Signal lists "!!!" as default (listConfiguredAccountIds in
     // src/channels/plugins/account-helpers.ts) and the promotion, with one map key, writes the root
-    // number into that key however it is spelled (src/channels/plugins/setup-helpers.ts:357-358),
+    // number into that key however it is spelled (src/channels/plugins/setup-helpers.ts:385-386),
     // while the account lookup never selects it. An oracle that drops keys with no optional
     // normalized form would preview no write there and let the number vanish into "!!!".
     expect(
@@ -263,7 +291,7 @@ describe("signalSetupAdapter account keys", () => {
     const authored = structuredClone(cfg);
 
     // The configured defaultAccount resolves to the first key normalizing to "work-phone"
-    // (src/channels/plugins/setup-helpers.ts:346-358), the case variant the account lookup also
+    // (src/channels/plugins/setup-helpers.ts:375-384), the case variant the account lookup also
     // selects, so the promotion lands where the account resolver looks.
     expect(
       signalSetupAdapter.validateInput?.({
@@ -303,7 +331,7 @@ describe("signalSetupAdapter account keys", () => {
       const authored = structuredClone(cfg);
 
       // With no exact key the promotion and the account lookup both take the first key in map
-      // order (src/channels/plugins/setup-helpers.ts:325-333, src/routing/account-lookup.ts:18-22),
+      // order (src/channels/plugins/setup-helpers.ts:354-357, src/routing/account-lookup.ts:18-22),
       // so a last-wins lookup would refuse this valid promotion.
       expect(
         signalSetupAdapter.validateInput?.({ cfg, accountId: "work", input: externalNativeInput }),

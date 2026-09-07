@@ -329,14 +329,15 @@ function resolveExistingAccountKey(
   accountEntryLookup: ChannelSetupAdapter["accountEntryLookup"],
 ): string {
   if (accountEntryLookup !== "case-insensitive") {
-    // The channel's readers select entries with resolveNormalizedAccountEntry
-    // (src/routing/account-lookup.ts:27-51), the exact key first, then the first key in map order
-    // whose normalized id is the target. The writer mirrors that order. The exact-first step can
-    // only keep a value with the entry that lookup already prefers, so accounts.default receives
-    // the moved values even when accounts.Default is listed before it, and the scan still keeps an
-    // alias such as accounts["Work.Bot"] from gaining a canonical twin that would shadow it. The
-    // target is still a raw existing key on the sole-named-key path, and Object.hasOwn returns it
-    // just as the scan's fallback would, since no second named key can carry the same id.
+    // The exact-key step mirrors the first step of resolveNormalizedAccountEntry, the lookup these
+    // channels' readers use (src/routing/account-lookup.ts:35-37), so accounts.default receives the
+    // moved values even when accounts.Default is listed before it. The scan below is the previous
+    // promotion rule unchanged, the first key in map order whose normalized id is the target, which
+    // keeps an alias such as accounts["Work.Bot"] from gaining a canonical twin that would shadow
+    // it. Together they are not that whole lookup, which also passes over blocked keys and keys
+    // with no canonical form (:39-47). The target is still a raw existing key on the sole-named-key
+    // path, and Object.hasOwn returns it just as the scan's fallback would, since no second named
+    // key can carry the same id.
     if (Object.hasOwn(accounts, targetAccountId)) {
       return targetAccountId;
     }
@@ -417,8 +418,9 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   const targetAccountId = hasAccounts
     ? resolveSingleAccountPromotionTarget({ channel: base, setupSurface: params.setupSurface })
     : DEFAULT_ACCOUNT_ID;
-  // The promotion lands on the key the channel's own account lookup selects, so a plain case
-  // variant such as `accounts.Ops` keeps its spelling under either rule.
+  // The promotion takes the exact key when the map holds one, and otherwise the key each branch's
+  // own scan chooses, so a plain case variant such as `accounts.Ops` keeps its spelling under
+  // either declaration.
   const resolvedTargetAccountKey = resolveExistingAccountKey(
     accounts,
     targetAccountId,

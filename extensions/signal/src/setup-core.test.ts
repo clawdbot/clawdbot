@@ -811,7 +811,7 @@ describe("signalSetupAdapter", () => {
       'Signal account "default" is stored under channels.signal.accounts."Default."; run openclaw doctor --fix to move it to its normalized key, then rerun setup.';
 
     // The promotion moves the root number into the first map key normalizing to "default", which
-    // is the unrepaired alias itself (src/channels/plugins/setup-helpers.ts:357-358, :390-403),
+    // is the unrepaired alias itself (src/channels/plugins/setup-helpers.ts:385-386, :392-438),
     // and nothing restores it from there, so the root would lose its number for good.
     expect(
       signalSetupAdapter.validateInput?.({
@@ -853,7 +853,7 @@ describe("signalSetupAdapter", () => {
     };
 
     // With exactly one map key the promotion targets it however it is spelled
-    // (src/channels/plugins/setup-helpers.ts:357-358), so the root number would be dropped into
+    // (src/channels/plugins/setup-helpers.ts:385-386), so the root number would be dropped into
     // the unselected alias instead of reaching accounts.default.
     expect(
       signalSetupAdapter.validateInput?.({
