@@ -10,6 +10,7 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.ui.design.ClawAvatarMark
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
@@ -115,7 +116,7 @@ internal fun CommandPalette(
               modifier = Modifier.size(ClawTheme.spacing.touchTarget),
               contentAlignment = Alignment.Center,
             ) {
-              CommandAvatar(text = "OC")
+              ClawAvatarMark(text = "OC")
             }
           }
         }
@@ -373,21 +374,6 @@ private fun CommandRowChevron(contentDescription: String?) {
       modifier = Modifier.size(17.dp),
       tint = ClawTheme.colors.textMuted,
     )
-  }
-}
-
-@Composable
-private fun CommandAvatar(text: String) {
-  Surface(
-    modifier = Modifier.size(34.dp),
-    shape = CircleShape,
-    color = ClawTheme.colors.surfaceRaised,
-    contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
-  ) {
-    Box(contentAlignment = Alignment.Center) {
-      Text(text = localizedUppercase(text.take(2), currentAppLanguage().languageTag), style = ClawTheme.type.label)
-    }
   }
 }
 

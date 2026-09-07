@@ -219,6 +219,11 @@ class CommandPaletteLogicTest {
       for (scale in listOf(1f, 2f)) {
         composeRule.runOnIdle { fontScale.value = scale }
         composeRule.onNodeWithContentDescription(nativeString("Search settings")).performClick()
+        try {
+          composeRule.onNode(hasText("OC") and hasAnyAncestor(searchResults), useUnmergedTree = true).assertCompleteText("OC")
+        } catch (error: AssertionError) {
+          failures += "$scale: avatar OC: ${error.message}"
+        }
         for ((index, label) in labels.withIndex()) {
           val node = composeRule.onNode(hasText(label) and hasAnyAncestor(searchResults), useUnmergedTree = true)
           node.performScrollTo().assertIsDisplayed()
