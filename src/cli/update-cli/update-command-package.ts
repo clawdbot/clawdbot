@@ -1,5 +1,6 @@
 import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import {
@@ -41,7 +42,11 @@ import {
   runUpdateStep,
   UpdatePreMutationError,
 } from "./shared.js";
-import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import {
+  createUpdateConfigSnapshot,
+  readUpdateConfigSnapshot,
+  type UpdateConfigSnapshot,
+} from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 
 const CLI_NAME = resolveCliName();
@@ -61,6 +66,7 @@ type PackageDoctorOptions = {
   managedServiceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
   nodeRunner?: string;
+  onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
 };
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
@@ -96,6 +102,9 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     total: 0,
   };
   params.progress?.onStepStart?.(doctorProgressInfo);
+  const configSnapshot = params.onConfigSnapshot
+    ? await readUpdateConfigSnapshot(resolveConfigPath(doctorEnv))
+    : undefined;
   const doctorStep = await runUpdateStep({
     name: `${CLI_NAME} doctor`,
     argv: doctorArgv,
@@ -113,6 +122,11 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     },
     timeoutMs: params.timeoutMs,
   });
+  if (configSnapshot) {
+    // Keep pre-Doctor bytes with the hash of Doctor’s completed write for rollback.
+    const { hash } = await readUpdateConfigSnapshot(configSnapshot.path);
+    params.onConfigSnapshot?.({ ...configSnapshot, hash });
+  }
   const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
   const completedDoctorStep = markPackagePostInstallDoctorAdvisory(doctorStep, doctorResult);
   params.progress?.onStepComplete?.({
@@ -198,6 +212,7 @@ export type PackageInstallUpdateParams = {
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   onTransaction: (transaction: PackageUpdateTransaction) => void;
+  onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
 };
 
 export async function runPackageInstallUpdate(

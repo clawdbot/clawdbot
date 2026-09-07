@@ -114,7 +114,7 @@ export function renderUpdateRunReport(
       headline = `ℹ️ OpenClaw update skipped: ${reason}.`;
       break;
     case "rolled-back":
-      headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
+      headline = "↩️ OpenClaw update rolled back";
       break;
     case "running":
       headline = `⬆️ OpenClaw update in progress: ${run.phase}.`;
@@ -122,6 +122,9 @@ export function renderUpdateRunReport(
   }
   headline = bounded(headline, 500);
   const lines: string[] = [];
+  if (run.status === "rolled-back") {
+    lines.push(`Restored ${after ?? running ?? before ?? "the previous version"} after ${reason}.`);
+  }
   const phases = run.steps
     .filter((step) => PHASES.has(step.step))
     .map((step) => {

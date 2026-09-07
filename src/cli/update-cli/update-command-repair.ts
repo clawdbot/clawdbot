@@ -63,6 +63,11 @@ export async function runUpdateCommandRepair(params: {
   let lastValidation: UpdateRepairValidation | undefined;
   const targetClass = params.phase === "validating" ? "candidate rehearsal" : "live";
   if (runId) {
+    if (params.phase === "verifying") {
+      // A thrown restart can leave the run before verification; enter its live
+      // phase before admitting a repair worker that requires repair ownership.
+      recordUpdateRunPhase(runId, "verifying", undefined, options);
+    }
     recordUpdateRunPhase(
       runId,
       "repairing",
