@@ -70,18 +70,36 @@ be released promptly after closing. This is a temporary runtime workaround while
 the [upstream close fix](https://github.com/oven-sh/bun/pull/40005) is pending;
 OpenClaw cannot finalize these handles through Bun's public `node:sqlite` API.
 
-On macOS, Bun uses Apple's system SQLite, which omits native extension loading.
-OpenClaw can open ordinary agent databases without extension loading when that
-library meets the WAL safety floor. For native `sqlite-vec` KNN memory queries on
-macOS, use Node. When the KNN child's SQLite cannot load extensions, memory search
-uses a batched embedding scan with the same provider and source filters and
-cancellation checks between batches. This can be slower on large indexes.
+On macOS, install Homebrew SQLite to enable native `sqlite-vec` KNN memory queries:
 
-Bun's [custom SQLite setup](https://bun.sh/docs/runtime/sqlite#loadextension) can
-enable extensions in the parent process when configured before opening any
-database. That selection does not reach the KNN child, whose environment
-intentionally omits Node and Bun preload options. OpenClaw does not select a
-different SQLite library automatically.
+```sh
+brew install sqlite
+```
+
+OpenClaw automatically selects a WAL-reset-safe, extension-capable SQLite library
+from Homebrew or MacPorts before opening a database, and uses the same library in
+the memory KNN child process. Discovery checks `$HOMEBREW_PREFIX/opt/sqlite/lib/libsqlite3.dylib`
+first, then the standard Homebrew paths under `/opt/homebrew` and `/usr/local`,
+then `/opt/local/lib/libsqlite3.dylib` for MacPorts. Linux and Windows Bun already
+support extension loading and need no additional SQLite installation.
+
+To override discovery, set `OPENCLAW_SQLITE_LIBRARY` in the process environment
+before starting OpenClaw:
+
+```sh
+OPENCLAW_SQLITE_LIBRARY=/path/to/libsqlite3.dylib bun openclaw.mjs gateway
+```
+
+The override must point to a loadable SQLite library that meets the WAL safety
+floor and supports extension loading. An invalid override fails with an error
+explaining how to fix or unset it. Node and Bun on platforms other than macOS
+ignore this override; Gateway startup logs a warning when it is ignored.
+
+Without a suitable library on macOS, Bun keeps Apple's system SQLite, which omits
+native extension loading. OpenClaw can open ordinary agent databases when that
+library meets the WAL safety floor. Memory search falls back to a batched
+embedding scan with the same provider and source filters and cancellation checks
+between batches. This can be slower on large indexes.
 
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
 

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,11 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawn: vi.fn(actual.spawn) };
 });
 
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-knn", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-knn")>();
+  return { ...actual, ensureSqliteLibrarySelected: vi.fn(actual.ensureSqliteLibrarySelected) };
+});
+
 const { spawn } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
 beforeEach(() => {
   vi.mocked(childProcess.spawn).mockReset().mockImplementation(spawn);
@@ -35,6 +41,7 @@ function useFixtureChild() {
       stdio: ["pipe", "pipe", "pipe"],
     });
     children.push(child);
+    vi.spyOn(child.stdin, "end");
     ready.push(once(child.stderr, "data"));
     return child;
   });
@@ -123,9 +130,34 @@ async function createFileBackedVectorDatabase(): Promise<{
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("memory vector KNN subprocess boundary", () => {
+  it.each(["runtime", "env", "discovered"] as const)(
+    "forwards the selected SQLite library through stdin for %s selection",
+    async (source) => {
+      const sqliteLibraryPath = "/synthetic/sqlite/libsqlite3.dylib";
+      vi.stubEnv("OPENCLAW_SQLITE_LIBRARY", sqliteLibraryPath);
+      vi.mocked(ensureSqliteLibrarySelected).mockReturnValueOnce(
+        source === "runtime"
+          ? { source }
+          : { source, path: sqliteLibraryPath, version: "3.53.4", extensionLoadingSupported: true },
+      );
+      const fixture = useFixtureChild();
+      await runVectorKnnInSubprocess({ databasePath: "fixture:ok", request: request(1) });
+      const input = JSON.parse(String(vi.mocked(fixture.children[0]!.stdin.end).mock.calls[0]![0]));
+      if (source === "runtime") {
+        expect(input).not.toHaveProperty("sqliteLibraryPath");
+      } else {
+        expect(input).toHaveProperty("sqliteLibraryPath", sqliteLibraryPath);
+      }
+      expect(vi.mocked(childProcess.spawn).mock.calls[0]![2]?.env).not.toHaveProperty(
+        "OPENCLAW_SQLITE_LIBRARY",
+      );
+    },
+  );
+
   it("keeps the parent event loop responsive during synchronous child work", async () => {
     const fixture = useFixtureChild();
     let childFinished = false;
@@ -241,6 +273,7 @@ describe("memory vector KNN subprocess boundary", () => {
         },
       });
       expect(memoryResult.rows.map((row) => row.id)).toEqual(["committed"]);
+      expect(memoryResult.fallbackScanRequired).toBe(false);
 
       const beforeCommit = await runVectorKnnInSubprocess({
         databasePath: fixture.databasePath,

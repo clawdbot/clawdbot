@@ -2,6 +2,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
@@ -92,6 +93,7 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
 export function requireNodeSqlite(): typeof import("node:sqlite") {
   installProcessWarningFilter();
   try {
+    ensureSqliteLibrarySelected();
     // Bun follow-up: Revalidate close/dispose file release after oven-sh/bun#40005 ships.
     // Bun 1.4.2 retains native statements after close; node:sqlite exposes no finalizer.
     const sqlite = require("node:sqlite") as typeof import("node:sqlite");
