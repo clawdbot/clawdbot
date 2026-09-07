@@ -1,5 +1,5 @@
 // Response readers do not depend on inbound request lifecycle or logging policy.
-import { decodeTextPrefix } from "@openclaw/normalization-core";
+import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   withResponseBodyIdleTimeout,
@@ -38,37 +38,26 @@ async function readResponsePrefixFromReader(
   options?: ReadResponsePrefixOptions,
 ): Promise<ReadResponsePrefixResult> {
   const chunks: Uint8Array[] = [];
-  let size = 0;
-  let truncated = false;
+  let result: { size: number; truncated: boolean };
   try {
-    await withResponseBodyIdleTimeout(
+    result = await withResponseBodyIdleTimeout(
       reader,
       options?.chunkTimeoutMs || undefined,
       options?.onIdleTimeout,
-      async (refreshTimeout) => {
-        while (true) {
-          refreshTimeout?.();
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
-          if (!value?.length) {
-            continue;
-          }
-          const remaining = maxBytes - size;
-          size += value.length;
-          if (size > maxBytes || (options?.stopAtLimit && size === maxBytes)) {
-            if (remaining > 0) {
-              chunks.push(value.subarray(0, remaining));
-            }
-            truncated = true;
-            // A capture tee can retain cancellation until the caller releases its request.
+      (refreshTimeout) =>
+        consumeResponseBytes({
+          maxBytes,
+          stopAtLimit: options?.stopAtLimit,
+          read: () => {
+            refreshTimeout?.();
+            return reader.read();
+          },
+          onChunk: (chunk) => chunks.push(chunk),
+          onLimit: () => {
+            // Capture tees must not delay bounded dispatcher release.
             void reader.cancel().catch(() => undefined);
-            break;
-          }
-          chunks.push(value);
-        }
-      },
+          },
+        }),
     );
   } finally {
     try {
@@ -79,9 +68,8 @@ async function readResponsePrefixFromReader(
   return {
     // Full-body readers reject overflow before allocating a contiguous copy.
     // MiB limits can yield fractional bytes; retained slices contain only whole bytes.
-    materializeBuffer: () => Buffer.concat(chunks, Math.floor(Math.min(size, maxBytes))),
-    size,
-    truncated,
+    materializeBuffer: () => Buffer.concat(chunks, Math.floor(Math.min(result.size, maxBytes))),
+    ...result,
   };
 }
 

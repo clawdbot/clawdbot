@@ -57,6 +57,20 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
+Import `execPolicy` from `openclaw/plugin-sdk/agent-harness-runtime` for the
+host's exec mode algebra. `execPolicy.resolveExecModePolicy({ mode, security, ask })`
+returns the mode, security, ask, and auto-review settings. An explicit mode
+determines those settings; without one, the helper preserves the security/ask
+pair and derives its display mode. `execPolicy.minSecurity(a, b)` chooses the
+more restrictive security value, and `execPolicy.maxAsk(a, b)` chooses the
+stronger approval requirement. Provider adapters retain their own strict input
+validation and native sandbox/approval projection.
+
+These typed object members replace the retired `minSecurity` and `maxAsk`
+exports from `infra-runtime`. The retired `resolveExecModeFromPolicy` and
+`resolveExecPolicyForMode` projections can also migrate to
+`execPolicy.resolveExecModePolicy`, selecting the returned fields they need.
+
 Native command probes should use `runCommandWithTimeout` from
 `openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
 `killProcessTree: true`. Await its result so timeout or cancellation cleanup finishes

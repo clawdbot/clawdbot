@@ -172,7 +172,6 @@ final class TalkModeManager: NSObject {
     var gatewayTalkProviderLabel: String = "Not loaded"
     var gatewayTalkTransportLabel: String = "Not loaded"
     var gatewayTalkUsesRealtime: Bool = false
-    var gatewayTalkUsesRealtimeRelay: Bool = false
     var gatewayTalkRealtimeProviderLabel: String?
     var gatewayTalkRealtimeModelId: String?
     var gatewayTalkRealtimeVoiceId: String?
@@ -494,6 +493,8 @@ final class TalkModeManager: NSObject {
         gatewaySpeechSynthesizer: (any TalkGatewaySpeechSynthesizing)? = nil,
         audioSessionDeactivationAction: (@MainActor () throws -> Void)? = nil)
     {
+        // The Gateway owns speech language; discard the retired app preference.
+        UserDefaults.standard.removeObject(forKey: "talk.speechLocale")
         self.allowSimulatorCapture = allowSimulatorCapture
         self.gatewaySpeechSynthesizerOverride = gatewaySpeechSynthesizer
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
@@ -615,7 +616,6 @@ final class TalkModeManager: NSObject {
         self.gatewayTalkProviderLabel = "OpenAI"
         self.gatewayTalkTransportLabel = String(localized: "Gateway Relay")
         self.gatewayTalkUsesRealtime = true
-        self.gatewayTalkUsesRealtimeRelay = true
         self.gatewayTalkRealtimeProviderLabel = "OpenAI"
         self.gatewayTalkRealtimeModelId = "gpt-realtime-2"
         self.gatewayTalkRealtimeVoiceId = "marin"
@@ -640,17 +640,6 @@ final class TalkModeManager: NSObject {
             self.logger.info("disabled")
             GatewayDiagnostics.log("talk.timeline manager disabled")
             self.stop()
-        }
-    }
-
-    func applyProviderSelectionChanged() {
-        let shouldRestart = self.isEnabled
-        if shouldRestart {
-            self.stop()
-            self.isEnabled = true
-            Task { await self.start() }
-        } else {
-            Task { await self.reloadConfig() }
         }
     }
 
@@ -827,39 +816,10 @@ final class TalkModeManager: NSObject {
         self.realtimePrefetchTask = nil
     }
 
-    private var talkProviderSelection: TalkModeProviderSelection {
-        TalkModeProviderSelection.resolved(
-            UserDefaults.standard.string(forKey: TalkModeProviderSelection.storageKey))
-    }
-
-    private var shouldUseOpenAIRealtimeSelectionFallback: Bool {
-        self.talkProviderSelection == .openAIRealtime
-    }
-
     private var hasRealtimeOwnerOrStart: Bool {
         self.realtimeSession != nil ||
             self.realtimeRelaySession != nil ||
             self.realtimeRelayStartGeneration != nil
-    }
-
-    private func applyOpenAIRealtimeSelectionDefaults() {
-        let realtimeVoiceOverride = TalkModeRealtimeVoiceSelection.resolvedOverride(
-            UserDefaults.standard.string(forKey: TalkModeRealtimeVoiceSelection.storageKey))
-        self.executionMode = .realtimeWebRTC
-        self.runtimeRoute = .realtimeWebRTC
-        self.realtimeProvider = "openai"
-        self.realtimeModelId = Self.defaultRealtimeModelIdFallback
-        self.realtimeVoiceId = realtimeVoiceOverride
-        self.gatewayTalkProviderLabel = TalkModeProviderSelection.openAIRealtime.label
-        self.gatewayTalkUsesRealtime = true
-        self.gatewayTalkUsesRealtimeRelay = false
-        self.gatewayTalkTransportLabel = String(localized: "Native WebRTC")
-        self.gatewayTalkRealtimeProviderLabel = Self.displayName(forProvider: self.realtimeProvider ?? "openai")
-        self.gatewayTalkRealtimeModelId = self.realtimeModelId
-        self.gatewayTalkRealtimeVoiceId = self.realtimeVoiceId
-        self.gatewayTalkDefaultModelId = self.realtimeModelId
-        self.gatewayTalkDefaultVoiceId = self.realtimeVoiceId
-        self.gatewayTalkApiKeyConfigured = true
     }
 
     func stop() {
@@ -1496,9 +1456,7 @@ final class TalkModeManager: NSObject {
         }
         #endif
 
-        let localSpeechLocale = UserDefaults.standard.string(forKey: TalkSpeechLocale.storageKey)
         let resolvedSpeech = TalkSpeechLocale.makeRecognizer(
-            localSelection: localSpeechLocale,
             gatewaySelection: self.gatewaySpeechLocaleID)
         self.speechRecognizer = resolvedSpeech.recognizer
         guard let recognizer = speechRecognizer else {
@@ -3158,7 +3116,6 @@ final class TalkModeManager: NSObject {
 
     private func resolvedSpeechLanguages(
         directiveLanguage: String?,
-        localSelection: String? = UserDefaults.standard.string(forKey: TalkSpeechLocale.storageKey),
         isSystemVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable)
         -> TalkSpeechLanguageSelection
     {
@@ -3166,7 +3123,6 @@ final class TalkModeManager: NSObject {
             provider: ElevenLabsTTSClient.validatedLanguage(directiveLanguage),
             systemVoice: TalkSpeechLocale.resolvedSynthesisLocaleID(
                 directiveLanguage: directiveLanguage,
-                localSelection: localSelection,
                 gatewaySelection: self.gatewaySpeechLocaleID,
                 isVoiceAvailable: isSystemVoiceAvailable))
     }
@@ -4351,23 +4307,12 @@ extension TalkModeManager {
 
     private func applyLoadedTalkConfig(
         _ parsed: TalkModeGatewayConfigState,
-        redactedFallbackMissingScope: String?,
-        providerSelection providerSelectionOverride: TalkModeProviderSelection? = nil)
+        redactedFallbackMissingScope: String?)
     {
-        let providerSelection = providerSelectionOverride ?? self.talkProviderSelection
         let routing = TalkModeRoutingResolver.resolve(
             parsed: parsed,
-            providerSelection: providerSelection,
-            defaultProvider: Self.defaultTalkProvider,
-            defaultRealtimeModelId: Self.defaultRealtimeModelIdFallback)
-        let realtimeVoiceOverride = TalkModeRealtimeVoiceSelection.resolvedOverride(
-            UserDefaults.standard.string(forKey: TalkModeRealtimeVoiceSelection.storageKey))
-        let parsedRealtimeProviderIsOpenAI =
-            parsed.realtimeProvider?.caseInsensitiveCompare("openai") == .orderedSame
-        let parsedRealtimeVoiceId = providerSelection == .openAIRealtime && !parsedRealtimeProviderIsOpenAI
-            ? nil
-            : parsed.realtimeVoiceId
-        let realtimeVoiceId = realtimeVoiceOverride ?? parsedRealtimeVoiceId
+            defaultProvider: Self.defaultTalkProvider)
+        let realtimeVoiceId = parsed.realtimeVoiceId
         self.executionMode = routing.executionMode
         self.runtimeRoute = routing.route
         self.realtimeProvider = routing.realtimeProvider
@@ -4395,7 +4340,6 @@ extension TalkModeManager {
             credentialProvider: credentialProvider)
         self.applyTalkModeDescriptor(
             routing: routing,
-            providerSelection: providerSelection,
             nativeModelId: routing.route == .localElevenLabs
                 ? self.defaultModelId
                 : self.configuredProviderModelId,
@@ -4440,7 +4384,6 @@ extension TalkModeManager {
 
     private func applyTalkModeDescriptor(
         routing: TalkModeResolvedRouting,
-        providerSelection: TalkModeProviderSelection,
         nativeModelId: String?,
         realtimeVoiceId: String?)
     {
@@ -4448,9 +4391,7 @@ extension TalkModeManager {
         let usesRealtimeRelay = routing.executionMode == .realtimeRelay
         self.gatewayTalkDefaultVoiceId = usesRealtimeConfig ? realtimeVoiceId : self.defaultVoiceId
         self.gatewayTalkDefaultModelId = usesRealtimeConfig ? routing.realtimeModelId : nativeModelId
-        let providerLabel = providerSelection == .gatewayDefault
-            ? Self.displayName(forProvider: routing.activeProvider)
-            : providerSelection.label
+        let providerLabel = Self.displayName(forProvider: routing.activeProvider)
         let transport = usesRealtimeConfig ? (usesRealtimeRelay ? "gateway-relay" : "webrtc") : "native"
         let transportLabel = usesRealtimeRelay
             ? String(localized: "Gateway Relay")
@@ -4459,7 +4400,6 @@ extension TalkModeManager {
                 : String(localized: "Native"))
         self.gatewayTalkProviderLabel = providerLabel
         self.gatewayTalkUsesRealtime = usesRealtimeConfig
-        self.gatewayTalkUsesRealtimeRelay = usesRealtimeRelay
         self.gatewayTalkTransportLabel = transportLabel
         self.gatewayTalkRealtimeProviderLabel = routing.realtimeProvider.map { Self.displayName(forProvider: $0) }
         self.gatewayTalkRealtimeModelId = routing.realtimeModelId
@@ -4501,12 +4441,7 @@ extension TalkModeManager {
 
     private func applyTalkConfigLoadFailure(_ error: Error) {
         self.configuredProviderModelId = nil
-        if self.shouldUseOpenAIRealtimeSelectionFallback {
-            self.applyOpenAIRealtimeSelectionDefaults()
-            GatewayDiagnostics.log("talk config unavailable; keeping openai realtime selection")
-        } else {
-            self.applyTalkConfigLoadFailureFallback()
-        }
+        self.applyTalkConfigLoadFailureFallback()
         self.defaultModelId = Self.defaultModelIdFallback
         if !self.modelOverrideActive {
             self.currentModelId = self.defaultModelId
@@ -4534,7 +4469,6 @@ extension TalkModeManager {
         self.gatewayTalkProviderLabel = String(localized: "Not loaded")
         self.gatewayTalkTransportLabel = String(localized: "Not loaded")
         self.gatewayTalkUsesRealtime = false
-        self.gatewayTalkUsesRealtimeRelay = false
         self.gatewayTalkRealtimeProviderLabel = nil
         self.gatewayTalkRealtimeModelId = nil
         self.gatewayTalkRealtimeVoiceId = nil
@@ -4930,18 +4864,8 @@ extension TalkModeManager {
         self.latestAssistantText(messages: messages, runId: runId, since: since)
     }
 
-    func _test_applyOpenAIRealtimeSelectionDefaults() {
-        self.applyOpenAIRealtimeSelectionDefaults()
-    }
-
-    func _test_applyLoadedTalkConfig(
-        _ parsed: TalkModeGatewayConfigState,
-        providerSelection: TalkModeProviderSelection)
-    {
-        self.applyLoadedTalkConfig(
-            parsed,
-            redactedFallbackMissingScope: nil,
-            providerSelection: providerSelection)
+    func _test_applyLoadedTalkConfig(_ parsed: TalkModeGatewayConfigState) {
+        self.applyLoadedTalkConfig(parsed, redactedFallbackMissingScope: nil)
     }
 
     func _test_runtimeRoute() -> TalkModeRuntimeRoute {
@@ -4954,13 +4878,11 @@ extension TalkModeManager {
 
     func _test_resolvedSpeechLanguages(
         directiveLanguage: String?,
-        localSelection: String?,
         isSystemVoiceAvailable: (String) -> Bool = { _ in true })
         -> (provider: String?, systemVoice: String?)
     {
         let selection = self.resolvedSpeechLanguages(
             directiveLanguage: directiveLanguage,
-            localSelection: localSelection,
             isSystemVoiceAvailable: isSystemVoiceAvailable)
         return (selection.provider, selection.systemVoice)
     }
@@ -5077,10 +4999,6 @@ extension TalkModeManager {
 
     func _test_realtimeModelId() -> String? {
         self.realtimeModelId
-    }
-
-    func _test_gatewayTalkUsesRealtimeRelay() -> Bool {
-        self.gatewayTalkUsesRealtimeRelay
     }
 
     func _test_markNativeFallbackActive(after issue: TalkRuntimeIssue) {
