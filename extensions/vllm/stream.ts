@@ -9,6 +9,7 @@ import {
   setQwenChatTemplateThinking,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  isVllmDeepSeekV4ThinkingModel,
   resolveVllmQwenThinkingFormatFromCompat,
   type VllmQwenThinkingFormat,
 } from "./thinking-policy.js";
@@ -31,7 +32,9 @@ function isVllmNemotronModel(model: { api?: unknown; provider?: unknown; id?: un
     typeof model.provider === "string" &&
     normalizeProviderId(model.provider) === "vllm" &&
     typeof model.id === "string" &&
-    /\bnemotron-3(?:[-_](?:nano|super|ultra))?\b/i.test(model.id)
+    // No leading `\b`: see thinking-policy.ts's isVllmNemotronThinkingModel for
+    // why served-model-name aliases like "yk_nemotron-3-super" need this.
+    /nemotron-3(?:[-_](?:nano|super|ultra))?\b/i.test(model.id)
   );
 }
 
@@ -39,6 +42,52 @@ function setNemotronThinkingOffChatTemplateKwargs(payload: Record<string, unknow
   const defaults = {
     enable_thinking: false,
     force_nonempty_content: true,
+  };
+  const existing = payload.chat_template_kwargs;
+  payload.chat_template_kwargs =
+    existing && typeof existing === "object" && !Array.isArray(existing)
+      ? {
+          ...defaults,
+          ...(existing as Record<string, unknown>),
+        }
+      : defaults;
+}
+
+function isVllmDeepSeekV4Model(model: {
+  api?: unknown;
+  provider?: unknown;
+  id?: unknown;
+}): boolean {
+  return (
+    model.api === "openai-completions" &&
+    typeof model.provider === "string" &&
+    normalizeProviderId(model.provider) === "vllm" &&
+    typeof model.id === "string" &&
+    isVllmDeepSeekV4ThinkingModel(model.id)
+  );
+}
+
+function resolveVllmDeepSeekV4ReasoningEffort(thinkingLevel: VllmThinkingLevel): "high" | "max" {
+  return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
+}
+
+function setVllmDeepSeekV4ThinkingChatTemplateKwargs(
+  payload: Record<string, unknown>,
+  thinkingLevel: VllmThinkingLevel,
+): void {
+  if (thinkingLevel === "off" || thinkingLevel === undefined) {
+    // vLLM's DeepSeek V4 chat template already defaults to non-think, so there
+    // is nothing to inject. This shouldPatch match still needs to fire for
+    // every DeepSeek V4 id regardless of level: that is what marks the
+    // request as plugin-handled and blocks the core DeepSeek V4 fallback
+    // wrapper (src/agents/embedded-agent-runner/extra-params.ts) from sending
+    // its hosted-API `thinking: { type }` top-level field instead, a shape
+    // self-hosted vLLM chat templates do not understand.
+    return;
+  }
+  const defaults = {
+    thinking: true,
+    reasoning_effort: resolveVllmDeepSeekV4ReasoningEffort(thinkingLevel),
   };
   const existing = payload.chat_template_kwargs;
   payload.chat_template_kwargs =
@@ -89,7 +138,18 @@ export function wrapVllmProviderStream(ctx: ProviderWrapStreamFnContext): Stream
       provider: ctx.provider,
       id: ctx.modelId,
     });
-  if (!qwenFormat && !shouldHandleNemotron) {
+  // Unlike Nemotron (gated to the "off" level only), DeepSeek V4 must engage
+  // this wrapper at every thinking level, including "off": the core DeepSeek
+  // V4 fallback wrapper matches by model id alone (no provider check), so
+  // leaving this plugin wrapper undefined for any level would let that
+  // fallback's hosted-API `thinking: { type }` wire format leak through for
+  // self-hosted vLLM deployments.
+  const isDeepSeekV4 = isVllmDeepSeekV4Model({
+    api: "openai-completions",
+    provider: ctx.provider,
+    id: ctx.modelId,
+  });
+  if (!qwenFormat && !shouldHandleNemotron && !isDeepSeekV4) {
     return undefined;
   }
   return composeProviderStreamWrappers(
@@ -110,6 +170,15 @@ export function wrapVllmProviderStream(ctx: ProviderWrapStreamFnContext): Stream
             model.api === "openai-completions" &&
             ctx.thinkingLevel === "off" &&
             isVllmNemotronModel(model),
+        },
+      ),
+    (streamFn) =>
+      createPayloadPatchStreamWrapper(
+        streamFn,
+        ({ payload }) => setVllmDeepSeekV4ThinkingChatTemplateKwargs(payload, ctx.thinkingLevel),
+        {
+          shouldPatch: ({ model }) =>
+            model.api === "openai-completions" && isVllmDeepSeekV4Model(model),
         },
       ),
   );

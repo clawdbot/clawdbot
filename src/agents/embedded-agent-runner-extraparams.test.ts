@@ -223,6 +223,7 @@ function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fast
   return createAnthropicServiceTierWrapper(baseStreamFn, fastMode ? "auto" : "standard_only");
 }
 
+import { wrapVllmProviderStream } from "../../extensions/vllm/api.js";
 import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "../llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.js";
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
@@ -297,6 +298,9 @@ function installFullProviderRuntimeDepsForTest() {
       }
       if (params.provider === "kimi") {
         return params.context.streamFn;
+      }
+      if (params.provider === "vllm") {
+        return wrapVllmProviderStream(params.context);
       }
       if (params.provider === "minimax" || params.provider === "minimax-portal") {
         return createMinimaxFastModeWrapper(
@@ -822,6 +826,49 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.reasoning_effort).toBe("high");
     expect(payload).not.toHaveProperty("thinking");
+  });
+
+  it("routes self-hosted vLLM DeepSeek V4 reasoning through chat_template_kwargs, not the hosted fallback", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "deepseek-v4-pro",
+      thinkingLevel: "high",
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "deepseek-v4-pro",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+
+    expect(payload.chat_template_kwargs).toEqual({
+      thinking: true,
+      reasoning_effort: "high",
+    });
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("keeps the hosted DeepSeek V4 fallback disabled for vLLM even when thinking is off", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "deepseek-v4-pro",
+      thinkingLevel: "off",
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "deepseek-v4-pro",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+
+    expect(payload).not.toHaveProperty("chat_template_kwargs");
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
   it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {

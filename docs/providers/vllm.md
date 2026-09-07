@@ -211,6 +211,45 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
 
   </Accordion>
 
+  <Accordion title="Self-hosted DeepSeek V4 thinking controls">
+    For self-hosted DeepSeek V4 checkpoints served through vLLM, `/think` exposes three levels instead of a binary toggle: `off` (the vLLM chat template's own non-think default; no override sent), `high` (Think High), and `max` (Think Max). Detection looks for `deepseek` immediately followed by `v4` anywhere in the configured model id (optionally joined by `-`/`_`, optionally followed by `-pro`/`-flash`), so it matches upstream ids like `deepseek-ai/DeepSeek-V4-Pro` as well as custom `--served-model-name` aliases such as `yk_deepseek_v4` or `team_deepseek-v4-flash`. Non-`off` levels make the bundled plugin send:
+
+    ```json
+    {
+      "chat_template_kwargs": {
+        "thinking": true,
+        "reasoning_effort": "high"
+      }
+    }
+    ```
+
+    `reasoning_effort` is `"max"` for the `max` thinking level. Think Max additionally requires starting vLLM with `--max-model-len` at least `393216` (384K tokens); smaller contexts truncate.
+
+    This targets self-hosted DeepSeek V4 through the generic `vllm` provider, which uses vLLM's `chat_template_kwargs` wire format. It is unrelated to the bundled `deepseek` plugin (DeepSeek's hosted API) or [`ds4`](/providers/ds4), both of which use DeepSeek's native `thinking: { type }` request format instead.
+
+    To customize these values, set `chat_template_kwargs` under the model params. If you also set `params.extra_body.chat_template_kwargs`, that value wins because `extra_body` is the last request-body override.
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/deepseek-ai/DeepSeek-V4-Pro": {
+              params: {
+                chat_template_kwargs: {
+                  thinking: true,
+                  reasoning_effort: "high",
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+  </Accordion>
+
   <Accordion title="Qwen tool calls appear as text">
     First confirm vLLM was started with the right tool-call parser and chat template for the model. vLLM documents `hermes` for Qwen2.5 models and `qwen3_xml` for Qwen3-Coder models.
 
@@ -352,6 +391,9 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
   </Card>
   <Card title="OAuth and auth" href="/gateway/authentication" icon="key">
     Auth details and credential reuse rules.
+  </Card>
+  <Card title="ds4" href="/providers/ds4" icon="brain">
+    Local DeepSeek V4 Flash via a Metal-backed OpenAI-compatible server.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
     Common issues and how to resolve them.

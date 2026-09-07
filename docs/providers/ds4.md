@@ -308,4 +308,7 @@ Expected result:
   <Card title="DeepSeek" href="/providers/deepseek" icon="brain">
     Native DeepSeek provider behavior and thinking controls.
   </Card>
+  <Card title="vLLM" href="/providers/vllm#advanced-configuration" icon="server">
+    Self-hosted DeepSeek V4 (Pro/Flash) thinking controls on vLLM.
+  </Card>
 </CardGroup>
