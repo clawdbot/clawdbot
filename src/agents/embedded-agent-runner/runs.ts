@@ -1555,7 +1555,8 @@ export function setActiveEmbeddedRun(
         : undefined,
     toolAuthority,
     sessionId,
-    agentId,
+    // Legacy SDK callers may omit this; a matching live binding proves the captured owner.
+    agentId: agentId ?? (toolAuthority ? caller?.agentId : undefined),
     ...(sessionKey ? { sessionKey } : {}),
     delegatedAuthority:
       operationalRunInstance?.runId === handle.runId && operationalRunInstance
