@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { admitSubagentCompletionDelivery } from "../src/agents/subagents/completion/subagent-completion-admission.store.js";
 import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
@@ -11,8 +12,15 @@ import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagen
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { getDeliveryQueueEntryStatus } from "../src/infra/delivery-queue-sqlite.js";
+import {
+  prepareClaimedSessionDelivery,
+  SESSION_DELIVERY_QUEUE_NAME,
+} from "../src/infra/session-delivery-queue-storage.js";
 import type { Deferred } from "../src/shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { loadTaskRegistryStateFromSqlite } from "../src/tasks/task-registry.store.sqlite.js";
+import type { TaskRecord } from "../src/tasks/task-registry.types.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -213,7 +221,7 @@ describe("Gateway restored requester settlement", () => {
         },
       });
       instances.push(instance);
-      await seedRestoredRequesters(instance, 1, 2);
+      const seeded = await seedPendingRestoredRequester(instance);
 
       await instance.startGateway();
       const client = await connectGatewayClient({
@@ -238,19 +246,16 @@ describe("Gateway restored requester settlement", () => {
           },
           { interval: 50, timeout: 20_000 },
         );
+        await vi.waitFor(() => expectPendingRestoredRequesterSettled(seeded), {
+          interval: 50,
+          timeout: 20_000,
+        });
       } finally {
         await disconnectGatewayClient(client);
         await instance.stopGateway();
       }
 
-      try {
-        expect(
-          loadSubagentRegistryFromSqlite().get("run-gateway-restored-settle-0")
-            ?.requesterSettleWake,
-        ).toBeUndefined();
-      } finally {
-        closeOpenClawStateDatabaseForTest();
-      }
+      expectPendingRestoredRequesterSettled(seeded);
 
       await instance.startGateway();
       await new Promise<void>((resolve) => {
@@ -261,6 +266,122 @@ describe("Gateway restored requester settlement", () => {
     },
   );
 });
+
+function expectPendingRestoredRequesterSettled(seeded: {
+  queueId: string;
+  runId: string;
+  taskId: string;
+}): void {
+  try {
+    const subagent = loadSubagentRegistryFromSqlite().get(seeded.runId);
+    const task = loadTaskRegistryStateFromSqlite().tasks.get(seeded.taskId);
+    const queueStatus = getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, seeded.queueId);
+    expect(subagent?.delivery).toMatchObject({ status: "failed" });
+    expect(subagent?.delivery?.queueId).toBeUndefined();
+    expect(subagent?.requesterSettleWake).toBeUndefined();
+    expect(task).toMatchObject({
+      status: "succeeded",
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+    });
+    expect(queueStatus).toBe("failed");
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+  }
+}
+
+async function seedPendingRestoredRequester(instance: OpenClawTestInstance) {
+  instance.state.applyEnv();
+  try {
+    const endedAt = Date.now();
+    const runId = "run-gateway-restored-settle-pending";
+    const taskId = "task-gateway-restored-settle-pending";
+    const taskRunId = "task-run-gateway-restored-settle-pending";
+    const requesterSessionKey = "agent:main:gateway-restored-requester-0";
+    const childSessionKey = "agent:main:subagent:gateway-restored-settle-pending";
+    const deadlineAt = endedAt + 30 * 60_000;
+    const task: TaskRecord = {
+      taskId,
+      runtime: "subagent",
+      requesterSessionKey,
+      ownerKey: requesterSessionKey,
+      scopeKind: "session",
+      childSessionKey,
+      runId: taskRunId,
+      requesterAgentId: "main",
+      task: "settle a restored pending completion",
+      status: "succeeded",
+      deliveryStatus: "session_queued",
+      terminalOutcome: "succeeded",
+      notifyPolicy: "silent",
+      createdAt: endedAt - 1_000,
+      endedAt,
+      lastEventAt: endedAt,
+    };
+    const subagent: SubagentRunRecord = {
+      runId,
+      taskRunId,
+      childSessionKey,
+      requesterSessionKey,
+      requesterDisplayKey: "gateway-restored-requester-0",
+      requesterAgentId: "main",
+      task: task.task,
+      cleanup: "keep",
+      createdAt: task.createdAt,
+      endedReason: "subagent-complete",
+      execution: {
+        status: "terminal",
+        startedAt: endedAt - 500,
+        endedAt,
+        outcome: { status: "ok" },
+      },
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "done", capturedAt: endedAt },
+      delivery: {
+        status: "in_progress",
+        disposition: "session_queued",
+        generation: 1,
+        windowStartedAt: endedAt,
+        deadlineAt,
+      },
+      cleanupHandled: true,
+      cleanupCompletedAt: endedAt,
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 2,
+        batchRunIds: [runId],
+        requesterYieldBatch: true,
+        afterRequesterYield: true,
+        rearmGeneration: 1,
+      },
+    };
+    const queueEntry = prepareClaimedSessionDelivery(
+      {
+        kind: "agentTurn",
+        sessionKey: requesterSessionKey,
+        message: "load the canonical completion at delivery time",
+        messageId: "gateway-restored-settle-pending:agent-loop",
+        idempotencyKey: "gateway-restored-settle-pending:agent-loop",
+        maxRetries: Number.MAX_SAFE_INTEGER,
+        owner: { kind: "subagent_completion", runId, taskId, generation: 1, deadlineAt },
+      },
+      125_000,
+      endedAt,
+    );
+    subagent.delivery!.queueId = queueEntry.id;
+    admitSubagentCompletionDelivery({ queueEntry, subagent, task });
+    await writeSubagentSessionEntry({
+      stateDir: instance.stateDir,
+      agentId: "main",
+      sessionKey: requesterSessionKey,
+      sessionId: "gateway-restored-requester-0",
+      defaultSessionId: "gateway-restored-requester-0",
+    });
+    return { queueId: queueEntry.id, runId, taskId };
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+  }
+}
 
 async function seedRestoredRequesters(
   instance: OpenClawTestInstance,

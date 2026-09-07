@@ -336,6 +336,69 @@ describe("atomic rejected requester-settle storage", () => {
     }
   });
 
+  it("settles a surviving frozen owner after another batch member retired", async () => {
+    useDefaultDatabase();
+    const input = failedRecords("failed", { status: "error" });
+    armRequesterWake(input, [input.subagent.runId, "retired-run"]);
+    persistOwner(input);
+    const driver = requesterWakeDriver([input]);
+    try {
+      await driver.run();
+      expect(driver.warn).not.toHaveBeenCalledWith(
+        "failed to persist requester settle wake rejection",
+        expect.any(Object),
+      );
+      reopenOwners();
+      expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
+      expect(getTaskById(input.task.taskId)).toMatchObject({
+        status: "failed",
+        deliveryStatus: "failed",
+        error: "original child failure",
+      });
+    } finally {
+      driver.controller.clearScheduledResumeTimers();
+    }
+  });
+
+  it("rejects a frozen batch while an omitted member still owns its wake", async () => {
+    useDefaultDatabase();
+    const first = failedRecords("failed", { status: "error" });
+    const second = failedRecords("timed_out", { status: "timeout" });
+    second.task.taskId = "task-completion-omitted";
+    second.task.runId = "task-run-omitted";
+    second.subagent.runId = "completion-run-omitted";
+    second.subagent.taskRunId = second.task.runId;
+    const batchRunIds = [first.subagent.runId, second.subagent.runId];
+    armRequesterWake(first, batchRunIds);
+    armRequesterWake(second, batchRunIds);
+    persistOwner(first);
+    persistOwner(second);
+    const firstBefore = structuredClone(first);
+    const secondBefore = structuredClone(second);
+    subagentRuns.delete(second.subagent.runId);
+
+    const driver = requesterWakeDriver([first]);
+    try {
+      await driver.run();
+      expect(driver.warn).toHaveBeenCalledWith(
+        "failed to persist requester settle wake rejection",
+        expect.objectContaining({
+          error: expect.objectContaining({
+            message: expect.stringContaining(second.subagent.runId),
+          }),
+        }),
+      );
+
+      reopenOwners();
+      expect(subagentRuns.get(first.subagent.runId)).toEqual(firstBefore.subagent);
+      expect(getTaskById(first.task.taskId)).toMatchObject(firstBefore.task);
+      expect(subagentRuns.get(second.subagent.runId)).toEqual(secondBefore.subagent);
+      expect(getTaskById(second.task.taskId)).toMatchObject(secondBefore.task);
+    } finally {
+      driver.controller.clearScheduledResumeTimers();
+    }
+  });
+
   it("rolls the whole rejected batch back when a later generation changed", async () => {
     useDefaultDatabase();
     const first = failedRecords("failed", { status: "error" });

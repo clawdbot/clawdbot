@@ -416,13 +416,39 @@ export function settleRejectedRequesterSettleWakeBatch(params: {
   try {
     runOpenClawStateWriteTransaction(
       (database) => {
-        const batchRunIds = params.entries.map((entry) => entry.subagent.runId).toSorted();
+        const submittedRunIds = params.entries.map((entry) => entry.subagent.runId).toSorted();
+        const submittedRunIdSet = new Set(submittedRunIds);
+        const firstWake = params.entries[0]?.expectedWake;
+        const frozenBatchRunIds = firstWake?.batchRunIds?.length
+          ? firstWake.batchRunIds.toSorted()
+          : undefined;
+        for (const expected of params.entries) {
+          const declaredBatchRunIds = expected.expectedWake.batchRunIds?.length
+            ? expected.expectedWake.batchRunIds.toSorted()
+            : undefined;
+          if (
+            !isDeepStrictEqual(declaredBatchRunIds, frozenBatchRunIds) ||
+            (frozenBatchRunIds && !frozenBatchRunIds.includes(expected.subagent.runId))
+          ) {
+            rejectedRunId = expected.subagent.runId;
+            throw ownershipChanged;
+          }
+        }
+        // Frozen cohorts can retain IDs after a row retires. A still-present
+        // same-generation wake remains an owner and may not be omitted.
+        for (const declaredRunId of frozenBatchRunIds ?? []) {
+          if (submittedRunIdSet.has(declaredRunId)) {
+            continue;
+          }
+          const declaredMember = readSubagentRun(database, declaredRunId);
+          if (declaredMember?.requesterSettleWake?.rearmGeneration === firstWake?.rearmGeneration) {
+            rejectedRunId = declaredRunId;
+            throw ownershipChanged;
+          }
+        }
         for (const expected of params.entries) {
           const generation = expected.subagent.delivery?.generation ?? 1;
           let subagent = readSubagentRun(database, expected.subagent.runId);
-          const expectedBatchRunIds = (
-            expected.expectedWake.batchRunIds ?? [expected.subagent.runId]
-          ).toSorted();
           const deliveryNeedsSettlement =
             subagent?.expectsCompletionMessage === true &&
             ["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending");
@@ -432,7 +458,6 @@ export function settleRejectedRequesterSettleWakeBatch(params: {
             (expected.settleDelivery && subagent.expectsCompletionMessage !== true) ||
             (subagent.delivery?.generation ?? 1) !== generation ||
             deliveryNeedsSettlement !== expected.settleDelivery ||
-            !isDeepStrictEqual(expectedBatchRunIds, batchRunIds) ||
             !isDeepStrictEqual(subagent.requesterSettleWake, expected.expectedWake)
           ) {
             rejectedRunId = expected.subagent.runId;
