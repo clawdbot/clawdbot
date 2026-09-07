@@ -30,7 +30,6 @@ import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
@@ -163,12 +162,12 @@ async function expectCompletedWithoutBootstrap(dir: string) {
 
 function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
-  expect(names).toStrictEqual(["AGENTS.md", "TOOLS.md"]);
+  expect(names).toStrictEqual(["AGENTS.md"]);
 }
 
 function expectCronAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
-  expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"]);
+  expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]);
 }
 
 describe("ensureAgentWorkspace", () => {
@@ -196,10 +195,6 @@ describe("ensureAgentWorkspace", () => {
 
     await expectBootstrapSeeded(tempDir);
     await expectNoLegacyWorkspaceStateWrites(tempDir);
-    await expectPathMissing(path.join(tempDir, DEFAULT_TOOLS_FILENAME));
-    expect((await loadWorkspaceBootstrapFiles(tempDir)).map((file) => file.name)).not.toContain(
-      DEFAULT_TOOLS_FILENAME,
-    );
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
     expect(readWorkspaceStateSnapshot(tempDir).attestation).toBeDefined();
   });
@@ -959,36 +954,6 @@ describe("ensureAgentWorkspace", () => {
 });
 
 describe("loadWorkspaceBootstrapFiles", () => {
-  it("loads only an opted-in root TOOLS.md and preserves it during setup", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    const nestedDir = path.join(tempDir, "project");
-    await fs.mkdir(nestedDir);
-    await writeWorkspaceFile({ dir: nestedDir, name: DEFAULT_TOOLS_FILENAME, content: "nested" });
-    expect((await loadWorkspaceBootstrapFiles(tempDir)).map((file) => file.name)).not.toContain(
-      DEFAULT_TOOLS_FILENAME,
-    );
-
-    await writeWorkspaceFile({
-      dir: tempDir,
-      name: DEFAULT_TOOLS_FILENAME,
-      content: "local notes",
-    });
-    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-
-    const files = await loadWorkspaceBootstrapFiles(tempDir);
-    expect(files.filter((file) => file.name === DEFAULT_TOOLS_FILENAME)).toEqual([
-      {
-        name: DEFAULT_TOOLS_FILENAME,
-        path: path.join(tempDir, DEFAULT_TOOLS_FILENAME),
-        content: "local notes",
-        missing: false,
-      },
-    ]);
-    expect(await fs.readFile(path.join(tempDir, DEFAULT_TOOLS_FILENAME), "utf8")).toBe(
-      "local notes",
-    );
-  });
-
   const getMemoryEntries = (files: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>) =>
     files.filter((file) => file.name === DEFAULT_MEMORY_FILENAME);
 
@@ -1203,7 +1168,6 @@ describe("filterBootstrapFilesForSession", () => {
   const mockFiles: WorkspaceBootstrapFile[] = [
     { name: "AGENTS.md", path: "/w/AGENTS.md", content: "", missing: false },
     { name: "SOUL.md", path: "/w/SOUL.md", content: "", missing: false },
-    { name: "TOOLS.md", path: "/w/TOOLS.md", content: "", missing: false },
     { name: "IDENTITY.md", path: "/w/IDENTITY.md", content: "", missing: false },
     { name: "USER.md", path: "/w/USER.md", content: "", missing: false },
     { name: "BOOTSTRAP.md", path: "/w/BOOTSTRAP.md", content: "", missing: false },

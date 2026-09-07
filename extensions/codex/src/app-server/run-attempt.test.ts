@@ -4781,9 +4781,11 @@ describe("runCodexAppServerAttempt", () => {
       await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       expect(readAttemptTerminal(await resumedRun)).toMatchObject({ promptError: null });
       const resume = resumeHarness.requests.find((request) => request.method === "thread/resume");
-      expect(resume).toBeDefined();
+      if (!resume) {
+        throw new Error("expected thread/resume request");
+      }
       const resumedInstructions =
-        (resume?.params as { developerInstructions?: string }).developerInstructions ?? "";
+        (resume.params as { developerInstructions?: string }).developerInstructions ?? "";
       expect(resumedInstructions.includes(toolsFacts)).toBe(change === "removed");
       resumeHarness.close();
 
@@ -4801,8 +4803,11 @@ describe("runCodexAppServerAttempt", () => {
       await nextHarness.completeTurn({ threadId: "thread-new", turnId: "turn-1" });
       expect(readAttemptTerminal(await nextRun)).toMatchObject({ promptError: null });
       const nextStart = nextHarness.requests.find((request) => request.method === "thread/start");
+      if (!nextStart) {
+        throw new Error("expected thread/start request");
+      }
       const nextInstructions =
-        (nextStart?.params as { developerInstructions?: string }).developerInstructions ?? "";
+        (nextStart.params as { developerInstructions?: string }).developerInstructions ?? "";
       expect(nextInstructions.includes(toolsFacts)).toBe(change === "created");
     },
   );
@@ -4832,9 +4837,11 @@ describe("runCodexAppServerAttempt", () => {
       await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
       expect(readAttemptTerminal(await run)).toMatchObject({ promptError: null });
       const resume = harness.requests.find((request) => request.method === "thread/resume");
-      expect(resume).toBeDefined();
+      if (!resume) {
+        throw new Error("expected thread/resume request");
+      }
       expect(
-        (resume?.params as { developerInstructions?: string }).developerInstructions,
+        (resume.params as { developerInstructions?: string }).developerInstructions,
       ).not.toContain(snapshot);
     },
   );

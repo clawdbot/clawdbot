@@ -109,6 +109,7 @@ describe("filterBootstrapFilesForSession privacy", () => {
     ["subagent", "agent:default:subagent:task-1", "AGENTS.md"],
     ["subagent tools", "agent:default:subagent:task-1", "TOOLS.md"],
     ["cron", "agent:default:cron:daily-check", "SOUL.md"],
+    ["cron tools", "agent:default:cron:daily-check", "TOOLS.md"],
   ] as const)(
     "drops root memory path aliases before the %s allowlist",
     (_mode, sessionKey, name) => {

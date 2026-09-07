@@ -302,7 +302,15 @@ describe("Codex app-server attempt context", () => {
       ]);
       const attempt = {
         sessionId: "tools-budget",
-        config: { agents: { defaults: { workspace: workspaceDir, ...limits } } },
+        config: {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+              bootstrapMaxChars: limits.bootstrapMaxChars,
+              bootstrapTotalMaxChars: limits.bootstrapTotalMaxChars,
+            },
+          },
+        },
       } as EmbeddedRunAttemptParams;
       const context = await buildCodexWorkspaceBootstrapContext({
         params: attempt,
