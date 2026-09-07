@@ -371,6 +371,56 @@ export function applyAnthropicPayloadPolicyToParams(
   );
 }
 
+/**
+ * Split transient runtime-context carriers out of the conversation array and
+ * return their text. Carrier bytes change every turn, so they must never sit in
+ * the `messages` array (where they would either anchor the deepest cache
+ * breakpoint or land before it); callers append the returned text to the system
+ * blocks after the last cache breakpoint instead. Non-carrier messages,
+ * including compaction checkpoints, are preserved in order.
+ */
+export function partitionAnthropicRuntimeContextCarriers<
+  T extends { role?: unknown; content?: unknown; runtimeContextCarrier?: unknown },
+>(messages: readonly T[]): { messages: T[]; carrierTexts: string[] } {
+  const kept: T[] = [];
+  const carrierTexts: string[] = [];
+  for (const message of messages) {
+    if (
+      message &&
+      typeof message === "object" &&
+      (message as { role?: unknown }).role === "user" &&
+      (message as { runtimeContextCarrier?: unknown }).runtimeContextCarrier === true
+    ) {
+      const text = extractAnthropicCarrierText((message as { content?: unknown }).content);
+      if (text.trim().length > 0) {
+        carrierTexts.push(text);
+      }
+      continue;
+    }
+    kept.push(message);
+  }
+  return { messages: kept, carrierTexts };
+}
+
+function extractAnthropicCarrierText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    )
+    .map((block) => block.text)
+    .join("");
+}
+
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export function applyAnthropicEphemeralCacheControlMarkers(
   payloadObj: Record<string, unknown>,

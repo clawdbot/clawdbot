@@ -1,9 +1,60 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
+  partitionAnthropicRuntimeContextCarriers,
   resolveAnthropicEphemeralCacheControl,
   resolveAnthropicServerCompactionPlan,
 } from "./anthropic-payload-policy.js";
+
+describe("partitionAnthropicRuntimeContextCarriers", () => {
+  it("splits carriers out of the messages array and returns their text in order", () => {
+    const stable = { role: "user", content: "stable question" };
+    const assistant = { role: "assistant", content: [{ type: "text", text: "ok" }] };
+    const carrierString = {
+      role: "user",
+      content: "volatile metadata",
+      runtimeContextCarrier: true,
+    };
+    const carrierBlocks = {
+      role: "user",
+      content: [
+        { type: "text", text: "more " },
+        { type: "image", source: {} },
+        { type: "text", text: "context" },
+      ],
+      runtimeContextCarrier: true,
+    };
+    const { messages, carrierTexts } = partitionAnthropicRuntimeContextCarriers([
+      stable,
+      carrierString,
+      assistant,
+      carrierBlocks,
+    ]);
+    // Non-carrier messages (including assistant turns) are preserved in order.
+    expect(messages).toEqual([stable, assistant]);
+    // Text is extracted (images dropped, text blocks concatenated) in order.
+    expect(carrierTexts).toEqual(["volatile metadata", "more context"]);
+  });
+
+  it("ignores an assistant message even if it is mislabeled as a carrier", () => {
+    const carrierAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "nope" }],
+      runtimeContextCarrier: true,
+    };
+    const { messages, carrierTexts } = partitionAnthropicRuntimeContextCarriers([carrierAssistant]);
+    expect(messages).toEqual([carrierAssistant]);
+    expect(carrierTexts).toEqual([]);
+  });
+
+  it("drops whitespace-only carriers", () => {
+    const { messages, carrierTexts } = partitionAnthropicRuntimeContextCarriers([
+      { role: "user", content: "   ", runtimeContextCarrier: true },
+    ]);
+    expect(messages).toEqual([]);
+    expect(carrierTexts).toEqual([]);
+  });
+});
 
 describe("resolveAnthropicEphemeralCacheControl", () => {
   afterEach(() => {

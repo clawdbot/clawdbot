@@ -28,7 +28,10 @@ import {
   suppressAnthropicCompaction,
   type AnthropicCompactionBlock,
 } from "../transports/anthropic-compaction-replay.js";
-import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
+import {
+  applyAnthropicCacheControlToMessages,
+  partitionAnthropicRuntimeContextCarriers,
+} from "../transports/anthropic-payload-policy.js";
 import {
   assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
@@ -1057,10 +1060,15 @@ async function buildParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
+  // Route transient runtime-context carriers into the (uncached) system tail
+  // instead of the messages array, so their per-turn bytes never invalidate the
+  // cached system prefix or the deepest message breakpoint.
+  const { messages: conversationMessages, carrierTexts: runtimeContextCarrierTexts } =
+    partitionAnthropicRuntimeContextCarriers(replayPlan.messages);
   const params: MessageCreateParamsStreaming = {
     model: model.id,
     messages: await convertMessages(
-      replayPlan.messages,
+      conversationMessages,
       model,
       isOAuthTokenResult,
       cacheControl,
@@ -1073,8 +1081,21 @@ async function buildParams(
     stream: true,
   };
 
-  if (system) {
-    params.system = system;
+  // Append carriers as trailing system blocks with no cache_control. They sit
+  // after the last system cache breakpoint (the OAuth "Claude Code" block, the
+  // stable system prefix, or the whole cached system prompt), so they stay in
+  // the uncached region and cannot thrash the cache.
+  const systemWithCarriers =
+    runtimeContextCarrierTexts.length > 0
+      ? [
+          ...(system ?? []),
+          ...runtimeContextCarrierTexts.map(
+            (text): TextBlockParam => ({ type: "text", text: sanitizeSurrogates(text) }),
+          ),
+        ]
+      : system;
+  if (systemWithCarriers) {
+    params.system = systemWithCarriers;
   }
 
   // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
@@ -1164,9 +1185,10 @@ async function convertMessages(
 ): Promise<MessageParam[]> {
   const params: MessageParam[] = [];
   const imageBudget = createAnthropicInlineImageBudget();
-  // Param indexes for transient runtime-context carriers — excluded from
-  // cache_control breakpoint selection so the deepest breakpoint anchors on the
-  // last stable user turn, not the volatile carrier appended after it.
+  // Runtime-context carriers are routed into the system blocks upstream and
+  // never reach the messages array, so the deepest breakpoint naturally anchors
+  // the last stable user turn. This set stays empty (kept for the shared cache
+  // helper's signature and any future per-message opt-outs).
   const cacheBreakpointOptOutParamIndexes = new Set<number>();
 
   // Transform messages for cross-provider compatibility
@@ -1182,12 +1204,13 @@ async function convertMessages(
     }
 
     if (msg.role === "user") {
-      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
+      // Defensive: carriers are partitioned out before conversion; never emit
+      // one into the messages array even if reached directly.
+      if (msg.runtimeContextCarrier === true) {
+        continue;
+      }
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
-          if (isRuntimeContextCarrier) {
-            cacheBreakpointOptOutParamIndexes.add(params.length);
-          }
           params.push({
             role: "user",
             content: sanitizeSurrogates(msg.content),
@@ -1219,9 +1242,6 @@ async function convertMessages(
         });
         if (filteredBlocks.length === 0) {
           continue;
-        }
-        if (isRuntimeContextCarrier) {
-          cacheBreakpointOptOutParamIndexes.add(params.length);
         }
         params.push({
           role: "user",

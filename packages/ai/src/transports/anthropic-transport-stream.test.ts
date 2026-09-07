@@ -2169,6 +2169,54 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("routes runtime-context carriers into an uncached system tail after the cache policy runs", async () => {
+    const model = makeAnthropicTransportModel();
+    await runTransportStream(
+      model,
+      {
+        systemPrompt: "Stable system",
+        messages: [
+          { role: "user", content: "stable question" },
+          {
+            role: "user",
+            content: "volatile current-turn metadata",
+            runtimeContextCarrier: true,
+          },
+        ],
+      } as unknown as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    const system = requireArray(payload.system, "system") as Array<{
+      type: string;
+      text: string;
+      cache_control?: unknown;
+    }>;
+    const messages = requireArray(payload.messages, "messages") as Array<{
+      role: string;
+      content: unknown;
+    }>;
+
+    // The carrier is gone from the messages array; only the real user turn
+    // remains and it keeps the deepest message cache breakpoint.
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.role).toBe("user");
+    expect(messages[0]?.content).toEqual([
+      { type: "text", text: "stable question", cache_control: { type: "ephemeral" } },
+    ]);
+
+    // The carrier is the final system block with no cache_control (appended
+    // AFTER applyAnthropicCacheControlToSystem), so it sits past the last
+    // system breakpoint and cannot invalidate the cached prefix.
+    const last = system[system.length - 1];
+    expect(last).toEqual({ type: "text", text: "volatile current-turn metadata" });
+    expect(last).not.toHaveProperty("cache_control");
+    const lastCachedIndex = system.map((block) => "cache_control" in block).lastIndexOf(true);
+    expect(lastCachedIndex).toBeGreaterThanOrEqual(0);
+    expect(lastCachedIndex).toBeLessThan(system.length - 1);
+  });
+
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([

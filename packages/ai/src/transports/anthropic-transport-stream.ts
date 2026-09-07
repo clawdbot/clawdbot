@@ -97,6 +97,7 @@ import {
 } from "./anthropic-compaction-replay.js";
 import {
   applyAnthropicPayloadPolicyToParams,
+  partitionAnthropicRuntimeContextCarriers,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import {
@@ -363,16 +364,17 @@ async function convertAnthropicMessages(
       continue;
     }
     if (msg.role === "user") {
-      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
+      // Defensive: carriers are partitioned out before conversion and routed to
+      // the system blocks; never emit one into the messages array.
+      if (msg.runtimeContextCarrier === true) {
+        continue;
+      }
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
           const userParam = {
             role: "user",
             content: sanitizeTransportPayloadText(msg.content),
           };
-          if (isRuntimeContextCarrier) {
-            options.cacheBreakpointOptOutMessageIndexes.add(params.length);
-          }
           params.push(userParam);
         }
         continue;
@@ -421,9 +423,6 @@ async function convertAnthropicMessages(
         role: "user",
         content: filteredBlocks,
       };
-      if (isRuntimeContextCarrier) {
-        options.cacheBreakpointOptOutMessageIndexes.add(params.length);
-      }
       params.push(userParam);
       continue;
     }
@@ -952,7 +951,12 @@ async function buildAnthropicParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
-  const messages = await convertAnthropicMessages(replayPlan.messages, model, isOAuthToken, {
+  // Route transient runtime-context carriers into the (uncached) system tail
+  // instead of the messages array; their per-turn bytes must not invalidate the
+  // cached system prefix or the deepest message breakpoint.
+  const { messages: conversationMessages, carrierTexts: runtimeContextCarrierTexts } =
+    partitionAnthropicRuntimeContextCarriers(replayPlan.messages);
+  const messages = await convertAnthropicMessages(conversationMessages, model, isOAuthToken, {
     allowReasoningContentReplay: supportsReasoningContentReplay(model),
     cacheBreakpointOptOutMessageIndexes,
     compaction: replayPlan.compaction,
@@ -1056,6 +1060,20 @@ async function buildAnthropicParams(
     }
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy, cacheBreakpointOptOutMessageIndexes);
+  // Append carriers AFTER the cache policy runs. applyAnthropicCacheControlToSystem
+  // stamps cache_control onto every plain trailing system block, so appending
+  // here guarantees carriers stay uncached and land after the last system
+  // breakpoint. (The provider path bakes system cache_control at build time and
+  // appends carriers before assignment; both end up in the uncached system tail.)
+  if (runtimeContextCarrierTexts.length > 0) {
+    const carrierBlocks = runtimeContextCarrierTexts.map((text) => ({
+      type: "text",
+      text: sanitizeTransportPayloadText(text),
+    }));
+    params.system = Array.isArray(params.system)
+      ? [...(params.system as unknown[]), ...carrierBlocks]
+      : carrierBlocks;
+  }
   return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
 }
 

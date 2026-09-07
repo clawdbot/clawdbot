@@ -2413,14 +2413,62 @@ describe("Anthropic provider", () => {
     );
 
     expect(result.stopReason).toBe("error");
-    const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    // Deepest breakpoint anchors on the stable user turn (converted to a block
-    // array with cache_control) so it stays a cacheable prefix next turn...
+    const messages = (capturedPayload as { messages: { role: string; content: unknown }[] })
+      .messages;
+    // The carrier is gone from the messages array; only the real user turn
+    // remains, and it keeps the deepest cache breakpoint so it stays a
+    // cacheable prefix next turn.
+    expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toEqual([
       { type: "text", text: "stable question", cache_control: { type: "ephemeral" } },
     ]);
-    // ...and NOT on the trailing volatile carrier, which is left uncached.
-    expect(messages[1]?.content).toBe("volatile current-turn metadata");
+    // The carrier lands as the final system block with no cache_control, after
+    // the cached system prompt, so its per-turn bytes never invalidate the cache.
+    const system = (
+      capturedPayload as {
+        system: { type: string; text: string; cache_control?: unknown }[];
+      }
+    ).system;
+    const last = system[system.length - 1];
+    expect(last).toEqual({ type: "text", text: "volatile current-turn metadata" });
+    expect(last).not.toHaveProperty("cache_control");
+    // The carrier sits strictly after the last cached (breakpoint) system block.
+    const lastCachedIndex = system.map((block) => "cache_control" in block).lastIndexOf(true);
+    expect(lastCachedIndex).toBeGreaterThanOrEqual(0);
+    expect(lastCachedIndex).toBeLessThan(system.length - 1);
+  });
+
+  it("appends the runtime-context carrier after the dynamic (uncached) system suffix", async () => {
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { stopBeforeNetwork: true },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [
+          { role: "user", content: "stable question", timestamp: 0 },
+          {
+            role: "user",
+            content: "volatile current-turn metadata",
+            timestamp: 1,
+            runtimeContextCarrier: true,
+          },
+        ],
+      },
+    );
+
+    expect(result.stopReason).toBe("error");
+    // Cached stable prefix, then the uncached dynamic suffix, then the carrier —
+    // the carrier is last and uncached, past the only cache breakpoint.
+    expect((capturedPayload as { system?: unknown }).system).toEqual([
+      { type: "text", text: "Stable prefix", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "Dynamic suffix" },
+      { type: "text", text: "volatile current-turn metadata" },
+    ]);
+    const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toEqual([
+      { type: "text", text: "stable question", cache_control: { type: "ephemeral" } },
+    ]);
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
