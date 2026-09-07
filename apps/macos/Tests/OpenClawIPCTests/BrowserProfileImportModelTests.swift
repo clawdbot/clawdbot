@@ -24,6 +24,7 @@ private final class BrowserImportTransportStub {
     var requests: [BrowserProfileImportRequest] = []
     var failingPaths: Set<String> = []
     var beforeStatusResponse: (@MainActor () async -> Void)?
+    var beforeImportResponse: (@MainActor () async -> Void)?
     var statusJSON = """
     {
       "enabled": true,
@@ -45,6 +46,10 @@ private final class BrowserImportTransportStub {
                 self.requests.append(request)
                 if request.path == "/system-profile-import/status", let hook = self.beforeStatusResponse {
                     self.beforeStatusResponse = nil
+                    await hook()
+                }
+                if request.path == "/profiles/import", let hook = self.beforeImportResponse {
+                    self.beforeImportResponse = nil
                     await hook()
                 }
                 if self.failingPaths.contains(request.path) {
@@ -220,6 +225,37 @@ struct BrowserProfileImportModelTests {
 
         model.retry()
         #expect(model.phase == .offering(retry))
+    }
+
+    @Test(arguments: [false, true])
+    func `late import outcomes stay hidden after switching to a remote gateway`(_ shouldFail: Bool) async {
+        let stub = BrowserImportTransportStub()
+        let eligibility = BrowserImportEligibilityGate()
+        eligibility.isLocalMode = true
+        let model = stub.makeModel(isLocalMode: { eligibility.isLocalMode })
+        let gate = ContinuationBox()
+
+        await model.refresh(force: false)
+        stub.beforeImportResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+        if shouldFail {
+            stub.failingPaths.insert("/profiles/import")
+        }
+
+        let importing = Task { await model.importProfile(Self.chromeProfile) }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        eligibility.isLocalMode = false
+        model.handleConnectionModeChange()
+        #expect(model.phase == .hidden)
+
+        gate.continuation?.resume()
+        await importing.value
+        #expect(model.phase == .hidden)
+        #expect(BrowserProfileImportBannerContent.content(for: model.phase) == nil)
     }
 
     @Test func `dismissing an offer persists the dismissal`() async {

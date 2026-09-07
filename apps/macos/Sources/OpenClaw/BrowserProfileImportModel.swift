@@ -127,7 +127,7 @@ final class BrowserProfileImportModel {
     /// while it was in flight — "phase is .hidden again" alone cannot tell a
     /// just-dismissed banner apart from one that never appeared.
     private func setPhase(_ phase: Phase) {
-        self.phase = phase
+        self.phase = self.isLocalMode() ? phase : .hidden
         self.phaseGeneration += 1
     }
 
