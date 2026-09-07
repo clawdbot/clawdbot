@@ -1,4 +1,5 @@
 // Upgrade Survivor Baselines tests cover upgrade survivor baselines script behavior.
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,6 +65,10 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
           package_acceptance_release_checks: {
             with: { published_upgrade_survivor_baselines: string };
           };
+          prepare_release_package: {
+            outputs: { upgrade_survivor_baselines: string };
+            steps: Array<{ id?: string; run?: string }>;
+          };
         };
       };
       const step = workflow.jobs.resolve_package.steps.find(
@@ -73,12 +78,11 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
       if (!run) {
         throw new Error("Missing baseline preparation step");
       }
-      const requested =
+      let requested =
         entrypoint === "update-migration"
           ? migration.on.workflow_dispatch.inputs.baselines.default
           : entrypoint === "release-checks"
-            ? release.jobs.package_acceptance_release_checks.with
-                .published_upgrade_survivor_baselines
+            ? ""
             : entrypoint === "historical"
               ? "2026.4.23"
               : inputs.published_upgrade_survivor_baselines.default;
@@ -102,6 +106,53 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
           { mode: 0o755 },
         );
         writeFileSync(path.join(bin, "gh"), "#!/bin/sh\nexit 75\n", { mode: 0o755 });
+        if (entrypoint === "release-checks") {
+          expect(
+            release.jobs.package_acceptance_release_checks.with
+              .published_upgrade_survivor_baselines,
+          ).toBe("${{ needs.prepare_release_package.outputs.upgrade_survivor_baselines }}");
+          expect(release.jobs.prepare_release_package.outputs.upgrade_survivor_baselines).toBe(
+            "${{ steps.upgrade_survivor_profile.outputs.baselines }}",
+          );
+          const profile = release.jobs.prepare_release_package.steps.find(
+            (entry) => entry.id === "upgrade_survivor_profile",
+          );
+          if (!profile?.run) {
+            throw new Error("Missing release survivor profile producer");
+          }
+          const profileOutput = path.join(root, "profile-output");
+          writeFileSync(profileOutput, "");
+          execFileSync("bash", ["-c", profile.run], {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              CANDIDATE_PUBLISHED: "true",
+              CANDIDATE_REF: "v2026.8.1",
+              CANDIDATE_SOURCE_SHA: "a".repeat(40),
+              CANDIDATE_VERSION: "2026.8.1",
+              PACKAGE_ACCEPTANCE_PACKAGE_SPEC: "",
+              RUN_RELEASE_SOAK: "false",
+              TARGET_CONTEXT_REF: "",
+              GITHUB_OUTPUT: profileOutput,
+              GITHUB_REPOSITORY: "openclaw/openclaw",
+              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+              FIXTURE_NPM_CALLS: calls,
+            },
+          });
+          const selected = Object.fromEntries(
+            readFileSync(profileOutput, "utf8")
+              .trimEnd()
+              .split("\n")
+              .map((line) => {
+                const separator = line.indexOf("=");
+                return [line.slice(0, separator), line.slice(separator + 1)];
+              }),
+          );
+          // Historical qualification keeps the candidate-relative predecessor.
+          expect(selected.baselines).toBe("");
+          assert(selected.baselines !== undefined, "Missing release baseline output");
+          requested = selected.baselines;
+        }
         execFileSync("bash", ["-c", run], {
           encoding: "utf8",
           env: {
@@ -117,7 +168,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
             TARGET_CONTEXT_REF: "",
           },
         });
-        const expanded = entrypoint === "update-migration" || entrypoint === "release-checks";
+        const expanded = entrypoint === "update-migration";
         const expectedBaselines = expanded
           ? "openclaw@2026.8.1 openclaw@2026.7.1-2 openclaw@2026.6.35 openclaw@2026.6.34"
           : `openclaw@${entrypoint === "historical" ? "2026.4.23" : "2026.7.1-2"}`;
