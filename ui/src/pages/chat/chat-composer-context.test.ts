@@ -1,15 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import {
-  CATALOG_CONTEXT_TOKENS,
-  COMPACTION_RESERVE_TOKENS,
-  createContextBudgetStatusFixture,
-  PRESSURED_PROMPT_TOKENS,
-  SESSION_CONTEXT_TOKEN_BUDGET,
-  STALE_CONTEXT_TOKEN_BUDGET,
-} from "../../test-helpers/context-budget-status-fixture.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 
 type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
@@ -23,6 +16,27 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer context usage", () => {
+  it.each([true, false])("uses the last-run prompt budget with fresh usage %s", (fresh) => {
+    const container = renderComposer({
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: 2,
+        totalTokens: 160_000,
+        totalTokensFresh: fresh,
+        contextTokens: 200_000,
+        contextBudgetStatus: contextBudgetStatusFixture(),
+      },
+    });
+    expect(container.querySelector(".context-usage__context-value")?.textContent).toContain("180k");
+    expect(container.querySelector(".context-usage__title")?.textContent).toBe(
+      "Prompt budget (last run)",
+    );
+    expect(
+      container.querySelector(".context-ring")?.classList.contains("context-ring--warning"),
+    ).toBe(fresh);
+  });
+
   it.each([
     { name: "renders the owner-selected global alias", sessionKey: "agent:work:main", owned: true },
     {
@@ -47,116 +61,6 @@ describe("renderChatComposer context usage", () => {
 
     expect(container.querySelector(".context-ring")?.getAttribute("aria-label") ?? null).toBe(
       owned ? "Session context usage: 46k of 200k (23%)" : null,
-    );
-  });
-
-  it("measures context usage against the budget compaction triggers on", () => {
-    const container = renderComposer({
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
-        totalTokens: PRESSURED_PROMPT_TOKENS,
-        contextTokens: CATALOG_CONTEXT_TOKENS,
-        contextBudgetStatus: createContextBudgetStatusFixture({
-          contextTokenBudget: SESSION_CONTEXT_TOKEN_BUDGET,
-          reserveTokens: COMPACTION_RESERVE_TOKENS,
-          estimatedPromptTokens: PRESSURED_PROMPT_TOKENS,
-        }),
-      },
-      sessions: { sessions: [], defaults: { contextTokens: CATALOG_CONTEXT_TOKENS } } as never,
-    });
-
-    // 160k of the 180k prompt budget. The same session reads 61% against the
-    // catalog window and 80% against contextTokenBudget: both stay under the
-    // 85% warning threshold this one crosses.
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: 160k of 180k (89%)",
-    );
-    expect(
-      container.querySelector(".context-ring")?.classList.contains("context-ring--warning"),
-    ).toBe(true);
-    expect(container.querySelector(".context-usage__title")?.textContent?.trim()).toBe(
-      "Before compaction",
-    );
-  });
-
-  it("reads full when the runtime is already over the prompt budget", () => {
-    const overflowingPromptTokens = 181_000;
-    const status = createContextBudgetStatusFixture({
-      contextTokenBudget: SESSION_CONTEXT_TOKEN_BUDGET,
-      reserveTokens: COMPACTION_RESERVE_TOKENS,
-      estimatedPromptTokens: overflowingPromptTokens,
-    });
-    expect(status.shouldCompact).toBe(true);
-
-    const container = renderComposer({
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
-        totalTokens: overflowingPromptTokens,
-        contextTokens: CATALOG_CONTEXT_TOKENS,
-        contextBudgetStatus: status,
-      },
-      sessions: { sessions: [], defaults: { contextTokens: CATALOG_CONTEXT_TOKENS } } as never,
-    });
-
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: 181k of 180k (100%)",
-    );
-  });
-
-  it("re-measures an idle session against a cap lowered under its snapshot", () => {
-    const container = renderComposer({
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
-        totalTokens: PRESSURED_PROMPT_TOKENS,
-        // The row already carries the lowered cap; the snapshot predates it and
-        // nothing refreshes it until the session runs again.
-        contextTokens: SESSION_CONTEXT_TOKEN_BUDGET,
-        contextBudgetStatus: createContextBudgetStatusFixture({
-          contextTokenBudget: STALE_CONTEXT_TOKEN_BUDGET,
-          reserveTokens: COMPACTION_RESERVE_TOKENS,
-          estimatedPromptTokens: PRESSURED_PROMPT_TOKENS,
-        }),
-      },
-      sessions: { sessions: [], defaults: { contextTokens: CATALOG_CONTEXT_TOKENS } } as never,
-    });
-
-    // Taken at face value the retained snapshot divides by its own 980k prompt
-    // budget and reads 16%, with no warning, for a session the next run
-    // compacts. The current cap is what bounds the meter.
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: 160k of 180k (89%)",
-    );
-    expect(
-      container.querySelector(".context-ring")?.classList.contains("context-ring--warning"),
-    ).toBe(true);
-    expect(container.querySelector(".context-usage__title")?.textContent?.trim()).toBe(
-      "Before compaction",
-    );
-  });
-
-  it("falls back to the catalog window when no budget snapshot exists", () => {
-    const container = renderComposer({
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
-        totalTokens: PRESSURED_PROMPT_TOKENS,
-        contextTokens: CATALOG_CONTEXT_TOKENS,
-      },
-      sessions: { sessions: [], defaults: { contextTokens: CATALOG_CONTEXT_TOKENS } } as never,
-    });
-
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: 160k of 262.1k (61%)",
-    );
-    expect(container.querySelector(".context-usage__title")?.textContent?.trim()).toBe(
-      "Context window",
     );
   });
 

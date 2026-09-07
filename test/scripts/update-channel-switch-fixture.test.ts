@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -96,4 +96,32 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
       execFileSync("git", ["status", "--porcelain"], { cwd: checkout, encoding: "utf8" }),
     ).toBe("");
   }
+});
+
+it("rejects retained runtime staging at the channel update success boundary", () => {
+  const root = tempDirs.make("update-channel-staging-cleanup-");
+  const assertCleanup = () =>
+    spawnSync(
+      process.execPath,
+      [
+        "scripts/e2e/lib/update-channel-switch/assertions.mjs",
+        "assert-runtime-staging-clean",
+        root,
+      ],
+      { encoding: "utf8" },
+    );
+  writeFileSync(join(root, "operator-update-notes.tmp"), "unrelated input");
+  expect(assertCleanup().status).toBe(0);
+  const staging = join(
+    root,
+    "packages",
+    "nested",
+    "node_modules.openclaw-update-00000000-0000-4000-8000-000000000000.tmp",
+  );
+  mkdirSync(staging, { recursive: true });
+  writeFileSync(join(staging, "previous"), "recoverable original");
+  const result = assertCleanup();
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("successful update retained runtime staging entries");
+  expect(readFileSync(join(staging, "previous"), "utf8")).toBe("recoverable original");
 });

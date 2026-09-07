@@ -216,7 +216,6 @@ async function resolvePluginImplicitProviders(
 ): Promise<Record<string, ProviderConfig> | undefined> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
-  const catalogConfig = buildPluginCatalogConfig(ctx);
   const selectedProviderIds = ctx.providerDiscoveryScope
     ? new Set([...ctx.providerDiscoveryScope.values()].flat())
     : undefined;
@@ -240,6 +239,7 @@ async function resolvePluginImplicitProviders(
     if (providerIds?.length === 0) {
       continue;
     }
+    const catalogConfig = buildPluginCatalogConfig(ctx, provider);
     const resolveCatalogProviderApiKey = (providerId?: string) => {
       const resolvedProviderId = providerId?.trim() || provider.id;
       const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
@@ -381,7 +381,10 @@ async function runProviderCatalogWithTimeout(
     if (!active) {
       return undefined;
     }
-    const result = await runProviderCatalog(prepared);
+    const result = await runProviderCatalog({ ...prepared, isActive: catalogParams.isActive });
+    if (!active) {
+      return undefined;
+    }
     return prepared.finalizeCatalogResult ? prepared.finalizeCatalogResult(result) : result;
   };
   try {

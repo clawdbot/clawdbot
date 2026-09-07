@@ -30,12 +30,15 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import {
+  listPluginManifestContributionIds,
+  PLUGIN_METADATA_CONTRIBUTION_KEYS,
+  type PluginMetadataContributionKey,
+} from "./plugin-metadata-contributions.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
-import {
-  adoptCurrentPluginMetadataSnapshotIfAbsentRuntime,
-  registerPluginMetadataSnapshotReaders,
-} from "./plugin-metadata-snapshot.runtime.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
+import { adoptCurrentPluginMetadataSnapshotIfAbsentRuntime } from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -181,33 +184,29 @@ function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: s
   owners.set(ownedId, [pluginId]);
 }
 
-function freezeOwnerMap(owners: Map<string, string[]>): ReadonlyMap<string, readonly string[]> {
-  // These maps and arrays are private until this transfer to the snapshot.
-  owners.forEach((pluginIds) => Object.freeze(pluginIds));
-  return owners;
-}
-
 function buildPluginMetadataOwnerMaps(
   plugins: readonly PluginManifestRecord[],
 ): PluginMetadataSnapshotOwnerMaps {
-  const channels = new Map<string, string[]>();
-  const channelConfigs = new Map<string, string[]>();
-  const providers = new Map<string, string[]>();
-  const modelCatalogProviders = new Map<string, string[]>();
-  const cliBackends = new Map<string, string[]>();
-  const setupProviders = new Map<string, string[]>();
-  const commandAliases = new Map<string, string[]>();
-  const contracts = new Map<string, string[]>();
+  const owners: Record<PluginMetadataContributionKey, Map<string, string[]>> = {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  };
 
   for (const plugin of plugins) {
-    for (const channelId of plugin.channels ?? []) {
-      appendOwner(channels, channelId, plugin.id);
-    }
-    for (const channelId of Object.keys(plugin.channelConfigs ?? {})) {
-      appendOwner(channelConfigs, channelId, plugin.id);
-    }
-    for (const providerId of plugin.providers ?? []) {
-      appendOwner(providers, providerId, plugin.id);
+    for (const contribution of PLUGIN_METADATA_CONTRIBUTION_KEYS) {
+      for (const id of listPluginManifestContributionIds(plugin, contribution)) {
+        appendOwner(
+          owners[contribution],
+          contribution === "cliBackends" ? normalizeProviderId(id) : id,
+          plugin.id,
+        );
+      }
     }
     for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
       const alias = normalizeProviderId(rawAlias);
@@ -219,45 +218,16 @@ function buildPluginMetadataOwnerMaps(
           (providerId) => normalizeProviderId(providerId) === targetProvider,
         )
       ) {
-        appendOwner(providers, alias, plugin.id);
-      }
-    }
-    for (const providerId of Object.keys(plugin.modelCatalog?.providers ?? {})) {
-      appendOwner(modelCatalogProviders, providerId, plugin.id);
-    }
-    for (const providerId of Object.keys(plugin.modelCatalog?.aliases ?? {})) {
-      appendOwner(modelCatalogProviders, providerId, plugin.id);
-    }
-    for (const cliBackendId of plugin.cliBackends ?? []) {
-      appendOwner(cliBackends, normalizeProviderId(cliBackendId), plugin.id);
-    }
-    for (const cliBackendId of plugin.setup?.cliBackends ?? []) {
-      appendOwner(cliBackends, normalizeProviderId(cliBackendId), plugin.id);
-    }
-    for (const setupProvider of plugin.setup?.providers ?? []) {
-      appendOwner(setupProviders, setupProvider.id, plugin.id);
-    }
-    for (const commandAlias of plugin.commandAliases ?? []) {
-      appendOwner(commandAliases, commandAlias.name, plugin.id);
-    }
-    for (const [contract, values] of Object.entries(plugin.contracts ?? {})) {
-      if (Array.isArray(values) && values.length > 0) {
-        appendOwner(contracts, contract, plugin.id);
+        appendOwner(owners.providers, alias, plugin.id);
       }
     }
   }
 
-  return {
-    channels: freezeOwnerMap(channels),
-    channelConfigs: freezeOwnerMap(channelConfigs),
-    providers: freezeOwnerMap(providers),
-    modelCatalogProviders: freezeOwnerMap(modelCatalogProviders),
-    cliBackends: freezeOwnerMap(cliBackends),
-    setupProviders: freezeOwnerMap(setupProviders),
-    commandAliases: freezeOwnerMap(commandAliases),
-    contracts: freezeOwnerMap(contracts),
-    ...buildPluginMetadataProviderFacts(plugins),
-  };
+  // These maps and arrays are private until this transfer to the snapshot.
+  for (const map of Object.values(owners)) {
+    map.forEach((pluginIds) => Object.freeze(pluginIds));
+  }
+  return { ...owners, ...buildPluginMetadataProviderFacts(plugins) };
 }
 
 export function listPluginOriginsFromMetadataSnapshot(
@@ -632,4 +602,7 @@ function loadPluginMetadataSnapshotImpl(
 // Light bridges (plugin-metadata-snapshot.runtime.ts) serve loads through this
 // instance whenever the metadata system is loaded; the require fallback only
 // covers cold processes.
-registerPluginMetadataSnapshotReaders({ resolvePluginMetadataSnapshot });
+registerPluginMetadataSnapshotReaders({
+  resolvePluginMetadataSnapshot,
+  loadPluginMetadataSnapshot,
+});

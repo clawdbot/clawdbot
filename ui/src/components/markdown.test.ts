@@ -299,12 +299,14 @@ describe("toSanitizedMarkdownHtml", () => {
       });
       fragment.addEventListener("click", handleMarkdownCodeBlockClick);
       try {
+        document.body.append(fragment);
         const button = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
         expect(button).toBeInstanceOf(HTMLButtonElement);
         button!.click();
         await vi.waitFor(() => expect(button!.getAttribute("aria-label")).toBe("Copied!"));
         expect(writeText).toHaveBeenCalledWith(text);
       } finally {
+        fragment.remove();
         fragment.removeEventListener("click", handleMarkdownCodeBlockClick);
         for (const [index, [, delay]] of schedule.mock.calls.entries()) {
           if (delay === 1_500) {
@@ -392,6 +394,23 @@ PY
       expect(fragment.querySelector(".code-block-copy")).toBeNull();
       expect(fragment.querySelector(".code-block-wrapper")).toBeNull();
       expect(fragment.querySelector("pre code")?.textContent).toBe(source);
+    });
+
+    it("separates cached GitHub references by repository and absent context", () => {
+      const source = "PR #141270";
+      for (const githubRepo of [
+        { owner: "first", repo: "one" },
+        { owner: "second", repo: "one" },
+        { owner: "second", repo: "two" },
+        null,
+      ]) {
+        const fragment = htmlFragment(toSanitizedMarkdownHtml(source, { githubRepo }));
+        expect(fragment.querySelector("a")?.getAttribute("href") ?? null).toBe(
+          githubRepo
+            ? `https://github.com/${githubRepo.owner}/${githubRepo.repo}/pull/141270`
+            : null,
+        );
+      }
     });
 
     it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
@@ -1122,5 +1141,35 @@ describe("toStreamingMarkdownParts", () => {
     const html = toStreamingMarkdownParts("prices are $$50 and").join("");
 
     expect(html).toBe("<p>prices are $$50 and</p>\n");
+  });
+});
+
+describe("indented Markdown source", () => {
+  it.each(["    *literal*", "\t*literal*", "\n\n    *literal*"])(
+    "renders initial code: %j",
+    (source) => {
+      expect(
+        htmlFragment(toSanitizedMarkdownHtml(source)).querySelector("pre code")?.textContent,
+      ).toBe("*literal*\n");
+    },
+  );
+
+  it.each(["    a\n\n    b", "Intro\n\n    a\n\n    b"])(
+    "keeps a streamed indented block together: %j",
+    (source) => {
+      const fragment = htmlFragment(toStreamingMarkdownParts(source).join(""));
+      expect(fragment.querySelectorAll("pre code")).toHaveLength(1);
+      expect(fragment.querySelector("pre code")?.textContent).toBe("a\n\nb\n");
+    },
+  );
+
+  it("never repairs literal punctuation inside streaming indented code", () => {
+    const source = "    *literal";
+    for (let end = 5; end <= source.length; end++) {
+      const fragment = htmlFragment(
+        toStreamingMarkdownParts(source.slice(0, end), {}, "indented-prefix").join(""),
+      );
+      expect(fragment.querySelector("pre code")?.textContent).toBe(`${source.slice(4, end)}\n`);
+    }
   });
 });

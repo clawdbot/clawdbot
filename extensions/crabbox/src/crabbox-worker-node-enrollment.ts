@@ -75,7 +75,13 @@ const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
 process.umask(0o077);
-let phase = "preparation";
+let phase;
+const setPhase = (next) => {
+  if (phase === next) return;
+  phase = next;
+  console.error("CRABBOX_PHASE:openclaw-bootstrap-" + next.toLowerCase().replaceAll(" ", "-"));
+};
+setPhase("preparation");
 (async () => {
   let tokens;
   try { tokens = JSON.parse(credentials || "{}"); }
@@ -114,12 +120,13 @@ let phase = "preparation";
       if (!nodeInvocation || fs.realpathSync(path.join("/proc", pidText, "cwd")) !== runtimeDir || !env.includes("OPENCLAW_STATE_DIR=" + stateDir)) {
         throw new Error("Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker");
       }
+      setPhase("complete");
       return;
     }
     fs.unlinkSync(pidFile);
   }
   const verifyRuntime = (root) => {
-    phase = "runtime verification";
+    setPhase("runtime verification");
     if (!fs.lstatSync(root).isDirectory() || fs.realpathSync(root) !== root) throw new Error("Cloud worker bootstrap runtime path is unsafe");
     const packageRoot = path.join(root, "node_modules", "openclaw");
     const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
@@ -141,7 +148,7 @@ let phase = "preparation";
     if (bytes !== artifact.bytes || hash.digest("hex") !== artifact.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
   };
   const downloadArchive = async (artifact, token, archive) => {
-    phase = "download connection";
+    setPhase("download connection");
     if (!token) throw new Error("Cloud worker bootstrap download authority is unavailable");
     const url = new URL(artifact.url);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || (artifact.tlsFingerprint && url.protocol !== "https:")) throw new Error("Cloud worker bootstrap artifact transport is invalid");
@@ -155,8 +162,8 @@ let phase = "preparation";
     });
     // Observe transport progress without changing when the pinned request may send credentials.
     request.once("socket", (socket) => {
-      socket.once("connect", () => { phase = url.protocol === "https:" ? "download TLS" : "download HTTP response"; });
-      socket.once("secureConnect", () => { if (!pin) phase = "download HTTP response"; });
+      socket.once("connect", () => { setPhase(url.protocol === "https:" ? "download TLS" : "download HTTP response"); });
+      socket.once("secureConnect", () => { if (!pin) setPhase("download HTTP response"); });
     });
     const pendingResponse = once(request, "response").then(([response]) => response);
     // Pinned private certificates authenticate the socket before any bearer bytes leave.
@@ -165,7 +172,7 @@ let phase = "preparation";
         const [socket] = await once(request, "socket");
         await once(socket, "secureConnect");
         if (normalizePin(socket.getPeerCertificate().fingerprint256 ?? "") !== pin) throw new Error("Cloud worker bootstrap TLS fingerprint mismatch");
-        phase = "download HTTP response";
+        setPhase("download HTTP response");
       }
       request.end();
     })().catch((error) => request.destroy(error));
@@ -173,7 +180,7 @@ let phase = "preparation";
     try {
       if (response.statusCode !== 200) throw new Error("Cloud worker bootstrap download failed with HTTP " + response.statusCode);
       if (response.headers["content-length"] !== undefined && Number(response.headers["content-length"]) !== artifact.bytes) throw new Error("Cloud worker bootstrap archive length does not match the Gateway");
-      phase = "download body";
+      setPhase("download body");
       const output = await fsp.open(archive, "wx", 0o600);
       try { await verifyArchive(response, artifact, output); }
       finally { await output.close(); }
@@ -186,6 +193,7 @@ let phase = "preparation";
     return path.join(root, "node_modules", "openclaw", ...parts);
   };
   const verifyWorkerArchive = async (root) => {
+    setPhase("worker archive verification");
     const archive = workerArchivePath(root);
     let handle;
     // A non-regular artifact (including a FIFO) must reject without blocking preparation.
@@ -202,6 +210,7 @@ let phase = "preparation";
   };
   const publishWorkerArchive = (root, downloaded) => {
     if (!workerBundle) return;
+    setPhase("worker archive publication");
     const archive = workerArchivePath(root);
     const directory = path.dirname(archive);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -232,7 +241,7 @@ let phase = "preparation";
     }
     const installDir = existingRuntime ? runtimeDir : path.join(stage, "runtime");
     if (!existingRuntime) {
-      phase = "installation";
+      setPhase("installation");
       fs.mkdirSync(installDir, { mode: 0o700 });
       // npm 12 requires a project policy even when ignore-scripts is false.
       // Trust only the verified artifact; dependency script policy stays unchanged.
@@ -255,13 +264,17 @@ let phase = "preparation";
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   }
   // A project snapshot contains only verified runtime bytes, never enrollment state.
-  if (!mode) return;
-  phase = "activation";
+  if (!mode) {
+    setPhase("complete");
+    return;
+  }
+  setPhase("activation");
   try {
     if (!fs.lstatSync(runtimeLink).isSymbolicLink()) throw new Error("Cloud worker runtime pointer is occupied");
     fs.unlinkSync(runtimeLink);
   } catch (error) { if (error.code !== "ENOENT") throw error; }
   fs.symlinkSync(runtimeDir, runtimeLink);
+  setPhase("plugin activation");
   for (const pluginId of new Set([...bootstrap.enabledPluginIds, ...${JSON.stringify(params.desktop ? ["cua-computer"] : [])}])) {
     const enabled = spawnSync(process.execPath, [cli, "plugins", "enable", pluginId], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
     if (enabled.status !== 0) throw new Error("Cloud worker bootstrap could not enable plugin " + pluginId);
@@ -271,7 +284,7 @@ let phase = "preparation";
     fs.writeFileSync(setupFile, setupCode + "\\n", { mode: 0o600 });
   }
   const args = mode === "connect" ? ["connect", "--target-file", setupFile] : ["node", "run"];
-  phase = "node launch";
+  setPhase("node launch");
   const log = fs.openSync(path.join(stateDir, "node.log"), "a", 0o600);
   let child;
   try {
@@ -281,6 +294,7 @@ let phase = "preparation";
     catch (error) { process.kill(-child.pid, "SIGTERM"); throw error; }
     child.unref();
   } finally { fs.closeSync(log); }
+  setPhase("complete");
 })().catch((error) => { console.error("Cloud worker node bootstrap " + phase + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message); process.exitCode = 1; });
 CRABBOX_NODE_ENROLLMENT_SCRIPT`;
   return {

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
@@ -29,7 +30,7 @@ const TOOLS = [
 
 function promptContext() {
   return {
-    systemPrompt: "Follow policy.",
+    systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
     messages: [],
     tools: TOOLS,
   } as never;
@@ -43,7 +44,10 @@ function invoke(
   return Promise.resolve(wrapped?.(model, context, {} as never));
 }
 
-const plainPromptContext = { systemPrompt: "Follow policy.", messages: [] } as never;
+const plainPromptContext = {
+  systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
+  messages: [],
+} as never;
 
 function readyEntry(params: {
   cachedContent?: string;
@@ -132,7 +136,7 @@ describe("google prompt cache failure handling", () => {
 
     await expect(invoke(wrapped)).resolves.toBe("visible-output");
     expect(streamContext(innerStreamFn)).toMatchObject({
-      systemPrompt: "Follow policy.",
+      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
       tools: TOOLS,
     });
     expect(entries.at(-1)?.data).toMatchObject({ status: "failed" });
@@ -230,7 +234,7 @@ describe("google prompt cache failure handling", () => {
     await expect(invoke(wrapped)).resolves.toBe("visible-output");
     expect(streamFn).toHaveBeenCalledOnce();
     expect(streamContext(streamFn)).toMatchObject({
-      systemPrompt: "Follow policy.",
+      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
       tools: TOOLS,
     });
     expect(getCapturedPayload()).not.toHaveProperty("cachedContent");
@@ -272,7 +276,7 @@ describe("google prompt cache failure handling", () => {
 
     await expect(invoke(wrapped)).resolves.toBe("visible-output");
     expect(streamContext(innerStreamFn)).toMatchObject({
-      systemPrompt: "Follow policy.",
+      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
       tools: TOOLS,
     });
     expect(entries.at(-1)?.data).toMatchObject({ status: "failed" });
@@ -503,7 +507,7 @@ describe("google prompt cache failure handling", () => {
       "https://generativelanguage.googleapis.com/v1beta/cachedContents",
     );
     expect(streamContext(streamFn)).toMatchObject({
-      systemPrompt: "Follow policy.",
+      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
       tools: TOOLS,
     });
     expect(getCapturedPayload()).not.toHaveProperty("cachedContent");

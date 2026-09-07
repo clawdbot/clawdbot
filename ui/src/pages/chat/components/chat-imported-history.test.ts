@@ -121,25 +121,30 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     expect(normalizeMessage(message).content).toEqual(
       normalizeMessage({ role, content: body }).content,
     );
-    expect(displayed(message)).toBe(body.trim());
+    expect(displayed(message)).toBe(role === "assistant" ? "  First\r\n\r\nSecond" : body);
   });
 
   it.each(["\n", "\r\n", "Thinking\n\n\n"])(
     "preserves extra leading separators %j instead of treating them as import framing",
     (prefix) => {
-      const content = prefix + wrap("Keep this body");
+      const framed = wrap("Keep this body");
+      const content = prefix + framed;
       const message = { role, content, __openclaw: { idempotencyKey: importKey } };
       expect(projectImportedMessageForDisplay(message)).toEqual(message);
-      expect(displayed(message)).toBe(content.trim());
+      // Assistant display removes leading blank lines, without unwrapping an ineligible frame.
+      expect(displayed(message)).toBe(
+        role === "assistant" && (prefix === "\n" || prefix === "\r\n") ? framed : content,
+      );
       expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
     },
   );
 
   it.each(["\n", "\r\n"])("preserves extra trailing separators %j", (suffix) => {
-    const content = wrap("Keep this body") + suffix;
+    const framed = wrap("Keep this body");
+    const content = framed + suffix;
     const message = { role, content, __openclaw: { idempotencyKey: importKey } };
     expect(projectImportedMessageForDisplay(message)).toEqual(message);
-    expect(displayed(message)).toBe(content.trim());
+    expect(displayed(message)).toBe(role === "assistant" ? framed : content);
     expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
   });
 

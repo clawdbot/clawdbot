@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -457,6 +458,58 @@ describe("gateway sessions patch", () => {
       }),
       "restore it first",
     );
+  });
+
+  test.each([
+    ["agent:main:dashboard:child", { spawnedBy: MAIN_SESSION_KEY }],
+    ["agent:main:dashboard:child", { parentSessionKey: MAIN_SESSION_KEY }],
+    ["agent:main:subagent:child", {}],
+  ] as const)("rejects child pins on %s with %j", async (key, lineage) => {
+    const original: SessionEntry = { sessionId: "child", updatedAt: 1, pinnedAt: 10, ...lineage };
+    expectPatchError(
+      await runPatch({
+        storeKey: key,
+        store: { [key]: { ...original } },
+        patch: { key, pinned: true },
+      }),
+      "cannot pin a child session; pin its parent session instead",
+    );
+  });
+
+  test.each([{ pinned: false }, { label: "Child task" }] as const)(
+    "clears stale child pins on a metadata or unpin patch: %j",
+    async (patch) => {
+      const key = "agent:main:dashboard:child";
+      const updated = expectPatchOk(
+        await runPatch({
+          storeKey: key,
+          store: {
+            [key]: { sessionId: "child", updatedAt: 1, pinnedAt: 10, spawnedBy: MAIN_SESSION_KEY },
+          },
+          patch: { key, ...patch },
+        }),
+      );
+      expect(updated.pinnedAt).toBeUndefined();
+    },
+  );
+
+  test.each([
+    ["agent:main:dashboard:root", { spawnedBy: "  ", parentSessionKey: "  " }],
+    ["agent:main:acp:root", {}],
+    ["agent:main:cron:root", {}],
+    [
+      "agent:main:dashboard:fork",
+      { forkSource: { sessionKey: MAIN_SESSION_KEY, sessionId: "parent" } },
+    ],
+  ] as const)("allows root pins on %s", async (key, lineage) => {
+    const pinned = expectPatchOk(
+      await runPatch({
+        storeKey: key,
+        store: { [key]: { sessionId: "root", updatedAt: 1, ...lineage } },
+        patch: { key, pinned: true },
+      }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
   });
 
   test("marks archived sessions unread and clears the marker when read", async () => {
@@ -1467,12 +1520,14 @@ describe("gateway sessions patch", () => {
               ? undefined
               : mainStoreEntry({
                   sessionId: sessionState === "existing" ? "sess-context" : undefined,
+                  contextBudgetStatus: contextBudgetStatusFixture(),
                 }),
           patch: { key: MAIN_SESSION_KEY, contextWindow: "200k" },
           loadGatewayModelCatalog,
         }),
       );
       expect(entry.contextWindow).toBe("200k");
+      expect(entry.contextBudgetStatus).toBeUndefined();
       expect(entry.liveModelSwitchPending).toBe(sessionState === "existing" ? true : undefined);
 
       const invalid = await runPatch({

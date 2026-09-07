@@ -562,42 +562,46 @@ export async function runPreparedEmbeddedLoop(
       }
       let assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;
       const terminalToolPresentationText = terminalToolPresentation.read();
-      const finalizedTerminal = await prepareTerminalWithSettledTurnFinalization({
-        initial: {
-          attempt,
-          attemptAssistant,
-          currentAttemptCompletedAssistant,
-          sessionIdUsed,
-          sessionFileUsed,
-          terminalState,
-          attemptCompactionCount,
-        },
-        terminalBase: {
-          runParams: params,
-          provider,
-          providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
-          model: model.id,
-          activeErrorContext,
-          authProfileStore: attemptAuthProfileStore,
-          authProfileId: lastProfileId,
-          outerContextTokenMeta,
-          usageAccumulator,
-          contextRecoveryState,
-          resolvedToolResultFormat,
-        },
-        lastRunPromptUsage,
-        finalization: {
-          preparedAttempt: dispatchedAttempt.preparedAttempt,
-          sessionTarget: sessionPromptState.sessionTarget,
-          sessionWriterFence: sessionPromptState.sessionWriterFence,
-          harness: agentHarness,
-          modelApi: effectiveModel.api,
-          executionContract,
-          hasTerminalToolPresentation: Boolean(terminalToolPresentationText),
-          createAttemptControls: input.laneController.createAttemptControls,
-          abortSignal: input.laneController.abortSignal,
-        },
-      });
+      // Finalization belongs to this child just like dispatch; an in-process
+      // sender may leave a closed parent transcript context on the outer lane.
+      const finalizedTerminal = await sessionPromptState.withSessionWriterContext(() =>
+        prepareTerminalWithSettledTurnFinalization({
+          initial: {
+            attempt,
+            attemptAssistant,
+            currentAttemptCompletedAssistant,
+            sessionIdUsed,
+            sessionFileUsed,
+            terminalState,
+            attemptCompactionCount,
+          },
+          terminalBase: {
+            runParams: params,
+            provider,
+            providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
+            model: model.id,
+            activeErrorContext,
+            authProfileStore: attemptAuthProfileStore,
+            authProfileId: lastProfileId,
+            outerContextTokenMeta,
+            usageAccumulator,
+            contextRecoveryState,
+            resolvedToolResultFormat,
+          },
+          lastRunPromptUsage,
+          finalization: {
+            preparedAttempt: dispatchedAttempt.preparedAttempt,
+            sessionTarget: sessionPromptState.sessionTarget,
+            sessionWriterFence: sessionPromptState.sessionWriterFence,
+            harness: agentHarness,
+            modelApi: effectiveModel.api,
+            executionContract,
+            hasTerminalToolPresentation: Boolean(terminalToolPresentationText),
+            createAttemptControls: input.laneController.createAttemptControls,
+            abortSignal: input.laneController.abortSignal,
+          },
+        }),
+      );
       const {
         attempt: terminalAttempt,
         attemptAssistant: terminalAttemptAssistant,

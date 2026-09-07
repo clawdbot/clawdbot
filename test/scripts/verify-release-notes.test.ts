@@ -1089,7 +1089,7 @@ console.log(JSON.stringify({ data }));
         expect(result.status, result.stdout).toBe(0);
         const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
         expect(
-          manifest.pullRequests.map((entry: { number: number }) => entry.number).sort(),
+          manifest.pullRequests.map((entry: { number: number }) => entry.number).toSorted(),
         ).toEqual(reversals === 1 ? [10, 13] : [10, 11, 13]);
         expect(manifest.pullRequests[0].thanks).toEqual(["contributor"]);
         expect(manifest.shippedBaselines).toEqual([
@@ -1103,6 +1103,117 @@ console.log(JSON.stringify({ data }));
       }
     },
   );
+
+  it.each([
+    { mode: "recover", attempts: 2, error: undefined },
+    { mode: "exhaust", attempts: 5, error: "unexpected EOF" },
+    { mode: "auth", attempts: 1, error: "Bad credentials" },
+    { mode: "missing-data", attempts: 1, error: "did not include data" },
+    { mode: "schema", attempts: 1, error: "Field unknownField does not exist" },
+  ])("handles GraphQL transport failure at the CLI boundary: $mode", (scenario) => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-transport-"));
+    try {
+      git(cwd, ["init", "-q", "-b", "main"]);
+      const changelog = [
+        "# Changelog",
+        "",
+        "## 2026.7.1",
+        "",
+        "### Highlights",
+        "",
+        "- One.",
+        "- Two.",
+        "- Three.",
+        "- Four.",
+        "- Five.",
+        "",
+        "### Changes",
+        "",
+        "### Fixes",
+        "",
+      ].join("\n");
+      writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+      git(cwd, ["add", "CHANGELOG.md"]);
+      git(cwd, ["commit", "-qm", "chore: baseline"]);
+      const base = git(cwd, ["rev-parse", "HEAD"]);
+      git(cwd, ["commit", "--allow-empty", "-qm", "chore: source contribution"]);
+      const target = git(cwd, ["rev-parse", "HEAD"]);
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}\n
+const fs = require("node:fs");
+const mode = ${JSON.stringify(scenario.mode)};
+const state = fs.existsSync("request-state.json") ? JSON.parse(fs.readFileSync("request-state.json", "utf8")) : { attempts: 0, settled: false };
+if (!state.settled) {
+  state.attempts += 1;
+  fs.writeFileSync("request-state.json", JSON.stringify(state));
+  if (mode === "exhaust" || (mode === "recover" && state.attempts === 1)) {
+    process.stderr.write('Post "https://api.github.com/graphql": unexpected EOF\\n');
+    process.exit(1);
+  }
+  if (mode === "auth") {
+    console.log(JSON.stringify({ message: "Bad credentials", status: 401 }));
+    process.stderr.write("gh: Bad credentials (HTTP 401)\\n");
+    process.exit(1);
+  }
+  if (mode === "missing-data") {
+    console.log(JSON.stringify({ unexpected: "shape" }));
+    process.exit(0);
+  }
+  if (mode === "schema") {
+    console.log(JSON.stringify({ errors: [{ type: "GRAPHQL_VALIDATION_FAILED", message: "Field unknownField does not exist on type Repository" }] }));
+    process.exit(0);
+  }
+  state.settled = true;
+  fs.writeFileSync("request-state.json", JSON.stringify(state));
+}
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) {
+  data[alias] = { object: { associatedPullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }, author: { user: { login: "steipete" } } } };
+}
+console.log(JSON.stringify({ data }));
+`,
+      );
+      chmodSync(gh, 0o755);
+      const manifestPath = join(cwd, "manifest.json");
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifier,
+          "--base",
+          base,
+          "--target",
+          target,
+          "--main-ref",
+          target,
+          "--version",
+          "2026.7.1",
+          "--manifest",
+          manifestPath,
+          "--write-ledger",
+          "--json",
+        ],
+        { cwd, encoding: "utf8", env: { ...process.env, PATH: `${cwd}:${process.env.PATH}` } },
+      );
+      const requests = JSON.parse(readFileSync(join(cwd, "request-state.json"), "utf8"));
+      expect(requests.attempts, result.stderr).toBe(scenario.attempts);
+      if (scenario.error) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(scenario.error);
+        expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(readFileSync(manifestPath, "utf8")).source.directCommits).toBe(1);
+        expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toContain(
+          "### Complete contribution record",
+        );
+      }
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
 
   it("records a canonical target SHA when --target is symbolic", () => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));

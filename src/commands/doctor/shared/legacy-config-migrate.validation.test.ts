@@ -3,6 +3,24 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("legacy config migrate validation", () => {
+  it.each([0, 1000.9, 7_200_000])("preserves restored MCP idle TTL %s", (sessionIdleTtlMs) => {
+    const result = migrateLegacyConfig({
+      mcp: { sessionIdleTtlMs },
+      cron: { maxConcurrentRuns: 2 },
+    });
+    expect(result.config?.mcp?.sessionIdleTtlMs).toBe(sessionIdleTtlMs);
+    expect(result.partiallyValid).toBeUndefined();
+  });
+
+  it("restores a schema-valid ambient owner after explicit roster normalization", () => {
+    const result = migrateLegacyConfig({
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+    });
+    expect(result.partiallyValid).toBeUndefined();
+    expect(result.config?.agents?.defaults?.systemAgent?.agentId).toBe("main");
+    expect(result.config?.agents?.defaults?.heartbeat?.agentId).toBe("main");
+  });
+
   let profileConfiguredToolAllowResult: ReturnType<typeof migrateLegacyConfig>;
 
   beforeAll(() => {

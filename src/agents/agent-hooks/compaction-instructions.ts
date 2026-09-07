@@ -4,6 +4,7 @@
  * Provides default language-preservation instructions and a precedence-based
  * resolver for customInstructions used during context compaction summaries.
  */
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /**
@@ -38,5 +39,5 @@ export function resolveCompactionInstructions(
     normalizeOptionalString(eventInstructions) ??
     normalizeOptionalString(runtimeInstructions) ??
     DEFAULT_COMPACTION_INSTRUCTIONS;
-  return Array.from(resolved).slice(0, MAX_INSTRUCTION_LENGTH).join("");
+  return truncateCodePoints(resolved, MAX_INSTRUCTION_LENGTH);
 }

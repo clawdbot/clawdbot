@@ -16,7 +16,7 @@ import {
   type QuotaBudgetSummary,
   type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
-import { resolveEffectiveContextLimit } from "../../../lib/sessions/context-budget.ts";
+import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
 import { handleChatComposerDetailsToggle } from "./chat-picker-overlay.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
@@ -128,10 +128,10 @@ function getContextNoticeViewModel(
   bg: string;
   warning: boolean;
   approximate: boolean;
-  reserveAdjusted: boolean;
+  fromLastPrompt: boolean;
 } | null {
   const used = session?.totalTokens;
-  const { tokens: limit, reserveAdjusted } = resolveEffectiveContextLimit(
+  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(
     session,
     defaultContextTokens,
   );
@@ -154,6 +154,7 @@ function getContextNoticeViewModel(
       ? session.estimatedCostUsd
       : null;
   const usage = {
+    fromLastPrompt,
     used,
     limit,
     input,
@@ -169,7 +170,6 @@ function getContextNoticeViewModel(
       bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
       warning,
       approximate,
-      reserveAdjusted,
     };
   }
   const { warnRgb, dangerRgb } = getThemeNoticeColors();
@@ -190,7 +190,6 @@ function getContextNoticeViewModel(
     bg,
     warning,
     approximate,
-    reserveAdjusted,
   };
 }
 
@@ -418,11 +417,7 @@ export function renderContextNotice(
               ? html`
                   <div class="context-usage__header">
                     <span class="context-usage__title"
-                      >${t(
-                        model.reserveAdjusted
-                          ? "chat.composer.contextUsage.promptBudget"
-                          : "chat.composer.contextUsage.contextWindow",
-                      )}</span
+                      >${t(model.fromLastPrompt ? "chat.composer.contextUsage.promptBudget" : "chat.composer.contextUsage.contextWindow")}</span
                     >
                     <strong class="context-usage__context-value"
                       >${model.detail} · ${percentage}</strong

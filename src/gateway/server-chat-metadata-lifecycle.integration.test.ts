@@ -73,7 +73,7 @@ let sidecars: GatewayPostReadySidecarHandle[] = [];
 beforeEach(async () => {
   vi.stubEnv("OPENAI_API_KEY", "");
   state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-  resetPreparedModelRuntimeHarness(state);
+  await resetPreparedModelRuntimeHarness(state);
   mocks.configuredAgentIds = ["main"];
   mocks.authStorage.getAll.mockReturnValue({
     openai: {

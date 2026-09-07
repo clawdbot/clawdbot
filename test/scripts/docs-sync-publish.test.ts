@@ -388,7 +388,18 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       "reference/release-performance-sweep",
       "reference/test",
       "ci",
+      "ci/pipeline",
+      "ci/watching-runs",
+      "ci/checkout",
+      "ci/scope-and-routing",
+      "ci/runners",
+      "ci/capacity",
+      "ci/release-validation",
+      "ci/scheduled-workflows",
+      "ci/local-proof",
       "help/scripts",
+      "concepts/qa-e2e-automation",
+      "concepts/personal-agent-benchmark-pack",
     ];
     expect(collectPages(releaseTab)).toEqual(releaseRoutes);
     expect(new Set(releaseRoutes)).toHaveLength(releaseRoutes.length);

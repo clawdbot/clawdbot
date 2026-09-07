@@ -226,6 +226,97 @@ describe("cross-OS manual gateway lane evidence", () => {
     );
   });
 
+  it.each([
+    ["pass", 15],
+    ["pass", 16],
+    ["update refused", 15],
+    ["skipped", 15],
+  ] as const)(
+    "proves stateful 9.2 packaged self-update without direct-install fallback: %s, publication %i",
+    async (outcome, publishedVersion) => {
+      arrangeSuccessfulLane();
+      mocks.readInstalledVersion.mockReset().mockReturnValue("2026.9.2");
+      mocks.readInstalledMetadata.mockReturnValue({
+        version: "2026.9.3",
+        commit: candidate.sourceSha,
+      });
+      mocks.stopGateway.mockImplementation(async (gateway) => {
+        if (gateway) {
+          gateway.child.exitCode = 0;
+        }
+      });
+      mocks.runCommand.mockImplementation(async (_command, args: string[]) => {
+        const schemaIndex = args.indexOf("schema");
+        if (schemaIndex !== -1) {
+          const contentVersion = Number(args[schemaIndex + 1]);
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              publishedVersion: contentVersion === 15 ? 15 : publishedVersion,
+              contentVersion,
+            }),
+            stderr: "",
+          };
+        }
+        if (args.includes("refusal") || args.includes("receipt")) {
+          throw new Error("obsolete external transition assertion");
+        }
+        return {
+          exitCode: 0,
+          stdout: args.includes("session-key") ? "agent:main:retained" : "{}",
+          stderr: "",
+        };
+      });
+      mocks.runOpenClaw.mockImplementation(async ({ args }: { args: string[] }) => {
+        if (args[0] === "update") {
+          return {
+            exitCode: outcome === "update refused" ? 1 : 0,
+            stdout: JSON.stringify({
+              status: outcome === "pass" ? "ok" : outcome === "skipped" ? "skipped" : "error",
+            }),
+            stderr: "",
+          };
+        }
+        return {
+          exitCode: 0,
+          stdout: args.includes("system-presence")
+            ? JSON.stringify([{ mode: "gateway", reason: "self", version: "2026.9.3" }])
+            : "{}",
+          stderr: "",
+        };
+      });
+      const result = await runUpgradeLane({
+        ...upgradeParams(),
+        build: { ...candidate, candidateVersion: "2026.9.3" },
+      });
+      if (outcome === "pass") {
+        expect(result).toMatchObject({
+          status: "pass",
+          method: "packaged-self-update",
+          selfUpdatePassed: true,
+          retainedSessionPassed: true,
+          persistedCandidateTurnPassed: true,
+          schemaAfterUpdate: { publishedVersion, contentVersion: 16 },
+          schemaAfterServing: { publishedVersion, contentVersion: 16 },
+        });
+        expect(mocks.startGateway).toHaveBeenCalledTimes(2);
+        expect(
+          mocks.runOpenClaw.mock.calls.filter(([call]) => call.args[0] === "agent"),
+        ).toHaveLength(2);
+      } else {
+        expect(result).toMatchObject({
+          status: "fail",
+          error: expect.stringContaining("packaged self-update"),
+        });
+      }
+      expect(
+        mocks.runOpenClaw.mock.calls.filter(([call]) => call.args[0] === "update"),
+      ).toHaveLength(1);
+      expect(mocks.runOpenClaw.mock.calls.some(([call]) => call.args[0] === "doctor")).toBe(false);
+      expect(mocks.installTarballPackage).not.toHaveBeenCalled();
+    },
+  );
+
   it("records bounded evidence when the supported Windows timeout fallback succeeds", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     arrangeSuccessfulLane();

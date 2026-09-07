@@ -6,7 +6,6 @@ import {
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/src/index.js";
-import "../../styles/sessions.css";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -16,17 +15,18 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
+import "../../styles/sessions.css";
 import { renderCapacityMeter } from "../../components/capacity-meter.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/tooltip.ts";
-import "../../components/web-awesome.ts";
-import "../../components/web-awesome-popover.ts";
 import {
   renderSettingsPage,
   renderSettingsSegmented,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
+import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
+import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { formatAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
@@ -47,7 +47,7 @@ import { isCronSessionKey } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import { resolveEffectiveContextTokens } from "../../lib/sessions/context-budget.ts";
+import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   groupSessionRows,
@@ -316,8 +316,8 @@ function renderTokensCell(row: GatewaySessionRow) {
   // composer's context-usage convention.
   const fresh = row.totalTokensFresh !== false;
   const totalLabel = `${fresh ? "" : "~"}${formatCompactTokenCount(total)}`;
-  const effectiveContext = resolveEffectiveContextTokens(row);
-  const context = effectiveContext > 0 ? effectiveContext : null;
+  const limit = resolveSessionContextLimit(row);
+  const context = limit.tokens > 0 ? limit.tokens : null;
   if (!context) {
     return html`<span class="session-tokens__value">${totalLabel}</span>`;
   }
@@ -329,11 +329,20 @@ function renderTokensCell(row: GatewaySessionRow) {
       : percent >= CONTEXT_METER_WARN_PERCENT
         ? "warn"
         : "ok";
-  const title = t(fresh ? "sessionsView.contextUsage" : "sessionsView.contextUsageApprox", {
-    percent: String(percent),
-    used: total.toLocaleString(),
-    context: context.toLocaleString(),
-  });
+  const title = t(
+    limit.fromLastPrompt
+      ? fresh
+        ? "sessionsView.promptBudgetUsage"
+        : "sessionsView.promptBudgetUsageApprox"
+      : fresh
+        ? "sessionsView.contextUsage"
+        : "sessionsView.contextUsageApprox",
+    {
+      percent: String(percent),
+      used: total.toLocaleString(),
+      context: context.toLocaleString(),
+    },
+  );
   return html`
     <openclaw-tooltip .content=${title}>
       <div class="session-tokens">

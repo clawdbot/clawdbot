@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   readUpdateStateSchemaVersions,
+  resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
@@ -51,16 +53,15 @@ export async function inspectActivatedUpdateState(
       root: result.root ?? null,
       nodeRunner: params.packageUpdateNodeRunner,
     });
-    const sharedVersion = current.find(
-      (entry) => entry.path === resolveOpenClawStateSqlitePath(env),
-    )?.userVersion;
+    const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
+    const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
     if (
       result.status === "ok" &&
       candidateSchemaVersions &&
       sharedVersion !== candidateSchemaVersions.state
     ) {
-      // Doctor can warn without failing. Startup must not perform a late
-      // migration underneath the previous runtime's ledger writer.
+      // Doctor can warn without failing. Require applied content so startup
+      // cannot migrate late; deferred publication alone is already ready.
       result.status = "error";
       result.reason = `${CLI_NAME} doctor`;
       result.steps.push({
@@ -72,7 +73,10 @@ export async function inspectActivatedUpdateState(
         stderrTail: `Shared state migration did not finish: expected schema ${candidateSchemaVersions.state}, found ${sharedVersion ?? "missing"}.`,
       });
     }
-    return updateStateSchemaVersionsMatch(schemaVersions, current)
+    return updateStateSchemaVersionsMatch(schemaVersions, current, {
+      sharedPath: resolveOpenClawStateSqlitePath(env),
+      candidateSchemaVersions,
+    })
       ? undefined
       : "state-migrated-no-rollback";
   } catch (error) {
@@ -111,13 +115,14 @@ export type MigratedUpdateFinalizationResult = {
   result: UpdateRunResult;
   exitCode: number;
   terminalRunId: string;
+  automaticTriage?: TriageFailureContext;
 };
 
 /** After migration, only candidate code may reopen state or finish the run. */
 export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
-): Promise<{ result: UpdateRunResult; exitCode: number }> {
+): Promise<Omit<MigratedUpdateFinalizationResult, "terminalRunId">> {
   const run = params.opts.run;
   if (!run) {
     throw new Error("Migrated update continuation requires its admitted run.");
@@ -235,7 +240,11 @@ export async function continueMigratedUpdateInFreshProcess(
       response.result.steps.push(retained);
       defaultRuntime.error(retained.stderrTail);
     }
-    return { result: response.result, exitCode: response.exitCode };
+    return {
+      result: response.result,
+      exitCode: response.exitCode,
+      automaticTriage: response.automaticTriage,
+    };
   } catch (error) {
     try {
       await windowsRecovery?.complete(false);

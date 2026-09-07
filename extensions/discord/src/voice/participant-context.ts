@@ -2,6 +2,7 @@ import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/c
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import type { GatewayPlugin } from "../internal/gateway.js";
+import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { type DiscordVoiceIngressContext, resolveDiscordVoiceIngressContext } from "./ingress.js";
 import type { VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
@@ -293,6 +294,7 @@ async function appendDiscordVoiceParticipantContext(params: {
 }
 
 export async function resolveDiscordVoiceIngressContextWithParticipants(params: {
+  readPolicy?: DiscordLivePolicyReader;
   entry: VoiceSessionEntry;
   userId: string;
   client: Client;
@@ -303,6 +305,7 @@ export async function resolveDiscordVoiceIngressContextWithParticipants(params: 
   speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<DiscordVoiceIngressContext | null> {
   const context = await resolveDiscordVoiceIngressContext({
+    readPolicy: params.readPolicy,
     entry: params.entry,
     userId: params.userId,
     cfg: params.cfg,

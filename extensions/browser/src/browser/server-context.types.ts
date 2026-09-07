@@ -21,6 +21,11 @@ export type BrowserTabTargetOptions = BrowserOperationOptions & {
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
+  /** Process-memory observation bound to one externally owned browser instance. */
+  externalBrowserMode?: {
+    browserWebSocketUrl: string;
+    headless: Promise<boolean | undefined>;
+  };
   managedLaunchFailure?: {
     consecutiveFailures: number;
     lastFailureAt: number;

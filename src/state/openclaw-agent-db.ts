@@ -46,6 +46,7 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
+import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertNoOpenClawAgentDatabaseLeases,
@@ -362,6 +363,7 @@ function* openOpenClawAgentDatabaseSteps(
       synchronous: "NORMAL",
     });
     ensureOpenClawAgentSchema(db, agentId, pathname);
+    registerOpenClawAgentDatabaseIdentity(db);
     const database = { agentId, db, path: pathname, walMaintenance };
     cache.incognito.add(database);
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
@@ -420,7 +422,7 @@ function* openOpenClawAgentDatabaseSteps(
         env: leaseEnvironment,
       });
   }
-  const finishPhase = startAgentDatabaseOpenTiming(agentId, pathname);
+  const finishPhase = startAgentDatabaseOpenTiming(agentId, pathname, pending ? "async" : "sync");
   let openedDb: DatabaseSync | undefined;
   let openedDatabase: OpenClawAgentDatabase | undefined;
   let openedWalMaintenance: SqliteWalMaintenance | undefined;
@@ -435,6 +437,7 @@ function* openOpenClawAgentDatabaseSteps(
     db.enableLoadExtension(false);
     enableNodeSqliteKyselyStatementCache(db);
     openedDb = db;
+    registerOpenClawAgentDatabaseIdentity(db);
     finishPhase("open");
     // Eviction churn must avoid migration/convergence and registry busy waits.
     // Version and owner can change while evicted, so their read-only gates run on every open.
@@ -608,12 +611,10 @@ export function runOpenClawAgentWriteTransaction<T>(
       () => {
         assertAgentDeletionDatabaseCleanupAccess(database, options);
         const operationResult = operation(database);
-        if (!enteredNestedTransaction) {
+        if (!enteredNestedTransaction && !cache.incognito.has(database)) {
           // Permission failure must roll back with the write. Repairing after
           // COMMIT could make callers retry a transaction already durable in SQLite.
-          if (!cache.incognito.has(database)) {
-            ensureOpenClawAgentDatabasePermissions(database.path, options);
-          }
+          ensureOpenClawAgentDatabasePermissions(database.path, options);
         }
         return operationResult;
       },
@@ -638,8 +639,7 @@ export function borrowOpenClawAgentDatabase(options: OpenClawAgentDatabaseOption
 
 /** Return whether the exact cached agent database pathname is still open. */
 export function isOpenClawAgentDatabaseOpen(pathname: string): boolean {
-  const database = cache.databases.get(path.resolve(pathname));
-  return database?.db.isOpen === true;
+  return cache.databases.get(path.resolve(pathname))?.db.isOpen === true;
 }
 
 /** Return the matching live cache entry without materializing a database. */

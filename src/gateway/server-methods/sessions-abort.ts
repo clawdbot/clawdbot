@@ -8,8 +8,10 @@ import {
   errorShape,
   validateSessionsAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import {
   abortEmbeddedAgentRun,
+  isEmbeddedAgentRunActive,
   resolveActiveEmbeddedRunOwnerByRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
@@ -368,11 +370,13 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     let chatAbortSucceeded = false;
     let responseMeta: Record<string, unknown> | undefined;
     const persistedSessionId = sessionEntry?.sessionId;
+    let mcpRetirement: Promise<boolean> | undefined;
     const onAuthorizedAfterQueuedAbort =
-      !requestedRunId && canonicalKey !== "global" && (clearQueued || persistedSessionId)
+      !requestedRunId && (clearQueued || persistedSessionId)
         ? () => {
+            sessionMutationAuthorization?.assertCurrent();
             let queueCleared = false;
-            if (clearQueued) {
+            if (clearQueued && canonicalKey !== "global") {
               // Explicit full-session stops clear first so an aborting run cannot
               // promote queued work. Ordinary sessions.abort calls preserve it.
               const cleared = clearSessionQueues([
@@ -385,9 +389,21 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             }
             // Persisted channel replies are active session work even when they
             // have no connection-owned chat controller.
-            const embeddedAborted = persistedSessionId
-              ? abortEmbeddedAgentRun(persistedSessionId)
-              : false;
+            const wasActive = persistedSessionId && isEmbeddedAgentRunActive(persistedSessionId);
+            const embeddedAborted =
+              persistedSessionId && canonicalKey !== "global"
+                ? abortEmbeddedAgentRun(persistedSessionId)
+                : false;
+            if (
+              (clearQueued || canonicalKey === "global") &&
+              persistedSessionId &&
+              (canonicalKey === "global" || !wasActive || embeddedAborted)
+            ) {
+              mcpRetirement ??= retireSessionMcpRuntime({
+                sessionId: persistedSessionId,
+                reason: "session-stop",
+              });
+            }
             return embeddedAborted || queueCleared;
           }
         : undefined;
@@ -408,6 +424,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     });
     if (queuedAbort) {
       const result = await queuedAbort;
+      await mcpRetirement;
       if (!result.ok) {
         respond(false, undefined, result.error);
       } else {
@@ -485,6 +502,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         ...(!requestedRunId ? { cascadeDescendants: true as const } : {}),
       },
     );
+    await mcpRetirement;
     if (!chatAbortSucceeded) {
       return;
     }

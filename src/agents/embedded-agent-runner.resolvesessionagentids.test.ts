@@ -1,10 +1,44 @@
 // Covers resolving the active agent id from session keys and explicit config.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRetainedLegacyDefaultAgentId } from "../config/legacy.default-agent-owner-state.js";
 import { AgentSelectionRequiredError } from "./agent-scope-config.js";
-import { resolveSessionAgentIds } from "./agent-scope.js";
+import {
+  resolveSessionAgentIdStrict,
+  resolveSessionAgentIds as resolvePairedSessionAgentIds,
+} from "./agent-scope.js";
 
-describe("resolveSessionAgentIds", () => {
+describe("resolveSessionAgentIdStrict", () => {
+  it.each([{ agentId: "main" }, { sessionKey: "agent:main:main" }, { fallbackAgentId: "main" }])(
+    "does not read unrelated roster entries for a prepared owner: %j",
+    (owner) => {
+      let unrelatedEntryReads = 0;
+      const config: OpenClawConfig = {
+        agents: {
+          entries: {
+            main: {},
+            get unrelated() {
+              unrelatedEntryReads += 1;
+              return {};
+            },
+          },
+        },
+      };
+      expect(resolveSessionAgentIdStrict({ config, ...owner })).toBe("main");
+      expect(unrelatedEntryReads).toBe(0);
+    },
+  );
+});
+
+describe.each([
+  { name: "resolveSessionAgentIds", resolve: resolvePairedSessionAgentIds },
+  {
+    name: "resolveSessionAgentIdStrict",
+    resolve: (params: Parameters<typeof resolveSessionAgentIdStrict>[0]) => ({
+      sessionAgentId: resolveSessionAgentIdStrict(params),
+    }),
+  },
+])("$name", ({ resolve: resolveSessionAgentIds }) => {
   const cfg = {
     agents: {
       entries: { main: {}, beta: {} },
@@ -20,6 +54,27 @@ describe("resolveSessionAgentIds", () => {
 
   it("requires an owner when sessionKey is missing", () => {
     expect(() => resolveSessionAgentIds({ config: cfg })).toThrow(AgentSelectionRequiredError);
+  });
+
+  it.each([
+    { config: {}, expected: "main" },
+    { config: { agents: { entries: { beta: {} } } }, expected: "beta" },
+    {
+      config: { agents: { list: [{ id: "main" }, { id: "beta", default: true }] } },
+      expected: "beta",
+    },
+  ])("preserves ownerless fallback for %j", ({ config, expected }) => {
+    expect(resolveSessionAgentIds({ config }).sessionAgentId).toBe(expected);
+  });
+
+  it("uses the retained migration owner only while it remains configured", () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
+    };
+    setRetainedLegacyDefaultAgentId(config, "beta");
+    expect(resolveSessionAgentIds({ config }).sessionAgentId).toBe("beta");
+    setRetainedLegacyDefaultAgentId(config, "retired");
+    expect(() => resolveSessionAgentIds({ config })).toThrow(AgentSelectionRequiredError);
   });
 
   it("requires an owner when sessionKey is non-agent", () => {
@@ -206,4 +261,18 @@ describe("resolveSessionAgentIds", () => {
     });
     expect(sessionAgentId).toBe("beta");
   });
+});
+
+it.each(["raw", "retained"])("preserves a different %s default for paired callers", (source) => {
+  const config: OpenClawConfig = {
+    agents: { entries: { main: { default: source === "raw" }, beta: {} } },
+  };
+  if (source === "retained") {
+    setRetainedLegacyDefaultAgentId(config, "main");
+  }
+  expect(resolvePairedSessionAgentIds({ config, agentId: "beta" })).toEqual({
+    defaultAgentId: "main",
+    sessionAgentId: "beta",
+  });
+  expect(resolveSessionAgentIdStrict({ config, agentId: "beta" })).toBe("beta");
 });

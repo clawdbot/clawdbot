@@ -14,6 +14,7 @@ import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
+  resolveProjectedSessionContextBudgetStatus,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
@@ -24,6 +25,7 @@ import {
   MAX_SESSION_PARTICIPANTS,
   sessionCreatorProfileId,
 } from "../config/sessions/session-entry-provenance.js";
+import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
@@ -43,6 +45,7 @@ import {
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
+import { readSessionTerminalModelFromTranscript } from "./session-transcript-readers.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import {
@@ -191,6 +194,7 @@ export function buildGatewaySessionRow(params: {
         params.storeChildSessionsByKey.get(key),
       )
     : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
+  const pinnedAt = isPinnableSessionEntry(key, entry) ? entry?.pinnedAt : undefined;
   const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
   const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
     ? compactionCheckpoints.length
@@ -207,10 +211,17 @@ export function buildGatewaySessionRow(params: {
     rowContext: params.rowContext,
   });
   // Display aliases do not change the selected route's catalog or runtime policy.
+  const completedModel =
+    entry?.status === "done" && entry.lastRunId && entry.fallbackNotice
+      ? readSessionTerminalModelFromTranscript(
+          { agentId: sessionAgentId, sessionKey: key, sessionId: entry.sessionId, storePath },
+          entry.lastRunId,
+        )
+      : undefined;
   const runtimeModels = resolveSelectedAndActiveModel({
     selectedProvider: rowModelProvider,
     selectedModel: rowModel,
-    sessionEntry: entry,
+    sessionEntry: completedModel ?? entry,
   });
   const activeFallback = resolveActiveFallbackState({
     selectedModelRef: runtimeModels.selected.label,
@@ -414,8 +425,8 @@ export function buildGatewaySessionRow(params: {
     archivedAt: entry?.archivedAt,
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
     archiveReason: entry?.archiveReason,
-    pinned: entry?.pinnedAt !== undefined,
-    pinnedAt: entry?.pinnedAt,
+    pinned: pinnedAt !== undefined,
+    pinnedAt,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,
@@ -489,7 +500,12 @@ export function buildGatewaySessionRow(params: {
     modelSelectionLocked: entry?.modelSelectionLocked,
     agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,
-    contextBudgetStatus: entry?.contextBudgetStatus,
+    contextBudgetStatus: resolveProjectedSessionContextBudgetStatus({
+      entry,
+      provider: rowModelProvider,
+      model: rowModel,
+      contextTokens,
+    }),
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel,
     lastTo: deliveryFields.lastTo,

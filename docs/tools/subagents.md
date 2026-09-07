@@ -76,7 +76,8 @@ completion path described in the accepted receipt:
 - Ordinary announcing runs return an internal completion event to the requester,
   which reviews the result and decides whether a user-facing update is needed.
 - [Swarm collectors](/tools/swarm) return results through explicit collection,
-  not completion notifications.
+  not completion notifications; reserve them for large parallel fan-out (several
+  similar children, about five or more), and use ordinary spawns for one or a few.
 - Thread-bound session runs with a deliverable bound route reply directly to that
   thread, without a separate parent announcement.
 - Caller-managed quiet runs send no completion notification.
@@ -355,9 +356,13 @@ starting a sibling. The requester is announced once such a follow-up finishes
 normally; a follow-up that yields again leaves the run paused and the requester
 waiting.
 
-Automatic continuation is specific to the plugin runtime API above. Ordinary
-follow-ups through routes not tracked as sub-agent runs neither continue the
-paused run nor announce its requester.
+The registry also continues a yielded sub-agent when its announced children
+settle, including an orchestrator spawned by cron. That internal settlement
+wake preserves the original requester and delivers the orchestrator's completion
+there. Ordinary follow-ups through routes not tracked as sub-agent runs neither
+continue the paused run nor announce its requester. See
+[Subagent yield handoff](/concepts/subagent-yield-handoff) for lifecycle ownership
+and the remaining boundary for channel progress after yield.
 
 Among plugin runtime follow-ups, continuation applies to those that use default
 delivery. A follow-up that supplies its own requester or completion-delivery
@@ -553,6 +558,10 @@ final answer, the correct follow-up is the exact silent token
 Each agent session (at any depth) can have at most `maxChildrenPerAgent`
 (default `5`) active children at a time. This prevents runaway fan-out
 from a single orchestrator.
+
+### Reset a conversation
+
+A full in-place conversation reset cancels unfinished native subagents associated with that session, including yielded children and children whose completion requester differs from their controller. Chat `/reset` and `sessions.reset` use the same cleanup owner. If child cancellation is incomplete, reset reports a failure before clearing the conversation; inspect the remaining tasks and retry. Child transcripts and unrelated sessions are preserved.
 
 ### Cascade stop
 

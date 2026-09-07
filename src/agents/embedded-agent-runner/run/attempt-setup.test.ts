@@ -8,6 +8,7 @@ import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook
 import { resolveSandboxContext as resolveRealSandboxContext } from "../../sandbox/context.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
@@ -28,7 +29,6 @@ vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
 import {
   installEmbeddedAttemptContextGuards,
   prepareEmbeddedAttemptSetup,
-  resolveAttemptWorkspaceSandbox,
 } from "./attempt-setup.js";
 
 const TINY_PNG_BASE64 =

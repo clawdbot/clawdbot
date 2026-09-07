@@ -83,6 +83,8 @@ Call `progress_card` with both parts absent or empty to remove the current card:
 
 An empty plan plus empty or whitespace-only Markdown also clears it. A successful clear returns `Progress card cleared`. Channel previews remove the checklist and its status, keep other activity, and delete an otherwise empty draft. A later card update can create a new draft.
 
+A full in-place conversation reset (`/reset` without `soft`, or `sessions.reset`) also clears the previous task’s card. The clear commits with the reset boundary and refreshes subscribed clients; a fresh page load also sees no old card. Writes admitted before that reset cannot restore it. Reset preserves transcript history and dashboard layout. Automatic continuity resets that preserve prior context do not clear the card.
+
 ## Where the card appears
 
 Channels with progress drafts show the latest checklist in active `partial`, `block`, and `progress` previews, subject to their preview settings and line limits. Card updates supply a completion count, or `Progress updated` for a note without steps; they do not copy the note's Markdown or HTML into tool summaries. Telegram uses native checkboxes with `channels.telegram.richMessages: true` and readable HTML checklists otherwise. See [Streaming and chunking](/concepts/streaming#progress-draft-rendering).

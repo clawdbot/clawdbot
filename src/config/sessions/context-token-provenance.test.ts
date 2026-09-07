@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { contextBudgetStatusFixture } from "./context-budget.test-support.js";
 import {
   resolveProjectedSessionContextTokens,
+  resolveProjectedSessionContextBudgetStatus,
   resolveTrustedSessionContextTokens,
 } from "./context-token-provenance.js";
 
@@ -184,5 +186,76 @@ describe("resolveProjectedSessionContextTokens", () => {
         authoredContextTokens: 272_000,
       }),
     ).toBe(1_000_000);
+  });
+});
+
+describe("resolveProjectedSessionContextBudgetStatus", () => {
+  const entry = { sessionId: "session-1", contextBudgetStatus: contextBudgetStatusFixture() };
+  const selection = { provider: "ollama", model: "qwen3:8b", contextTokens: 200_000 };
+
+  it.each([{ name: "matching cap", contextTokens: 200_000 }])(
+    "keeps a last-run estimate with $name",
+    ({ contextTokens }) => {
+      expect(
+        resolveProjectedSessionContextBudgetStatus({ entry, ...selection, contextTokens }),
+      ).toEqual(entry.contextBudgetStatus);
+    },
+  );
+
+  it.each([
+    { name: "model", current: { model: "qwen3:4b" } },
+    { name: "missing model", current: { model: undefined } },
+    { name: "missing provider", current: { provider: undefined } },
+    { name: "unknown cap", current: { contextTokens: undefined } },
+    { name: "provider", current: { provider: "lmstudio" } },
+    { name: "lower cap", current: { contextTokens: 100_000 } },
+    { name: "higher cap", current: { contextTokens: 1_000_000 } },
+  ])("rejects a budget after the $name changes", ({ current }) => {
+    expect(
+      resolveProjectedSessionContextBudgetStatus({ entry, ...selection, ...current }),
+    ).toBeUndefined();
+  });
+
+  it.each([{ sessionId: "session-2" }, { liveModelSwitchPending: true }])(
+    "rejects a stale session lifecycle %j",
+    (patch) => {
+      expect(
+        resolveProjectedSessionContextBudgetStatus({ entry: { ...entry, ...patch }, ...selection }),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each([undefined, "", " "])("rejects an unbound snapshot session ID %j", (sessionId) => {
+    expect(
+      resolveProjectedSessionContextBudgetStatus({
+        entry: { ...entry, contextBudgetStatus: { ...entry.contextBudgetStatus, sessionId } },
+        ...selection,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a narrower budget owned by the serving runtime", () => {
+    const runtimeEntry = {
+      ...entry,
+      modelProvider: "ollama",
+      model: "qwen3:8b",
+      agentHarnessId: "openclaw",
+      contextTokens: 200_000,
+      contextTokensSource: "runtime" as const,
+    };
+    const contextTokens = resolveProjectedSessionContextTokens({
+      entry: runtimeEntry,
+      ...selection,
+      agentHarnessId: "openclaw",
+      resolvedContextTokens: 262_144,
+    });
+    expect(contextTokens).toBe(200_000);
+    expect(
+      resolveProjectedSessionContextBudgetStatus({
+        entry: runtimeEntry,
+        ...selection,
+        contextTokens,
+      }),
+    ).toEqual(entry.contextBudgetStatus);
   });
 });

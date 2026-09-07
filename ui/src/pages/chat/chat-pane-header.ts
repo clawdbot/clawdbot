@@ -28,6 +28,7 @@ import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
+  isPinnableUiSessionRow,
   resolveUiConfiguredMainKey,
   resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
@@ -303,10 +304,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     });
     const archiveAllowed = Boolean(row && canArchiveSessionRow(row, configuredMainKey));
     const deleteAllowed = Boolean(row && canDeleteSessionRows([row], configuredMainKey));
+    const pinnable = row != null && isPinnableUiSessionRow(row);
     const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
           snapshot: this.context.gateway.snapshot,
-          session: row,
+          session: { ...row, pinnable },
         })
       : {};
     const assignmentAccess = row
@@ -610,6 +612,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 sessionId: row.sessionId ?? null,
                 isChild: Boolean(resolveUiSessionNavigationParentKey(row)),
                 pinned: row.pinned === true,
+                pinnable,
                 unread: row.unread === true,
                 archived: row.archived === true,
                 category: normalizeOptionalString(row.category) ?? null,

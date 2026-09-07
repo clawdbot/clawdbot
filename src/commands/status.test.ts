@@ -1184,10 +1184,7 @@ describe("statusCommand", () => {
 
     await statusCommand({ deep: true, timeoutMs: 5000 }, runtime as never);
 
-    expect(scanStatus).toHaveBeenCalledWith(
-      { json: false, timeoutMs: 5000, all: undefined, deep: true },
-      runtime,
-    );
+    expect(scanStatus).toHaveBeenCalledWith({ timeoutMs: 5000, deep: true });
   });
 
   it("surfaces unknown usage when totalTokens is missing", async () => {

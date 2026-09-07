@@ -41,17 +41,14 @@ import {
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
-import {
-  abortChatRunById,
-  registerChatAbortController,
-  type ChatAbortControllerEntry,
-} from "./chat-abort.js";
+import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
+import { lifecycleState, readLifecycleState } from "./server-runtime-subscriptions.test-support.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
   agentTerminalOwner,
@@ -189,35 +186,6 @@ function readTaskUpserts(broadcast: Mock<SubscriptionParams["broadcast"]>) {
   });
 }
 type LifecycleTransition = { state: string; lifecycle?: ReturnType<typeof readLifecycleState> };
-
-function readLifecycleState(entry: ChatAbortControllerEntry) {
-  return {
-    projectSessionActive: entry.projectSessionActive,
-    projectSessionTerminalPending: entry.projectSessionTerminalPending,
-    projectSessionTerminalObservedAt: entry.projectSessionTerminalObservedAt,
-    projectSessionTerminalPersistence: entry.projectSessionTerminalPersistence,
-    projectSessionTerminalPersisted: entry.projectSessionTerminalPersisted,
-    registrationCleanupRequested: entry.registrationCleanupRequested,
-  };
-}
-
-function lifecycleState(
-  projectSessionActive: boolean | undefined,
-  projectSessionTerminalPending?: boolean,
-  projectSessionTerminalObservedAt?: number,
-  projectSessionTerminalPersistence?: Promise<void>,
-  projectSessionTerminalPersisted?: boolean,
-  registrationCleanupRequested?: boolean,
-): ReturnType<typeof readLifecycleState> {
-  return {
-    projectSessionActive,
-    projectSessionTerminalPending,
-    projectSessionTerminalObservedAt,
-    projectSessionTerminalPersistence,
-    projectSessionTerminalPersisted,
-    registrationCleanupRequested,
-  };
-}
 
 const sessionTaskDefaults = {
   requesterSessionKey: "agent:main:main",
@@ -721,6 +689,21 @@ describe("startGatewayEventSubscriptions", () => {
     );
     expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("broadcasts progress-card retirement without session-list subscribers", () => {
+    const params = createParams();
+    unsubs = startGatewayEventSubscriptions(params);
+    emitSessionLifecycleEvent({
+      sessionKey: "global",
+      agentId: "work",
+      reason: "progress-card-reset",
+    });
+    expect(params.broadcast).toHaveBeenCalledWith(
+      "progressCard.changed",
+      { sessionKey: "agent:work:global", revision: null },
+      { sessionKeys: ["global"], agentId: "work" },
+    );
   });
 
   it("logs lifecycle handler failures", async () => {

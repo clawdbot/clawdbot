@@ -48,6 +48,8 @@ type CompactSchemaLimits = {
   maxDepth: number;
   maxProperties: number;
   numericInputConstraints: boolean;
+  declaration?: boolean;
+  remainingNodes?: { value: number };
 };
 
 const INPUT_LIMITS: CompactSchemaLimits = {
@@ -117,8 +119,12 @@ function renderPrimitive(value: unknown): string | undefined {
   return undefined;
 }
 
-function compactLiteralUnion(values: unknown): SchemaHint | undefined {
-  if (!Array.isArray(values) || values.length === 0 || values.length > MAX_COMPACT_ENUM_VALUES) {
+function compactLiteralUnion(values: unknown, limits: CompactSchemaLimits): SchemaHint | undefined {
+  if (
+    !Array.isArray(values) ||
+    values.length === 0 ||
+    values.length > (limits.declaration ? 256 : MAX_COMPACT_ENUM_VALUES)
+  ) {
     return undefined;
   }
   const rendered = values.map(renderPrimitive);
@@ -126,7 +132,9 @@ function compactLiteralUnion(values: unknown): SchemaHint | undefined {
     return undefined;
   }
   const result = [...new Set(rendered as string[])].join(" | ");
-  return result.length <= MAX_COMPACT_ENUM_CHARS ? completeHint(result) : undefined;
+  return result.length <= (limits.declaration ? limits.maxChars : MAX_COMPACT_ENUM_CHARS)
+    ? completeHint(result)
+    : undefined;
 }
 
 function compactSchemaUnion(
@@ -149,7 +157,7 @@ function compactSchemaUnion(
   if (
     !Array.isArray(variants) ||
     variants.length === 0 ||
-    variants.length > MAX_COMPACT_ENUM_VALUES
+    variants.length > (limits.declaration ? 256 : MAX_COMPACT_ENUM_VALUES)
   ) {
     return UNKNOWN_HINT;
   }
@@ -173,12 +181,12 @@ function compactSchemaUnion(
     return variant.const;
   });
   if (literalVariants.every((value) => value !== undefined)) {
-    const literalUnion = compactLiteralUnion(literalVariants);
+    const literalUnion = compactLiteralUnion(literalVariants, limits);
     if (literalUnion) {
       return literalUnion;
     }
   }
-  if (variants.length > MAX_COMPACT_UNION_TYPES) {
+  if (variants.length > (limits.declaration ? 256 : MAX_COMPACT_UNION_TYPES)) {
     return UNKNOWN_HINT;
   }
   const rendered = variants.map((variant) => compactSchemaType(variant, depth + 1, limits));
@@ -216,6 +224,37 @@ function compactObjectHint(
   depth: number,
   limits: CompactSchemaLimits,
 ): SchemaHint {
+  if (limits.declaration) {
+    const properties = isRecord(schema.properties) ? schema.properties : {};
+    const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+    const keys = [...new Set([...Object.keys(properties), ...required])];
+    if (
+      keys.length > limits.maxProperties ||
+      !keys.every(
+        (key): key is string =>
+          typeof key === "string" && key.length <= MAX_COMPACT_SCHEMA_PROPERTY_NAME_CHARS,
+      )
+    ) {
+      return UNKNOWN_HINT;
+    }
+    const fields = keys.toSorted().map((key) => {
+      const hint = compactSchemaType(properties[key], depth, limits);
+      return (
+        (IDENTIFIER_RE.test(key) ? key : JSON.stringify(key)) +
+        (required.has(key) ? "" : "?") +
+        ": " +
+        (hint.complete ? hint.text : "unknown")
+      );
+    });
+    // TS index signatures cover named fields too, unlike additionalProperties.
+    if (schema.additionalProperties !== false) {
+      const extra = compactSchemaType(schema.additionalProperties, depth, limits);
+      fields.push(
+        "[key: string]: " + (keys.length === 0 && extra.complete ? extra.text : "unknown"),
+      );
+    }
+    return completeHint(fields.length ? "{ " + fields.join("; ") + " }" : "Record<string, never>");
+  }
   if (!isRecord(schema.properties)) {
     const requiredValues = Array.isArray(schema.required) ? schema.required : [];
     const required =
@@ -311,7 +350,13 @@ function compactSchemaType(
   depth = 0,
   limits: CompactSchemaLimits = INPUT_LIMITS,
 ): SchemaHint {
+  if (limits.remainingNodes && --limits.remainingNodes.value < 0) {
+    return UNKNOWN_HINT;
+  }
   if (!isRecord(schema)) {
+    return limits.declaration && schema === false ? completeHint("never") : UNKNOWN_HINT;
+  }
+  if (limits.declaration && UNSUPPORTED_SHAPE_KEYWORDS.some((key) => Object.hasOwn(schema, key))) {
     return UNKNOWN_HINT;
   }
   // An empty schema is JSON Schema's top type: it accepts any value, so
@@ -340,7 +385,7 @@ function compactSchemaType(
   if (literal !== undefined) {
     return finish(completeHint(literal));
   }
-  const enumUnion = compactLiteralUnion(schema.enum);
+  const enumUnion = compactLiteralUnion(schema.enum, limits);
   if (enumUnion) {
     return finish(enumUnion);
   }
@@ -393,6 +438,22 @@ function compactSchemaType(
     return finish(completeHint(type));
   }
   return UNKNOWN_HINT;
+}
+
+/** Full bounded declaration from the same schema as the compact hints.
+ * Unsupported shapes remain unknown; runtime validation still owns constraints.
+ */
+export function toolSchemaDeclaration(schema: unknown): string {
+  const limits: CompactSchemaLimits = {
+    maxChars: 32_768,
+    maxDepth: 12,
+    maxProperties: 256,
+    numericInputConstraints: true,
+    declaration: true,
+    remainingNodes: { value: 4096 },
+  };
+  const hint = compactSchemaType(schema, 0, limits);
+  return hint.complete && hint.text.length <= limits.maxChars ? hint.text : "unknown";
 }
 
 /** Compact one tool input schema. Unknown inputs remain explicit for safe describe fallback. */

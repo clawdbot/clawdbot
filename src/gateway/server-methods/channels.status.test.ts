@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelStatusIssue } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
@@ -22,6 +23,7 @@ type ChannelTestPlugin = {
   status?: {
     probeAccount?: (params?: unknown) => unknown;
     buildChannelSummary?: () => unknown;
+    collectStatusIssues?: () => ChannelStatusIssue[];
   };
 };
 
@@ -100,6 +102,7 @@ function createChannelPlugin(
     id?: string;
     probeAccount?: (params?: unknown) => unknown;
     buildChannelSummary?: () => unknown;
+    collectStatusIssues?: () => ChannelStatusIssue[];
   } = {},
 ): ChannelTestPlugin {
   return {
@@ -110,12 +113,15 @@ function createChannelPlugin(
       isEnabled: () => true,
       isConfigured: async (_account, cfg) => Boolean(cfg.autoEnabled),
     },
-    ...(params.probeAccount || params.buildChannelSummary
+    ...(params.probeAccount || params.buildChannelSummary || params.collectStatusIssues
       ? {
           status: {
             ...(params.probeAccount ? { probeAccount: params.probeAccount } : {}),
             ...(params.buildChannelSummary
               ? { buildChannelSummary: params.buildChannelSummary }
+              : {}),
+            ...(params.collectStatusIssues
+              ? { collectStatusIssues: params.collectStatusIssues }
               : {}),
           },
         }
@@ -228,6 +234,83 @@ describe("channelsHandlers channels.status", () => {
     const channels = requireGatewayRecord(payload.channels, "channels payload");
     const whatsapp = requireGatewayRecord(channels.whatsapp, "whatsapp channel");
     expect(whatsapp.configured).toBe(true);
+  });
+
+  it("reports policy and deferred publication without changing healthy transport status", async () => {
+    const policyIssue: ChannelStatusIssue = {
+      channel: "guildchat",
+      accountId: "default",
+      kind: "config",
+      message: "No groups are allowed.",
+      fix: "Add an allowed group.",
+    };
+    configureAutoEnabledChannels([
+      createChannelPlugin({ id: "guildchat", collectStatusIssues: () => [policyIssue] }),
+      createChannelPlugin({ id: "sibling" }),
+    ]);
+    mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      lastError: null,
+    });
+    const options = createOptions({});
+    options.context.getDeferredChannelReloads = () => [
+      { channel: "guildchat", publicationPending: true },
+      { channel: "unselected", publicationPending: true },
+    ];
+
+    const payload = await runChannelsStatus({ channel: "guildchat" }, { context: options.context });
+
+    expect(payload.statusIssues).toEqual([
+      policyIssue,
+      expect.objectContaining({
+        channel: "guildchat",
+        kind: "config",
+        message: expect.stringContaining("previous configuration is still in use"),
+        fix: expect.stringContaining("Stopping and starting the channel does not apply"),
+      }),
+    ]);
+    expect(firstChannelAccount(payload, "guildchat")).toMatchObject({
+      running: true,
+      connected: true,
+      lastError: null,
+    });
+    expect(payload.partial).toBeUndefined();
+    expect(payload.warnings).toBeUndefined();
+  });
+
+  it("clears deferred diagnostics and distinguishes work after publication", async () => {
+    const options = createOptions({});
+    options.context.getDeferredChannelReloads = () => [
+      { channel: "whatsapp", publicationPending: false },
+    ];
+    const payload = await runChannelsStatus({}, { context: options.context });
+    expect(payload.statusIssues).toEqual([
+      expect.objectContaining({
+        message: "Channel reload is deferred while active work finishes.",
+      }),
+    ]);
+    options.context.getDeferredChannelReloads = () => [];
+    expect((await runChannelsStatus({}, { context: options.context })).statusIssues).toEqual([]);
+  });
+
+  it("retains account status when a plugin diagnostic collector fails", async () => {
+    configureAutoEnabledChannels([
+      createChannelPlugin({
+        collectStatusIssues: () => {
+          throw new Error("diagnostic unavailable");
+        },
+      }),
+    ]);
+    const payload = await runChannelsStatus({});
+    expect(firstChannelAccount(payload, "whatsapp").configured).toBe(true);
+    expect(payload.partial).toBe(true);
+    expect(payload.warnings).toContain(
+      "whatsapp status diagnostics failed: Error: diagnostic unavailable",
+    );
   });
 
   it("redacts base URL credentials returned by channel summary hooks", async () => {

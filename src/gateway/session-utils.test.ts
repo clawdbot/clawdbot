@@ -13,6 +13,7 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/con
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
+import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import {
   appendTranscriptMessageSync,
   listSessionChildEntriesReadOnly,
@@ -61,6 +62,7 @@ import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
 } from "./session-utils-store.js";
+import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 
 const providerArtifactMocks = vi.hoisted(() => ({
   resolveBundledProviderPolicySurface: vi.fn<
@@ -721,6 +723,28 @@ describe("gateway session utils", () => {
     expect(all.sessions.map((session) => session.key)).toEqual(["pinned", "recent", "archived"]);
   });
 
+  test.each([
+    ["agent:main:dashboard:child", { spawnedBy: "agent:main:main" }],
+    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:main" }],
+    ["agent:main:subagent:child", {}],
+  ] as const)(
+    "ignores stale child pins in session list projection and ordering: %s %j",
+    async (key, lineage) => {
+      const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+      const store: Record<string, SessionEntry> = {
+        "agent:main:dashboard:root": { sessionId: "root", updatedAt: 30 },
+        [key]: { sessionId: "child", updatedAt: 10, pinnedAt: 40, ...lineage },
+      };
+      for (const limit of [undefined, 2]) {
+        const listed = await listSessionFixture({ cfg, storePath: "", store, opts: { limit } });
+        const child = listed.sessions.find((row) => row.key === key);
+        expect.soft(child?.pinned).toBe(false);
+        expect.soft(child?.pinnedAt).toBeUndefined();
+        expect(listed.sessions.map((row) => row.key)).toEqual(["agent:main:dashboard:root", key]);
+      }
+    },
+  );
+
   test("session lists page from an offset after filtering and sorting", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(
@@ -1107,6 +1131,80 @@ describe("gateway session utils", () => {
     expect(row).toMatchObject({ contextWindow: "200k", contextTokens: 200_000 });
     expect(row.contextWindows).toEqual(catalog[0]?.contextWindows);
   });
+
+  test.each([
+    { before: 32_000, after: 128_000, reserve: 8_000 },
+    { before: 128_000, after: 32_000, reserve: 20_000 },
+  ])(
+    "projects the new cap immediately after a $before → $after context selection",
+    ({ before, after, reserve }) => {
+      const catalog = [
+        {
+          provider: "ollama",
+          id: "qwen3:8b",
+          name: "Qwen",
+          contextWindow: 128_000,
+          api: "ollama" as const,
+          contextWindows: [
+            { id: "32000", label: "32K", contextWindow: 32_000 },
+            { id: "128000", label: "128K", contextWindow: 128_000 },
+          ],
+        },
+      ];
+      const cfg = createModelDefaultsConfig({
+        primary: "ollama/qwen3:8b",
+        agentRuntime: { id: "openclaw" },
+      });
+      const entry: SessionEntry = {
+        sessionId: "session-1",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "qwen3:8b",
+        agentHarnessId: "openclaw",
+        contextWindow: String(before),
+        contextTokens: before,
+        contextTokensSource: "runtime",
+        contextBudgetStatus: contextBudgetStatusFixture({
+          contextTokenBudget: before,
+          promptBudgetBeforeReserve: before - reserve,
+          reserveTokens: reserve,
+          effectiveReserveTokens: reserve,
+          estimatedPromptTokens: 1_000,
+          remainingPromptBudgetTokens: before - reserve - 1_000,
+        }),
+      };
+      const previousRow = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry,
+        modelCatalog: catalog,
+      });
+      expect(previousRow.contextTokens).toBe(before);
+      expect(previousRow.agentRuntime?.id).toBe(entry.agentHarnessId);
+      const patch = applySessionContextWindowPatch({
+        next: entry,
+        patch: { key: "agent:main:main", contextWindow: String(after) },
+        defaultProvider: "ollama",
+        defaultModel: "qwen3:8b",
+        loadModelCatalog: function* () {
+          return catalog;
+        },
+      });
+      expect(patch.next().value).toEqual({ ok: true });
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry,
+        modelCatalog: catalog,
+      });
+      expect(row.contextTokens).toBe(after);
+      expect(row.contextBudgetStatus).toBeUndefined();
+    },
+  );
 
   test("session rows project automation bindings and event fields forward them", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
@@ -2146,9 +2244,46 @@ describe("gateway session utils", () => {
     });
   });
 
+  test.each(["runtime", "resolved"] as const)(
+    "keeps a local prompt budget below the native window with %s provenance",
+    (contextTokensSource) => {
+      const status = contextBudgetStatusFixture();
+      const row = buildGatewaySessionRow({
+        cfg: createModelDefaultsConfig({ primary: "ollama/qwen3:8b" }),
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        modelCatalog: [
+          {
+            provider: "ollama",
+            id: "qwen3:8b",
+            name: "Qwen",
+            contextWindow: 262_144,
+            contextTokens: 200_000,
+          },
+        ],
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 2,
+          modelProvider: "ollama",
+          model: "qwen3:8b",
+          agentHarnessId: "openclaw",
+          contextTokens: 200_000,
+          contextTokensSource,
+          contextBudgetStatus: status,
+        },
+      });
+      expect(row.contextTokens).toBe(200_000);
+      expect(row.contextBudgetStatus).toEqual(status);
+    },
+  );
+
   test("session rows expose estimated context budget status", () => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4.6" }),
+      modelCatalog: [
+        { provider: "anthropic", id: "claude-sonnet-4.6", name: "Sonnet", contextWindow: 200_000 },
+      ],
       storePath: "",
       store: {},
       key: "agent:main:main",

@@ -324,7 +324,7 @@ export function renderSegmentedControl(params: {
   resolvedValue: unknown;
   disabled: boolean;
   ariaLabel: string;
-  onSelect: (value: unknown) => void;
+  onSelect: (value: unknown) => boolean | void;
 }): TemplateResult {
   const selectedIndex = params.options.findIndex((option) =>
     matchesComparablePrimitiveValue(option, params.resolvedValue),
@@ -340,7 +340,7 @@ export function renderSegmentedControl(params: {
     onChange: (index) => {
       const option = params.options[Number(index)];
       if (option !== undefined) {
-        params.onSelect(option);
+        return params.onSelect(option);
       }
     },
   });

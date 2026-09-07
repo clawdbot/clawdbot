@@ -1,15 +1,8 @@
-// Control UI tests cover cron schedule and session token presentation.
 import { afterEach, describe, expect, it } from "vitest";
-import type { CronJob, GatewaySessionRow } from "../api/types.ts";
+// Control UI tests cover cron schedule presentation.
+import { contextBudgetStatusFixture } from "../../../src/config/sessions/context-budget.test-support.js";
+import type { CronJob } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
-import {
-  CATALOG_CONTEXT_TOKENS,
-  COMPACTION_RESERVE_TOKENS,
-  createContextBudgetStatusFixture,
-  PRESSURED_PROMPT_TOKENS,
-  SESSION_CONTEXT_TOKEN_BUDGET,
-  STALE_CONTEXT_TOKEN_BUDGET,
-} from "../test-helpers/context-budget-status-fixture.ts";
 import { formatCronPayload, formatCronSchedule, formatSessionTokens } from "./presenter.ts";
 
 function job(schedule: CronJob["schedule"]): CronJob {
@@ -89,55 +82,15 @@ describe("formatCronPayload", () => {
   });
 });
 
-describe("formatSessionTokens", () => {
-  function sessionRow(
-    contextBudgetStatus?: GatewaySessionRow["contextBudgetStatus"],
-    contextTokens: number = CATALOG_CONTEXT_TOKENS,
-  ) {
-    return {
-      key: "agent:main:main",
+it("formats session detail against its last-run prompt budget", () => {
+  expect(
+    formatSessionTokens({
+      key: "main",
       kind: "direct",
-      updatedAt: null,
-      totalTokens: PRESSURED_PROMPT_TOKENS,
-      contextTokens,
-      contextBudgetStatus,
-    } satisfies GatewaySessionRow;
-  }
-
-  // The sessions detail row sits directly under the context meter, so it has to
-  // name the same limit the meter divides by.
-  it("prints the budget compaction triggers on", () => {
-    expect(
-      formatSessionTokens(
-        sessionRow(
-          createContextBudgetStatusFixture({
-            contextTokenBudget: SESSION_CONTEXT_TOKEN_BUDGET,
-            reserveTokens: COMPACTION_RESERVE_TOKENS,
-            estimatedPromptTokens: PRESSURED_PROMPT_TOKENS,
-          }),
-        ),
-      ),
-    ).toBe("160000 / 180000");
-  });
-
-  // The row and the meter above it have to keep naming one limit, so the detail
-  // row follows the same cap bound rather than the retained snapshot's 980000.
-  it("prints the lowered cap's budget for an idle session", () => {
-    expect(
-      formatSessionTokens(
-        sessionRow(
-          createContextBudgetStatusFixture({
-            contextTokenBudget: STALE_CONTEXT_TOKEN_BUDGET,
-            reserveTokens: COMPACTION_RESERVE_TOKENS,
-            estimatedPromptTokens: PRESSURED_PROMPT_TOKENS,
-          }),
-          SESSION_CONTEXT_TOKEN_BUDGET,
-        ),
-      ),
-    ).toBe("160000 / 180000");
-  });
-
-  it("falls back to the catalog window without a budget snapshot", () => {
-    expect(formatSessionTokens(sessionRow())).toBe("160000 / 262144");
-  });
+      updatedAt: 2,
+      totalTokens: 160_000,
+      contextTokens: 200_000,
+      contextBudgetStatus: contextBudgetStatusFixture(),
+    }),
+  ).toBe("160000 / 180000");
 });

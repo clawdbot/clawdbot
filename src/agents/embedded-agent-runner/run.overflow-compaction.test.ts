@@ -574,6 +574,32 @@ describe("createEmbeddedRunCompactionRuntime", () => {
     expect(fixture.sessionPromptState.committedCompactionSuccessor).toBeUndefined();
   });
 
+  it("retires MCP predecessors when an in-memory compaction rotates identity", async () => {
+    const fixture = await createRuntime();
+    const { getOrCreateSessionMcpRuntime } =
+      await import("../agent-bundle-mcp-manager.test-support.js");
+    const { getSessionMcpRuntimeManagerForTesting } =
+      await import("../agent-bundle-mcp-manager-api.js");
+    const manager = getSessionMcpRuntimeManagerForTesting();
+    const create = (sessionId: string) =>
+      getOrCreateSessionMcpRuntime({
+        sessionId,
+        sessionKey: fixture.currentTarget.sessionKey,
+        workspaceDir: path.dirname(fixture.currentTarget.storePath),
+        cfg: { mcp: { servers: {} } },
+        manifestRegistry: { plugins: [] },
+      });
+    try {
+      await create(fixture.currentTarget.sessionId);
+      const successor = await create("rotated-session");
+      await fixture.runtime.adoptCompactionTranscript(fixture.compactResult);
+      expect(manager.peekSession({ sessionId: fixture.currentTarget.sessionId })).toBeUndefined();
+      expect(manager.peekSession({ sessionId: successor.sessionId })).toBe(successor);
+    } finally {
+      await manager.disposeAll();
+    }
+  });
+
   it("fires ownership hooks against the rotated compacted transcript", async () => {
     const fixture = await createRuntime();
     await fixture.runtime.runOwnsCompactionBeforeHook("overflow recovery");

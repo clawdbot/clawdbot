@@ -1,5 +1,6 @@
-// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -15,14 +16,6 @@ import {
   createModelCatalog,
   OPENAI_GPT5_MINI_MODEL,
 } from "../../test-helpers/chat-model.ts";
-import {
-  CATALOG_CONTEXT_TOKENS,
-  COMPACTION_RESERVE_TOKENS,
-  createContextBudgetStatusFixture,
-  PRESSURED_PROMPT_TOKENS,
-  SESSION_CONTEXT_TOKEN_BUDGET,
-  STALE_CONTEXT_TOKEN_BUDGET,
-} from "../../test-helpers/context-budget-status-fixture.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-executor.ts";
@@ -751,100 +744,6 @@ describe("executeSlashCommand directives", () => {
         t("chat.commandResults.usage.outputTokens", { count: "**300**" }),
         t("chat.commandResults.usage.totalTokens", { count: "**1.5k**" }),
         t("chat.commandResults.usage.context", { percent: "**31%**", total: "4k" }),
-        t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
-      ].join("\n"),
-    );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-  });
-
-  it("measures /usage against the budget compaction triggers on", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              model: "gpt-4.1-mini",
-              inputTokens: 120_000,
-              outputTokens: 9_000,
-              totalTokens: PRESSURED_PROMPT_TOKENS,
-              contextTokens: CATALOG_CONTEXT_TOKENS,
-              contextBudgetStatus: createContextBudgetStatusFixture({
-                contextTokenBudget: SESSION_CONTEXT_TOKEN_BUDGET,
-                reserveTokens: COMPACTION_RESERVE_TOKENS,
-                estimatedPromptTokens: PRESSURED_PROMPT_TOKENS,
-                provider: "openai",
-                model: "gpt-4.1-mini",
-              }),
-            }),
-          ],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "usage",
-      "",
-    );
-
-    // The catalog window would report 61% of 262.1k for the same session.
-    expect(result.content).toBe(
-      [
-        `**${t("chat.commandResults.usage.title")}**`,
-        t("chat.commandResults.usage.inputTokens", { count: "**120k**" }),
-        t("chat.commandResults.usage.outputTokens", { count: "**9k**" }),
-        t("chat.commandResults.usage.totalTokens", { count: "**129k**" }),
-        t("chat.commandResults.usage.context", { percent: "**89%**", total: "180k" }),
-        t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
-      ].join("\n"),
-    );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-  });
-
-  it("measures /usage against a cap lowered under an idle session's snapshot", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              model: "gpt-4.1-mini",
-              inputTokens: 120_000,
-              outputTokens: 9_000,
-              totalTokens: PRESSURED_PROMPT_TOKENS,
-              // The row already carries the lowered cap; the snapshot predates
-              // it and nothing refreshes it until the session runs again.
-              contextTokens: SESSION_CONTEXT_TOKEN_BUDGET,
-              contextBudgetStatus: createContextBudgetStatusFixture({
-                contextTokenBudget: STALE_CONTEXT_TOKEN_BUDGET,
-                reserveTokens: COMPACTION_RESERVE_TOKENS,
-                estimatedPromptTokens: PRESSURED_PROMPT_TOKENS,
-                provider: "openai",
-                model: "gpt-4.1-mini",
-              }),
-            }),
-          ],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "usage",
-      "",
-    );
-
-    // The retained snapshot would report 16% of 980k for the same session.
-    expect(result.content).toBe(
-      [
-        `**${t("chat.commandResults.usage.title")}**`,
-        t("chat.commandResults.usage.inputTokens", { count: "**120k**" }),
-        t("chat.commandResults.usage.outputTokens", { count: "**9k**" }),
-        t("chat.commandResults.usage.totalTokens", { count: "**129k**" }),
-        t("chat.commandResults.usage.context", { percent: "**89%**", total: "180k" }),
         t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
       ].join("\n"),
     );
@@ -1858,3 +1757,22 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("reports the last-run prompt budget through /usage", async () => {
+  const request = vi.fn(async () => ({
+    sessions: [
+      row("agent:main:main", {
+        totalTokens: 160_000,
+        contextTokens: 200_000,
+        contextBudgetStatus: contextBudgetStatusFixture(),
+      }),
+    ],
+  }));
+  const result = await executeSlashCommand(
+    createTestGatewayClient(request),
+    "agent:main:main",
+    "usage",
+    "",
+  );
+  expect(result.content).toContain("Prompt budget (last run): **89%** of 180k");
+});

@@ -1033,25 +1033,7 @@ grep -q '^build -t demo-image .$' "$TMPDIR/docker-seen"
 
   it("prints heartbeat progress for long successful centralized Docker builds", () => {
     const workDir = tempDirs.make("openclaw-docker-build-heartbeat-");
-    writeExecutables(join(workDir, "bin"), {
-      timeout: `#!/bin/bash
-set -euo pipefail
-if [[ "$1" = "--kill-after=1s" ]]; then
-  exit 0
-fi
-shift 2
-"$@"
-`,
-      docker: `#!/bin/sh
-printf "captured docker build log\\n"
-/bin/sleep 0.05
-`,
-    });
-
     const script = repoShell(workDir)`
-export PATH="$TMPDIR/bin:$PATH"
-export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=1
-
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
 printf "captured docker build log\\n" >"$TMPDIR/build.log"
@@ -2985,7 +2967,9 @@ docker_e2e_docker_run_cmd run demo
       "send $'\\r'",
       'wait_for_log "How should I set things up?"',
       "send $'\\r'",
-      'wait_for_log "Use Current model?"',
+      'wait_for_log "Model/auth provider"',
+      "send $'\\r'",
+      'wait_for_log "Use which detected AI?"',
       "send $'\\r'",
     ]);
   });
@@ -4564,6 +4548,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
         env: {
           ...process.env,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(childPath)}`,
         },
         stdio: "ignore",
@@ -5190,6 +5175,7 @@ exit 0
           ...process.env,
           COUNT_FILE: countPath,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
         },
         stdio: "ignore",
@@ -5224,6 +5210,7 @@ exit 0
         env: {
           ...process.env,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
           STATE_FILE: statePath,
         },
@@ -5275,6 +5262,7 @@ process.exit(starts === 1 ? 1 : 78);
           ...process.env,
           OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:43123",
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
           URLS_FILE: urlsPath,
         },
@@ -5339,6 +5327,7 @@ setInterval(() => {}, 1_000);
             DESCENDANT_PID_FILE: descendantPidPath,
             DESCENDANT_SCRIPT: descendantPath,
             OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
             OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
             STATE_FILE: statePath,
           },
@@ -5423,6 +5412,7 @@ if (starts === 1) {
             DESCENDANT_PID_FILE: descendantPidPath,
             DESCENDANT_SCRIPT: descendantPath,
             OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
             OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
             REPLACEMENT_FILE: replacementPath,
             STARTS_FILE: startsPath,
@@ -6127,8 +6117,15 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     );
     expect(packageRunner.match(/verify-fs-safe-native\.mjs[^\n]+--mode require/gu)).toHaveLength(3);
     expect(packageRunner).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(packageRunner.match(/-e OPENCLAW_FS_SAFE_NATIVE_CONTRACT/g)).toHaveLength(4);
+    expectTextToIncludeAll(packageRunner, [
+      'MUSL_FS_SAFE_NATIVE_OUTCOME="passed"',
+      'MUSL_FS_SAFE_NATIVE_OUTCOME="not-applicable"',
+      '--detail "musl:fsSafeNative=$MUSL_FS_SAFE_NATIVE_OUTCOME"',
+    ]);
     expect(updateRunner).toContain('mv "$platform_package" "$platform_package.omitted"');
     expect(updateRunner).toContain("--mode fallback");
+    expect(updateRunner).toContain("-e OPENCLAW_FS_SAFE_NATIVE_CONTRACT");
   });
 
   it("verifies fs-safe through a pnpm-style linked package root", () => {

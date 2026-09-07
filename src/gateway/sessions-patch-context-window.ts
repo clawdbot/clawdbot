@@ -24,6 +24,9 @@ export function* applySessionContextWindowPatch(params: {
     }
     if (previous !== params.next.contextWindow) {
       params.next.liveModelSwitchPending = true;
+      delete params.next.contextTokens;
+      delete params.next.contextTokensSource;
+      delete params.next.contextBudgetStatus;
     }
   }
   if (!("contextWindow" in params.patch) && !("model" in params.patch)) {

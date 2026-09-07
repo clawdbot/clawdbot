@@ -20,7 +20,6 @@ import { controlUiPluginAssetRoot } from "../src/gateway/control-ui-plugin-asset
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
-import { createContextBudgetStatusFixture } from "../ui/src/test-helpers/context-budget-status-fixture.ts";
 import {
   controlUiSessionPath,
   createControlUiMockBootstrapConfig,
@@ -1782,16 +1781,9 @@ async function createChatPickerScenario(
     sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
       activeRunIds: [PLAN_DEMO_RUN_ID],
       childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
-      contextBudgetStatus: createContextBudgetStatusFixture({
-        contextTokenBudget: 200_000,
-        reserveTokens: 20_000,
-        estimatedPromptTokens: 160_000,
-        provider: "openai",
-        model: "gpt-5.6-luna",
-      }),
       hasActiveRun: true,
       status: "running",
-      totalTokens: 160_000,
+      totalTokens: 170_000,
       totalTokensFresh: true,
       ...(fixture === "goal" ? { goal: activeGoal } : {}),
     }),
@@ -2227,12 +2219,7 @@ async function createChatPickerScenario(
               configured: true,
               defaultModel: "gpt-realtime-2.1",
               transports: ["webrtc", "gateway-relay"],
-              models: [
-                "gpt-realtime-2.1",
-                "gpt-realtime-2.1-mini",
-                "gpt-realtime-2",
-                "gpt-live-1-codex",
-              ],
+              models: ["gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"],
               voices: [
                 "alloy",
                 "ash",
