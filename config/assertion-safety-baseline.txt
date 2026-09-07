@@ -2551,7 +2551,6 @@ src/config/io.write-prepare.ts	12
 src/config/io.write-safety.ts	4
 src/config/io.write.ts	6
 src/config/issue-location.ts	2
-src/config/legacy-private-network-migration.ts	1
 src/config/legacy.default-agent-roles.ts	1
 src/config/legacy.roster.ts	13
 src/config/legacy.ts	3
