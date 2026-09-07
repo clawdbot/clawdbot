@@ -11,6 +11,7 @@ import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { FsSafeError, readRegularFile } from "../infra/fs-safe.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
@@ -65,6 +66,11 @@ export {
 export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
 export { definePluginDoctorMigrationFromPlans } from "./doctor-migration-plan-adapter.js";
 export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
+
+/** Default bounded read for bundled legacy JSON doctor migrations. */
+export const LEGACY_JSON_MIGRATION_MAX_BYTES = 8 * 1024 * 1024;
+/** Optional recovery bound for migrations that explicitly support larger sources. */
+export const LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES = 64 * 1024 * 1024;
 
 type KeyMoveValue = { value: unknown };
 type KeyMoveChangeContext = {
@@ -399,6 +405,15 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   parse: (value: unknown) => TSource | null;
   namespace: string;
   maxEntries: number;
+  /** Optional byte cap for the first read; omitted to preserve legacy behavior. */
+  maxBytes?: number;
+  /** Optional second bounded read attempted after the first cap is exceeded. */
+  recoveryMaxBytes?: number;
+  /** Custom preview and warning when the final bounded read is still oversized. */
+  oversizedSource?: (params: { filePath: string; maxBytes: number }) => {
+    warning: string;
+    preview: string;
+  };
   overflowPolicy?: OpenKeyedStoreOptions["overflowPolicy"];
   archiveLabel?: string;
   capacityPrecheck?: {
@@ -413,15 +428,65 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   };
   toRows: (source: TSource) => readonly { key: string; value: unknown }[];
 }): PluginDoctorStateMigration {
-  const readSource = async (filePath: string): Promise<TSource | null> => {
+  type ReadSourceResult =
+    | { kind: "loaded"; source: TSource }
+    | { kind: "oversized"; maxBytes: number }
+    | { kind: "unavailable" };
+
+  // Preserve the historical unbounded read for callers that do not opt into
+  // a migration-specific limit. Bundled migrations pass explicit limits when
+  // they need bounded recovery.
+  const maxBytes = params.maxBytes;
+
+  const readSource = async (
+    filePath: string,
+    limit: number | undefined,
+  ): Promise<ReadSourceResult> => {
+    let buffer: Buffer;
     try {
-      return params.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
+      if (limit === undefined) {
+        // Preserve the historical fs.readFile contract for callers that omit
+        // maxBytes, including following a symlinked legacy source.
+        buffer = await fs.readFile(filePath);
+      } else {
+        // Resolve intentional legacy links before the bounded regular-file read;
+        // keep filePath unchanged so archiveLegacyStateSource moves the link.
+        const resolvedFilePath = await fs.realpath(filePath);
+        ({ buffer } = await readRegularFile({ filePath: resolvedFilePath, maxBytes: limit }));
       }
-      return null;
+    } catch (err) {
+      if (limit !== undefined && err instanceof FsSafeError && err.code === "too-large") {
+        return { kind: "oversized", maxBytes: limit };
+      }
+      if (hasErrnoCode(err, "ENOENT")) {
+        return { kind: "unavailable" };
+      }
+      throw err;
     }
+    const source = params.parse(JSON.parse(buffer.toString("utf8")) as unknown);
+    return source === null ? { kind: "unavailable" } : { kind: "loaded", source };
+  };
+
+  const readSourceWithRecovery = async (filePath: string): Promise<ReadSourceResult> => {
+    const fast = await readSource(filePath, maxBytes);
+    if (fast.kind !== "oversized" || params.recoveryMaxBytes === undefined) {
+      return fast;
+    }
+    return await readSource(filePath, params.recoveryMaxBytes);
+  };
+
+  const oversizedSourceMessages = (filePath: string, limit: number) =>
+    params.oversizedSource?.({ filePath, maxBytes: limit }) ?? {
+      warning: `Skipped ${params.label} migration because ${filePath} exceeds ${limit} bytes; left legacy source in place`,
+      preview: `- ${params.label}: legacy source exceeds ${limit} bytes; left in place`,
+    };
+
+  const readMigrationSource = async (filePath: string) => {
+    const result = await readSourceWithRecovery(filePath);
+    if (result.kind === "oversized") {
+      return { source: null, oversized: oversizedSourceMessages(filePath, result.maxBytes) };
+    }
+    return { source: result.kind === "loaded" ? result.source : null, oversized: null };
   };
   const describe = (source: TSource, filePath: string) =>
     params.describeEntries(source, { filePath, namespace: params.namespace });
@@ -431,7 +496,10 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
     label: params.label,
     async detectLegacyState({ stateDir }) {
       const filePath = params.resolvePath(stateDir);
-      const source = await readSource(filePath);
+      const { source, oversized } = await readMigrationSource(filePath);
+      if (oversized) {
+        return { preview: [oversized.preview] };
+      }
       if (!source) {
         return null;
       }
@@ -446,7 +514,11 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
       const changes: string[] = [];
       const warnings: string[] = [];
       const filePath = params.resolvePath(stateDir);
-      const source = await readSource(filePath);
+      const { source, oversized } = await readMigrationSource(filePath);
+      if (oversized) {
+        warnings.push(oversized.warning);
+        return { changes, warnings };
+      }
       if (!source) {
         return { changes, warnings };
       }

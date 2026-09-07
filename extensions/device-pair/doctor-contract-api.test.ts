@@ -7,9 +7,11 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type {
-  OpenKeyedStoreOptions,
-  PluginDoctorStateMigrationContext,
+import {
+  LEGACY_JSON_MIGRATION_MAX_BYTES,
+  LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES,
+  type OpenKeyedStoreOptions,
+  type PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
@@ -204,6 +206,29 @@ describe("device-pair doctor notify migration", () => {
     ).resolves.toEqual(subscriber);
   });
 
+  it("imports symlinked legacy notify subscribers under the file cap", async () => {
+    const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
+    const targetPath = path.join(stateDir, "device-pair-notify-state-target.json");
+    const subscriber = expectDefined(legacySubscribers(1)[0], "symlinked subscriber");
+    const source = JSON.stringify({ subscribers: [subscriber], notifiedRequestIds: {} });
+    await fs.writeFile(targetPath, source, "utf8");
+    await fs.symlink(targetPath, sourcePath);
+
+    const migration = expectDefined(stateMigrations[0], "device-pair state migration");
+    const result = await migration.migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Device Pair notify subscribers -> plugin state (1 imported, 0 already present)",
+      expect.stringContaining("Archived Device Pair notify-state legacy source"),
+    ]);
+    const archivePath = `${sourcePath}.migrated`;
+    await expect(fs.readFile(archivePath, "utf8")).resolves.toBe(source);
+    expect((await fs.lstat(archivePath)).isSymbolicLink()).toBe(true);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+    await expect(openSubscribers().entries()).resolves.toHaveLength(1);
+  });
+
   it("ignores legacy notify files that only contain cache state", async () => {
     const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
     await fs.writeFile(
@@ -223,5 +248,75 @@ describe("device-pair doctor notify migration", () => {
       warnings: [],
     });
     await fs.access(sourcePath);
+  });
+
+  it("recovers subscribers from a legacy notify source above the fast read cap", async () => {
+    const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
+    const subscriber: NotifySubscription = {
+      to: "chat-oversized",
+      accountId: "telegram-default",
+      messageThreadId: 271,
+      mode: "persistent",
+      addedAtMs: 1,
+    };
+    const payload = JSON.stringify({
+      subscribers: [subscriber],
+      notifiedRequestIds: {},
+      padding: "x".repeat(LEGACY_JSON_MIGRATION_MAX_BYTES),
+    });
+    expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(LEGACY_JSON_MIGRATION_MAX_BYTES);
+    await fs.writeFile(sourcePath, payload, "utf8");
+
+    const migration = expectDefined(stateMigrations[0], "device-pair state migration");
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toMatchObject({
+      preview: [expect.stringContaining("Device Pair notify subscribers")],
+    });
+
+    const result = await migration.migrateLegacyState(migrationParams());
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Device Pair notify subscribers -> plugin state (1 imported, 0 already present)",
+      expect.stringContaining("Archived Device Pair notify-state legacy source"),
+    ]);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+    await expect(
+      createDoctorContext(env)
+        .openPluginStateKeyedStore<NotifySubscription>({
+          namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+          maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
+        })
+        .lookup(notifySubscriberStoreKey(subscriber)),
+    ).resolves.toEqual(subscriber);
+  });
+
+  it("keeps an unprocessable notify source above the recovery budget", async () => {
+    const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
+    await fs.writeFile(sourcePath, "", "utf8");
+    await fs.truncate(sourcePath, LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES + 1);
+
+    const migration = expectDefined(stateMigrations[0], "device-pair state migration");
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toMatchObject({
+      preview: [
+        expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES} bytes`),
+      ],
+    });
+
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [
+        expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES} bytes`),
+      ],
+    });
+    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
+    await expect(
+      createDoctorContext(env)
+        .openPluginStateKeyedStore<NotifySubscription>({
+          namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+          maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
+        })
+        .entries(),
+    ).resolves.toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import fs, { readFile as readFileUnmocked } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineLegacyJsonStateMigration } from "../plugin-sdk/runtime-doctor-migrations.js";
@@ -72,7 +72,7 @@ describe("legacy JSON plugin migration diagnostics", () => {
         if (fault !== "ENOENT") {
           await fs.writeFile(sourcePath, source, "utf8");
         }
-        const readFile = fs.readFile.bind(fs);
+        const readFile = readFileUnmocked;
         let sourceReads = 0;
         vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
           if (filePath === sourcePath) {

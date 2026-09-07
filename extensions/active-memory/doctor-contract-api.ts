@@ -8,6 +8,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asObjectRecord,
   defineLegacyJsonStateMigration,
+  LEGACY_JSON_MIGRATION_MAX_BYTES,
+  LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
@@ -21,6 +23,9 @@ const TOGGLE_STATE_FILE = "session-toggles.json";
 const SESSION_TOGGLES_NAMESPACE = "session-toggles";
 const MAX_TOGGLE_ENTRIES = 10_000;
 const RETIRED_QMD_CONFIG_PATH = ["plugins", "entries", "active-memory", "config", "qmd"];
+
+export const LEGACY_TOGGLE_STATE_MAX_BYTES = LEGACY_JSON_MIGRATION_MAX_BYTES;
+export const LEGACY_TOGGLE_RECOVERY_MAX_BYTES = LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES;
 
 /** Retired Active Memory QMD override detected before strict manifest validation. */
 export const legacyConfigRules = [
@@ -67,13 +72,18 @@ function normalizeLegacyUpdatedAt(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
 }
 
-function parseLegacyToggleEntries(parsed: unknown): ActiveMemoryToggleEntry[] | null {
+/**
+ * Parses legacy toggle JSON with tolerant per-record semantics: malformed
+ * records are skipped, non-true disabled values are ignored, and invalid
+ * timestamps are normalized.
+ */
+function parseLegacyToggleEntries(parsed: unknown): ActiveMemoryToggleEntry[] {
   if (!parsed || typeof parsed !== "object") {
-    return null;
+    return [];
   }
   const sessions = (parsed as { sessions?: unknown }).sessions;
   if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
-    return null;
+    return [];
   }
   const entries: ActiveMemoryToggleEntry[] = [];
   for (const [sessionKey, value] of Object.entries(sessions)) {
@@ -98,6 +108,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     parse: parseLegacyToggleEntries,
     namespace: SESSION_TOGGLES_NAMESPACE,
     maxEntries: MAX_TOGGLE_ENTRIES,
+    maxBytes: LEGACY_TOGGLE_STATE_MAX_BYTES,
+    recoveryMaxBytes: LEGACY_TOGGLE_RECOVERY_MAX_BYTES,
+    oversizedSource: ({ filePath, maxBytes }) => ({
+      warning: `Skipped Active Memory session toggle migration because ${filePath} exceeds ${maxBytes} bytes; left legacy source in place`,
+      preview: `- Active Memory session toggles: legacy source exceeds ${maxBytes} bytes and cannot be recovered; left in place`,
+    }),
     capacityPrecheck: {
       warning: ({ available, missing }) =>
         `Skipped Active Memory session toggle migration because plugin state has room for ${available} of ${missing} missing entries; left legacy source in place`,

@@ -13,6 +13,8 @@ import type {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  LEGACY_TOGGLE_RECOVERY_MAX_BYTES,
+  LEGACY_TOGGLE_STATE_MAX_BYTES,
   legacyConfigRules,
   normalizeCompatibilityConfig,
   stateMigrations,
@@ -168,6 +170,48 @@ describe("active-memory doctor state migration", () => {
     ]);
   });
 
+  it("imports symlinked legacy session opt-outs under the file cap", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    const targetPath = path.join(
+      stateDir,
+      "plugins",
+      "active-memory",
+      "session-toggles-target.json",
+    );
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const source = JSON.stringify({
+      sessions: {
+        "telegram:dm:symlinked": { disabled: true, updatedAt: 1700 },
+      },
+    });
+    await fs.writeFile(targetPath, source, "utf8");
+    await fs.symlink(targetPath, sourcePath);
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 1 Active Memory session toggle entry"),
+      expect.stringContaining("Archived Active Memory session toggles legacy source"),
+    ]);
+    const archivePath = `${sourcePath}.migrated`;
+    await expect(fs.readFile(archivePath, "utf8")).resolves.toBe(source);
+    expect((await fs.lstat(archivePath)).isSymbolicLink()).toBe(true);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+    await expect(
+      createDoctorContext(env)
+        .openPluginStateKeyedStore({ namespace: "session-toggles", maxEntries: 10_000 })
+        .entries(),
+    ).resolves.toHaveLength(1);
+  });
+
   it("normalizes malformed legacy updatedAt values before importing toggles", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T00:00:00.000Z"));
@@ -202,6 +246,389 @@ describe("active-memory doctor state migration", () => {
           updatedAt: Date.parse("2026-07-10T00:00:00.000Z"),
         },
       },
+    ]);
+  });
+
+  it("preserves a live session opt-out inserted during legacy migration", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        sessions: {
+          "telegram:dm:race": { disabled: true, updatedAt: 1700 },
+        },
+      }),
+    );
+
+    const baseContext = createDoctorContext(env);
+    const liveEntry = {
+      sessionKey: "telegram:dm:race",
+      disabled: true,
+      updatedAt: 9999,
+    };
+    let insertedLiveEntry = false;
+    const context: PluginDoctorStateMigrationContext = {
+      openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
+        const store = baseContext.openPluginStateKeyedStore<T>(options);
+        async function insertLiveEntry(key: string) {
+          if (insertedLiveEntry) {
+            return;
+          }
+          insertedLiveEntry = true;
+          await store.register(key, liveEntry as T);
+        }
+        return {
+          ...store,
+          async register(...args: Parameters<typeof store.register>) {
+            await insertLiveEntry(args[0]);
+            return await store.register(...args);
+          },
+          async registerIfAbsent(...args: Parameters<typeof store.registerIfAbsent>) {
+            await insertLiveEntry(args[0]);
+            return await store.registerIfAbsent(...args);
+          },
+        };
+      },
+    };
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Archived Active Memory session toggles legacy source"),
+    ]);
+    const entries = await createDoctorContext(env)
+      .openPluginStateKeyedStore({
+        namespace: "session-toggles",
+        maxEntries: 10_000,
+      })
+      .entries();
+    expect(entries).toMatchObject([{ value: liveEntry }]);
+  });
+
+  it("imports the maximum supported legacy session opt-outs under the file cap", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const sessions = Object.fromEntries(
+      Array.from({ length: 10_000 }, (_, index) => [
+        `telegram:dm:${String(index).padStart(5, "0")}`,
+        { disabled: true, updatedAt: index },
+      ]),
+    );
+    const payload = JSON.stringify({ sessions });
+    expect(Buffer.byteLength(payload, "utf8")).toBeLessThan(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    await fs.writeFile(sourcePath, payload);
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    await expect(
+      migration.detectLegacyState({
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env),
+      }),
+    ).resolves.toMatchObject({
+      preview: [expect.stringContaining("10000 entries")],
+    });
+
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 10000 Active Memory session toggle entries"),
+      expect.stringContaining("Archived Active Memory session toggles legacy source"),
+    ]);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+
+    const entries = await createDoctorContext(env)
+      .openPluginStateKeyedStore({
+        namespace: "session-toggles",
+        maxEntries: 10_000,
+      })
+      .entries();
+    expect(entries).toHaveLength(10_000);
+  });
+
+  it("recovers valid opt-outs from an oversized legacy source within the bounded recovery budget", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const padding = "x".repeat(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    const sessions = Object.fromEntries(
+      Array.from({ length: 2 }, (_, index) => [
+        `telegram:dm:${String(index).padStart(5, "0")}`,
+        { disabled: true, updatedAt: index },
+      ]),
+    );
+    const payload = JSON.stringify({
+      sessions: { ...sessions, __padding__: { disabled: false, updatedAt: 0, note: padding } },
+    });
+    expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    await fs.writeFile(sourcePath, payload);
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    await expect(
+      migration.detectLegacyState({
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env),
+      }),
+    ).resolves.toMatchObject({
+      preview: [expect.stringContaining("2 entries")],
+    });
+
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 2 Active Memory session toggle entries"),
+      expect.stringContaining("Archived Active Memory session toggles legacy source"),
+    ]);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+
+    const entries = await createDoctorContext(env)
+      .openPluginStateKeyedStore({
+        namespace: "session-toggles",
+        maxEntries: 10_000,
+      })
+      .entries();
+    expect(entries).toHaveLength(2);
+  });
+
+  it("warns and keeps an oversized legacy source that cannot be read within the bounded recovery budget", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.alloc(LEGACY_TOGGLE_RECOVERY_MAX_BYTES + 1));
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    await expect(
+      migration.detectLegacyState({
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env),
+      }),
+    ).resolves.toMatchObject({
+      preview: [expect.stringContaining("cannot be recovered")],
+    });
+
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(`exceeds ${LEGACY_TOGGLE_RECOVERY_MAX_BYTES} bytes`),
+    ]);
+    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
+  });
+
+  it("preserves valid opt-outs from an oversized source that also contains malformed records", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T00:00:00.000Z"));
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const padding = "x".repeat(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    const payload = `{"sessions":{"telegram:dm:valid-1":{"disabled":true,"updatedAt":1700},"telegram:dm:bad-disabled":{"disabled":"yes","updatedAt":1701},"telegram:dm:valid-2":{"disabled":true,"updatedAt":1702},"telegram:dm:bad-timestamp":{"disabled":true,"updatedAt":"not-a-number"},"telegram:dm:infinity-timestamp":{"disabled":true,"updatedAt":1e999},"__padding__":{"disabled":false,"updatedAt":0,"note":"${padding}"}}}`;
+    expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    await fs.writeFile(sourcePath, payload);
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 4 Active Memory session toggle entries"),
+      expect.stringContaining("Archived Active Memory session toggles legacy source"),
+    ]);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+
+    const entries = await createDoctorContext(env)
+      .openPluginStateKeyedStore({
+        namespace: "session-toggles",
+        maxEntries: 10_000,
+      })
+      .entries();
+    expect(entries).toHaveLength(4);
+    expect(entries.map((entry) => (entry.value as { sessionKey?: unknown }).sessionKey)).toEqual(
+      expect.arrayContaining([
+        "telegram:dm:valid-1",
+        "telegram:dm:valid-2",
+        "telegram:dm:bad-timestamp",
+        "telegram:dm:infinity-timestamp",
+      ]),
+    );
+    const normalized = entries.find(
+      (entry) =>
+        (entry.value as { sessionKey?: unknown }).sessionKey === "telegram:dm:infinity-timestamp",
+    );
+    expect((normalized?.value as { updatedAt?: unknown } | undefined)?.updatedAt).toBe(
+      Date.parse("2026-07-10T00:00:00.000Z"),
+    );
+  });
+
+  it("preserves JSON escapes when decoding recovered session keys", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const padding = "x".repeat(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    const payload = `{"sessions":{"telegram\\u003adm\\u003a123":{"disabled":true,"updatedAt":1700},"telegram\\\\quoted":{"disabled":true,"updatedAt":1701},"__padding__":{"disabled":false,"updatedAt":0,"note":"${padding}"}}}`;
+    expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    await fs.writeFile(sourcePath, payload);
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 2 Active Memory session toggle entries"),
+      expect.stringContaining("Archived Active Memory session toggles legacy source"),
+    ]);
+    const entries = await createDoctorContext(env)
+      .openPluginStateKeyedStore({
+        namespace: "session-toggles",
+        maxEntries: 10_000,
+      })
+      .entries();
+    const sessionKeys = entries
+      .map((entry) => String((entry.value as { sessionKey?: unknown }).sessionKey))
+      .toSorted((left, right) => left.localeCompare(right));
+    expect(sessionKeys).toEqual(["telegram:dm:123", "telegram\\quoted"]);
+  });
+
+  it("keeps the final JSON-visible value for duplicate session keys in an oversized source", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const padding = "x".repeat(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    const payload = `{"sessions":{"telegram:dm:dup":{"disabled":true,"updatedAt":1700},"telegram:dm:dup":{"disabled":false,"updatedAt":1701},"__padding__":{"disabled":false,"updatedAt":0,"note":"${padding}"}}}`;
+    expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    await fs.writeFile(sourcePath, payload);
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([]);
+    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
+    const entries = await createDoctorContext(env)
+      .openPluginStateKeyedStore({
+        namespace: "session-toggles",
+        maxEntries: 10_000,
+      })
+      .entries();
+    expect(entries).toHaveLength(0);
+  });
+
+  it("skips non-object session records while recovering valid siblings from an oversized source", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const padding = "x".repeat(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    const payload = `{"sessions":{"telegram:dm:valid":{"disabled":true,"updatedAt":1700},"telegram:dm:null":null,"telegram:dm:array":[],"telegram:dm:scalar":5,"__padding__":{"disabled":false,"updatedAt":0,"note":"${padding}"}}}`;
+    expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    await fs.writeFile(sourcePath, payload);
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 1 Active Memory session toggle entry"),
+      expect.stringContaining("Archived Active Memory session toggles legacy source"),
+    ]);
+    const entries = await createDoctorContext(env)
+      .openPluginStateKeyedStore({
+        namespace: "session-toggles",
+        maxEntries: 10_000,
+      })
+      .entries();
+    expect(entries.map((entry) => (entry.value as { sessionKey?: unknown }).sessionKey)).toEqual([
+      "telegram:dm:valid",
+    ]);
+  });
+
+  it("finds the sessions property regardless of outer-member order in an oversized source", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const padding = "x".repeat(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    const payload = `{"format":1,"note":"extra","sessions":{"telegram:dm:valid":{"disabled":true,"updatedAt":1700}},"__padding__":{"disabled":false,"updatedAt":0,"note":"${padding}"}}`;
+    expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(LEGACY_TOGGLE_STATE_MAX_BYTES);
+    await fs.writeFile(sourcePath, payload);
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 1 Active Memory session toggle entry"),
+      expect.stringContaining("Archived Active Memory session toggles legacy source"),
+    ]);
+    const entries = await createDoctorContext(env)
+      .openPluginStateKeyedStore({
+        namespace: "session-toggles",
+        maxEntries: 10_000,
+      })
+      .entries();
+    expect(entries.map((entry) => (entry.value as { sessionKey?: unknown }).sessionKey)).toEqual([
+      "telegram:dm:valid",
     ]);
   });
 });

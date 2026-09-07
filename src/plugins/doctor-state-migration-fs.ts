@@ -1,6 +1,9 @@
 // Shared filesystem helpers for plugin doctor legacy-state migrations.
 import fs from "node:fs/promises";
 
+/** Keep archive comparisons bounded without imposing a file-size cutoff. */
+const ARCHIVE_COMPARE_CHUNK_BYTES = 64 * 1024;
+
 /** True when the legacy-state path exists and is a regular file. */
 export async function legacyStateFileExists(filePath: string): Promise<boolean> {
   try {
@@ -28,11 +31,16 @@ export async function archiveLegacyStateSource(params: {
       // Import commits before archival, so an existing archive must converge
       // instead of re-warning every startup (#102749): identical bytes already
       // preserve the snapshot; differing bytes archive under a free suffix.
-      const [sourceBytes, archiveBytes] = await Promise.all([
-        fs.readFile(params.filePath),
-        fs.readFile(archivedPath),
+      const [sourceStat, archiveStat] = await Promise.all([
+        fs.stat(params.filePath),
+        fs.stat(archivedPath),
       ]);
-      if (sourceBytes.equals(archiveBytes)) {
+      if (
+        sourceStat.isFile() &&
+        archiveStat.isFile() &&
+        sourceStat.size === archiveStat.size &&
+        (await areArchiveFilesEqual(params.filePath, archivedPath, sourceStat.size))
+      ) {
         await fs.rm(params.filePath, { force: true });
         params.changes.push(
           `Removed already-archived ${params.label} legacy source ${params.filePath}`,
@@ -49,6 +57,83 @@ export async function archiveLegacyStateSource(params: {
   } catch (err) {
     params.warnings.push(`Failed archiving ${params.label} legacy source: ${String(err)}`);
   }
+}
+
+/**
+ * Compares a legacy source and archive through fixed-size buffers. Opening the
+ * paths directly preserves the historical symlink-following behavior, while
+ * the comparison never allocates the complete files.
+ */
+async function areArchiveFilesEqual(
+  sourcePath: string,
+  archivePath: string,
+  expectedSize: number,
+): Promise<boolean> {
+  let sourceHandle: fs.FileHandle | undefined;
+  let archiveHandle: fs.FileHandle | undefined;
+  try {
+    sourceHandle = await fs.open(sourcePath, "r");
+    archiveHandle = await fs.open(archivePath, "r");
+    const [sourceStat, archiveStat] = await Promise.all([
+      sourceHandle.stat(),
+      archiveHandle.stat(),
+    ]);
+    if (
+      !sourceStat.isFile() ||
+      !archiveStat.isFile() ||
+      sourceStat.size !== expectedSize ||
+      archiveStat.size !== expectedSize
+    ) {
+      return false;
+    }
+
+    const sourceBuffer = Buffer.allocUnsafe(Math.min(ARCHIVE_COMPARE_CHUNK_BYTES, expectedSize));
+    const archiveBuffer = Buffer.allocUnsafe(Math.min(ARCHIVE_COMPARE_CHUNK_BYTES, expectedSize));
+    for (let position = 0; position < expectedSize;) {
+      const chunkBytes = Math.min(ARCHIVE_COMPARE_CHUNK_BYTES, expectedSize - position);
+      const [sourceComplete, archiveComplete] = await Promise.all([
+        readArchiveComparisonChunk(sourceHandle, sourceBuffer, position, chunkBytes),
+        readArchiveComparisonChunk(archiveHandle, archiveBuffer, position, chunkBytes),
+      ]);
+      if (!sourceComplete || !archiveComplete) {
+        return false;
+      }
+      if (!sourceBuffer.subarray(0, chunkBytes).equals(archiveBuffer.subarray(0, chunkBytes))) {
+        return false;
+      }
+      position += chunkBytes;
+    }
+
+    const [sourceFinalStat, archiveFinalStat] = await Promise.all([
+      sourceHandle.stat(),
+      archiveHandle.stat(),
+    ]);
+    return (
+      sourceFinalStat.isFile() &&
+      archiveFinalStat.isFile() &&
+      sourceFinalStat.size === expectedSize &&
+      archiveFinalStat.size === expectedSize
+    );
+  } finally {
+    await Promise.all([sourceHandle?.close(), archiveHandle?.close()]);
+  }
+}
+
+async function readArchiveComparisonChunk(
+  handle: fs.FileHandle,
+  buffer: Buffer,
+  position: number,
+  length: number,
+): Promise<boolean> {
+  let filled = 0;
+  while (filled < length) {
+    const { bytesRead } = await handle.read(buffer, filled, length - filled, position + filled);
+    if (bytesRead === 0) {
+      return false;
+    }
+    filled += bytesRead;
+  }
+  return true;
 }
 
 async function firstFreeArchivePath(sourcePath: string): Promise<string> {
