@@ -1743,6 +1743,9 @@ importers:
 
   extensions/openshell:
     dependencies:
+      '@openclaw/fs-safe':
+        specifier: 0.8.3
+        version: 0.8.3
       p-limit:
         specifier: 7.3.1
         version: 7.3.1
