@@ -1028,6 +1028,8 @@ export const en: TranslationMap & {
     nativeTerminalHint:
       "Start the native CLI on the selected machine using its own account and configuration. This does not create an OpenClaw Chat.",
     chooseNativeHost: "Choose a native CLI host",
+    nativeHostsUnavailable:
+      "No native CLI is available. Install it on the Gateway or connect a machine with CLI access, then reconnect to the Gateway.",
     nativeTerminalPrompt: "Optional initial prompt for the native CLI",
     terminalNodeFolder: "Existing absolute folder on this node",
     terminalAttachmentsUnsupported:
@@ -1292,6 +1294,7 @@ export const en: TranslationMap & {
     customEmojiHintNoShortcut: "Any emoji works.",
     removeIcon: "Remove icon",
     pinSession: "Pin session",
+    pinRootSessionsOnly: "Only root sessions can be pinned; pin the parent session instead.",
     unpinSession: "Unpin session",
     markUnread: "Mark as unread",
     markRead: "Mark as read",
@@ -2193,6 +2196,8 @@ export const en: TranslationMap & {
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
     settingsGroupDevice: "This Mac",
+    settingsGroupThisIPhone: "This iPhone",
+    settingsGroupThisIPad: "This iPad",
     settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
@@ -2227,6 +2232,8 @@ export const en: TranslationMap & {
     uploadProgress: "Uploading {current} of {total}",
     uploadFailed: "Upload failed",
     retryUpload: "Retry",
+    insertUploadedPaths: "Insert uploaded paths",
+    uploadExpired: "Uploaded files may have expired. Cancel this batch and choose the files again.",
     closeSession: "Close terminal session",
     sessions: "Terminal sessions",
     refreshSessions: "Refresh",
@@ -2236,6 +2243,8 @@ export const en: TranslationMap & {
     sessionAttached: "attached",
     attachSession: "Attach session",
     attachFailed: "Could not attach terminal session",
+    startCancelled: "Terminal start was cancelled. Try again.",
+    panelUnavailable: "Terminal panel is unavailable. Reconnect and try again.",
     connecting: "Connecting to session…",
     connectionTimedOut: "Session did not connect within 30 seconds.",
     refreshRequired: "Control UI updated. Reload this page to continue the terminal action.",
@@ -2244,6 +2253,7 @@ export const en: TranslationMap & {
     agentOwnedBadge: "agent",
     exited: "exited",
     exitedCode: "exited ({code})",
+    exitedSignal: "exited (signal {signal})",
     detached: "detached",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
@@ -3189,6 +3199,7 @@ export const en: TranslationMap & {
       progress: "{complete} of {total}",
       active: "{running} running · {queued} queued · {failed} failed",
       finished: "{done} completed · {failed} failed",
+      completed: "{done} completed",
       childOutcome: "Child runs finished. Check the conversation for the final response.",
       details: "Child details",
       detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
@@ -3429,11 +3440,12 @@ export const en: TranslationMap & {
   githubConnections: {
     title: "GitHub connections",
     description:
-      "Publishing access is separate from your verified GitHub sign-in and co-author credit. Connect an account here to publish with it.",
+      "Check the accounts used for agent commands, dashboard data, and publishing. These connections are separate from your GitHub sign-in and co-author credit.",
     mine: "My GitHub",
     system: "System GitHub",
     personalDescription: "Your account for explicitly selected Publish PR actions.",
-    systemDescription: "Shared account for agents and default publication.",
+    systemDescription:
+      "Default account for agent commands, authenticated dashboards, and publishing.",
     unboundDescription:
       "Sign in with a personal Gateway profile to connect My GitHub. Administrators can still manage System GitHub.",
     signInRequired: "Personal sign-in required",
@@ -3461,6 +3473,10 @@ export const en: TranslationMap & {
       "My GitHub is used only when you explicitly select it for Gateway-brokered Publish PR on an idle, reconciled local workspace. Publication still needs write access to the session. Agent git/gh, model actions, previews, and workers keep the shared account. Finish and reclaim remote work before personal publication. Connecting My GitHub changes no defaults.",
     details: "Connection details",
     agentTitle: "GitHub account",
+    agentFor: "GitHub for {agent}",
+    agentDescription:
+      "Used for this agent's commands and authenticated dashboard data. Verified confirms the account; repository access is checked when data is requested.",
+    viewAgent: "View agent account",
     agentOverride: "Agent override",
     advancedOverride: "Advanced: agent GitHub override",
     manageCommon: "Manage connections in Profile",
@@ -3659,6 +3675,8 @@ export const en: TranslationMap & {
       supportFiles: "{count} support files",
       noSupportFiles: "0 support files",
       loading: "Loading\u2026",
+      draftMissing:
+        "This suggestion's draft is missing. Reject it and ask your agent to create a new suggestion.",
       supportFilesTitle: "Support files",
       clickToPreview: "\u00b7 click to preview",
     },

@@ -91,8 +91,6 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
     prePromptMessageCount: 0,
     nestedToolActivities: [],
     cache: {
-      observabilityEnabled: false,
-      changesForTurn: null,
       retention: undefined,
     },
     shouldFlushForContextEngine: false,
@@ -123,6 +121,31 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     await vi.advanceTimersByTimeAsync(1);
     const result = await settle;
     expect(result.sessionIdUsed).toBe("sess-settle-1");
+  });
+
+  it("keeps the last request observation separate from billing totals", async () => {
+    const input = createSettleFixture();
+    input.subscription.getUsageTotals = () => ({ input: 300, cacheRead: 30_000 });
+    input.subscription.getLastAssistantUsage = () => ({ input: 100, cacheRead: 10_000 });
+    input.cache = {
+      ...input.cache,
+      getObservation: () => ({
+        requestIndex: 3,
+        broke: false,
+        input: 100,
+        cacheRead: 10_000,
+        cacheWrite: 0,
+        previousCacheRead: 10_000,
+        changes: null,
+      }),
+    };
+    const result = await settleEmbeddedAttemptStream(input);
+    expect(result.attemptUsage?.cacheRead).toBe(30_000);
+    expect(result.promptCache?.observation).toMatchObject({
+      broke: false,
+      cacheRead: 10_000,
+      previousCacheRead: 10_000,
+    });
   });
 
   it("settles normally when the flush resolves", async () => {

@@ -150,12 +150,12 @@ Accepted checkpoint history and publication source artifacts remain until explic
 
 ## Versioning contract
 
-Each database records its schema in two places:
+Each database records its published schema in two places:
 
 - `PRAGMA user_version` is the SQLite schema version.
 - The primary `schema_meta` row records `role`, `agent_id`, `schema_version`, and `app_version`. `app_version` is the OpenClaw build that last wrote the schema metadata.
 
-OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted.
+OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted. Updates driven by the 2026.9.2 release line can temporarily defer publication of a shared-state schema version while the old updater finishes; see [Schema bumps and older updaters](#schema-bumps-and-older-updaters).
 
 When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `doctor --fix`; run Doctor from the compatible install if further migration is required, then restart through the service or deployment owner.
 
@@ -235,6 +235,81 @@ validity expires; later Goal writes prune expired rows. They retain the
 original result and a keyed request fingerprint, not a second raw request.
 There is no backfill or configuration switch. Downgrading preserves the table
 but disables the new structured controls; upgrading can read retained receipts.
+
+### Schema bumps and older updaters
+
+OpenClaw 2026.9.2 introduced the update ledger but reopens it with old code after
+running the target's Doctor, including a final read after recording its terminal
+outcome. The shared-state database runner lets this updater finish by applying
+migration content first and publishing the new schema version later. This rule
+applies to every writable open, including Doctor, the restarted Gateway, and
+other CLI processes.
+
+The runner records the applied content version in the existing
+`config_machine_state` key `state.schema.contentVersion`. While publication is
+deferred, new code uses that content version, and both `PRAGMA user_version` and
+`schema_meta.schema_version` retain the previous published version. Content and
+its marker commit together. Reopening skips migration steps already covered by
+the marker, including the schema-16 Skill Workshop rebuild; it does not infer
+completion from table shape or repeat the rebuild. This requires no new table,
+configuration option, or environment override.
+
+Current content is ready for readers even while its version is unpublished.
+Ordinary CLI commands can run alongside the Gateway throughout this window;
+publication alone does not trigger schema repair or require stopping the Gateway.
+
+A subsequent update can run during this window. Its migration verification and
+rollback checks compare applied content versions from private database snapshots.
+Publishing already-applied content is not another migration; applying new content
+still blocks rollback even when the published number has not changed. Managed
+service stop, activation, and Doctor maintenance keep their normal ownership rules.
+
+Publication waits until **every** update row whose `before.version` identifies
+the 2026.9.2 release line meets its applicable condition:
+
+- A terminal row's `finished_at_ms` is at least five minutes old.
+- A running row's `updated_at_ms` is more than 30 minutes old. The runner treats
+  that driver as abandoned for publication purposes; it does not rewrite the
+  run's outcome.
+
+A missing ledger or no affected rows permits immediate publication. Deadlines
+come from the rows' timestamps, never the observing process's start time. The
+new Gateway's ledger watcher schedules publication at the applicable deadline
+without jitter. Publication holds the Gateway lifecycle fence: the owning Gateway
+can publish, and a later writable open can publish when no Gateway owns the state
+directory. Other processes silently leave publication to that owner.
+Publication rereads the content marker and all affected rows inside one
+synchronous write transaction before advancing both published schema markers.
+A new or refreshed running row blocks publication again. Restarting the Gateway
+does not shorten or restart the grace period.
+
+The five-minute grace accommodates 2026.9.2's trailing ledger reads; that release
+records no driver process identity that would prove those reads have finished.
+An old CLI blocked for more than five minutes after committing its terminal row,
+for example on a stalled stdout pipe, can still fail its final render after
+publication. By then the package swap, any requested service restart, and terminal ledger
+outcome are complete. Downgrade protection for the 2026.9.2 line is delayed by the
+same grace, or by the 30-minute abandoned-driver bound. The retained version is
+not permission to run older code against migrated feature tables. Do not
+manually lower either version marker or delete the content marker.
+
+Update-time Doctor checks shared and registered agent databases before other
+repairs. A state-only migration proceeds with deferred publication and reports
+`schema content applied; version publication deferred until update run <id> finishes`.
+Publication still observes the five-minute grace after that run finishes.
+Doctor keeps the typed `update-schema-bump-unfenced` refusal when deferral cannot
+cover a pending agent-database migration, the required `config_machine_state`
+table is missing, or the state-content migration fails. A failed content
+transaction rolls back. The refusal includes the database versions, driving
+updater version, and [manual update commands](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+Package rollback cannot reverse a migration that already happened.
+
+The driver check requires a valid semantic version and includes 2026.9.2
+rebuilds. Earlier updaters, including 2026.9.1, have no ledger and keep normal
+publication behavior. Builds from 2026.9.3 onward, including prereleases, use
+transactional updates that fence old-process ledger access and let candidate
+code finish after migration; they also keep normal publication behavior.
+Same-schema repairs and ordinary Doctor runs remain available.
 
 ### Profile-owned skill library
 
@@ -389,6 +464,10 @@ Only admission is retried; transaction callbacks and mutations are never replaye
 The original lock-admission deadline is retained. After granting approval,
 the parent synchronously joins transaction settlement before allowing owner retirement;
 that mandatory join cannot be abandoned at the append deadline.
+
+Periodic incremental vacuum uses the same write-admission boundary, so it can
+service reclamation approval before taking the writer lock. Its 512-page limit
+is unchanged; passive checkpoints remain outside the write transaction.
 
 Reclamation page maintenance uses a PASSIVE checkpoint and at most 512 pages of
 incremental vacuum per pass. PASSIVE does not wait for readers, but does not cap

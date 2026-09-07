@@ -24,6 +24,7 @@ import {
   MAX_SESSION_PARTICIPANTS,
   sessionCreatorProfileId,
 } from "../config/sessions/session-entry-provenance.js";
+import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
@@ -191,6 +192,7 @@ export function buildGatewaySessionRow(params: {
         params.storeChildSessionsByKey.get(key),
       )
     : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
+  const pinnedAt = isPinnableSessionEntry(key, entry) ? entry?.pinnedAt : undefined;
   const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
   const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
     ? compactionCheckpoints.length
@@ -414,8 +416,8 @@ export function buildGatewaySessionRow(params: {
     archivedAt: entry?.archivedAt,
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
     archiveReason: entry?.archiveReason,
-    pinned: entry?.pinnedAt !== undefined,
-    pinnedAt: entry?.pinnedAt,
+    pinned: pinnedAt !== undefined,
+    pinnedAt,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,

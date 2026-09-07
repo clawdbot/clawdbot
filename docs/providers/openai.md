@@ -696,7 +696,7 @@ for the full example.
     active tokens. Configure an ordered OpenAI API-key profile and keep the
     default isolated agent-scoped Codex home. The complete catalog, app-server,
     auth, and restart recipe is in
-    [Codex harness long context](/plugins/codex-harness#direct-api-long-context).
+    [Codex harness long context](/plugins/codex-harness/configuration#direct-api-long-context).
 
     These examples are two explicit runtime choices, not one auto-selecting
     configuration. The model-scoped `agentRuntime` and runtime-owned compaction
@@ -1530,7 +1530,7 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     clears only the session layer. `/status` reports the resolved OpenClaw
     policy and runtime, not the upstream service tier actually honored or
     returned. See [Thinking levels](/tools/thinking#fast-mode-%2Ffast) and
-    [Codex harness](/plugins/codex-harness#shared-fast-mode-and-codex-fast-mode).
+    [Codex harness](/plugins/codex-harness/commands#shared-fast-mode-and-codex-fast-mode).
     </Note>
 
     Fast mode is premium-priced and model-specific. GPT-5.6 Sol API Fast mode
@@ -1730,6 +1730,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     - Accept `params.chat_template_kwargs` for OpenAI-compatible Completions
       proxies such as vLLM
     - Do not force strict tool schemas or native-only headers
+
+    If a usable tool schema is incompatible with requested strict mode, the request uses
+    `strict: false`. Debug logs report the downgrade under `openai-transport`,
+    with a bounded sample of incompatible tools. Built-in and managed Responses
+    requests share duplicate suppression for the same model and schemas.
 
   </Accordion>
 </AccordionGroup>

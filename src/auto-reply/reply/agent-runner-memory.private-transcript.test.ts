@@ -25,7 +25,10 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { runReplyAgent } from "./agent-runner.js";
-import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
+import {
+  createTestFollowupRun,
+  isModelRuntimeContextCarrier,
+} from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
 
 type ModelRequest = { messages: Array<{ role: string; content: unknown }> };
@@ -50,7 +53,9 @@ it.each(["completed", "interrupted"] as const)(
           const modelRequest = JSON.parse(body) as ModelRequest;
           requests.push(modelRequest);
           const isHuman = text(
-            modelRequest.messages.findLast((m) => m.role === "user")?.content,
+            modelRequest.messages.findLast(
+              (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
+            )?.content,
           ).endsWith(human);
           response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
           response.flushHeaders();
@@ -277,13 +282,19 @@ it.each(["completed", "interrupted"] as const)(
         expect(result).toMatchObject({ text: "FOREGROUND_READY" });
         const humanRequests = requests.filter((modelRequest) =>
           text(
-            modelRequest.messages.findLast((message) => message.role === "user")?.content,
+            modelRequest.messages.findLast(
+              (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
+            )?.content,
           ).endsWith(human),
         );
         expect(humanRequests).toHaveLength(1);
-        const nextUser = text(
-          humanRequests[0]!.messages.findLast((message) => message.role === "user")?.content,
+        const humanMessages = humanRequests[0]!.messages;
+        const userIndex = humanMessages.findLastIndex(
+          (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
         );
+        const nextUser = text(humanMessages[userIndex]?.content);
+        expect(humanMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
+        expect(humanMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(userIndex);
         const canonicalHuman = SessionManager.open(scope)
           .buildSessionContext()
           .messages.findLast(

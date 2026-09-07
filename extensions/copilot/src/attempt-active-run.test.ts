@@ -36,6 +36,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 });
 
 function registerTestRun(params?: {
+  agentId?: string;
+  sessionKey?: string;
   canAcceptSteering?: () => boolean;
   isAborted?: () => boolean;
   isSettled?: () => boolean;
@@ -56,10 +58,15 @@ function registerTestRun(params?: {
   };
   const handle = registerCopilotActiveRun({
     abortActiveSession: vi.fn(),
+    agentId: params?.agentId ?? "main",
     bridge: undefined,
     canAcceptSteering: params?.canAcceptSteering ?? (() => true),
     startedAtMs: params?.startedAtMs ?? 1_750_000_000_000,
-    input: { runId: "run-1", sessionId: "session-1" } as AttemptParamsLike,
+    input: {
+      runId: "run-1",
+      sessionId: "session-1",
+      sessionKey: params?.sessionKey,
+    } as AttemptParamsLike,
     isAborted: params?.isAborted ?? (() => false),
     isSettled: params?.isSettled ?? (() => false),
     session,
@@ -104,6 +111,17 @@ describe("registerCopilotActiveRun", () => {
     harnessMocks.claimPendingAgentQuestionAnswer.mockReset();
     harnessMocks.claimPendingAgentQuestionAnswer.mockResolvedValue(false);
     harnessMocks.setActiveEmbeddedRun.mockClear();
+  });
+
+  it("retains the resolved agent for raw global registrations", () => {
+    const { handle } = registerTestRun({ agentId: "ops", sessionKey: "global" });
+    expect(harnessMocks.setActiveEmbeddedRun).toHaveBeenCalledWith(
+      "session-1",
+      handle,
+      "global",
+      undefined,
+      "ops",
+    );
   });
 
   it("refuses scoped controls before the real V1 handle while preserving unscoped injection", async () => {

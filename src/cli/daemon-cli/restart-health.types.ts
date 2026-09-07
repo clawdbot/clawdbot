@@ -18,7 +18,6 @@ export type GatewayRestartSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
   gatewayVersion?: string | null;
-  gatewayBootId?: string;
   gatewayBuildId?: string | null;
   probeError?: string;
   activatedPluginErrors?: PluginHealthErrorSummary[];

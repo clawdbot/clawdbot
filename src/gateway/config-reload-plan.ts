@@ -105,13 +105,32 @@ const SHARED_CHANNEL_PREFIXES = [
 ];
 
 function matchesReloadPrefix(path: string, prefix: string): boolean {
+  if (prefix.includes("*")) {
+    const segments = path.split(".");
+    return prefix
+      .split(".")
+      .every((segment, index) =>
+        segment === "*" ? Boolean(segments[index]) : segment === segments[index],
+      );
+  }
   return path === prefix || path.startsWith(`${prefix}.`);
+}
+
+function compareReloadRules(left: ReloadRule, right: ReloadRule): number {
+  const leftSegments = left.prefix.split(".");
+  const rightSegments = right.prefix.split(".");
+  // A long record key must not outrank a deeper wildcard policy boundary.
+  return (
+    rightSegments.length - leftSegments.length ||
+    leftSegments.filter((segment) => segment === "*").length -
+      rightSegments.filter((segment) => segment === "*").length
+  );
 }
 
 function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
   return policies
     .flatMap(({ prefixes, ...policy }) => prefixes.map((prefix) => ({ ...policy, prefix })))
-    .toSorted((a, b) => b.prefix.length - a.prefix.length);
+    .toSorted(compareReloadRules);
 }
 
 const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
@@ -356,7 +375,7 @@ function getReloadPolicyCatalog() {
   }
   // Narrow config contracts must override broad owner fallbacks. Sort once per
   // registry snapshot so the hot path can retain first-match semantics.
-  rules.sort((a, b) => b.prefix.length - a.prefix.length);
+  rules.sort(compareReloadRules);
   cachedCatalog = {
     registry,
     version,

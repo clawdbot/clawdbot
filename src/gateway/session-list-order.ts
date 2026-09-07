@@ -1,6 +1,7 @@
 // Bounded session-list ordering shared by synchronous and asynchronous projections.
 
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
 const SESSIONS_LIST_TOP_N_LIMIT = 200;
@@ -13,8 +14,8 @@ function compareSessionEntryPairs(
   sortBy: SessionsListParams["sortBy"] = "updatedAt",
 ): number {
   if (sortBy !== "lastInteractionAt") {
-    const aPinnedAt = a[1]?.pinnedAt ?? 0;
-    const bPinnedAt = b[1]?.pinnedAt ?? 0;
+    const aPinnedAt = isPinnableSessionEntry(a[0], a[1]) ? (a[1]?.pinnedAt ?? 0) : 0;
+    const bPinnedAt = isPinnableSessionEntry(b[0], b[1]) ? (b[1]?.pinnedAt ?? 0) : 0;
     if (aPinnedAt !== bPinnedAt) {
       return bPinnedAt - aPinnedAt;
     }

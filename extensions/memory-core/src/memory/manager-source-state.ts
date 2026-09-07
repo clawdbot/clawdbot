@@ -38,11 +38,13 @@ export async function resolveMemorySourceFileEntries(params: {
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
+  onSkippedSymlinkRoot?: (root: string) => void;
 }): Promise<MemoryFileEntry[]> {
   const files = await listMemoryFiles(
     params.workspaceDir,
     params.settings.extraPaths,
     params.settings.multimodal,
+    params.onSkippedSymlinkRoot,
   );
   return (
     await runWithConcurrency(
@@ -73,13 +75,24 @@ export async function inspectMemorySourceState(params: {
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
 }): Promise<MemorySourceInspection> {
-  const entries = await resolveMemorySourceFileEntries(params);
+  const skippedRoots = new Set<string>();
+  const entries = await resolveMemorySourceFileEntries({
+    ...params,
+    onSkippedSymlinkRoot: (root) => skippedRoots.add(root),
+  });
   const indexedRows = loadMemorySourceFileState({ db: params.db, source: "memory" });
   return {
     source: "memory",
     dirty: hasMemorySourceDrift({ entries, indexedRows }),
     eligible: entries.length,
-    issues: entries.length === 0 ? ["no eligible memory files found"] : [],
+    issues: [
+      ...(entries.length === 0 ? ["no eligible memory files found"] : []),
+      ...Array.from(
+        skippedRoots,
+        (root) =>
+          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its canonical absolute directory instead`,
+      ),
+    ],
   };
 }
 

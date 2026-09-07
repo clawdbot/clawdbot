@@ -792,18 +792,30 @@ describe("createSessionCapability", () => {
       sessions.reconcileRunTerminal({
         sessionKeys: ["main"],
         runId: "run-1",
-        status: "done",
+        status: "failed",
+        errorMessage: `Provider failed.\npassword=synthetic-password\n${"x".repeat(180)}`,
         endedAt: 160,
       }),
     ).toBe(true);
+    const lastRunError = `Provider failed. password=[redacted] ${"x".repeat(123)}`;
     expect(sessions.state.result?.sessions[0]).toMatchObject({
       key,
       hasActiveRun: false,
       activeRunIds: [],
-      status: "done",
+      status: "failed",
+      lastRunError,
       endedAt: 160,
       runtimeMs: 60,
     });
+    expect(
+      sessions.reconcileRunTerminal({
+        sessionKeys: ["main"],
+        runId: "run-1",
+        status: "failed",
+        endedAt: 160,
+      }),
+    ).toBe(false);
+    expect(sessions.state.result?.sessions[0]?.lastRunError).toBe(lastRunError);
 
     expect(
       sessions.reconcile({
@@ -814,6 +826,7 @@ describe("createSessionCapability", () => {
         activeRunIds: ["run-2"],
         status: "running",
         startedAt: 200,
+        lastRunError,
       }),
     ).toBe(true);
     expect(
@@ -828,7 +841,21 @@ describe("createSessionCapability", () => {
       hasActiveRun: true,
       activeRunIds: ["run-2"],
       status: "running",
+      lastRunError,
     });
+    expect(
+      sessions.reconcileRunTerminal({
+        sessionKeys: ["main"],
+        runId: "run-2",
+        status: "done",
+        endedAt: 260,
+      }),
+    ).toBe(true);
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+    });
+    expect(sessions.state.result?.sessions[0]?.lastRunError).toBeUndefined();
 
     expect(
       sessions.reconcile({

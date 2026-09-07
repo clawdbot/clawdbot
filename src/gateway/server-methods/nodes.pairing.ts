@@ -33,8 +33,8 @@ import {
   type DeviceManagementAuthz,
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
-import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { refreshConnectedNodeSurfaceCaches } from "./nodes.read.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";

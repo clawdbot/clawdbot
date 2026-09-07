@@ -7,7 +7,7 @@ import { prepareSessionSharing } from "../session-sharing.js";
 function listBoardSessionKeys(targets: GatewayStoredSessionTargets): ReadonlySet<string> {
   const inventories = new Map<string, ReadonlySet<string>>();
   const keys = new Set<string>();
-  for (const [key, { storeTarget }] of targets) {
+  for (const [key, { storeKey, storeTarget }] of targets) {
     const identity = `${storeTarget.agentId}\0${storeTarget.storePath}`;
     let inventory = inventories.get(identity);
     if (!inventory) {
@@ -18,7 +18,7 @@ function listBoardSessionKeys(targets: GatewayStoredSessionTargets): ReadonlySet
       inventories.set(identity, inventory);
     }
     // Equal sentinel keys in another store do not describe this selected row's board.
-    if (inventory.has(key)) {
+    if (inventory.has(storeKey ?? key)) {
       keys.add(key);
     }
   }

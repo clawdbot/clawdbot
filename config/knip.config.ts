@@ -44,6 +44,8 @@ const repositoryScriptEntries = [
   "scripts/docker-e2e.mts!",
   // Docker and package-install harnesses invoke this verifier by path.
   "scripts/docker/verify-fs-safe-native.mjs!",
+  // Reusable Docker workflows invoke this selector from a trusted sparse checkout.
+  "scripts/resolve-fs-safe-native-contract.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
@@ -110,6 +112,10 @@ const repositoryScriptEntries = [
   "scripts/lib/vitest-resource-reporter.mts!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
+  // Mantis controllers launch these observers and bridge by path inside isolated runtimes.
+  "scripts/mantis/observe-request-telegram-qa.mts!",
+  "scripts/mantis/observe-request-web-ui.mts!",
+  "scripts/mantis/telegram-proof-bridge.mjs!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",

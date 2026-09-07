@@ -38,6 +38,8 @@ let isManifestPluginAvailableForControlPlane: typeof import("./manifest-contract
 let listAvailableManifestContractValues: typeof import("./manifest-contract-eligibility.js").listAvailableManifestContractValues;
 let loadManifestContractSnapshot: typeof import("./manifest-contract-eligibility.js").loadManifestContractSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
+let makePluginMetadataIndex: typeof import("./current-plugin-metadata.test-support.js").makePluginMetadataIndex;
+let createInstalledPluginEnabledPredicate: typeof import("./installed-plugin-index.js").createInstalledPluginEnabledPredicate;
 
 beforeAll(async () => {
   // The plugins project shares module state across files. Rebind this module graph
@@ -49,6 +51,8 @@ beforeAll(async () => {
     loadManifestContractSnapshot,
   } = await import("./manifest-contract-eligibility.js"));
   ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
+  ({ makePluginMetadataIndex } = await import("./current-plugin-metadata.test-support.js"));
+  ({ createInstalledPluginEnabledPredicate } = await import("./installed-plugin-index.js"));
 });
 
 describe("bundled manifest contract availability", () => {
@@ -276,6 +280,118 @@ describe("bundled manifest contract availability", () => {
         config: { plugins: { allow: ["another-plugin"] } },
       }),
     ).toEqual([]);
+  });
+});
+
+describe("prepared installed-plugin eligibility", () => {
+  it("normalizes installed policy once for a batch of manifest checks", () => {
+    const ids = Array.from({ length: 8 }, (_, index) => `external-${index}`);
+    const index = makePluginMetadataIndex();
+    index.plugins = ids.flatMap((id) => makePluginMetadataIndex(id).plugins);
+    let enumerations = 0;
+    const entries = new Proxy(Object.fromEntries(ids.map((id) => [id, { enabled: true }])), {
+      ownKeys(target) {
+        enumerations += 1;
+        return Reflect.ownKeys(target);
+      },
+    });
+    const config = { plugins: { entries } };
+    const normalizedConfig = normalizePluginsConfig(config.plugins);
+    enumerations = 0;
+    const isInstalledPluginEnabled = createInstalledPluginEnabledPredicate(index.plugins, config);
+    expect(
+      ids.map((id) =>
+        isManifestPluginAvailableForControlPlane({
+          snapshot: { index },
+          plugin: { id, origin: "global" },
+          config,
+          normalizedConfig,
+          isInstalledPluginEnabled,
+        }),
+      ),
+    ).toEqual(ids.map(() => true));
+    expect(enumerations).toBe(1);
+  });
+
+  it.each([
+    { config: undefined, expected: [true, true, true, false, false, false] },
+    { config: {}, expected: [true, true, false, true, false, false] },
+    {
+      config: { plugins: { enabled: false } },
+      expected: [true, false, false, false, false, false],
+    },
+    {
+      config: { plugins: { allow: ["global", "workspace", "duplicate"] } },
+      expected: [false, true, true, false, true, false],
+    },
+    {
+      config: {
+        plugins: {
+          allow: ["global", "workspace", "duplicate"],
+          deny: ["workspace"],
+          entries: { global: { enabled: false } },
+        },
+      },
+      expected: [false, false, false, false, true, false],
+    },
+  ])("preserves policy and first-record selection for $config", ({ config, expected }) => {
+    const index = makePluginMetadataIndex();
+    index.plugins = [
+      ...makePluginMetadataIndex("provider").plugins.map((record) =>
+        Object.assign({}, record, {
+          origin: "bundled" as const,
+          enabledByDefault: true,
+          contributions: {
+            channels: [],
+            channelConfigs: [],
+            providers: ["provider"],
+            modelCatalogProviders: [],
+            modelSupportPrefixes: [],
+            modelSupportPatterns: [],
+            autoEnableProviderIds: [],
+            commandAliases: [],
+            contracts: {},
+          },
+        }),
+      ),
+      ...makePluginMetadataIndex("global").plugins,
+      ...makePluginMetadataIndex("workspace").plugins.map((record) =>
+        Object.assign({}, record, {
+          origin: "workspace" as const,
+        }),
+      ),
+      ...makePluginMetadataIndex("disabled").plugins.map((record) =>
+        Object.assign({}, record, {
+          enabled: false,
+        }),
+      ),
+      ...makePluginMetadataIndex("duplicate").plugins.map((record) =>
+        Object.assign({}, record, {
+          origin: "workspace" as const,
+          enabled: false,
+        }),
+      ),
+      ...makePluginMetadataIndex("duplicate").plugins,
+    ];
+    const plugins = index.plugins.slice(0, 5).map((record) => ({
+      id: record.pluginId,
+      origin: record.origin,
+    }));
+    plugins.push({ id: "missing", origin: "global" });
+    const isInstalledPluginEnabled = createInstalledPluginEnabledPredicate(index.plugins, config);
+    const params = {
+      snapshot: { index },
+      config,
+      normalizedConfig: normalizePluginsConfig(config?.plugins),
+    };
+    expect(
+      plugins.map((plugin) => isManifestPluginAvailableForControlPlane({ ...params, plugin })),
+    ).toEqual(expected);
+    expect(
+      plugins.map((plugin) =>
+        isManifestPluginAvailableForControlPlane({ ...params, plugin, isInstalledPluginEnabled }),
+      ),
+    ).toEqual(expected);
   });
 });
 

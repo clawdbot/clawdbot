@@ -8,6 +8,7 @@ import {
   formatTaskStatusTitle,
   sanitizeTaskPromptText,
   sanitizeTaskStatusText,
+  truncateTaskStatusText,
 } from "../../tasks/task-status.js";
 
 type TaskLedgerStatus = TaskSummary["status"];
@@ -48,26 +49,22 @@ function sanitizeOptionalTaskText(
 export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolean }): TaskSummary {
   const activity = getTaskActivitySnapshot(task.taskId);
   const lastActivity = sanitizeOptionalTaskText(activity?.lastActivity);
-  const progressSummary = sanitizeOptionalTaskText(task.progressSummary);
-  const terminalSummary = sanitizeOptionalTaskText(task.terminalSummary, { errorContext: true });
+  const progressResult = sanitizeTaskStatusText(task.progressSummary);
+  const terminalResult = sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
+  const progressSummary =
+    truncateTaskStatusText(progressResult, TASK_STATUS_DETAIL_MAX_CHARS) || undefined;
+  const terminalSummary =
+    truncateTaskStatusText(terminalResult, TASK_STATUS_DETAIL_MAX_CHARS) || undefined;
   const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
   const lastToolName = sanitizeOptionalTaskText(task.lastToolName);
   const prompt = opts?.includePrompt
     ? sanitizeTaskPromptText(task.task, TASK_PROMPT_MAX_CHARS) || undefined
     : undefined;
-  const progressResult = opts?.includePrompt
-    ? sanitizeTaskStatusText(task.progressSummary, { maxChars: TASK_RESULT_MAX_CHARS })
-    : "";
-  const terminalResult = opts?.includePrompt
-    ? sanitizeTaskStatusText(task.terminalSummary, {
-        errorContext: true,
-        maxChars: TASK_RESULT_MAX_CHARS,
-      })
-    : "";
-  const result =
-    (task.runtime === "subagent" || task.runtime === "acp"
-      ? progressResult
-      : terminalResult || progressResult) || undefined;
+  const result = opts?.includePrompt
+    ? (task.runtime === "subagent" || task.runtime === "acp"
+        ? progressResult
+        : terminalResult || progressResult) || undefined
+    : undefined;
   const toolUseCount =
     typeof task.toolUseCount === "number" && Number.isInteger(task.toolUseCount)
       ? Math.max(0, task.toolUseCount)
@@ -100,7 +97,7 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     ...(error ? { error } : {}),
     deliveryStatus: task.deliveryStatus,
     ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
-    ...(result ? { result } : {}),
+    ...(result ? { result: truncateTaskStatusText(result, TASK_RESULT_MAX_CHARS) } : {}),
     ...(prompt ? { prompt } : {}),
   };
 }

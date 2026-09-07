@@ -366,6 +366,10 @@ openclaw memory promote [--agent <id>] [--limit <n>] [--min-score <n>] \
 The CLI and scheduled dreaming sweep share the deep-phase defaults below.
 Explicit CLI flags override them for a one-off manual run.
 
+Entries with `untrusted` or `system` provenance are excluded before ranking, so
+they do not occupy preview limits or appear in `promote-explain`. Promotion still
+rechecks current provenance before writing.
+
 Ranking signals: recall frequency, retrieval relevance, query diversity,
 temporal recency, cross-day consolidation, and derived concept richness, drawn
 from both memory recalls and daily-ingestion passes, plus a light/REM phase

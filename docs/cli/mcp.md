@@ -443,7 +443,7 @@ See [MCP tool grants](/tools/exec-approvals#mcp-tool-grants) for the document
 shape and export/edit workflow.
 
 For approval delivery through Slack buttons, see
-[Native approvals in Slack](/channels/slack#native-approvals-in-slack).
+[Native approvals in Slack](/channels/slack/rich-messages#native-approvals-in-slack).
 
 When an operator denies an MCP tool approval, Codex reports only its generic
 "user rejected MCP tool call" to the model; the remedy is shown on the operator

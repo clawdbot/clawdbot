@@ -2238,6 +2238,18 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
       keptIndexes: [2],
     },
     {
+      name: "drops a pre-cutoff settlement wake and its adjacent synthesis",
+      messages: [
+        {
+          ...recordedMessage("user", "All children settled", 1, cutoff - 1_000),
+          provenance: { ...announceProvenance, sourceTool: "subagent_settle" },
+        },
+        recordedMessage("assistant", "old synthesis", 2, cutoff - 500),
+        recordedMessage("user", "fresh user turn", 3, cutoff + 1_000),
+      ],
+      keptIndexes: [2],
+    },
+    {
       name: "keeps a mid-session announce pair whose timestamp is at or after the cutoff",
       messages: [
         recordedMessage("user", announceText, 1, cutoff + 1_000, true),

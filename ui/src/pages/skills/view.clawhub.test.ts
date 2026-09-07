@@ -321,6 +321,8 @@ describe("renderSkills ClawHub", () => {
                     requestedReference: "skills-sh:openai/skills/pdf",
                     installedVersion: "0.0.0",
                     installedAt: 1,
+                    originPath: "/tmp/.clawhub/origin.json",
+                    lockPath: "/tmp/workspace/.clawhub/lock.json",
                   },
                 }),
               ],
@@ -417,6 +419,8 @@ describe("renderSkills ClawHub", () => {
         ownerHandle: "openclaw",
         installedVersion: "1.2.3",
         installedAt: 123,
+        originPath: "/tmp/.clawhub/origin.json",
+        lockPath: "/tmp/workspace/.clawhub/lock.json",
       },
       skillCard: {
         present: true,
@@ -538,6 +542,8 @@ describe("renderSkills ClawHub", () => {
           slug: "agentreceipt",
           installedVersion: "1.2.3",
           installedAt: 123,
+          originPath: "/tmp/.clawhub/origin.json",
+          lockPath: "/tmp/workspace/.clawhub/lock.json",
         },
       });
       render(
@@ -588,6 +594,8 @@ describe("renderSkills ClawHub", () => {
         slug: "agentreceipt",
         installedVersion: "1.2.3",
         installedAt: 123,
+        originPath: "/tmp/.clawhub/origin.json",
+        lockPath: "/tmp/workspace/.clawhub/lock.json",
       },
     });
     const report: SkillStatusReport = {

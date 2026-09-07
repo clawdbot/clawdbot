@@ -14,6 +14,12 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { buildGatewayConnectionDetails, formatGatewayTransportErrorJson } from "../gateway/call.js";
+import type {
+  DevicePairingList as GatewayDevicePairingList,
+  DeviceTokenSummary,
+  PairedDevice,
+  PendingDevice,
+} from "../gateway/device-pairing-list.types.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { isOperatorScope } from "../gateway/operator-scopes.js";
@@ -55,48 +61,7 @@ type DevicesRpcOpts = {
   name?: string;
 };
 
-type DeviceTokenSummary = {
-  role: string;
-  scopes?: string[];
-  revokedAtMs?: number;
-};
-
-type PendingDevice = {
-  requestId: string;
-  deviceId: string;
-  publicKey?: string;
-  displayName?: string;
-  clientId?: string;
-  clientMode?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  isRepair?: boolean;
-  ts?: number;
-};
-
-type PairedDevice = {
-  deviceId: string;
-  publicKey?: string;
-  displayName?: string;
-  operatorLabel?: string;
-  clientId?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  tokens?: DeviceTokenSummary[];
-  nodeSurface?: InfraPairedDevice["nodeSurface"];
-  pendingNodeSurface?: InfraPairedDevice["pendingNodeSurface"];
-  createdAtMs?: number;
-  approvedAtMs?: number;
-};
-
-type DevicePairingList = {
-  pending?: PendingDevice[];
-  paired?: PairedDevice[];
-};
+type DevicePairingList = Partial<GatewayDevicePairingList>;
 
 type ApprovePairingGatewayContext = {
   originalRequest: PendingDevice | null;
