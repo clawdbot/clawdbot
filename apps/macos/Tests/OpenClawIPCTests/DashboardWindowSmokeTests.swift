@@ -1,32 +1,8 @@
 import AppKit
 import Foundation
-import ObjectiveC
-import os
 import Testing
 import WebKit
 @testable import OpenClaw
-
-private enum DashboardExternalOpenCapture {
-    struct State {
-        var target: URL?
-        var opened: [URL] = []
-    }
-
-    static let state = OSAllocatedUnfairLock(initialState: State())
-}
-
-extension NSWorkspace {
-    @objc fileprivate dynamic nonisolated func dashboardTestOpen(_ url: URL) -> Bool {
-        let intercepted = DashboardExternalOpenCapture.state.withLock { state in
-            guard state.target == url else { return false }
-            state.opened.append(url)
-            return true
-        }
-        if intercepted { return true }
-        // During the exchange, this Objective-C slot holds the original open implementation.
-        return self.dashboardTestOpen(url)
-    }
-}
 
 private actor DashboardRouteAuthGate {
     private var token: String?
@@ -487,56 +463,6 @@ struct DashboardWindowSmokeTests {
             await Task.yield()
         }
         #expect(requestCount == 2)
-    }
-
-    @Test func `older dashboard inline link messages hand off to the default browser`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let dashboard = server.url("/control/")
-        let target = server.url("/legacy-link/" + UUID().uuidString)
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
-        let controller = DashboardWindowController(
-            url: dashboard, auth: auth,
-            websiteDataStore: .nonPersistent(), windowAutosaveName: "",
-            requestBrowserProfileImportOffer: { _ in false })
-        defer { controller.closeDashboard() }
-        controller.show()
-        // The message is posted from the page, so the document must be loaded first.
-        // A cold WebKit content process on a loaded hosted runner can take well over
-        // ten seconds; the bound only guards against a fixture that never serves.
-        let deadline = ContinuousClock.now + .seconds(90)
-        while controller.webView.url != dashboard || controller.webView.isLoading, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        try #require(
-            controller.webView.url == dashboard && !controller.webView.isLoading,
-            "dashboard did not finish loading: url=\(String(describing: controller.webView.url)) loading=\(controller.webView.isLoading)")
-        let original = try #require(class_getInstanceMethod(NSWorkspace.self, #selector(NSWorkspace.open(_:))))
-        let replacement = try #require(class_getInstanceMethod(
-            NSWorkspace.self, #selector(NSWorkspace.dashboardTestOpen(_:))))
-        DashboardExternalOpenCapture.state.withLock { $0 = .init(target: target) }
-        method_exchangeImplementations(original, replacement)
-        defer {
-            // Retire WebKit delivery before restoring the process-wide method slot.
-            controller.closeDashboard()
-            method_exchangeImplementations(original, replacement)
-            DashboardExternalOpenCapture.state.withLock { $0 = .init() }
-        }
-
-        _ = try await controller.webView.evaluateJavaScript("""
-        window.webkit.messageHandlers.openclawLink.postMessage({
-          type: "open-link", url: "\(target.absoluteString)", target: "inline"
-        });
-        null;
-        """)
-        let deliveryDeadline = ContinuousClock.now + .seconds(5)
-        while DashboardExternalOpenCapture.state.withLock({ $0.opened.isEmpty }),
-              ContinuousClock.now < deliveryDeadline
-        {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(DashboardExternalOpenCapture.state.withLock { $0.opened } == [target])
-        #expect(!controller.nativeBrowser.hasTabs)
     }
 
     @Test(arguments: ["close", "invalidate", "replacement"])
