@@ -5,6 +5,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-f
 import {
   buildSessionEntry,
   loadMemorySessionMetadata,
+  matchesSessionEntryPrefixHash,
   sessionPathForFile,
   statSessionEntrySync,
   type SessionTranscriptCorpusEntry,
@@ -320,12 +321,19 @@ export async function scanSessionIngestionSource(params: {
   ) {
     return emptyScan("unchanged", params.previous);
   }
-  const sameContent =
-    params.previous?.mtimeMs === fileFingerprint.mtimeMs &&
-    params.previous.size === fileFingerprint.size &&
-    params.previous.contentHash === terminalState.contentHash &&
-    params.previous.lineCount === lines.length;
-  const startIndex = sameContent
+  // Reuse the full hash for unchanged capped scans; only appends need a prefix hash.
+  const previousSnapshotMatches =
+    params.previous !== undefined &&
+    params.previous.contentHash.length > 0 &&
+    ((params.previous.lineCount === lines.length &&
+      params.previous.contentHash === terminalState.contentHash) ||
+      (params.previous.lineCount < lines.length &&
+        matchesSessionEntryPrefixHash(
+          entry,
+          params.previous.lineCount,
+          params.previous.contentHash,
+        )));
+  const startIndex = previousSnapshotMatches
     ? Math.max(0, Math.min(params.previous?.lastContentLine ?? 0, lines.length))
     : 0;
   const seen = new Set(params.seenMessages[params.source.scope] ?? []);

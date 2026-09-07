@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ManagedRepairBoundary } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import { managedRepairConfig } from "./update-managed-service-handoff-repair.test-support.js";
+import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 
 export async function prepareManagedServiceRuntimeFixture(params: {
   recoveryModulePath: string;
@@ -64,14 +65,14 @@ export async function prepareManagedServiceRuntimeFixture(params: {
       recoveryModulePath,
       `
       export async function isManagedUpdateRequesterOwner(requester) {
-        const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
-        state.ownerChecked = true;
-        fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
+        const state = ${managedServiceStateUpdateScript(
+          statePath,
+          `state.ownerChecked = true;
+          ${options.cancelAtActivation === "requester" ? "state.ownerChecks = (state.ownerChecks || 0) + 1;" : ""}`,
+        )};
         ${
           options.cancelAtActivation === "requester"
-            ? `state.ownerChecks = (state.ownerChecks || 0) + 1;
-        fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
-        if (state.ownerChecks === 2) {
+            ? `if (state.ownerChecks === 2) {
           fs.writeFileSync(${JSON.stringify(activationGatePath)}, "requester");
           while (!fs.existsSync(${JSON.stringify(activationReleasePath)})) {
             await new Promise((resolve) => setTimeout(resolve, 5));

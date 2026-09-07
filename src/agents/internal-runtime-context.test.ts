@@ -134,6 +134,26 @@ describe("internal runtime context codec", () => {
     ).toBe("Visible reply");
   });
 
+  it.each([true, false])("strips a wrapped preface with delimiters=%s", (delimiters) => {
+    const input = [
+      "Use it to continue answering the active user request now. Do not wait for",
+      "another message. This context is runtime-generated, not user-authored.",
+      "Keep internal details private.",
+      "",
+      ...(delimiters
+        ? [INTERNAL_RUNTIME_CONTEXT_BEGIN, "private metadata", INTERNAL_RUNTIME_CONTEXT_END, ""]
+        : []),
+      "Visible reply",
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
+  });
+
+  it("preserves a long nonmatching paragraph containing a runtime notice", () => {
+    const input = "Ordinary visible text.\n".repeat(2_000) + OPENCLAW_RUNTIME_CONTEXT_NOTICE;
+    expect(stripInternalRuntimeContext(input)).toBe(input);
+  });
+
   it.each([
     [`Visible reply\n${INTERNAL_RUNTIME_CONTEXT_END}`, "Visible reply"],
     [`Visible reply\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nprivate`, "Visible reply"],
@@ -146,6 +166,7 @@ describe("internal runtime context codec", () => {
     for (const input of [
       [LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER, "Ordinary user text"].join("\n"),
       ["OpenClaw runtime context for another message.", OPENCLAW_RUNTIME_CONTEXT_NOTICE].join("\n"),
+      OPENCLAW_RUNTIME_CONTEXT_NOTICE,
     ]) {
       expect(hasInternalRuntimeContext(input)).toBe(false);
       expect(stripInternalRuntimeContext(input)).toBe(input);

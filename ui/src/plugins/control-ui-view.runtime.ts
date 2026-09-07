@@ -38,6 +38,7 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   private registration?: ViewRegistration;
   private mountAbort?: AbortController;
   private mountGeneration = 0;
+  private composerGeneration = 0;
   private ownerChanged = false;
   private handle?: ReturnType<ControlUiView<unknown>>;
   private viewContext?: ControlUiViewContext<unknown>;
@@ -69,6 +70,10 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
 
   override requestUpdate(...args: Parameters<OpenClawLightDomContentsElement["requestUpdate"]>) {
     const [name, previous] = args;
+    if (name === "presented" && this.presented !== previous) {
+      // Retention preserves the view host, but old composer operations must never revive.
+      this.composerGeneration += 1;
+    }
     if (name === "props") {
       // SAFETY: host renderers supply props records; plugin page props may omit session identity.
       const before = previous as Partial<BoardGetParams> | undefined;
@@ -167,8 +172,14 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
     }
     // SAFETY: renderPluginSurface supplies composer props only for the discriminants checked above.
     const props = this.props as ControlUiSurfaceProps["composer"];
+    const generation = this.composerGeneration;
     const check = () => {
-      if (signal.aborted || this.registration?.signal.aborted) {
+      if (
+        !this.presented ||
+        generation !== this.composerGeneration ||
+        signal.aborted ||
+        this.registration?.signal.aborted
+      ) {
         throw new Error("This plugin UI view has ended.");
       }
     };

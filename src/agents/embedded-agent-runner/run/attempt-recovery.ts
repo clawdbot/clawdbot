@@ -313,6 +313,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     failureReason &&
     (await failoverRetryController.maybeRetryTransient({
       reason: failureReason,
+      message: promptError ? formatErrorMessage(promptError) : assistantSignal?.message,
       retryAfterMs: promptError
         ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)
         : assistantSignal?.retryAfterMs,

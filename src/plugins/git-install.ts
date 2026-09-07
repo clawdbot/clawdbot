@@ -401,7 +401,7 @@ export async function installPluginFromGitSpec(
     const acquired = await acquireGitSource({
       ...parsed,
       repoDir,
-      refMode: "detached",
+      refMode: "resolve-remote",
       timeoutMs: params.timeoutMs,
       commandEnv: () => ({ env: createGitCommandEnv() }),
     });

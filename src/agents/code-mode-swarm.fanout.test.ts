@@ -93,7 +93,7 @@ describe("Swarm pipeline backpressure", () => {
                 ? { runId, status: "failed", error: "child intentionally failed" }
                 : { runId, status: "done", result: nextStage };
           }
-          return { id: request.id, ok: true as const, value };
+          return { id: request.id, ok: true as const, json: JSON.stringify(value) };
         });
         result = await testing.runCodeModeWorker(
           { kind: "resume", snapshot: result.snapshot, config, settledRequests, pendingRequests },
@@ -178,7 +178,7 @@ describe("Swarm pipeline backpressure", () => {
         const settledRequests = result.pendingRequests.map((request) => ({
           id: request.id,
           ok: true as const,
-          value:
+          json: JSON.stringify(
             request.method === "agentSpawn"
               ? { runId: "collector" }
               : {
@@ -187,6 +187,7 @@ describe("Swarm pipeline backpressure", () => {
                   result: "text",
                   ...(structured ? { structured: { answer: 42 } } : {}),
                 },
+          ),
         }));
         result = await testing.runCodeModeWorker(
           { kind: "resume", snapshot: result.snapshot, config, settledRequests },

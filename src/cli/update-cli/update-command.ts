@@ -668,7 +668,8 @@ async function updateCommandInternal(
   if (!execution) {
     return;
   }
-  const { result, preManagedServiceStop, ownedManagedUpdateContext, recoveryEnv } = execution;
+  const { ownedManagedUpdateContext, recoveryEnv, ...executionState } = execution;
+  const { result } = executionState;
   result.runId = run.runId;
   if (result.status === "skipped" && result.reason === "already-current") {
     stop();
@@ -682,10 +683,8 @@ async function updateCommandInternal(
   const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
   stop();
   const finalization = {
-    mutationStarted: execution.mutationStarted,
+    ...executionState,
     expectedVersion: targetVersion ?? undefined,
-    result,
-    failure: execution.failure,
     root,
     previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
@@ -696,7 +695,6 @@ async function updateCommandInternal(
     downgradeRisk,
     shouldRestart,
     opts,
-    preManagedServiceStop,
     ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
     controlPlaneUpdateSentinelMeta,
     preUpdatePluginInstallRecords:
@@ -705,11 +703,6 @@ async function updateCommandInternal(
     packageUpdateNodeRunner,
     updateStepTimeoutMs,
     invocationCwd,
-    packageTransaction: execution.packageTransaction,
-    schemaVersions: execution.schemaVersions,
-    candidateSchemaVersions: execution.candidateSchemaVersions,
-    previousSchemaVersions: execution.previousSchemaVersions,
-    previousVerified: execution.previousVerified,
   };
   const rollbackBlockedReason = await inspectActivatedUpdateState({
     result,

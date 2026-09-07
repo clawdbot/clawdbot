@@ -245,7 +245,7 @@ suite.define(() => {
         details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
       },
       expectedKind: "auth-required",
-      expectedTitle: "Auth required",
+      expectedTitle: "Token needed",
     },
     {
       name: "missing identity header",
@@ -288,7 +288,7 @@ suite.define(() => {
         details: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
       },
       expectedKind: "pairing-required",
-      expectedTitle: "Device pairing required",
+      expectedTitle: "Approve this browser",
     },
     {
       name: "generic transport",
@@ -297,7 +297,7 @@ suite.define(() => {
         message: "WebSocket connection failed",
       },
       expectedKind: "network",
-      expectedTitle: "Could not connect",
+      expectedTitle: "Gateway unreachable",
     },
     {
       name: "profile verification",
@@ -350,7 +350,7 @@ suite.define(() => {
       );
       const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
       await failure.waitFor({ timeout: 10_000 });
-      expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
+      expect((await failure.locator(".login-gate__failure-title").textContent())?.trim()).toBe(
         fixture.expectedTitle,
       );
     } catch (error) {
@@ -500,7 +500,7 @@ suite.define(() => {
       });
 
       expect(metrics.gatePadding).toBe("16px 12px");
-      expect(metrics.cardPadding).toBe("24px 20px");
+      expect(metrics.cardPadding).toBe("20px 20px 24px");
       expect(metrics.cardTop).toBeGreaterThanOrEqual(0);
       expect(metrics.documentScrollWidth).toBe(metrics.documentClientWidth);
       expect(metrics.commandBounds.length).toBeGreaterThan(0);
@@ -510,8 +510,8 @@ suite.define(() => {
       expect(metrics.connectMinHeight).toBe("44px");
       expect(metrics.gateOverflowY).toBe("auto");
       expect(metrics.gateScrollHeight).toBeGreaterThan(metrics.gateClientHeight);
-      expect(metrics.inputMinHeights.every((height) => height === "44px")).toBe(true);
-      expect(metrics.toggleSizes).toHaveLength(2);
+      expect(metrics.inputMinHeights).toEqual(["44px", "44px"]);
+      expect(metrics.toggleSizes).toHaveLength(1);
       expect(
         metrics.toggleSizes.every(({ height, width }) => height === "32px" && width === "32px"),
       ).toBe(true);
@@ -528,22 +528,37 @@ suite.define(() => {
     }
   });
 
-  it("keeps failure recovery visible while generic help stays collapsed", async () => {
+  it("keeps failure recovery visible without generic help", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
 
     try {
       await renderLoginGate(page, suite.server.baseUrl);
       const failure = page.locator(".login-gate__failure");
-      expect(await failure.evaluate((element) => element.tagName)).toBe("DIV");
+      expect(await failure.evaluate((element) => element.tagName)).toBe("SECTION");
       expect(await page.locator(".login-gate__failure-summary").isVisible()).toBe(true);
       expect(await page.locator(".login-gate__failure-steps").isVisible()).toBe(true);
       expect(await page.locator(".login-gate__failure-docs").isVisible()).toBe(true);
+      expect(await page.locator(".login-gate__help").count()).toBe(0);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("keeps generic help collapsed until requested when there is no failure", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+
+    try {
+      await renderLoginGate(page, suite.server.baseUrl, { lastError: null });
+      expect(await page.locator(".login-gate__failure").count()).toBe(0);
 
       const help = page.locator(".login-gate__help");
       expect(await help.evaluate((element) => element.tagName)).toBe("DETAILS");
       expect(await help.getAttribute("open")).toBeNull();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(false);
+      await help.locator("summary").click();
+      expect(await page.locator(".login-gate__steps").isVisible()).toBe(true);
     } finally {
       await closeContext(context);
     }

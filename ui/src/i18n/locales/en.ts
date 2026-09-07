@@ -2196,6 +2196,8 @@ export const en: TranslationMap & {
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
     settingsGroupDevice: "This Mac",
+    settingsGroupThisIPhone: "This iPhone",
+    settingsGroupThisIPad: "This iPad",
     settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
@@ -2230,6 +2232,8 @@ export const en: TranslationMap & {
     uploadProgress: "Uploading {current} of {total}",
     uploadFailed: "Upload failed",
     retryUpload: "Retry",
+    insertUploadedPaths: "Insert uploaded paths",
+    uploadExpired: "Uploaded files may have expired. Cancel this batch and choose the files again.",
     closeSession: "Close terminal session",
     sessions: "Terminal sessions",
     refreshSessions: "Refresh",
@@ -3195,6 +3199,7 @@ export const en: TranslationMap & {
       progress: "{complete} of {total}",
       active: "{running} running · {queued} queued · {failed} failed",
       finished: "{done} completed · {failed} failed",
+      completed: "{done} completed",
       childOutcome: "Child runs finished. Check the conversation for the final response.",
       details: "Child details",
       detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
@@ -3670,6 +3675,8 @@ export const en: TranslationMap & {
       supportFiles: "{count} support files",
       noSupportFiles: "0 support files",
       loading: "Loading\u2026",
+      draftMissing:
+        "This suggestion's draft is missing. Reject it and ask your agent to create a new suggestion.",
       supportFilesTitle: "Support files",
       clickToPreview: "\u00b7 click to preview",
     },
@@ -4608,9 +4615,8 @@ export const en: TranslationMap & {
       sat: "Sat",
     },
   },
-  login: {
-    subtitle: "Gateway Dashboard",
-  },
+  // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
+  login: {},
   chat: {
     modelAccounts: {
       label: "Account for this chat",

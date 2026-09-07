@@ -177,17 +177,34 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
           if [ "$anchor_extraction_valid" = "1" ] &&
             grep -q "OPENCLAW_PR_ANCHOR_REPO_ROOT" "$anchor_exec_dir/scripts/pr" 2>/dev/null; then
             # Only third-party tooling comes from the installed canonical tree.
+            # Pin package directories: a later install may replace top-level aliases.
             # A whole node_modules link could load unanchored workspace source.
-            mkdir "$anchor_exec_dir/node_modules"
-            # Native junctions avoid Git Bash copying package directories on Windows.
-            node --input-type=module - "$canonical_repo_root/node_modules" "$anchor_exec_dir/node_modules" <<'EOF_NODE'
-import { symlinkSync } from "node:fs";
+            if ! node --input-type=module - "$canonical_repo_root/node_modules" "$anchor_exec_dir/node_modules" <<'EOF_NODE'
+import { mkdirSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-for (const dependency of ["tsx", "zod", "minimatch", "yaml"]) {
-  symlinkSync(join(process.argv[2], dependency), join(process.argv[3], dependency),
+const dependencies = ["tsx", "zod", "minimatch", "yaml"].map((dependency) => {
+  const installedPath = join(process.argv[2], dependency);
+  try {
+    const target = realpathSync(installedPath);
+    if (!statSync(target).isDirectory()) throw new Error("not a package directory");
+    return { dependency, target };
+  } catch {
+    console.error(`Cannot resolve installed scripts/pr dependency '${dependency}' at ${installedPath}.`);
+    console.error("Restore frozen dependencies in a clean trusted-main checkout before retrying; no dependencies were installed.");
+    process.exit(1);
+  }
+});
+mkdirSync(process.argv[3]);
+for (const { dependency, target } of dependencies) {
+  // Native junctions avoid Git Bash copying package directories on Windows.
+  symlinkSync(target, join(process.argv[3], dependency),
     process.platform === "win32" ? "junction" : "dir");
 }
 EOF_NODE
+            then
+              rm -rf "$anchor_exec_dir"
+              exit 1
+            fi
             # Not cleaned by trap: exec replaces this shell, and bash re-reads
             # the script file during execution, so the copy must outlive the
             # whole supervised run. OS tmp reaping owns this directory.

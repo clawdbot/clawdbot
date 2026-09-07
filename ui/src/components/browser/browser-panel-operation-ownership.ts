@@ -2,6 +2,8 @@ import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   bindBrowserRequestClient,
+  captureBrowserScreenshot,
+  fetchBrowserScreenshotDataUrl,
   type BrowserRequestClient,
   isBrowserEvaluateDisabledError,
   isBrowserNavigationBlockedError,
@@ -9,6 +11,7 @@ import {
   type BrowserPageMetrics,
   type BrowserPanelTab,
 } from "./browser-client.ts";
+import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
 import type { BrowserRoute } from "./browser-target.ts";
 
 export interface BrowserPanelControllerHost extends ReactiveControllerHost {
@@ -316,7 +319,7 @@ export class BrowserPanelOperationOwnership {
 }
 
 /** A stale gateway must not disable evaluation on the replacement browser. */
-export async function readBrowserPanelOwnedMetrics(
+async function readBrowserPanelOwnedMetrics(
   client: BrowserRequestClient,
   targetId: string,
   evaluateUnavailable: boolean,
@@ -337,4 +340,52 @@ export async function readBrowserPanelOwnedMetrics(
     }
     return null;
   }
+}
+
+export async function captureBrowserPanelOwnedView(params: {
+  client: BrowserRequestClient;
+  targetId: string;
+  route?: BrowserRoute;
+  host: Pick<BrowserPanelControllerHost, "resourceBasePath" | "authToken">;
+  isEvaluateUnavailable: () => boolean;
+  current: () => boolean;
+  markEvaluateUnavailable: () => void;
+}): Promise<BrowserPanelView | null> {
+  const shot = await captureBrowserScreenshot(params.client, params.targetId);
+  if (!params.current()) {
+    return null;
+  }
+  const dataUrl = await fetchBrowserScreenshotDataUrl({
+    resourceBasePath: params.host.resourceBasePath,
+    authToken: params.host.authToken,
+    path: shot.path,
+  });
+  if (!params.current()) {
+    return null;
+  }
+  const image = await loadBrowserPanelImage(dataUrl);
+  if (!params.current()) {
+    return null;
+  }
+  const observedMetrics = await readBrowserPanelOwnedMetrics(
+    params.client,
+    params.targetId,
+    params.isEvaluateUnavailable(),
+    params.current,
+    params.markEvaluateUnavailable,
+  );
+  if (!params.current()) {
+    return null;
+  }
+  // A navigation between screenshot and evaluation changes the coordinate document.
+  const metrics =
+    shot.url && observedMetrics?.url && shot.url !== observedMetrics.url ? null : observedMetrics;
+  return {
+    targetId: params.targetId,
+    dataUrl,
+    image,
+    url: shot.url,
+    metrics,
+    ...(params.route ? { browserTab: { ...params.route, targetId: params.targetId } } : {}),
+  };
 }

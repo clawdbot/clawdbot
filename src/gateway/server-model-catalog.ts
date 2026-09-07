@@ -63,7 +63,7 @@ export async function resetPreparedModelCatalogStateForTest(): Promise<void> {
       import("../agents/prepared-model-runtime.test-support.js"),
       import("../agents/model-catalog.js"),
     ]);
-  resetPreparedModelRuntimeSnapshotsForTest();
+  await resetPreparedModelRuntimeSnapshotsForTest();
   resetModelCatalogBuilderCacheForTest();
 }
 

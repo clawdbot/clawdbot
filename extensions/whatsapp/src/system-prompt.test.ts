@@ -164,4 +164,21 @@ describe("resolveWhatsAppSystemPrompt", () => {
       ).toBe("wildcard prompt");
     },
   );
+
+  it.each(promptSurfaceCases)(
+    "falls back to wildcard when specific $name systemPrompt is null",
+    (surface) => {
+      expect(
+        surface.resolve(
+          createParams(
+            surface,
+            createAccountConfig(surface, {
+              [surface.targetId]: { systemPrompt: null },
+              "*": { systemPrompt: "wildcard prompt" },
+            }),
+          ),
+        ),
+      ).toBe("wildcard prompt");
+    },
+  );
 });

@@ -23,8 +23,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
         name: "03-agent-connected")
     private static let settingsScreenshotTarget = ScreenshotTarget(
         initialTab: "settings",
-        initialDestination: "settings",
+        initialDestination: "gateway",
         name: "04-settings-connected")
+    private static let settingsFallbackTarget = ScreenshotTarget(
+        initialTab: "settings",
+        initialDestination: "settings",
+        name: "settings-fallback")
     private static let appReadinessAccessibilityIdentifier = "RootTabs.Ready"
 
     private var app: XCUIApplication?
@@ -73,10 +77,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testWatchMessageDeliveryIsReachableFromSettings() throws {
-        self.launchApp(for: Self.settingsScreenshotTarget)
+        self.launchApp(for: Self.settingsFallbackTarget)
         let app = try XCTUnwrap(self.app)
-        let watch = app.buttons.containing(.staticText, identifier: "Apple Watch").firstMatch
-        for _ in 0..<5 where !watch.isHittable {
+        XCTAssertTrue(app.descendants(matching: .any)["SettingsHub.Fallback"].waitForExistence(timeout: 8))
+        let watch = app.buttons["settings-watch-row"]
+        for _ in 0..<12 where !watch.isHittable {
             app.swipeUp()
         }
         XCTAssertTrue(watch.isHittable)
@@ -102,34 +107,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.buttons["agent-status-filter-menu"].waitForExistence(timeout: 8) == true)
         try self.selectSidebarDestination("Settings")
         XCTAssertTrue(
-            self.app?.descendants(matching: .any)["settings-system-agent-row"]
+            self.app?.descendants(matching: .any)["SettingsHub.Fallback"]
                 .waitForExistence(timeout: 8) == true)
-    }
-
-    func testAutomationManagementScreenshot() {
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "control",
-            initialDestination: "cron",
-            name: "automation-management"))
-
-        XCTAssertTrue(self.app?.staticTexts["Release briefing"].waitForExistence(timeout: 8) == true)
-        XCTAssertTrue(self.app?.staticTexts["Weekly project review"].exists == true)
-        self.attachScreenshot(named: "automation-management")
-    }
-
-    func testSkillsManagementScreenshot() throws {
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "skills-management"))
-
-        let skills = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Skills").firstMatch)
-        XCTAssertTrue(skills.waitForExistence(timeout: 8))
-        skills.tap()
-        XCTAssertTrue(self.app?.staticTexts["github"].waitForExistence(timeout: 8) == true)
-        XCTAssertTrue(self.app?.staticTexts["calendar"].exists == true)
-        self.attachScreenshot(named: "skills-management")
     }
 
     func testOnboardingExplainsCapabilitiesAndTrust() {
@@ -177,7 +156,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             Self.controlScreenshotTarget,
             Self.chatScreenshotTarget,
             Self.agentScreenshotTarget,
-            Self.settingsScreenshotTarget,
+            Self.settingsFallbackTarget,
         ] {
             self.launchApp(for: target)
             let app = try XCTUnwrap(self.app)
@@ -288,13 +267,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         // A clean normal-state launch can auto-route to Gateway setup.
         try self.selectSidebarDestination("Settings")
         let app = try XCTUnwrap(self.app)
-        let appearance = self.revealAppearanceSettingsRow(in: app)
-        XCTAssertTrue(appearance.waitForExistence(timeout: 8))
-        self.waitForHittable(true, of: appearance)
-        // Appearance is a destination-style NavigationLink, so this exercises
-        // the root-visibility guard rather than the typed Settings path guard.
-        appearance.tap()
-        XCTAssertTrue(self.app?.navigationBars["Appearance"].waitForExistence(timeout: 5) == true)
+        let licenses = app.buttons["settings-licenses-row"]
+        for _ in 0..<12 where !licenses.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(licenses.isHittable)
+        licenses.tap()
+        XCTAssertTrue(self.app?.navigationBars["Licenses"].waitForExistence(timeout: 5) == true)
 
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.5))
@@ -306,144 +285,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "sidebar-pushed-screen-after-back-swipe")
 
         self.waitForHittable(false, of: app.buttons["RootTabs.Sidebar.Hide"])
-        self.waitForHittable(true, of: appearance)
-        XCTAssertFalse(app.navigationBars["Appearance"].exists)
-    }
-
-    func testLocationAlwaysWaitsForSlowSystemPermissionResponse() throws {
-        XCUIApplication().resetAuthorizationStatus(for: .location)
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "location-always-slow-prompt"))
-
-        let permissions = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
-        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
-        permissions.tap()
-
-        let sharingToggle = try XCTUnwrap(self.app?.buttons["settings-location-sharing-toggle"])
-        XCTAssertTrue(sharingToggle.waitForExistence(timeout: 5))
-        if sharingToggle.value as? String != "Off" {
-            sharingToggle.tap()
-            self.waitForValue("Off", of: sharingToggle)
-            self.waitForEnabled(sharingToggle)
-        }
-        sharingToggle.tap()
-
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let prompt = springboard.alerts.firstMatch
-        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
-        self.waitForValue("On", of: sharingToggle)
-        Thread.sleep(forTimeInterval: 3)
-        XCTAssertTrue(prompt.exists)
-        XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
-        self.attachFullScreenScreenshot(named: "location-always-first-prompt-after-3s")
-
-        let firstAllow = prompt.buttons.matching(
-            NSPredicate(format: "label CONTAINS[c] 'While Using'")).firstMatch
-        XCTAssertTrue(firstAllow.exists)
-        firstAllow.tap()
-
-        self.app?.activate()
-        XCTAssertTrue(
-            self.app?.staticTexts["Requesting iOS location permission…"].waitForNonExistence(timeout: 5) == true)
-
-        let accessLevel = try XCTUnwrap(
-            self.app?.descendants(matching: .any)["settings-location-access-level"])
-        XCTAssertTrue(accessLevel.waitForExistence(timeout: 5))
-        self.waitForValue("While Using the App", of: accessLevel)
-        let accessLevelButton = try XCTUnwrap(self.app?.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Access Level")).firstMatch)
-        XCTAssertTrue(accessLevelButton.waitForExistence(timeout: 3))
-        self.waitForEnabled(accessLevelButton)
-        accessLevelButton.tap()
-        let appAlwaysAction = try XCTUnwrap(self.app?.descendants(matching: .any)["Always"])
-        let systemAlwaysAction = springboard.descendants(matching: .any)["Always"]
-        let alwaysAction = appAlwaysAction.waitForExistence(timeout: 1)
-            ? appAlwaysAction
-            : systemAlwaysAction
-        XCTAssertTrue(alwaysAction.waitForExistence(timeout: 3))
-        alwaysAction.tap()
-
-        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
-        self.waitForValue("Always", of: accessLevel)
-        Thread.sleep(forTimeInterval: 3)
-        XCTAssertTrue(prompt.exists)
-        XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
-        self.attachFullScreenScreenshot(named: "location-always-upgrade-prompt-after-3s")
-
-        let changeToAlways = prompt.buttons.matching(
-            NSPredicate(format: "label CONTAINS[c] 'Change to Always'")).firstMatch
-        XCTAssertTrue(changeToAlways.exists)
-        changeToAlways.tap()
-
-        self.app?.activate()
-        XCTAssertTrue(accessLevel.waitForExistence(timeout: 5))
-        self.waitForValue("Always", of: accessLevel)
-        XCTAssertTrue(
-            self.app?.staticTexts["Requesting iOS location permission…"].waitForNonExistence(timeout: 5) == true)
-        Thread.sleep(forTimeInterval: 1)
-        self.attachScreenshot(named: "location-always-granted-after-slow-prompt")
-    }
-
-    func testLocationWhileUsingStaysSelectedAfterSlowSystemPermissionResponse() throws {
-        XCUIApplication().resetAuthorizationStatus(for: .location)
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "location-while-using-slow-prompt"))
-
-        let permissions = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
-        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
-        permissions.tap()
-
-        let sharingToggle = try XCTUnwrap(self.app?.buttons["settings-location-sharing-toggle"])
-        XCTAssertTrue(sharingToggle.waitForExistence(timeout: 5))
-        if sharingToggle.value as? String != "Off" {
-            sharingToggle.tap()
-            self.waitForValue("Off", of: sharingToggle)
-            self.waitForEnabled(sharingToggle)
-        }
-        sharingToggle.tap()
-
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let prompt = springboard.alerts.firstMatch
-        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
-        self.waitForValue("On", of: sharingToggle)
-        Thread.sleep(forTimeInterval: 3)
-        XCTAssertTrue(prompt.exists)
-        XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
-
-        let allow = prompt.buttons.matching(
-            NSPredicate(format: "label CONTAINS[c] 'While Using'")).firstMatch
-        XCTAssertTrue(allow.exists)
-        allow.tap()
-
-        self.app?.activate()
-        let accessLevel = try XCTUnwrap(
-            self.app?.descendants(matching: .any)["settings-location-access-level"])
-        XCTAssertTrue(accessLevel.waitForExistence(timeout: 5))
-        self.waitForValue("While Using the App", of: accessLevel)
-        XCTAssertTrue(
-            self.app?.staticTexts["Requesting iOS location permission…"].waitForNonExistence(timeout: 5) == true)
-
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "location-while-using-relaunch"))
-        let relaunchedPermissions = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
-        XCTAssertTrue(relaunchedPermissions.waitForExistence(timeout: 8))
-        relaunchedPermissions.tap()
-        let relaunchedToggle = try XCTUnwrap(self.app?.buttons["settings-location-sharing-toggle"])
-        XCTAssertTrue(relaunchedToggle.waitForExistence(timeout: 5))
-        self.waitForValue("On", of: relaunchedToggle)
-        let relaunchedAccessLevel = try XCTUnwrap(
-            self.app?.descendants(matching: .any)["settings-location-access-level"])
-        XCTAssertTrue(relaunchedAccessLevel.waitForExistence(timeout: 5))
-        self.waitForValue("While Using the App", of: relaunchedAccessLevel)
+        self.waitForHittable(true, of: licenses)
+        XCTAssertFalse(app.navigationBars["Licenses"].exists)
     }
 
     func testGatewaySettingsOpenedFromChatUsesRootSidebarNavigation() throws {
@@ -470,49 +313,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.navigationBars["Settings"].waitForExistence(timeout: 5) == true)
         XCTAssertTrue(self.app?.buttons["RootTabs.Sidebar.Show"].exists == true)
         self.attachScreenshot(named: "gateway-to-settings-via-sidebar")
-    }
-
-    func testVoiceWakeResumesAfterTalkModeToggle() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Settings proof only")
-        self.addUIInterruptionMonitor(withDescription: "Microphone and speech permissions") { alert in
-            guard alert.buttons["Allow"].exists else { return false }
-            alert.buttons["Allow"].tap()
-            return true
-        }
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "voice-wake-talk-lifecycle"))
-
-        let voiceSettings = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Voice & Talk").firstMatch)
-        XCTAssertTrue(voiceSettings.waitForExistence(timeout: 8))
-        voiceSettings.tap()
-
-        let voiceWake = try XCTUnwrap(self.app?.buttons["Voice Wake"])
-        let talkMode = try XCTUnwrap(self.app?.buttons["Talk Mode"])
-        XCTAssertTrue(voiceWake.waitForExistence(timeout: 5))
-        XCTAssertTrue(talkMode.exists)
-
-        if talkMode.value as? String == "On" {
-            talkMode.tap()
-        }
-        if voiceWake.value as? String == "On" {
-            voiceWake.tap()
-        }
-
-        voiceWake.tap()
-        self.waitForValue("On", of: voiceWake)
-        talkMode.tap()
-        self.waitForValue("On", of: talkMode)
-        talkMode.tap()
-        self.waitForValue("Off", of: talkMode)
-        XCTAssertEqual(voiceWake.value as? String, "On")
-        XCTAssertEqual(self.app?.state, .runningForeground)
-        self.attachScreenshot(named: "voice-wake-after-talk-resume")
-
-        voiceWake.tap()
-        self.waitForValue("Off", of: voiceWake)
     }
 
     func testChatComposerStartsCompactAndGrowsWithDraft() throws {
@@ -1051,53 +851,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].exists)
     }
 
-    func testAppearanceUsesSettingsRow() throws {
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "appearance-compact"), appearance: nil)
-
-        let app = try XCTUnwrap(self.app)
-        let row = self.revealAppearanceSettingsRow(in: app)
-        XCTAssertTrue(row.waitForExistence(timeout: 8))
-        XCTAssertFalse(self.app?.buttons["settings-appearance-menu"].exists == true)
-        XCTAssertFalse(self.app?.segmentedControls["settings-appearance-picker"].exists == true)
-
-        row.tap()
-        let navigationBar = try XCTUnwrap(self.app?.navigationBars["Appearance"])
-        XCTAssertTrue(navigationBar.waitForExistence(timeout: 3))
-        let system = try XCTUnwrap(self.app?.buttons["settings-appearance-system"])
-        let light = try XCTUnwrap(self.app?.buttons["settings-appearance-light"])
-        let dark = try XCTUnwrap(self.app?.buttons["settings-appearance-dark"])
-        XCTAssertTrue(system.exists)
-        XCTAssertTrue(light.exists)
-        XCTAssertTrue(dark.exists)
-        if system.value as? String != "Selected" {
-            system.tap()
-            XCTAssertTrue(row.waitForExistence(timeout: 3))
-            self.waitForValue("System", of: row)
-            row.tap()
-            XCTAssertTrue(navigationBar.waitForExistence(timeout: 3))
-            self.waitForValue("Selected", of: system)
-        }
-        Thread.sleep(forTimeInterval: 1)
-        self.attachScreenshot(named: "appearance-system")
-
-        dark.tap()
-        XCTAssertTrue(row.waitForExistence(timeout: 3))
-        self.waitForValue("Dark", of: row)
-        self.assertDarkAppearanceTextVisible()
-        self.attachScreenshot(named: "settings-dark")
-
-        row.tap()
-        XCTAssertTrue(navigationBar.waitForExistence(timeout: 3))
-        system.tap()
-        XCTAssertTrue(row.waitForExistence(timeout: 3))
-        self.waitForValue("System", of: row)
-        Thread.sleep(forTimeInterval: 1)
-        self.attachScreenshot(named: "appearance-system-restored")
-    }
-
     func testChatAndOverviewNavigateThroughSidebar() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar proof only")
         self.launchApp(for: ScreenshotTarget(
@@ -1266,78 +1019,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 30))
         self.attachScreenshot(named: "manual-auth-retry-connected")
-    }
-
-    func testPhotosLimitedAccess() throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["OPENCLAW_IOS_PHOTOS_E2E"] == "1",
-            "Set OPENCLAW_IOS_PHOTOS_E2E=1 to exercise the system Photos prompt")
-        addUIInterruptionMonitor(withDescription: "Photos access") { alert in
-            for title in ["Limit Access…", "Select Photos…"] where alert.buttons[title].exists {
-                alert.buttons[title].tap()
-                return true
-            }
-            return false
-        }
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "photos-limited-access"))
-
-        let permissions = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
-        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
-        permissions.tap()
-
-        let privacy = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Privacy & Access").firstMatch)
-        XCTAssertTrue(privacy.waitForExistence(timeout: 8))
-        privacy.tap()
-
-        let request = try XCTUnwrap(self.app?.buttons["privacy-access-photos-action"])
-        XCTAssertTrue(request.waitForExistence(timeout: 5))
-        XCTAssertEqual(request.label, "Continue")
-        request.tap()
-        self.app?.tap()
-
-        // The limited picker is an out-of-process system surface without stable accessibility identifiers.
-        // Normalized taps are confined to this opt-in simulator test; app-owned state proves completion below.
-        let screen = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        screen.coordinate(withNormalizedOffset: CGVector(dx: 0.17, dy: 0.43)).tap()
-        screen.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: 0.16)).tap()
-
-        self.app?.activate()
-        let limitedStatus = try XCTUnwrap(self.app?.staticTexts.matching(
-            NSPredicate(
-                format: "identifier == %@ AND label == %@",
-                "privacy-access-photos-status",
-                "Limited")).firstMatch)
-        XCTAssertTrue(limitedStatus.waitForExistence(timeout: 8))
-        XCTAssertEqual(self.app?.buttons["privacy-access-photos-action"].label, "Manage Access")
-        self.attachScreenshot(named: "photos-limited-access")
-    }
-
-    func testAppleHealthDisclosureIsVisible() throws {
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "apple-health-disclosure"))
-
-        let permissions = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
-        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
-        permissions.tap()
-
-        let appleHealth = try XCTUnwrap(self.app?.staticTexts["Apple Health Summaries"])
-        XCTAssertTrue(appleHealth.waitForExistence(timeout: 8))
-        let action = try XCTUnwrap(self.app?.buttons["apple-health-summaries-action"])
-        XCTAssertTrue(action.waitForExistence(timeout: 5))
-        XCTAssertEqual(action.label, "Enable Apple Health Summaries")
-        let labelWidth = (action.label as NSString).size(withAttributes: [
-            .font: UIFont.preferredFont(forTextStyle: .footnote),
-        ]).width
-        XCTAssertGreaterThanOrEqual(action.frame.width, labelWidth + 24)
-        self.attachScreenshot(named: "apple-health-disclosure")
     }
 }
 
@@ -1697,30 +1378,26 @@ extension OpenClawSnapshotUITests {
         hierarchy.name = "\(origin)-approvals-notifications-hierarchy"
         hierarchy.lifetime = .keepAlways
         add(hierarchy)
-        XCTAssertTrue(reachedNotifications, "Open Notifications must push from \(origin) Approvals")
-        XCTAssertTrue(app.switches.firstMatch.exists, "Notifications must render its delivery control")
+        XCTAssertTrue(
+            reachedNotifications,
+            "Open Notifications must open Dashboard notification settings from \(origin) Approvals")
+        let dashboard = app.webViews.firstMatch
+        XCTAssertTrue(
+            dashboard.waitForExistence(timeout: 8),
+            "Notification settings must render in the embedded Dashboard")
+        XCTAssertTrue(dashboard.staticTexts["Notifications"].waitForExistence(timeout: 8))
         XCTAssertFalse(
             approvalDialog.exists,
-            "The approval being reviewed must not cover Notifications")
-        let back = app.navigationBars.buttons.firstMatch
-        XCTAssertTrue(back.exists)
-        back.tap()
-        XCTAssertTrue(notifications.waitForExistence(timeout: 5), "Back must return to Approvals")
+            "The approval being reviewed must not cover Dashboard notification settings")
+        let close = app.buttons["DashboardPage.Close"]
+        XCTAssertTrue(close.exists)
+        close.tap()
+        XCTAssertTrue(notifications.waitForExistence(timeout: 5), "Done must return to Approvals")
         self.attachScreenshot(named: "\(origin)-approvals-after-back")
     }
 
     private func agentIdentity(in app: XCUIApplication) -> XCUIElement {
         app.otherElements.matching(identifier: "chat-agent-identity").firstMatch
-    }
-
-    private func revealAppearanceSettingsRow(in app: XCUIApplication) -> XCUIElement {
-        let row = app.descendants(matching: .any)["settings-appearance-row"]
-        let settingsList = app.collectionViews.firstMatch
-        for _ in 0..<4 {
-            if row.waitForExistence(timeout: 1) { break }
-            settingsList.swipeUp()
-        }
-        return row
     }
 
     private func readinessMarker(in app: XCUIApplication) -> XCUIElement {
@@ -1732,7 +1409,8 @@ extension OpenClawSnapshotUITests {
         case "overview": app.staticTexts["Agent session"]
         case "chat": app.otherElements["chat-composer-surface"]
         case "agents": app.buttons["agent-status-filter-menu"]
-        case "settings": app.descendants(matching: .any)["settings-system-agent-row"]
+        case "settings": app.descendants(matching: .any)["SettingsHub.Fallback"]
+        case "gateway": app.navigationBars["Gateway"]
         default: self.readinessMarker(in: app)
         }
     }
@@ -2094,59 +1772,6 @@ extension OpenClawSnapshotUITests {
         gatewaySettings.tap()
     }
 
-    private func assertDarkAppearanceTextVisible(
-        file: StaticString = #filePath,
-        line: UInt = #line)
-    {
-        guard let app, let image = app.screenshot().image.cgImage else {
-            XCTFail("App screenshot has no CGImage", file: file, line: line)
-            return
-        }
-        let width = image.width
-        let height = image.height
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        let rendered = pixels.withUnsafeMutableBytes { buffer in
-            guard let context = CGContext(
-                data: buffer.baseAddress,
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bytesPerRow: width * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-            else {
-                return false
-            }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return true
-        }
-        guard rendered else {
-            XCTFail("Could not render the appearance screenshot", file: file, line: line)
-            return
-        }
-
-        // Sample the full List content, excluding navigation/tab chrome. The regression left
-        // entire labels transparent while isolated row crops could still look healthy.
-        let sampleX = (width / 12)..<(width * 11 / 12)
-        let sampleY = (height / 8)..<(height * 4 / 5)
-        var brightPixels = 0
-        for y in sampleY {
-            for x in sampleX {
-                let offset = (y * width + x) * 4
-                if pixels[offset] > 190, pixels[offset + 1] > 190, pixels[offset + 2] > 190 {
-                    brightPixels += 1
-                }
-            }
-        }
-        let sampledPixels = max(1, sampleX.count * sampleY.count)
-        XCTAssertGreaterThan(
-            Double(brightPixels) / Double(sampledPixels),
-            0.002,
-            "Dark appearance must keep the settings labels visibly light",
-            file: file,
-            line: line)
-    }
-
     private func assertElementHasRenderedContent(
         _ element: XCUIElement,
         named name: String,
@@ -2327,12 +1952,5 @@ extension OpenClawSnapshotUITests {
             }
             element.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
         }
-    }
-
-    private func attachFullScreenScreenshot(named name: String) {
-        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 }

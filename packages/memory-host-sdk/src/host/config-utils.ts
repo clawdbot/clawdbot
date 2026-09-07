@@ -1,12 +1,11 @@
 // Memory Host SDK helper module supports config utils behavior.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+  resolveDefaultAgentWorkspaceDir,
+  resolveStateDir,
+  resolveUserPath,
+} from "./openclaw-runtime-paths.js";
 import type { MemoryExtraPath } from "./types.js";
 export { normalizeAgentId };
 
@@ -128,118 +127,6 @@ export function resolveRememberAcrossConversations(cfg: OpenClawConfig, agentId:
 export const MEMORY_HOST_ROOT_FILENAME = "MEMORY.md";
 
 const DEFAULT_AGENT_ID = "main";
-const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
-const NEW_STATE_DIRNAME = ".openclaw";
-/** Treat shell-placeholder home values as absent. */
-function normalizeHomeValue(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
-    return undefined;
-  }
-  return trimmed;
-}
-
-/** Resolve the underlying OS home before applying OpenClaw-specific overrides. */
-function resolveRawOsHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
-  return (
-    normalizeHomeValue(env.HOME) ??
-    normalizeHomeValue(env.USERPROFILE) ??
-    normalizeHomeValue(homedir())
-  );
-}
-
-/** Resolve OPENCLAW_HOME or the OS home, falling back to cwd for hermetic tests. */
-function resolveRequiredHomeDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
-): string {
-  const explicitHome = normalizeHomeValue(env.OPENCLAW_HOME);
-  const rawHome = explicitHome
-    ? explicitHome.replace(/^~(?=$|[\\/])/, () => resolveRawOsHomeDir(env, homedir) ?? "")
-    : resolveRawOsHomeDir(env, homedir);
-  return rawHome ? path.resolve(rawHome) : path.resolve(process.cwd());
-}
-
-/** Resolve standalone memory-host paths without importing core home-directory policy. */
-function resolveMemoryHostUserPath(
-  input: string,
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
-): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("~")) {
-    return path.resolve(
-      trimmed.replace(/^~(?=$|[\\/])/, () => resolveRequiredHomeDir(env, homedir)),
-    );
-  }
-  return path.resolve(trimmed);
-}
-
-/** Return legacy state roots in priority order. */
-function legacyStateDirs(homedir: () => string): string[] {
-  return LEGACY_STATE_DIRNAMES.map((dir) => path.join(homedir(), dir));
-}
-
-function isFastTestRuntimeEnv(env: NodeJS.ProcessEnv): boolean {
-  const isTestRuntime =
-    env.VITEST === "true" ||
-    env.VITEST === "1" ||
-    env.VITEST_POOL_ID !== undefined ||
-    env.VITEST_WORKER_ID !== undefined ||
-    env.NODE_ENV === "test" ||
-    (env !== process.env &&
-      (process.env.VITEST === "true" ||
-        process.env.VITEST === "1" ||
-        process.env.VITEST_POOL_ID !== undefined ||
-        process.env.VITEST_WORKER_ID !== undefined ||
-        process.env.NODE_ENV === "test"));
-  return isTestRuntime && env.OPENCLAW_TEST_FAST === "1";
-}
-
-/** Resolve the current state root while preserving shipped legacy installs when present. */
-function resolveStateDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
-): string {
-  const override = env.OPENCLAW_STATE_DIR?.trim();
-  if (override) {
-    return resolveMemoryHostUserPath(override, env, homedir);
-  }
-  const effectiveHome = () => resolveRequiredHomeDir(env, homedir);
-  const nextDir = path.join(effectiveHome(), NEW_STATE_DIRNAME);
-  if (isFastTestRuntimeEnv(env) || fs.existsSync(nextDir)) {
-    return nextDir;
-  }
-  // Remove after 2026-10-01: drop legacy state-dir precedence once an explicit migration creates .openclaw.
-  const existingLegacy = legacyStateDirs(effectiveHome).find((dir) => {
-    try {
-      return fs.existsSync(dir);
-    } catch {
-      return false;
-    }
-  });
-  return existingLegacy ?? nextDir;
-}
-
-/** Resolve the default agent workspace, partitioned by OPENCLAW_PROFILE when set. */
-function resolveDefaultAgentWorkspaceDir(env: NodeJS.ProcessEnv = process.env): string {
-  const workspaceDir = env.OPENCLAW_WORKSPACE_DIR?.trim();
-  if (workspaceDir) {
-    return resolveMemoryHostUserPath(workspaceDir, env);
-  }
-  if (env.OPENCLAW_STATE_DIR?.trim()) {
-    return path.join(resolveStateDir(env), "workspace");
-  }
-  const home = resolveRequiredHomeDir(env, os.homedir);
-  const profile = env.OPENCLAW_PROFILE?.trim();
-  if (profile && normalizeLowercaseStringOrEmpty(profile) !== "default") {
-    return path.join(resolveStateDir(env), "workspace");
-  }
-  return path.join(home, ".openclaw", "workspace");
-}
 
 /** Return configured agent entries after dropping nullish placeholders. */
 function listAgentEntries(cfg: OpenClawConfig): AgentConfig[] {
@@ -281,16 +168,16 @@ export function resolveMemoryHostAgentWorkspaceDir(
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
-    return stripNullBytes(resolveMemoryHostUserPath(configured, env));
+    return stripNullBytes(resolveUserPath(configured, env));
   }
   const fallback = cfg.agents?.defaults?.workspace?.trim();
   if (id === resolveDefaultAgentId(cfg)) {
     return stripNullBytes(
-      fallback ? resolveMemoryHostUserPath(fallback, env) : resolveDefaultAgentWorkspaceDir(env),
+      fallback ? resolveUserPath(fallback, env) : resolveDefaultAgentWorkspaceDir(env),
     );
   }
   if (fallback) {
-    return stripNullBytes(path.join(resolveMemoryHostUserPath(fallback, env), id));
+    return stripNullBytes(path.join(resolveUserPath(fallback, env), id));
   }
   return stripNullBytes(path.join(resolveStateDir(env), `workspace-${id}`));
 }

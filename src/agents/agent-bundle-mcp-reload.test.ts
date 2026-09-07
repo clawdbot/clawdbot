@@ -683,11 +683,12 @@ it("reconciles a second publication arriving while a pending owner is retiring a
   });
   releaseCreate.resolve();
   await closing.promise;
-  await manager.reloadConfig({
+  const latestPublication = manager.reloadConfig({
     cfg: { ...cfg, mcp: { servers: {} } },
     manifestRegistry: params.manifestRegistry,
   });
   releaseClose.resolve();
+  await latestPublication;
   await expect(probe(await pending, "second")).rejects.toThrow();
 });
 
@@ -700,6 +701,56 @@ it("preserves an explicit config snapshot acquired after an unrelated global pub
   const explicit = await manager.getOrCreate({ ...params, cfg: config() });
   expect(await probe(explicit, "healthy")).toMatchObject({ label: "healthy" });
 });
+
+it.each([false, true])(
+  "accounts for config cleanup with concurrent replacement %s",
+  async (replace) => {
+    const closing = createDeferred();
+    const releaseClose = createDeferred();
+    releaseHeld.push(() => releaseClose.resolve());
+    const url = await httpProbe(async () => {
+      closing.resolve();
+      await releaseClose.promise;
+    });
+    const { manager, params } = await fixture();
+    const server = { transport: "streamable-http" as const, url };
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      mcp: { servers: { first: server, second: server } },
+    };
+    const original = await manager.getOrCreate({
+      ...params,
+      cfg: { ...cfg, mcp: { servers: { first: server } } },
+    });
+    await probe(original, "first");
+    const acquire = (sessionId: string) =>
+      manager.getOrCreate({
+        ...params,
+        sessionId,
+        cfg: { ...cfg, mcp: { servers: { second: server } } },
+      });
+    for (let index = 0; index < 255; index += 1) {
+      await acquire(`other-${index}`);
+    }
+    const reload = manager.reloadConfig({
+      cfg: { ...cfg, mcp: { servers: { second: server } } },
+      manifestRegistry: params.manifestRegistry,
+    });
+    await closing.promise;
+    const replacement = replace ? acquire(params.sessionId) : undefined;
+    await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
+    releaseClose.resolve();
+    await reload;
+    await replacement;
+    if (replace) {
+      await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
+      await manager.disposeSession(params.sessionId);
+    }
+    await acquire("overflow");
+    // The cached empty facade must reserve capacity again before gaining a server.
+    await expect(acquire(params.sessionId)).rejects.toThrow("live runtime limit (256)");
+  },
+);
 
 it("joins config retirement cleanup before installing a replacement transport", async () => {
   const closing = createDeferred();

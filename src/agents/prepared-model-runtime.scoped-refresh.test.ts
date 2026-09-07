@@ -56,7 +56,7 @@ async function prepareCatalogOwner(
 describe("prepared model runtime scoped refresh", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
   });
 
   it.each([undefined, "provider-a:default"])(

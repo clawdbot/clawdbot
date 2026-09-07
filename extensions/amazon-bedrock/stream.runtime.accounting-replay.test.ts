@@ -93,6 +93,7 @@ async function captureMessages(
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("Bedrock reasoning replay", () => {
@@ -304,6 +305,75 @@ describe("Bedrock reasoning replay", () => {
 });
 
 describe("Bedrock prompt cache ownership", () => {
+  it("keeps unset Nova payloads identical to disabled caching despite environment defaults", async () => {
+    vi.stubEnv("OPENCLAW_CACHE_RETENTION", "long");
+    vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", "1");
+    const model = bedrockModel({});
+    const context: Context = {
+      systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
+      messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+    };
+    const unset = await capturePayload(model, context);
+    const disabled = await capturePayload(model, context, { cacheRetention: "none" });
+    expect(JSON.stringify(unset)).not.toContain("cachePoint");
+    expect(JSON.stringify(unset)).toBe(JSON.stringify(disabled));
+  });
+
+  it.each([
+    ["amazon.nova-micro-v1:0", true],
+    ["eu.amazon.nova-lite-v1:0", true],
+    ["apac.amazon.nova-pro-v1:0", true],
+    ["us.amazon.nova-premier-v1:0", true],
+    ["global.amazon.nova-2-lite-v1:0", true],
+    ["arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0", true],
+    ["arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-pro-v1:0", true],
+    ["amazon.nova-sonic-v1:0", false],
+    ["amazon.nova-lite-v2:0", false],
+    ["amazon.nova-pro-v1:0:custom", false],
+    ["meta.llama3-70b-instruct-v1:0", false],
+    [
+      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/amazon.nova-pro-v1:0",
+      false,
+    ],
+  ])("emits only supported Nova checkpoints for %s", async (id, supported) => {
+    for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
+      const payload = await capturePayload(
+        bedrockModel({ id, name: "Nova Pro" }),
+        {
+          systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
+          messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+        },
+        cacheRetention === undefined ? {} : { cacheRetention },
+      );
+      if (supported && (cacheRetention === "short" || cacheRetention === "long")) {
+        expect(payload.system).toEqual([
+          { text: "Stable workspace" },
+          { cachePoint: { type: "default" } },
+          { text: "Today: Monday" },
+        ]);
+        expect(payload.messages?.[0]?.content).toEqual([
+          { text: "Hello" },
+          { cachePoint: { type: "default" } },
+        ]);
+      } else {
+        expect(JSON.stringify(payload)).not.toContain("cachePoint");
+        if (supported || cacheRetention === "none") {
+          expect(payload.system).toEqual([{ text: "Stable workspace\nToday: Monday" }]);
+        }
+      }
+      expect(payload.toolConfig?.tools).toHaveLength(1);
+      expect(payload.toolConfig?.tools?.[0]).toHaveProperty("toolSpec.name", "lookup");
+      expect(JSON.stringify(payload.toolConfig)).not.toContain("cachePoint");
+    }
+  });
+
   it.each(["direct", "application-profile"])(
     "advances the retained-carrier checkpoint through a tool loop (%s)",
     async (route) => {

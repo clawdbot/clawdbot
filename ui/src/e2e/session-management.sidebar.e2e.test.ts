@@ -115,9 +115,22 @@ suite.define(() => {
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
+      // The parent is idle: its running child is summarized by the collapsed toggle
+      // on the right, never as a ring on the parent's own glyph.
       await expect
-        .poll(() => parent.locator(".session-run-spinner").getAttribute("aria-label"))
-        .toBe("Active run");
+        .poll(() => parent.locator(".sidebar-child-session-toggle--running").count())
+        .toBe(1);
+      expect(await parent.locator(".sidebar-session-indicator .session-glyph__ring").count()).toBe(
+        0,
+      );
+      const accessibility = await context.newCDPSession(page);
+      const collapsedTree = await accessibility.send("Accessibility.getFullAXTree");
+      const collapsedToggle = collapsedTree.nodes.find(
+        (node) =>
+          node.role?.value === "button" &&
+          node.name?.value === "Show 4 child sessions for Plan release",
+      );
+      expect(collapsedToggle?.description?.value).toBe("Active run");
       await captureUiProof(suite, page, "child-sessions-collapsed.png");
 
       await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
@@ -150,6 +163,15 @@ suite.define(() => {
       expect(await childToggle.getAttribute("class")).toContain(
         "sidebar-child-session-toggle--running",
       );
+      const expandedTree = await accessibility.send("Accessibility.getFullAXTree");
+      const expandedToggle = expandedTree.nodes.find(
+        (node) =>
+          node.role?.value === "button" &&
+          node.name?.value === "Hide 4 child sessions for Plan release",
+      );
+      expect(expandedToggle).toBeDefined();
+      expect(expandedToggle?.description?.value ?? "").toBe("");
+      await accessibility.detach();
       for (const child of [staleRunningChild, failedChild]) {
         expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
         expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();

@@ -43,6 +43,14 @@ Use `openclaw doctor --json` when an operator or script wants the advisory Docto
 
 For read-only diagnosis, use `--lint` or bare `--json`. Ordinary `doctor`, including `doctor --non-interactive`, can copy legacy config and migrate state even without `--fix`. `--non-interactive` suppresses prompts, not writes.
 
+If the shared state database uses a newer schema, Doctor refuses before offering
+an interactive update because update admission also needs that database. Run
+Doctor from the OpenClaw install that wrote the state, or another compatible
+build. A readable shared database still permits an interactive source update
+when agent databases use newer schemas; if the update does not take over,
+Doctor checks all database schemas again before diagnostics or repair. See
+[Database schemas](/reference/database-schemas).
+
 After an exec-approval format upgrade, Doctor reports older generated approvals
 that are no longer active because they were not tied to a working directory.
 `openclaw doctor --fix` removes those inactive generated entries and leaves
@@ -278,6 +286,13 @@ Bare `openclaw doctor --json` exits `0` once it emits a findings payload, includ
 `--all` controls which checks are selected before severity filtering. The default lint run excludes checks that are deep, historical, or more likely to surface repairable legacy residue; use `--all` for the complete inventory. `--only <id>` is the most precise selector and can run any registered check by id.
 
 `core/doctor/local-audio-acceleration` reports the auto-selected local STT command, separate capable/requested/observed backend evidence, and fallback order without loading a speech model. It emits an informational finding, so include `--severity-min info` to display it.
+
+`core/doctor/skill-workshop-relocation` distinguishes pending legacy collection
+backup roots from roots preserved for review. Eligible proposals or backup roots
+receive `openclaw doctor --fix` guidance, not a guarantee that every backup will
+be retired. Preserved roots require manual review of workspace ownership, backup
+manifests, and workspace migration blockers. If both kinds remain, Doctor reports
+both next steps. Do not delete preserved backups to clear the warning.
 
 ## Structured health checks
 

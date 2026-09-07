@@ -54,7 +54,6 @@ export function createLazyExecTool(
       return (
         presentation?.description ??
         describeExecTool({
-          agentId: defaults?.agentId,
           hasCronTool: defaults?.hasCronTool === true,
           hasProcessTool: defaults?.processToolAvailabilityRef?.value,
         })

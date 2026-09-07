@@ -108,6 +108,11 @@ export function loadOpenClawPluginsWithInternalOverrides(
       return runtimeModelConfig;
     },
   };
+  // Preserve supplied lazy services without reading their getters during registration.
+  const runtimeDescriptors = Object.getOwnPropertyDescriptors(overrides.runtime);
+  delete runtimeDescriptors.modelAuth;
+  delete runtimeDescriptors.modelConfig;
+  Object.defineProperties(runtime, runtimeDescriptors);
   return loadOpenClawPluginsCore(options, loaderBindings, { ...overrides, runtime });
 }
 

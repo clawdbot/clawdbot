@@ -226,7 +226,7 @@ describe("Code Mode output provenance", () => {
   );
 
   it.each(["interactive", "headless"])(
-    "counts actual bridge markers as guest data through %s",
+    "projects intact bridge data only when emitted through %s",
     async (mode) => {
       const payload = { text: "🦞".repeat(1000) };
       const fixture = fakeTool("marker_fixture", "Large nested result", async () =>
@@ -269,8 +269,8 @@ describe("Code Mode output provenance", () => {
       expect(result).toMatchObject({ status: "completed", value: true });
       expectCodeModeSharedBudget(result, 1024);
       expectOriginalCodeModeMarker((result.output as unknown[])[0], [
-        { type: "text", text: JSON.stringify(marker) },
-        { type: "json", value: marker },
+        { type: "text", text: JSON.stringify(payload) },
+        { type: "json", value: payload },
       ]);
       expect(fixture.execute).toHaveBeenCalledTimes(2);
     },

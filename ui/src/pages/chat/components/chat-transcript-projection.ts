@@ -33,6 +33,7 @@ import {
 } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
+import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
@@ -250,10 +251,12 @@ export function projectChatTranscript(
   const hasForwardedGroups = chatItems.some(
     (item) => item.kind === "group" && hasForwardedSource(item),
   );
-  const isDirectThread =
+  const defaultAvatarPlacement = resolveChatDefaultAvatarPlacement(
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
-    !props.userId &&
-    !hasForwardedGroups;
+      !hasForwardedGroups,
+    props.userId,
+  );
+  const isDirectThread = defaultAvatarPlacement === "footer";
   // Precedence: explicit prop, subagent classification/spawnedBy/key → none, direct → footer, else gutter.
   const avatarPlacement =
     props.avatarPlacement ??
@@ -261,9 +264,7 @@ export function projectChatTranscript(
     activeSession?.spawnedBy ||
     isSubagentSessionKey(props.sessionKey)
       ? "none"
-      : isDirectThread
-        ? "footer"
-        : "gutter");
+      : defaultAvatarPlacement);
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;

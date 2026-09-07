@@ -107,8 +107,8 @@ vi.mock("./recommended-tool-installs.js", () => ({
 const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
 const { listManagedPlugins, resolveManagedPluginIconSource, resolveManagedSetupCatalogIconUrl } =
   await import("./management-service.js");
-const { setManagedPluginEnabled, uninstallManagedPlugin } =
-  await import("./management-mutations.js");
+const { setManagedPluginEnabled } = await import("./management-mutations.js");
+const { uninstallManagedPlugin } = await import("./management-uninstall.js");
 
 function mockHostedOfficialCatalog(entries: unknown[]) {
   mocks.officialCatalog.mockResolvedValue({
