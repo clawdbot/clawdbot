@@ -501,11 +501,16 @@ struct DashboardWindowSmokeTests {
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         controller.show()
-        let deadline = ContinuousClock.now + .seconds(10)
+        // The message is posted from the page, so the document must be loaded first.
+        // A cold WebKit content process on a loaded hosted runner can take well over
+        // ten seconds; the bound only guards against a fixture that never serves.
+        let deadline = ContinuousClock.now + .seconds(90)
         while controller.webView.url != dashboard || controller.webView.isLoading, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
-        try #require(controller.webView.url == dashboard && !controller.webView.isLoading)
+        try #require(
+            controller.webView.url == dashboard && !controller.webView.isLoading,
+            "dashboard did not finish loading: url=\(String(describing: controller.webView.url)) loading=\(controller.webView.isLoading)")
         let original = try #require(class_getInstanceMethod(NSWorkspace.self, #selector(NSWorkspace.open(_:))))
         let replacement = try #require(class_getInstanceMethod(
             NSWorkspace.self, #selector(NSWorkspace.dashboardTestOpen(_:))))
