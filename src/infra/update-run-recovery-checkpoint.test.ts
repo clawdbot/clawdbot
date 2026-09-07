@@ -62,7 +62,6 @@ async function fixture(
   phase: "unprepared" | "preparing" | "sealed" = "sealed",
 ) {
   const root = fs.realpathSync(dirs.make("recovery-checkpoint-adapter-"));
-  await buildCheckpointReaderRuntime(root);
   const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
   let held = true;
   const fence = {
