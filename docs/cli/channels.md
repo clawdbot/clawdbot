@@ -45,8 +45,10 @@ For `add`, `login`, `logout`, `remove`, and `resolve`, or `capabilities --channe
 use `--agent <id>` to select the workspace used for channel plugin discovery.
 The option works before or after the subcommand; a subcommand value takes precedence.
 Without it, discovery uses the configured System Agent or the existing sole/legacy owner.
-An explicit fleet with no such owner requires `--agent`. Selecting a workspace
-does not create account routing bindings; guided setup asks about routing separately.
+In an interactive guided `channels add`, an explicit fleet with no such owner
+prompts for the setup owner before workspace-scoped discovery; flag-driven or
+non-interactive setup still requires `--agent`. Selecting a workspace does not
+create account routing bindings; guided setup asks about routing separately.
 
 `add`, `login`, `logout`, and `remove` also take `--account <id>`. Omitting it selects the
 default account. A blank value is rejected instead of falling back to the default, as with

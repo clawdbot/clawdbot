@@ -78,6 +78,67 @@ describe("ChannelWizardController", () => {
     });
   });
 
+  it("does not treat a colliding owner selection as the channel presentation", async () => {
+    let nextCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "wizard.start") {
+        return {
+          sessionId: "s-owner-collision",
+          done: false,
+          status: "running",
+          step: {
+            id: "step-owner",
+            type: "select" as const,
+            message: "Set up channels for agent",
+            options: [
+              { value: { agentId: "telegram" }, label: "telegram" },
+              { value: { agentId: "helper" }, label: "helper" },
+            ],
+          },
+        };
+      }
+      if (method !== "wizard.next") {
+        throw new Error(`unexpected ${method}`);
+      }
+      nextCount += 1;
+      if (nextCount === 1) {
+        return {
+          done: false,
+          status: "running",
+          step: {
+            id: "step-channel",
+            type: "select" as const,
+            message: "Select channels",
+            options: [{ value: "discord", label: "Discord" }],
+          },
+        };
+      }
+      return {
+        done: true,
+        status: "done",
+        channels: ["discord"],
+        accounts: [{ channel: "discord", accountId: "default" }],
+      };
+    });
+    const controller = new ChannelWizardController(
+      () => ({ request: request as never }),
+      vi.fn(),
+      (value) => value === "telegram" || value === "discord",
+      () => "Setup expired. Close and restart setup.",
+    );
+
+    await controller.start(null);
+    await controller.answer({ agentId: "telegram" });
+    await controller.answer("discord");
+
+    expect(controller.state).toEqual({
+      phase: "done",
+      channel: "discord",
+      channels: ["discord"],
+      accounts: [{ channel: "discord", accountId: "default" }],
+    });
+  });
+
   it("advances gateway-owned progress without inventing user answers", async () => {
     let resolveProgress: ((value: unknown) => void) | undefined;
     let nextCount = 0;

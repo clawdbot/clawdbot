@@ -3,7 +3,10 @@
 // prompter driving the Control UI / native clients).
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
+  AgentSelectionRequiredError,
+  listAgentIds,
   resolveConfiguredAgentId,
+  resolveAgentOperationAgentId,
   tryResolveAgentOperationAgentId,
 } from "../../agents/agent-scope-config.js";
 import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
@@ -25,8 +28,29 @@ type InitialWizardChannelTarget =
   | { kind: "resolved"; channel: ChannelChoice }
   | { kind: "unresolved"; message: string };
 
+type ChannelSetupAgentChoice = { agentId: string };
+
 function unresolvedInitialWizardChannelTarget(channel: string): InitialWizardChannelTarget {
   return { kind: "unresolved", message: formatUnknownChannelMessage({ channel }) };
+}
+
+/** Select a setup owner before workspace-scoped channel discovery. */
+export async function selectChannelSetupAgentId(
+  cfg: OpenClawConfig,
+  prompter: WizardPrompter,
+): Promise<string> {
+  try {
+    return resolveAgentOperationAgentId(cfg);
+  } catch (error) {
+    if (!(error instanceof AgentSelectionRequiredError)) {
+      throw error;
+    }
+  }
+  const selectedAgent = await prompter.select<ChannelSetupAgentChoice>({
+    message: "Set up channels for agent",
+    options: listAgentIds(cfg).map((agentId) => ({ value: { agentId }, label: agentId })),
+  });
+  return resolveConfiguredAgentId(cfg, selectedAgent.agentId);
 }
 
 /** Resolve omitted, matched, and unmatched channel targets without collapsing caller intent. */
@@ -67,6 +91,7 @@ export async function resolveInitialWizardChannelTarget(
 
 type ChannelsAddWizardFlowParams = {
   cfg: OpenClawConfig;
+  agentId?: string;
   workspaceDir?: string;
   baseHash?: string;
   runtime: RuntimeEnv;
@@ -222,7 +247,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
             value: agent.id,
             label: agent.isDefault ? `${agent.id} (default)` : agent.id,
           })),
-          initialValue: defaultAgentId,
+          initialValue: params.agentId ?? defaultAgentId,
         });
         const bindingResult = applyAgentBindings(nextConfig, [
           {
@@ -287,15 +312,19 @@ export async function runChannelsSetupWizard(
     );
   }
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const target = await resolveInitialWizardChannelTarget(opts.channel, cfg);
+  const agentId = await selectChannelSetupAgentId(cfg, prompter);
+  const workspaceDir = resolveChannelSetupOwner(cfg, agentId).workspaceDir;
+  const target = await resolveInitialWizardChannelTarget(opts.channel, cfg, workspaceDir);
   if (target.kind === "unresolved") {
     throw new Error(target.message);
   }
   await runChannelsAddWizardFlow({
     cfg,
+    agentId,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     runtime,
     prompter,
+    workspaceDir,
     ...(target.kind === "resolved" ? { initialChannel: target.channel } : {}),
     deferDeviceLinkToClient: true,
     ...(opts.onConfigured ? { onConfigured: opts.onConfigured } : {}),
