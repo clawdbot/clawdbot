@@ -13,15 +13,20 @@ import {
 const readWindowsProcessStartTimeSyncMock = vi.hoisted(() =>
   vi.fn<(pid: number) => number | null>(() => null),
 );
+const isWindowsProcessDefinitelyAbsentSyncMock = vi.hoisted(() =>
+  vi.fn<(pid: number, timeoutMs?: number) => boolean>(() => false),
+);
 
 vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
   readWindowsProcessStartTimeSync: readWindowsProcessStartTimeSyncMock,
+  isWindowsProcessDefinitelyAbsentSync: isWindowsProcessDefinitelyAbsentSyncMock,
 }));
 
 afterEach(() => {
   vi.restoreAllMocks();
   readWindowsProcessStartTimeSyncMock.mockReset();
+  isWindowsProcessDefinitelyAbsentSyncMock.mockReset();
 });
 
 function mockProcReads(entries: Record<string, string>) {
@@ -117,6 +122,42 @@ describe("isPidDefinitelyDead", () => {
 
     expect(isPidDefinitelyDead(42)).toBe(false);
     expect(process["kill"]).toHaveBeenCalledWith(42, 0);
+  });
+
+  it("returns true for Windows EPERM when active enumeration has zero rows", async () => {
+    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw error;
+    });
+    isWindowsProcessDefinitelyAbsentSyncMock.mockReturnValue(true);
+
+    await withMockedPlatform("win32", async () => {
+      expect(isPidDefinitelyDead(42)).toBe(true);
+    });
+    expect(isWindowsProcessDefinitelyAbsentSyncMock).toHaveBeenCalledWith(42, 2000);
+  });
+
+  it("keeps an unproven Windows EPERM state fail-closed", async () => {
+    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw error;
+    });
+    isWindowsProcessDefinitelyAbsentSyncMock.mockReturnValue(false);
+
+    await withMockedPlatform("win32", async () => {
+      expect(isPidDefinitelyDead(42)).toBe(false);
+    });
+  });
+
+  it("does not use Windows enumeration for non-Windows EPERM", async () => {
+    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw error;
+    });
+    await withMockedPlatform("linux", async () => {
+      expect(isPidDefinitelyDead(42)).toBe(false);
+    });
+    expect(isWindowsProcessDefinitelyAbsentSyncMock).not.toHaveBeenCalled();
   });
 
   it("returns false for live non-zombie processes", async () => {
