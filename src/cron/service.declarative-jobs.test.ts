@@ -212,7 +212,7 @@ describe("CronService declarative jobs", () => {
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;
-    const project = () => resolveSkillCollectionReviewMonitorSpecs(cfg)[0]!.input;
+    const project = () => resolveSkillCollectionReviewMonitorSpecs(cfg, [])[0]!.input;
     await cron.start();
     try {
       const created = declarativeResult(

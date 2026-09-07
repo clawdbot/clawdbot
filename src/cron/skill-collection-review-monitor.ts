@@ -6,6 +6,7 @@ import {
   resolveSubagentModelConfigSelectionResult,
   resolveSubagentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
+import { resolveAvailableAgentHarnessPolicy } from "../agents/harness/availability.js";
 import { resolveModelCandidateChain } from "../agents/model-fallback-candidates.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
@@ -16,11 +17,12 @@ import {
   normalizeModelSelection,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
-import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
@@ -31,6 +33,8 @@ import {
 } from "../skills/workshop/maintenance-prompt.js";
 import { supportsCronExecutionRoot } from "./execution-root-runtime.js";
 import { resolveCronAgentConfigFromSnapshot } from "./isolated-agent/run-config.js";
+import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { partitionSystemMonitors } from "./system-monitor-jobs.js";
 import { SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "./system-owned-declaration.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
@@ -124,8 +128,9 @@ function hasEligibleSkillCollectionReviewRuntime(
         return undefined;
       }
       return candidates.some((candidate) => {
-        const runtime = resolveEffectiveAgentRuntime({
-          cfg: cfgWithAgentDefaults,
+        const policy = resolveAvailableAgentHarnessPolicy({
+          mode: "projection",
+          config: cfgWithAgentDefaults,
           provider: candidate.provider,
           modelId: candidate.model,
           agentId,
@@ -137,9 +142,15 @@ function hasEligibleSkillCollectionReviewRuntime(
             modelId: candidate.model,
             agentId,
           }) ?? candidate.provider;
-        return supportsCronExecutionRoot(
-          runtime,
-          isCliProvider(executionProvider, cfgWithAgentDefaults),
+        // Implicit/auto runtime selection can still fall back to embedded
+        // execution after harness preparation; it cannot prove rejection here.
+        return (
+          policy.runtimeSource === "implicit" ||
+          policy.runtime === "auto" ||
+          supportsCronExecutionRoot(
+            policy.runtime,
+            isCliProvider(executionProvider, cfgWithAgentDefaults),
+          )
         );
       });
     }),
@@ -155,15 +166,49 @@ export function skillCollectionReviewMonitorAgentId(job: CronJob): string | unde
   return key.slice(SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX.length) || undefined;
 }
 
+function hasStoredExecutionPreference(
+  cfg: OpenClawConfig,
+  agentId: string,
+  jobId: string,
+): boolean {
+  try {
+    const entry = loadSessionEntry({
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+      sessionKey: resolveCronAgentSessionKey({
+        sessionKey: `cron:${jobId}`,
+        agentId,
+        mainKey: cfg.session?.mainKey,
+        cfg,
+      }),
+      readConsistency: "latest",
+    });
+    return Boolean(entry?.modelOverride || entry?.agentRuntimeOverride);
+  } catch {
+    // An unavailable session store is not evidence that no preference exists.
+    return true;
+  }
+}
+
 /** One system-owned review job per configured agent and its Workshop directory. */
 export function resolveSkillCollectionReviewMonitorSpecs(
   cfg: OpenClawConfig,
+  jobs: readonly CronJob[],
   options: { schedulerSeed?: string } = {},
 ): Array<{ agentId: string; input: CronJobCreate }> {
   const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
+  const { retained } = partitionSystemMonitors(jobs, skillCollectionReviewMonitorAgentId);
   const workshopEnabled = resolveSkillWorkshopConfig(cfg).autonomous.mode === "auto";
   return listAgentIds(cfg).map((agentId) => {
-    const hasEligibleRuntime = hasEligibleSkillCollectionReviewRuntime(cfg, agentId);
+    const configuredEligibility = hasEligibleSkillCollectionReviewRuntime(cfg, agentId);
+    const existing = retained.get(agentId);
+    // Config cannot prove the execution chain while a stored session can select
+    // a different model or runtime. Leave preference validation to the runner.
+    const hasEligibleRuntime =
+      configuredEligibility === false &&
+      existing &&
+      hasStoredExecutionPreference(cfg, agentId, existing.id)
+        ? undefined
+        : configuredEligibility;
     const enabled = workshopEnabled && hasEligibleRuntime !== false;
     return {
       agentId,

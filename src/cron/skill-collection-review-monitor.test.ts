@@ -16,7 +16,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;
 
-    const specs = resolveSkillCollectionReviewMonitorSpecs(cfg, {
+    const specs = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
       schedulerSeed: "test-seed",
     });
 
@@ -45,7 +45,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       wakeMode: "next-heartbeat",
     });
     expect(specs[0]?.input.payload).not.toHaveProperty("toolsAllowIsDefault");
-    const repeated = resolveSkillCollectionReviewMonitorSpecs(cfg, {
+    const repeated = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
       schedulerSeed: "test-seed",
     });
     expect(repeated.map(({ input }) => input.schedule)).toEqual(
@@ -58,7 +58,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     } as unknown as OpenClawConfig;
     expect(
-      resolveSkillCollectionReviewMonitorSpecs(explicitFleet).map(({ agentId }) => agentId),
+      resolveSkillCollectionReviewMonitorSpecs(explicitFleet, []).map(({ agentId }) => agentId),
     ).toEqual(["ops", "research"]);
 
     const systemAgentFleet = {
@@ -69,7 +69,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       },
     } as unknown as OpenClawConfig;
     expect(
-      resolveSkillCollectionReviewMonitorSpecs(systemAgentFleet).map(({ agentId }) => agentId),
+      resolveSkillCollectionReviewMonitorSpecs(systemAgentFleet, []).map(({ agentId }) => agentId),
     ).toEqual(["ops", "research"]);
   });
 
@@ -79,7 +79,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       skills: { workshop: { autonomous: { mode: "propose" } } },
     } as OpenClawConfig;
 
-    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, {
+    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
       schedulerSeed: "test-seed",
     });
     expect(spec?.input.enabled).toBe(false);
@@ -113,6 +113,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
             },
           },
           { id: "embedded", model: "anthropic/claude-sonnet-4-6" },
+          { id: "implicit", model: "openai/gpt-5.2" },
           { id: "cli", model: "claude-cli/claude-opus-4-6" },
         ],
       },
@@ -120,14 +121,14 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     } as OpenClawConfig;
 
     const byAgent = new Map(
-      resolveSkillCollectionReviewMonitorSpecs(cfg).map((spec) => [spec.agentId, spec.input]),
+      resolveSkillCollectionReviewMonitorSpecs(cfg, []).map((spec) => [spec.agentId, spec.input]),
     );
 
     expect(byAgent.get("blocked")).toMatchObject({
       enabled: false,
       displayName: expect.stringContaining("no-rooted-runtime"),
     });
-    for (const agentId of ["fallback", "embedded", "cli"]) {
+    for (const agentId of ["fallback", "embedded", "implicit", "cli"]) {
       expect(byAgent.get(agentId)?.enabled).toBe(true);
       expect(byAgent.get(agentId)?.displayName).not.toContain("no-rooted-runtime");
     }
@@ -150,7 +151,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;
-    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg);
+    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, []);
     expect(spec?.input.enabled).toBe(true);
     expect(spec?.input.displayName).not.toContain("no-rooted-runtime");
   });
@@ -170,7 +171,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;
-    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg);
+    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, []);
     expect(spec?.input.enabled).toBe(true);
     expect(spec?.input.displayName).not.toContain("no-rooted-runtime");
   });
