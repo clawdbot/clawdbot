@@ -214,6 +214,21 @@ export function peekDiagnosticSessionState(ref: SessionRef): SessionState | unde
   );
 }
 
+/** Retires collector observations without resetting independent tool-loop or poll policy. */
+export function retireDiagnosticSessionObservations(): void {
+  for (const state of diagnosticSessionStates.values()) {
+    // Recovery accepts one completion increment. A collector boundary must
+    // advance beyond that exception before this session can collect fresh work.
+    state.generation = (state.generation ?? 0) + 2;
+    state.state = "idle";
+    state.queueDepth = 0;
+    state.activeQueuedTurn = false;
+    state.lastActivity = Date.now();
+    state.lastStuckWarnAgeMs = undefined;
+    state.lastLongRunningWarnAgeMs = undefined;
+  }
+}
+
 /** Clears all process-local diagnostic session state for tests. */
 export function resetDiagnosticSessionStateForTest(): void {
   diagnosticSessionStates.clear();

@@ -20,16 +20,25 @@ describe("session store target dedupe", () => {
           { agentId: "ops", storePath: path.join(aliasDir, "shared.sqlite") },
         ];
         const diagnostics: string[] = [];
+        const onResolvedTarget = vi.fn();
+        const onSharedTarget = vi.fn();
 
         expect(
           dedupeSessionStoreTargetsBySqliteTarget(targets, {
             defaultAgentId: "main",
             env,
             onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.message),
+            onResolvedTarget,
+            onSharedTarget,
           }),
           // The collapsed logical owners ride along on the surviving target so a
           // multi-agent sweep of the shared database can cover all of them.
         ).toEqual([{ ...targets[0], sharedOwnerAgentIds: ["main", "ops"] }]);
+        expect(onResolvedTarget).toHaveBeenCalledExactlyOnceWith(targets[0], targets[0]);
+        expect(onSharedTarget).toHaveBeenCalledExactlyOnceWith(
+          targets[0],
+          new Set(targets.map((target) => target.storePath)),
+        );
         expect(diagnostics).toContainEqual(expect.stringContaining('ignored owner(s): "ops"'));
 
         const otherDir = path.join(home, "other-stores");

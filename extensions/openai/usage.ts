@@ -3,7 +3,7 @@ import type {
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
+import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   addProviderUsageModel,
   asProviderUsageObject,

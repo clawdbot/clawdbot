@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   hashControlUiTranslationText,
   loadControlUiSourceCatalog,
+  loadControlUiTranslationMemory,
   readControlUiSourceCatalog,
 } from "../../../scripts/lib/control-ui-i18n-catalog.ts";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
@@ -481,6 +482,7 @@ describe("Control UI Vite config", () => {
     expect(source.configView).not.toBe(en.configView);
     expect(flat.get("activity.title")).toBe("Activity");
     expect(flat.get("memoryImport.title")).toBe("Import assistant memory");
+    expect(flat.get("login.failure.authRequired.title")).toBe("Auth required");
     expect(flat.get("sessionsView.runsOnDevice")).toBe("Runs on device");
     expect(flat.get("pluginConsent.widenedTitle")).toBe("What changed");
     expect(flat.get("configPage.themeImported")).toBe("Imported {name}.");
@@ -524,9 +526,20 @@ describe("Control UI Vite config", () => {
       throw new Error("Expected locale module loader to return generated source");
     }
     const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
-    expect(catalog.common.health).toBe("Santé");
+    const memoryPath = path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl");
+    const healthText = flattenTranslations(en).get("common.health");
+    if (typeof healthText !== "string") {
+      throw new Error("Expected English health source");
+    }
+    const healthEntry = [...loadControlUiTranslationMemory(memoryPath).values()].find(
+      (entry) =>
+        (entry.segment_id === "common.health" || entry.segment_ids?.includes("common.health")) &&
+        entry.text_hash === hashControlUiTranslationText(healthText),
+    );
+    expect(healthEntry).toBeDefined();
+    expect(catalog.common.health).toBe(healthEntry?.translated);
     expect(catalog.activity.title).toBeTypeOf("string");
-    expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl"));
+    expect(addWatchFile).toHaveBeenCalledWith(memoryPath);
   });
 
   it("bootstraps only an absent locale memory from the English catalog", async () => {

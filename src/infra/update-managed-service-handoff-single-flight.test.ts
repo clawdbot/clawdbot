@@ -5,13 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   signalMockManagedUpdateHandoffReady,
   type MockManagedUpdateHandoffLeaseFailure,
 } from "./update-managed-service-handoff.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn());
 const forceKillChildProcessTreeMock = vi.hoisted(() => vi.fn());
 const findInstalledSystemdGatewayScopeMock = vi.hoisted(() =>
   vi.fn(
@@ -23,7 +25,8 @@ const findInstalledSystemdGatewayScopeMock = vi.hoisted(() =>
       } | null,
   ),
 );
-const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+// The coordinator must outlive mocked lease cleanup in afterEach.
+const tempRoots = createTempDirTracker();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-single-flight-${process.pid}`);
 
@@ -70,7 +73,16 @@ vi.mock("../process/child-process-tree.js", async (importOriginal) => ({
   forceKillChildProcessTree: forceKillChildProcessTreeMock,
 }));
 
+vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tmp-openclaw-dir.js")>()),
+  resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
+}));
+
 beforeEach(async () => {
+  // Competing helpers share this fixture's coordinator, never the operator's database.
+  resolvePreferredOpenClawTmpDirMock.mockReturnValue(
+    tempRoots.make("openclaw-handoff-coordinator-"),
+  );
   let pid = 24680;
   const liveChildren = new Set<number>();
   const processIdentity = await import("../shared/pid-alive.js");
@@ -106,6 +118,7 @@ afterEach(async () => {
     return scriptPath ? [path.dirname(scriptPath)] : [];
   });
   await Promise.all(handoffDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  tempRoots.cleanup();
   vi.restoreAllMocks();
   vi.resetModules();
 });
@@ -118,6 +131,48 @@ const baseParams = {
 };
 
 describe("managed service update handoff single-flight", () => {
+  it.each([false, true])(
+    "awaits the pre-park notice and rechecks helper ownership (lost: %s)",
+    async (lost) => {
+      const { requestManagedServiceUpdateHandoffPark, startManagedServiceUpdateHandoff } =
+        await import("./update-managed-service-handoff.js");
+      const entered = createDeferredCore();
+      const delivered = createDeferredCore();
+      const started = await startManagedServiceUpdateHandoff({
+        ...baseParams,
+        root: `${MOCK_INSTALL_ROOT}-notice-${lost}`,
+        meta: {},
+        beforePark: async () => {
+          entered.resolve();
+          await delivered.promise;
+        },
+      });
+      if (started.status !== "started") {
+        throw new Error("expected helper ownership");
+      }
+      const child = spawnMock.mock.results[0]?.value as ReturnType<typeof createReadyChild>;
+      const commands: string[] = [];
+      child.stdin.on("data", (chunk: Buffer) => {
+        commands.push(chunk.toString());
+        child.stdout.write("parked\n");
+      });
+      const park = requestManagedServiceUpdateHandoffPark({
+        kind: "managed-update-handoff",
+        ...started,
+      });
+      await entered.promise;
+      expect(commands).toEqual([]);
+      if (lost) {
+        child.emit("exit", 0, null);
+      }
+      delivered.resolve();
+      await expect(park).resolves.toBe(!lost);
+      expect(commands).toEqual(lost ? [] : ["park\n"]);
+      if (!lost) {
+        child.emit("exit", 0, null);
+      }
+    },
+  );
   it.each([
     ["does not exist", "absent"],
     ["has malformed helper identity", "malformed"],
@@ -272,9 +327,10 @@ describe("managed service update handoff single-flight", () => {
         if (helperStartIdentity === null) {
           throw new Error("expected the real detached helper to have a process identity");
         }
-        vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(
-          failure === "reused" ? helperStartIdentity + 1 : null,
-        );
+        vi.spyOn(
+          await import("../shared/pid-alive.js"),
+          "getFileLockProcessStartTime",
+        ).mockReturnValue(failure === "reused" ? helperStartIdentity + 1 : null);
       }
       expect(claimManagedServiceUpdateHandoff(identity)).toBe(false);
       vi.restoreAllMocks();
@@ -288,8 +344,7 @@ describe("managed service update handoff single-flight", () => {
   });
 
   it("terminates the exact helper when its initial start identity is unavailable", async () => {
-    const processIdentity = await import("../shared/pid-alive.js");
-    vi.mocked(processIdentity.getFileLockProcessStartTime)
+    vi.mocked((await import("../shared/pid-alive.js")).getFileLockProcessStartTime)
       .mockReturnValueOnce(17)
       .mockReturnValueOnce(null);
     const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
@@ -380,9 +435,10 @@ describe("managed service update handoff single-flight", () => {
       const initialLease = readLease();
       expect(initialLease?.owner).toBe(started.handoffId);
       expect(JSON.parse(initialLease?.payload_json ?? "null")).toEqual({
-        version: 1,
-        pid: started.pid,
-        startIdentity: String(helperStartIdentity),
+        version: 2,
+        executor: { pid: started.pid, startIdentity: String(helperStartIdentity) },
+        helper: { pid: started.pid, startIdentity: String(helperStartIdentity) },
+        action: { kind: "update" },
       });
 
       const helperExited = new Promise<void>((resolve) => {
@@ -397,9 +453,10 @@ describe("managed service update handoff single-flight", () => {
         throw new Error("expected complete live-parent and dead-helper lease identities");
       }
       const originalPayload = {
-        version: 1,
-        pid: started.pid,
-        startIdentity: String(helperStartIdentity),
+        version: 2,
+        executor: { pid: started.pid, startIdentity: String(helperStartIdentity) },
+        helper: { pid: started.pid, startIdentity: String(helperStartIdentity) },
+        action: { kind: "update" },
       };
       const rejectedOwners = [
         {
@@ -412,19 +469,27 @@ describe("managed service update handoff single-flight", () => {
           owner: started.handoffId,
           payload: {
             ...originalPayload,
-            pid: process.pid,
-            startIdentity: String(ownStartIdentity),
+            executor: { pid: process.pid, startIdentity: String(ownStartIdentity) },
           },
         },
         {
           label: "different recorded start identity",
           owner: started.handoffId,
-          payload: { ...originalPayload, startIdentity: `${helperStartIdentity}-reused` },
+          payload: {
+            ...originalPayload,
+            executor: {
+              ...originalPayload.executor,
+              startIdentity: `${helperStartIdentity}-reused`,
+            },
+          },
         },
         {
           label: "malformed process identity",
           owner: started.handoffId,
-          payload: { ...originalPayload, startIdentity: null },
+          payload: {
+            ...originalPayload,
+            executor: { ...originalPayload.executor, startIdentity: null },
+          },
         },
         {
           label: "noncanonical process identity",
@@ -457,7 +522,13 @@ describe("managed service update handoff single-flight", () => {
         });
       }
       writeLease(started.handoffId, originalPayload);
-      const unknownDeath = vi.spyOn(processIdentity, "isPidDefinitelyDead").mockReturnValue(false);
+      const kill = process.kill.bind(process);
+      const unknownDeath = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === started.pid && signal === 0) {
+          throw Object.assign(new Error("process visibility denied"), { code: "EPERM" });
+        }
+        return kill(pid, signal);
+      });
       await expect(cancelManagedServiceUpdateHandoff(identity)).resolves.toBe(false);
       expect(readLease()).toEqual(initialLease);
       unknownDeath.mockRestore();
@@ -495,6 +566,55 @@ describe("managed service update handoff single-flight", () => {
         );
         db.close();
       }
+      parent.stdin?.end();
+    }
+  });
+
+  it("admits another update after a transferred no-op leaves the Gateway serving", async () => {
+    vi.restoreAllMocks();
+    const { spawn } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawnMock.mockImplementation(spawn);
+    const root = await fs.realpath(tempRoots.make("openclaw-handoff-noop-"));
+    const updaterPath = path.join(root, "updater.cjs");
+    await fs.writeFile(
+      updaterPath,
+      `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:"skipped",mode:"npm",reason:"already-current"}));`,
+    );
+    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    const { startManagedServiceUpdateHandoff, transferManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const started = await startManagedServiceUpdateHandoff({
+          root,
+          restartDrainTimeoutMs: 300_000,
+          parentPid: parent.pid,
+          execPath: process.execPath,
+          argv1: updaterPath,
+          env: { ...process.env, OPENCLAW_STATE_DIR: root },
+          meta: {},
+        });
+        expect(started.status).toBe("started");
+        if (started.status !== "started") {
+          throw new Error("completed no-op retained its owner");
+        }
+        const child = spawnMock.mock.results.at(-1)
+          ?.value as import("node:child_process").ChildProcess;
+        const exited = new Promise<number | null>((resolve) => {
+          child.once("close", resolve);
+        });
+        await expect(
+          transferManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...started }),
+        ).resolves.toBe(true);
+        expect(await exited).toBe(0);
+        expect(parent.exitCode).toBeNull();
+        expect(parent.signalCode).toBeNull();
+      }
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    } finally {
       parent.stdin?.end();
     }
   });
@@ -705,9 +825,10 @@ describe("managed service update handoff single-flight", () => {
             root,
             "replacement",
             JSON.stringify({
-              version: 1,
-              pid: process.pid,
-              startIdentity: String(replacementStartIdentity),
+              version: 2,
+              executor: { pid: process.pid, startIdentity: String(replacementStartIdentity) },
+              helper: { pid: process.pid, startIdentity: String(replacementStartIdentity) },
+              action: { kind: "update" },
             }),
             Date.now(),
           );

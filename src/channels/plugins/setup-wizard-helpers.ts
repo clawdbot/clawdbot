@@ -15,6 +15,7 @@ import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-au
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import { setTopLevelChannelEnabledInConfigSection, writeChannelSection } from "./config-helpers.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
   patchScopedAccountConfig,
@@ -267,17 +268,11 @@ export function patchTopLevelChannelConfigSection(params: {
   for (const field of params.clearFields ?? []) {
     delete channelConfig[field];
   }
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.channel]: {
-        ...channelConfig,
-        ...(params.enabled ? { enabled: true } : {}),
-        ...params.patch,
-      },
-    },
-  };
+  return writeChannelSection(params.cfg, params.channel, {
+    ...channelConfig,
+    ...(params.enabled ? { enabled: true } : {}),
+    ...params.patch,
+  });
 }
 
 function setTopLevelChannelAllowFrom(params: {
@@ -549,17 +544,7 @@ export function setSetupChannelEnabled(
   channel: string,
   enabled: boolean,
 ): OpenClawConfig {
-  const channelConfig = (cfg.channels?.[channel] as Record<string, unknown> | undefined) ?? {};
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      [channel]: {
-        ...channelConfig,
-        enabled,
-      },
-    },
-  };
+  return setTopLevelChannelEnabledInConfigSection({ cfg, sectionKey: channel, enabled });
 }
 
 function patchConfigForScopedAccount(params: {

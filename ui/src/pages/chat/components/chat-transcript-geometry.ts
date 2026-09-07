@@ -1,5 +1,5 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
-import type { ReactiveControllerHost } from "lit";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 
 function transcriptScrollMargin(element: Element | null): number {
   if (!(element instanceof HTMLElement) || typeof getComputedStyle !== "function") {
@@ -63,4 +63,50 @@ export function measureConnectedTranscriptRows(
 
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
   return element ? Math.max(0, element.scrollHeight - element.clientHeight) : null;
+}
+
+export class PositionRailGutterController implements ReactiveController {
+  private frame: number | null = null;
+
+  constructor(
+    private readonly host: ReactiveControllerHost & {
+      readonly scrollElement: HTMLDivElement | null;
+    },
+    private readonly inner: () => HTMLDivElement | null,
+  ) {
+    host.addController(this);
+  }
+
+  hostUpdated(): void {
+    if (this.frame !== null) {
+      return;
+    }
+    // Nested Lit children can still be replacing footer content. A synchronous
+    // layout read here clamps scrolling against that intermediate viewport.
+    this.frame = requestAnimationFrame(() => {
+      this.frame = null;
+      this.sync();
+    });
+  }
+
+  hostDisconnected(): void {
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
+  }
+
+  sync(): void {
+    const viewport = this.host.scrollElement;
+    const inner = this.inner();
+    if (!viewport?.isConnected || inner?.parentElement !== viewport) {
+      return;
+    }
+    const right =
+      viewport.getBoundingClientRect().left + viewport.clientLeft + viewport.clientWidth;
+    const gutter = right - inner.getBoundingClientRect().right;
+    // The rail's marker/tick footprint reaches 69px from the client edge;
+    // reserve 80px including breathing room (see message-layout.css).
+    viewport.toggleAttribute("data-position-rail-gutter", gutter >= 80);
+  }
 }

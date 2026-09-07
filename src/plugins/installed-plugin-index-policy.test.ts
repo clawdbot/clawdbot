@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";

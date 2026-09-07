@@ -1,5 +1,6 @@
 // Gateway RPC handlers for cron job CRUD, run logs, wake, and delivery previews.
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type CronListParams,
@@ -31,8 +32,8 @@ import {
   resolveCronDeliveryPreviews,
 } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
+import { cronJobReadView } from "../../cron/job-read-view.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import { toPublicCronJob } from "../../cron/public-job.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
@@ -196,25 +197,6 @@ function publicCronScratch(
   };
 }
 
-function cronJobReadView(job: CronJob) {
-  const publicJob = toPublicCronJob(job);
-  return {
-    ...publicJob,
-    configRevision: resolveCronJobConfigRevision(job),
-    nextRunAtMs: job.state.nextRunAtMs,
-    lastRunAtMs: job.state.lastRunAtMs,
-    lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus,
-    lastRunError: job.state.lastError,
-    lastDelivered: job.state.lastDelivered,
-    lastDeliveryStatus: job.state.lastDeliveryStatus,
-    lastDeliveryError: job.state.lastDeliveryError,
-    deliverySuppressionReason: job.state.deliverySuppressionReason,
-    lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
-    lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
-    lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
-  };
-}
-
 function cronAddPayloadWithDeliveryPreview(params: {
   result: CronJob | { created: boolean; updated?: boolean; job: CronJob };
   deliveryPreview: CronDeliveryPreview;
@@ -244,9 +226,16 @@ function compactCronListJob(job: CronJob) {
     ...(job.displayName ? { displayName: job.displayName } : {}),
     ...(job.owner ? { owner: job.owner } : {}),
     enabled: job.enabled,
+    // Keep epoch fields for existing clients; readable dates avoid model timestamp arithmetic.
+    nextRunAt: timestampMsToIsoString(job.state.nextRunAtMs) ?? null,
     nextRunAtMs: job.state.nextRunAtMs ?? null,
     scheduleKind: job.schedule.kind,
+    // Disabled jobs have no next run. Keep their timing without exposing event commands.
+    ...(job.schedule.kind === "at" || job.schedule.kind === "every" || job.schedule.kind === "cron"
+      ? { schedule: job.schedule }
+      : {}),
     ...(job.trigger ? { trigger: true } : {}),
+    lastRunAt: timestampMsToIsoString(job.state.lastRunAtMs) ?? null,
     lastRunAtMs: job.state.lastRunAtMs ?? null,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
     lastRunError: job.state.lastError ?? null,

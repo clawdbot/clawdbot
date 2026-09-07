@@ -7,7 +7,11 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  patchSessionEntry,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
@@ -18,6 +22,7 @@ import {
   hashCodexAppServerBindingFingerprint,
   readCodexAppServerThreadBinding,
   reclaimCurrentCodexSessionGeneration,
+  resolveCodexSessionBinding,
   type StoredCodexAppServerBinding,
 } from "./session-binding.js";
 
@@ -936,6 +941,354 @@ describe("Codex app-server binding store", () => {
 
     expect(store.read(second)).toBeUndefined();
     expect(store.read(third)).toMatchObject({ threadId: "thread-1" });
+  });
+
+  it.each(["ordinary", "supervision"] as const)(
+    "adopts the committed predecessor after reopening a %s binding without a compaction hook",
+    async (ownership) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-predecessor-reopen-"));
+      const storePath = path.join(root, "sessions.json");
+      const previous = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "session-before-compaction",
+        sessionKey: "agent:main:compaction",
+      };
+      const current = { ...previous, sessionId: "session-after-compaction" };
+      const sessionScope = { agentId: current.agentId, sessionKey: current.sessionKey, storePath };
+      const binding = {
+        threadId: "native-thread-before-compaction",
+        cwd: "/repo",
+        model: "gpt-5.6-luna",
+        modelProvider: "openai",
+        dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint("native-tools"),
+        ...(ownership === "supervision"
+          ? {
+              connectionScope: "supervision" as const,
+              supervisionSourceThreadId: "native-source",
+              conversationSourceTransferComplete: true as const,
+              preserveNativeModel: true as const,
+            }
+          : {}),
+      };
+      const openStore = () => {
+        const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>(
+          "codex",
+          {
+            namespace: "predecessor-reopen",
+            maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+            overflowPolicy: "reject-new",
+            env: { ...process.env, OPENCLAW_STATE_DIR: root },
+          },
+        );
+        return { state, store: createLazyCodexAppServerBindingStore(state) };
+      };
+      try {
+        await upsertSessionEntry({
+          ...sessionScope,
+          entry: { sessionId: previous.sessionId, updatedAt: 1 },
+        });
+        await openStore().store.mutate(previous, { kind: "set", binding });
+        await patchSessionEntry({
+          ...sessionScope,
+          update: () => ({ sessionId: current.sessionId }),
+        });
+        expect(getSessionEntry(sessionScope)).toMatchObject({
+          sessionId: current.sessionId,
+          previousSessionId: previous.sessionId,
+        });
+        resetPluginStateStoreForTests();
+        const { state, store } = openStore();
+        expect(store.read(current)).toBeUndefined();
+
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await expect(
+            reclaimCurrentCodexSessionGeneration({
+              bindingStore: store,
+              identity: current,
+              storePath,
+            }),
+          ).resolves.toBe(true);
+          expect(store.read(current)).toEqual(binding);
+        }
+        expect(state.lookup(bindingStoreKey(current))).toEqual({
+          version: 1,
+          state: "active",
+          sessionId: current.sessionId,
+          binding,
+        });
+        await expect(store.mutate(previous, { kind: "clear" })).resolves.toBe(false);
+      } finally {
+        resetPluginStateStoreForTests();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("fences an already-readable binding when its admitted session generation rotates", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-readable-authority-"));
+    const storePath = path.join(root, "sessions.json");
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-current",
+      sessionKey: "agent:main:readable",
+    };
+    const scope = { agentId: current.agentId, sessionKey: current.sessionKey, storePath };
+    const binding = { threadId: "thread-current", cwd: "/repo" };
+    try {
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: current.sessionId, updatedAt: 1 },
+      });
+      await store.mutate(current, { kind: "set", binding });
+
+      const resolved = await resolveCodexSessionBinding({
+        bindingStore: store,
+        identity: current,
+        storePath,
+      });
+      expect(resolved.binding).toEqual(binding);
+
+      await patchSessionEntry({
+        ...scope,
+        update: () => ({ sessionId: "session-successor" }),
+      });
+      expect(resolved.assertCurrent).toThrow("Codex session generation is no longer current");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an already-readable binding owned by a stale admitted session", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-readable-stale-"));
+    const storePath = path.join(root, "sessions.json");
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const stale = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-stale",
+      sessionKey: "agent:main:readable",
+    };
+    try {
+      await upsertSessionEntry({
+        agentId: stale.agentId,
+        sessionKey: stale.sessionKey,
+        storePath,
+        entry: { sessionId: "session-current", updatedAt: 1 },
+      });
+      await store.mutate(stale, {
+        kind: "set",
+        binding: { threadId: "thread-stale", cwd: "/repo" },
+      });
+
+      await expect(
+        resolveCodexSessionBinding({ bindingStore: store, identity: stale, storePath }),
+      ).rejects.toThrow("Codex session generation is no longer current");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves caller authority for a scoped session with no durable row", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-readable-ephemeral-"));
+    const storePath = path.join(root, "sessions.json");
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const ephemeral = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-ephemeral",
+      sessionKey: "agent:main:ephemeral",
+    };
+    let active = true;
+    try {
+      await upsertSessionEntry({
+        agentId: ephemeral.agentId,
+        sessionKey: "agent:main:other",
+        storePath,
+        entry: { sessionId: "session-other", updatedAt: 1 },
+      });
+      const binding = { threadId: "thread-ephemeral", cwd: "/repo" };
+      await store.mutate(ephemeral, { kind: "set", binding });
+
+      const resolved = await resolveCodexSessionBinding({
+        bindingStore: store,
+        identity: ephemeral,
+        storePath,
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("caller authority closed");
+          }
+        },
+      });
+      expect(resolved.binding).toEqual(binding);
+      expect(resolved.assertCurrent).not.toThrow();
+
+      active = false;
+      expect(resolved.assertCurrent).toThrow("caller authority closed");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(
+    ["two generations behind", "different session key", "different agent"].flatMap((mismatch) =>
+      [false, true].map((supervision) => ({ mismatch, supervision })),
+    ),
+  )(
+    "does not adopt a binding owned by $mismatch (supervision=$supervision)",
+    async ({ mismatch, supervision }) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-predecessor-mismatch-"));
+      const storePath = path.join(root, "sessions.json");
+      const { state } = createStateStore();
+      const store = createCodexAppServerBindingStore(state);
+      const current = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "session-current",
+        sessionKey: "agent:main:compaction",
+      };
+      const previous = {
+        ...current,
+        sessionId: mismatch === "two generations behind" ? "session-oldest" : "session-previous",
+        ...(mismatch === "different session key" ? { sessionKey: "agent:main:other" } : {}),
+        ...(mismatch === "different agent" ? { agentId: "other" } : {}),
+      };
+      const binding = {
+        threadId: "native-thread-foreign-generation",
+        cwd: "/repo",
+        model: "gpt-5.6-luna",
+        modelProvider: "openai",
+        ...(supervision
+          ? {
+              connectionScope: "supervision" as const,
+              supervisionSourceThreadId: "native-source",
+              conversationSourceTransferComplete: true as const,
+              preserveNativeModel: true as const,
+            }
+          : {}),
+      };
+      try {
+        await upsertSessionEntry({
+          agentId: current.agentId,
+          sessionKey: current.sessionKey,
+          storePath,
+          entry: {
+            sessionId: current.sessionId,
+            previousSessionId: "session-previous",
+            updatedAt: 1,
+          },
+        });
+        await store.mutate(previous, { kind: "set", binding });
+
+        await expect(
+          resolveCodexSessionBinding({ bindingStore: store, identity: current, storePath }),
+        ).resolves.toMatchObject({ binding: undefined });
+        expect(store.read(previous)).toEqual(binding);
+        await expect(
+          reclaimCurrentCodexSessionGeneration({
+            bindingStore: store,
+            identity: current,
+            storePath,
+          }),
+        ).resolves.toBe(mismatch !== "two generations behind" || !supervision);
+        expect(store.read(current)).toBeUndefined();
+        expect(store.read(previous)).toEqual(
+          mismatch === "two generations behind" && !supervision ? undefined : binding,
+        );
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not bridge two generations when the host rotates during a predecessor lease wait", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-predecessor-lease-"));
+    const storePath = path.join(root, "sessions.json");
+    const { state } = createStateStore();
+    const owner = createCodexAppServerBindingStore(state);
+    const peer = createCodexAppServerBindingStore(state);
+    const previous = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "previous",
+      sessionKey: "agent:main:compaction",
+    };
+    const current = { ...previous, sessionId: "current" };
+    const next = { ...previous, sessionId: "next" };
+    const scope = { agentId: previous.agentId, sessionKey: previous.sessionKey, storePath };
+    const binding = { threadId: "native-thread", cwd: "/repo" };
+    try {
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: previous.sessionId, updatedAt: 1 },
+      });
+      await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
+      await owner.mutate(previous, { kind: "set", binding });
+      vi.useFakeTimers();
+      let outcome!: Promise<unknown>;
+      await owner.withLease(previous, async () => {
+        outcome = reclaimCurrentCodexSessionGeneration({
+          bindingStore: peer,
+          identity: current,
+          storePath,
+          reclaimStale: false,
+        }).catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(0);
+        await patchSessionEntry({
+          ...scope,
+          skipMaintenance: true,
+          update: () => ({ sessionId: next.sessionId }),
+        });
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await outcome).toMatchObject({ name: "AgentHarnessSessionSupersededError" });
+      expect(peer.read(previous)).toEqual(binding);
+      expect(getSessionEntry(scope)).toMatchObject({
+        sessionId: next.sessionId,
+        previousSessionId: current.sessionId,
+      });
+      await expect(
+        reclaimCurrentCodexSessionGeneration({
+          bindingStore: peer,
+          identity: next,
+          storePath,
+          reclaimStale: false,
+        }),
+      ).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechecks predecessor adoption authority after the lazy store resolves", async () => {
+    const { state } = createStateStore();
+    const previous = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-previous",
+      sessionKey: "agent:main:compaction",
+    };
+    const current = { ...previous, sessionId: "session-current" };
+    const binding = { threadId: "native-thread", cwd: "/repo" };
+    await createCodexAppServerBindingStore(state).mutate(previous, { kind: "set", binding });
+    const store = createLazyCodexAppServerBindingStore(state);
+    let active = true;
+    const adopting = store.adoptSessionGeneration(current, previous.sessionId, () => {
+      if (!active) {
+        throw new Error("admission authority closed");
+      }
+    });
+    active = false;
+
+    await expect(adopting).rejects.toThrow("admission authority closed");
+    expect(store.read(current)).toBeUndefined();
+    expect(store.read(previous)).toEqual(binding);
   });
 
   it("rejects reclaim when another session generation wins after verification", async () => {

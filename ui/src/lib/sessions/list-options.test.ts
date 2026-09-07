@@ -2,11 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionGoal, SessionsListResult } from "../../api/types.ts";
-import { createSessionCapability } from "./index.ts";
-import { sessionsResult } from "./session-capability.test-support.ts";
+import { createTestSessionCapability, sessionsResult } from "./session-capability.test-support.ts";
 
 function createSessions(client: GatewayBrowserClient, key: string, ownerId?: string) {
-  return createSessionCapability({
+  return createTestSessionCapability({
     snapshot: {
       client,
       phase: "connected" as const,
@@ -259,7 +258,7 @@ describe("session list replacement options", () => {
       );
     });
     snapshot.client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot,
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
@@ -440,11 +439,14 @@ describe("session list replacement options", () => {
       assistantAgentId: "ops",
       hello: null,
     };
-    const sessions = createSessionCapability({
-      snapshot,
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    });
+    const sessions = createTestSessionCapability(
+      {
+        snapshot,
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+      "ops",
+    );
 
     await sessions.refresh({ agentId: "ops", force: true });
     expect(sessions.state.result?.sessions[0]).toMatchObject({

@@ -35,7 +35,7 @@ describe("Vitest CLI final outcome ownership", () => {
         "success",
         "help",
         ...(process.platform === "win32" ? [] : ["signal"]),
-      ].map((outcome) => ({ ...entry, outcome })),
+      ].map((outcome) => Object.assign({}, entry, { outcome })),
     ),
   )(
     "$script (direct=$direct) reports $outcome after its owners settle",
@@ -82,11 +82,15 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
               : [target];
         if (outcome !== "help") {
           args.push(...(direct ? [] : ["--"]), "--configLoader=native");
-          if (outcome === "startup") args.push("--openclaw-trailer-repro");
+          if (outcome === "startup") {
+            args.push("--openclaw-trailer-repro");
+          }
         }
         const env = { ...process.env };
         for (const key of Object.keys(env)) {
-          if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) delete env[key];
+          if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
+            delete env[key];
+          }
         }
         Object.assign(env, {
           CI: "1",
@@ -136,21 +140,35 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
         expect(output.match(/^\[.*\] FAILED \(exit \d+\)$/gmu) ?? [], output).toEqual(
           failed ? [trailer] : [],
         );
-        if (failed) expect(output.trim().split("\n").at(-1)).toBe(trailer);
-        if (outcome === "startup") expect(output).toContain("Unknown option");
-        if (outcome === "help") expect(output).toMatch(/Usage:|vitest\//);
+        // The trailer belongs to stderr; arrivals on separate pipes have no shared order.
+        if (failed) {
+          expect(result.stderr.trim().split("\n").at(-1)).toBe(trailer);
+        }
+        if (outcome === "startup") {
+          expect(output).toContain("Unknown option");
+        }
+        if (outcome === "help") {
+          expect(output).toMatch(/Usage:|vitest\//);
+        }
         if (["failure", "success", "signal"].includes(outcome)) {
-          if (outcome === "signal") expect(signaled).toBe(true);
-          else expect(output).toContain("fixture cleanup finished");
-          if (outcome === "failure")
+          if (outcome === "signal") {
+            expect(signaled).toBe(true);
+          } else {
+            expect(output).toContain("fixture cleanup finished");
+          }
+          if (outcome === "failure") {
             expect(output).toContain("intentional trailer fixture failure");
-          if (!direct && outcome !== "signal")
+          }
+          if (!direct && outcome !== "signal") {
             expect(output).toMatch(/\[test\] (?:failed|passed) 1 Vitest shard/);
+          }
           const owned = JSON.parse(fs.readFileSync(receipt, "utf8"));
           expect(isProcessAlive(owned.pid)).toBe(false);
           expect(owned.generation).toEqual(expect.any(String));
           expect(fs.existsSync(owned.generation)).toBe(false);
-          if (process.platform !== "win32") expect(fs.existsSync(owned.namespace)).toBe(false);
+          if (process.platform !== "win32") {
+            expect(fs.existsSync(owned.namespace)).toBe(false);
+          }
         }
       });
     },
@@ -207,10 +225,16 @@ syncBuiltinESMExports();
       );
       const env = { ...process.env };
       for (const key of Object.keys(env)) {
-        if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) delete env[key];
+        if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
+          delete env[key];
+        }
       }
-      if (outcome === "prebuilt") env.OPENCLAW_E2E_USE_PREBUILT_DIST = "1";
-      if (outcome === "skip") env.OPENCLAW_E2E_SKIP_BUILD = "1";
+      if (outcome === "prebuilt") {
+        env.OPENCLAW_E2E_USE_PREBUILT_DIST = "1";
+      }
+      if (outcome === "skip") {
+        env.OPENCLAW_E2E_SKIP_BUILD = "1";
+      }
       const child = spawn(
         process.execPath,
         [
@@ -280,11 +304,17 @@ syncBuiltinESMExports();
           expect(reader.prebuilt).toBe(["success", "prebuilt"].includes(outcome) ? "1" : "");
           expect(reader.skip).toBe(outcome === "skip" ? "1" : "");
         }
-        for (const pid of new Set(events.map(({ pid }) => pid))) await waitForDead(pid, 5_000);
+        for (const workerPid of new Set(events.map(({ pid }) => pid))) {
+          await waitForDead(workerPid, 5_000);
+        }
       } finally {
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGTERM");
+        }
         await withTestTimeout(stopped.promise, 5_000, "E2E preparation CLI cleanup");
-        if (builderPid) await waitForDead(builderPid, 5_000);
+        if (builderPid) {
+          await waitForDead(builderPid, 5_000);
+        }
       }
     },
   );
@@ -354,7 +384,9 @@ it("case ${index}", () => {
       } else {
         // The first shard fails, later shards pass: success must not erase that failure.
         expect(result.status, result.stderr).toBe(1);
-        expect(receipts.map(({ index }) => index).sort()).toEqual([0, 1, 2, 3]);
+        expect(receipts.map(({ index }) => index).toSorted((left, right) => left - right)).toEqual([
+          0, 1, 2, 3,
+        ]);
         expect(new Set(receipts.map(({ pid }) => pid)).size).toBe(4);
       }
       for (const { pid } of receipts) {

@@ -148,6 +148,7 @@ function createEditClient(originalContent: Record<string, unknown>) {
   const sendMessage = vi.fn().mockResolvedValue("evt-edit");
   const client = {
     getEvent: vi.fn().mockResolvedValue({ content: originalContent }),
+    getRelations: vi.fn().mockResolvedValue({ events: [], nextBatch: null }),
     getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     sendMessage,

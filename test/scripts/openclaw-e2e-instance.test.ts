@@ -1008,37 +1008,41 @@ exit 1
     });
   });
 
-  it("redacts logged command failures before replay", () => {
-    withTempDir("openclaw-e2e-instance-run-log-redact-", (tempDir) => {
-      const redactorPath = path.join(tempDir, "redactor.mjs");
-      fs.writeFileSync(
-        redactorPath,
-        'export const redactSensitiveText = (value) => value.replaceAll("fixture-secret", "***");\n',
-        "utf8",
-      );
-      writeFakeTimeout(path.join(tempDir, "timeout"), true);
-      writeBashExecutable(path.join(tempDir, "fixture-command"), [
-        'printf "actionable failure fixture-secret\\n"',
-        "exit 23",
-      ]);
+  it.each([false, true])(
+    "redacts logged command failures before replay (stdin initialized: %s)",
+    (initializeStdin) => {
+      withTempDir("openclaw-e2e-instance-run-log-redact-", (tempDir) => {
+        const redactorPath = path.join(tempDir, "redactor.mjs");
+        fs.writeFileSync(
+          redactorPath,
+          `${initializeStdin ? "void process.stdin;\n" : ""}export const redactSensitiveText = (value) => value.replaceAll("fixture-secret", "***");\n`,
+          "utf8",
+        );
+        writeFakeTimeout(path.join(tempDir, "timeout"), true);
+        writeBashExecutable(path.join(tempDir, "fixture-command"), [
+          'for ((i = 0; i < 120; i += 1)); do printf "%02000d\\n" 0; done',
+          'printf "actionable failure fixture-secret\\n"',
+          "exit 23",
+        ]);
 
-      const result = runBashWithHelper(
-        ["openclaw_e2e_run_logged redacted-failure fixture-command"],
-        {
-          PATH: `${tempDir}${path.delimiter}${hostPath}`,
-          OPENCLAW_E2E_LOG_DIR: path.join(tempDir, "logs"),
-          OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
-          OPENCLAW_TEST_TIMEOUT_ARGS: path.join(tempDir, "timeout-args.txt"),
-        },
-        undefined,
-        "; ",
-      );
+        const result = runBashWithHelper(
+          ["openclaw_e2e_run_logged redacted-failure fixture-command"],
+          {
+            PATH: `${tempDir}${path.delimiter}${hostPath}`,
+            OPENCLAW_E2E_LOG_DIR: path.join(tempDir, "logs"),
+            OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
+            OPENCLAW_TEST_TIMEOUT_ARGS: path.join(tempDir, "timeout-args.txt"),
+          },
+          undefined,
+          "; ",
+        );
 
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain("actionable failure ***");
-      expect(result.stdout).not.toContain("fixture-secret");
-    });
-  });
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain("actionable failure ***");
+        expect(result.stdout).not.toContain("fixture-secret");
+      });
+    },
+  );
 
   it("installs the trash shim under isolated test state", () => {
     withTempDir("openclaw-e2e-trash-shim-", (tempDir) => {

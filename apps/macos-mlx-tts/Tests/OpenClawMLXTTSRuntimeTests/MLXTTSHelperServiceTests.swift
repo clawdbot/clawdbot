@@ -98,6 +98,9 @@ final class MLXTTSHelperServiceTests: XCTestCase {
             .audioChunk(MLXTTSAudioChunk(
                 id: "stream",
                 pcm: Data([0x01, 0x80, 0x00, 0x00, 0xFF, 0x7F]))),
+            .audioChunk(MLXTTSAudioChunk(
+                id: "stream",
+                pcm: Data([0xFF, 0x7F, 0x00, 0x00, 0x01, 0x80]))),
             .completed(id: "stream"),
         ])
         let references = await state.references
@@ -157,6 +160,33 @@ private actor TestState {
     }
 }
 
+extension MLXTTSSpeechModel {
+    func generateStream(
+        text: String,
+        voice: String?,
+        language: String?,
+        referenceAudioPath: String?,
+        referenceText: String?) -> AsyncThrowingStream<[Float], Error>
+    {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await continuation.yield(self.generate(
+                        text: text,
+                        voice: voice,
+                        language: language,
+                        referenceAudioPath: referenceAudioPath,
+                        referenceText: referenceText))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
 private final class TestModel: MLXTTSSpeechModel, @unchecked Sendable {
     let sampleRate = 32000
     let state: TestState
@@ -175,6 +205,26 @@ private final class TestModel: MLXTTSSpeechModel, @unchecked Sendable {
         await self.state.generated(text)
         await self.state.referenced(path: referenceAudioPath, text: referenceText)
         return [-1, 0, 1]
+    }
+
+    func generateStream(
+        text: String,
+        voice _: String?,
+        language _: String?,
+        referenceAudioPath: String?,
+        referenceText: String?) -> AsyncThrowingStream<[Float], Error>
+    {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                await self.state.generated(text)
+                await self.state.referenced(path: referenceAudioPath, text: referenceText)
+                continuation.yield([-1, 0, 1])
+                continuation.yield([])
+                continuation.yield([1, 0, -1])
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }
 

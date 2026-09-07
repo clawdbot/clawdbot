@@ -1,3 +1,4 @@
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import type { CacheRetention, Model } from "../types.js";
 
 /** Selects the documented cache lifetime fields for a Responses request. */
@@ -33,9 +34,5 @@ export function clampOpenAIPromptCacheKey(key: string | undefined): string | und
   if (key === undefined) {
     return undefined;
   }
-  const chars = Array.from(key);
-  if (chars.length <= OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH) {
-    return key;
-  }
-  return chars.slice(0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH).join("");
+  return truncateCodePoints(key, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH);
 }

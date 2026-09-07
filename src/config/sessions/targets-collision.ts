@@ -48,6 +48,8 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     env?: NodeJS.ProcessEnv;
     registeredDatabases?: readonly { agentId: string; path: string }[];
     onDiagnostic?: (diagnostic: SessionStoreTargetCollisionDiagnostic) => void;
+    onSharedTarget?: (selected: SessionStoreTarget, sharedStorePaths: ReadonlySet<string>) => void;
+    onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   },
 ): SessionStoreTarget[] {
   // Ownership must not fall back while the authoritative registry is unreadable:
@@ -191,6 +193,17 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       deduped.push(
         collision ? { ...selected, sharedOwnerAgentIds: [...byAgentId.keys()] } : selected,
       );
+      options.onResolvedTarget?.(selected, { agentId: ownerAgentId, storePath: sqlitePath });
+      if (options.onSharedTarget) {
+        // A shared alias can select a per-agent registry spelling. Preserve its
+        // original shared claims so consumers need no second ownership scan.
+        const sharedStorePaths = new Set(
+          group.filter((entry) => entry.shared).map((entry) => entry.target.storePath),
+        );
+        if (sharedStorePaths.size > 0) {
+          options.onSharedTarget(selected, sharedStorePaths);
+        }
+      }
     }
     const selectedAgentId = selected ? normalizeAgentId(selected.agentId) : ownerAgentId;
     const ignoredAgentIds = [...byAgentId.keys()].filter((agentId) => agentId !== selectedAgentId);

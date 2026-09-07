@@ -8,7 +8,7 @@ import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../type
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import { escapeSkillXml, type Skill } from "./skill-contract.js";
+import { compactSkillsPromptForContext, escapeSkillXml, type Skill } from "./skill-contract.js";
 import { compactPromptSkills } from "./skill-paths.js";
 import { prepareSkillsForPrompt } from "./skill-prompt-limits.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
@@ -39,7 +39,10 @@ function resolveWorkspaceSkillPromptState(
   const limits = opts?.config?.skills?.limits;
   const agentLimits = resolveEffectiveAgentSkillsLimits(opts?.config, opts?.agentId);
   const prepared = prepareSkillsForPrompt({
-    skills: compactPromptSkills(resolvedSkills),
+    skills: compactPromptSkills(resolvedSkills, {
+      config: opts?.config,
+      agentId: opts?.agentId,
+    }),
     maxSkillsInPrompt: limits?.maxSkillsInPrompt,
     maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
     remoteNote,
@@ -82,6 +85,7 @@ export function buildSkillSnapshot(
 }
 
 type ResolveSkillsPromptParams = {
+  contextTokenBudget?: number;
   skillsSnapshot?: SkillSnapshot;
   entries?: SkillEntry[];
   config?: OpenClawConfig;
@@ -124,7 +128,7 @@ function rebuildAfterUnsafeSnapshot(
   return buildSkillsPromptFromEntries(params, entries);
 }
 
-export function resolveSkillsPrompt(params: ResolveSkillsPromptParams): string {
+function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (params.skillsSnapshot && !snapshotPrompt) {
     return "";
@@ -194,4 +198,11 @@ export function resolveSkillsPrompt(params: ResolveSkillsPromptParams): string {
     return `${snapshotPrompt.slice(0, bodyStart)}${filteredBody}${tail}${snapshotPrompt.slice(catalogEnd)}`.trim();
   }
   return buildSkillsPromptFromEntries(params, params.entries);
+}
+
+export function resolveSkillsPrompt(params: ResolveSkillsPromptParams): string {
+  return compactSkillsPromptForContext(
+    resolveSkillsPromptCatalog(params),
+    params.contextTokenBudget,
+  );
 }
