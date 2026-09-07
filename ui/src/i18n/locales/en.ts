@@ -3429,11 +3429,12 @@ export const en: TranslationMap & {
   githubConnections: {
     title: "GitHub connections",
     description:
-      "Publishing access is separate from your verified GitHub sign-in and co-author credit. Connect an account here to publish with it.",
+      "Check the accounts used for agent commands, dashboard data, and publishing. These connections are separate from your GitHub sign-in and co-author credit.",
     mine: "My GitHub",
     system: "System GitHub",
     personalDescription: "Your account for explicitly selected Publish PR actions.",
-    systemDescription: "Shared account for agents and default publication.",
+    systemDescription:
+      "Default account for agent commands, authenticated dashboards, and publishing.",
     unboundDescription:
       "Sign in with a personal Gateway profile to connect My GitHub. Administrators can still manage System GitHub.",
     signInRequired: "Personal sign-in required",
@@ -3461,6 +3462,10 @@ export const en: TranslationMap & {
       "My GitHub is used only when you explicitly select it for Gateway-brokered Publish PR on an idle, reconciled local workspace. Publication still needs write access to the session. Agent git/gh, model actions, previews, and workers keep the shared account. Finish and reclaim remote work before personal publication. Connecting My GitHub changes no defaults.",
     details: "Connection details",
     agentTitle: "GitHub account",
+    agentFor: "GitHub for {agent}",
+    agentDescription:
+      "Used for this agent's commands and authenticated dashboard data. Verified confirms the account; repository access is checked when data is requested.",
+    viewAgent: "View agent account",
     agentOverride: "Agent override",
     advancedOverride: "Advanced: agent GitHub override",
     manageCommon: "Manage connections in Profile",

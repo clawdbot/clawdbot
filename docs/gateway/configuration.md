@@ -507,12 +507,30 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - **Sibling keys**: merged after includes (override included values)
     - **Relative paths**: resolved relative to the including file
     - **Path format**: include paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution
-    - **OpenClaw-owned writes**: when a write changes only one top-level section
-      backed by a single-file include such as `plugins: { $include: "./plugins.json5" }`,
-      OpenClaw updates that included file and leaves `openclaw.json` intact
-    - **Unsupported write-through**: root includes, include arrays, and includes
-      with sibling overrides fail closed for OpenClaw-owned writes instead of
-      flattening the config
+    - **OpenClaw-owned writes**: when every changed key is owned by one
+      single-file include at an object-key path, OpenClaw updates the deepest
+      owning include and leaves `openclaw.json` intact. This works for both
+      top-level sections such as `plugins: { $include: "./plugins.json5" }` and
+      nested object-map entries. Write-through only targets include files inside
+      the top-level config directory; includes admitted through
+      `OPENCLAW_INCLUDE_ROOTS` stay read-only for OpenClaw-owned writes.
+    - **Unsupported write-through**: root includes (every section of a config
+      whose root object authors `$include`), actual array-entry includes,
+      include arrays, sibling overrides, files shared by multiple logical paths,
+      changes spanning ownership boundaries,
+      any nested include beneath a merged owner, and any include whose own file
+      still authors a nested `$include` directive fail closed instead of
+      flattening the config. Numeric object keys are treated as map keys, not
+      array positions.
+      Include targets and contents are rechecked around persistence; a concurrent
+      edit to an intermediate include refuses the write or rolls back its unchanged leaf.
+    - **Doctor repairs**: `openclaw doctor --fix` writes through the same
+      boundary. A run whose candidate mixes a root-owned repair with an
+      include-owned repair is refused as a whole. That refused write leaves every
+      file unchanged (earlier writes in the same run stay saved), and Doctor names
+      the boundary to repair by hand before rerunning, plus the included file or
+      files when the root file authors that boundary's `$include` (an agent-roster
+      boundary is named without its file).
     - **Confinement**: `$include` paths must resolve under the directory holding
       `openclaw.json`. To share a tree across machines or users, set
       `OPENCLAW_INCLUDE_ROOTS` to a path-list (`:` on POSIX, `;` on Windows) of

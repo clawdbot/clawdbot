@@ -847,30 +847,33 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("import value\nconst marker = '\uFEFF';");
   });
 
-  it("preserves an injected backend decoder's exact UTF-16 text", async () => {
-    const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        decodeText: ({ buffer, absolutePath }) =>
-          `${absolutePath}:${buffer.toString("hex")}:\ud800a🦞b\udc00`,
-        access: async () => {},
-        detectImageMimeType: async () => null,
-        readFile: async () => bytes,
-      },
-    });
-    const result = await tool.execute(
-      "call-1",
-      { path: "legacy.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+  it.each(["\ud800a🦞b\udc00", "\ud800first\udc00\nsecond🦞\ud800\n"])(
+    "preserves an injected backend decoder's exact UTF-16 text: %j",
+    async (decoded) => {
+      const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          decodeText: ({ buffer, absolutePath }) =>
+            `${absolutePath}:${buffer.toString("hex")}:${decoded}`,
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => bytes,
+        },
+      });
+      const result = await tool.execute(
+        "call-1",
+        { path: "legacy.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
 
-    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
-    expect(textContent(result)).toBe(
-      `${path.resolve("/workspace", "legacy.txt")}:c4e3bac3:\ud800a🦞b\udc00`,
-    );
-  });
+      expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
+      expect(textContent(result)).toBe(
+        `${path.resolve("/workspace", "legacy.txt")}:c4e3bac3:${decoded}`,
+      );
+    },
+  );
 
   it("waits for an aliased queued write before reading the same new file", async () => {
     const tempDir = tempDirs.make("openclaw-read-write-order-");

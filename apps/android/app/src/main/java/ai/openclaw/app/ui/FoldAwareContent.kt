@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.recalculateWindowInsets
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
@@ -19,23 +19,27 @@ import androidx.window.layout.DisplayFeature
 internal fun FoldAwareContent(
   features: List<DisplayFeature>,
   modifier: Modifier = Modifier,
-  content: @Composable () -> Unit,
+  bookPanesEnabled: Boolean = false,
+  content: @Composable (BookPaneBounds?) -> Unit,
 ) {
-  Layout(
+  SubcomposeLayout(
     modifier = modifier.fillMaxSize(),
-    content = {
-      Box(Modifier.recalculateWindowInsets().clipToBounds()) { content() }
-    },
-  ) { measurables, constraints ->
+  ) { constraints ->
     val width = constraints.maxWidth
     val height = constraints.maxHeight
+    val density = this
     layout(width, height) {
       // Read the stationary host, not the moving pane. Measuring during placement uses the
       // current window offset even when an ancestor moves without changing our constraints.
       val origin = coordinates?.positionInWindow()?.round() ?: IntOffset.Zero
-      val pane = foldSafeRegion(IntRect(origin, IntSize(width, height)), features, layoutDirection)
-      measurables
-        .single()
+      val host = IntRect(origin, IntSize(width, height))
+      val book = if (bookPanesEnabled) bookPaneBounds(host, features, layoutDirection, density) else null
+      val pane = if (book != null) host else foldSafeRegion(host, features, layoutDirection)
+      val localBook = book?.let { BookPaneBounds(it.start.translate(-origin), it.end.translate(-origin)) }
+      // One subcomposition keeps the screen alive while deciding its mode from current host bounds.
+      subcompose(Unit) {
+        Box(Modifier.recalculateWindowInsets().clipToBounds()) { content(localBook) }
+      }.single()
         .measure(Constraints.fixed(pane.width, pane.height))
         .place(pane.left - origin.x, pane.top - origin.y)
     }

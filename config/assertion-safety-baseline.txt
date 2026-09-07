@@ -2349,7 +2349,6 @@ src/cli/program/register.migrate.ts	12
 src/cli/program/register.onboard.ts	27
 src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	29
-src/cli/program/route-specs.ts	1
 src/cli/run-main.ts	1
 src/cli/sandbox-cli.ts	4
 src/cli/secrets-cli.ts	2
@@ -2459,7 +2458,6 @@ src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
 src/commands/doctor/shared/empty-allowlist-policy.ts	14
 src/commands/doctor/shared/empty-allowlist-scan.ts	17
-src/commands/doctor/shared/include-migration-ownership.ts	2
 src/commands/doctor/shared/legacy-config-compat.ts	1
 src/commands/doctor/shared/legacy-config-core-migrate.ts	1
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	18
@@ -2564,7 +2562,7 @@ src/config/mcp-config.ts	1
 src/config/merge-patch.ts	1
 src/config/model-input-normalization.ts	2
 src/config/model-input.ts	1
-src/config/mutate.ts	6
+src/config/mutate.ts	4
 src/config/normalize-exec-safe-bin.ts	2
 src/config/official-external-channel-secret-schema.ts	4
 src/config/plugin-auto-enable.apply.ts	1
