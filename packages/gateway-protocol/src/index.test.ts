@@ -737,6 +737,21 @@ describe("validateTalkConfigResult", () => {
       }),
     ]);
   });
+
+  it("accepts response-only realtime client routing hints", () => {
+    expectAccepted(validateTalkConfigResult, [
+      {
+        config: {
+          clientHints: {
+            realtime: {
+              modelSource: "gateway",
+              gatewayRelaySupported: false,
+            },
+          },
+        },
+      },
+    ]);
+  });
 });
 
 describe("validateTalkClientCreateParams", () => {

@@ -8,6 +8,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
@@ -681,6 +683,56 @@ describe("createPdfTool", () => {
         text: "fallback summary",
       });
       expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
+    });
+  });
+
+  it("uses the prepared provider stream for extraction fallback", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const pluginRegistry = createEmptyPluginRegistry();
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai",
+        api: "openai-completions",
+        input: ["text"],
+        pluginRegistry,
+      });
+      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Managed model content",
+        images: [],
+      });
+      const order: string[] = [];
+      const providerStreamFn = vi.fn(async () => {
+        order.push("request");
+        return {
+          result: async () => ({
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "managed summary" }],
+          }),
+        };
+      });
+      registerProviderStreamForModelMock.mockImplementationOnce(() => {
+        order.push("prepare");
+        expect(getPluginRuntimeGenerationRegistry()).toBe(pluginRegistry);
+        return providerStreamFn;
+      });
+      completeMock.mockImplementationOnce(() => {
+        throw new Error("unprepared completion dispatched");
+      });
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(order).toEqual(["prepare", "request"]);
+      expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
+        expect.objectContaining({ wrapProviderStream: true }),
+      );
+      expect(providerStreamFn).toHaveBeenCalledOnce();
+      expect(completeMock).not.toHaveBeenCalled();
+      expect(result.content).toEqual([{ type: "text", text: "managed summary" }]);
     });
   });
 

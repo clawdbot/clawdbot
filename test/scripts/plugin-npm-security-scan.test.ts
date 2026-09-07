@@ -1,14 +1,6 @@
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
@@ -28,12 +20,6 @@ import {
   type PublishablePluginPackage,
   type ScanPackageResult,
 } from "../../scripts/lib/plugin-npm-security-scan.mts";
-import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CANDIDATE_SHA = "1".repeat(40);
@@ -188,6 +174,25 @@ function frozenReviewedFindings(): string[] {
   ];
 }
 
+// Recorded by the inert package scan for candidate 292991c9d814 in
+// https://github.com/openclaw/openclaw/actions/runs/33807502201/job/100821685649.
+function frozen2026_7_33ReviewedFindings(): string[] {
+  return [
+    ...frozenReviewedFindings(),
+    ...Array.from(
+      { length: 3 },
+      () => "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.test.ts",
+    ),
+    "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.http.test.ts",
+    "@openclaw/google-meet:dangerous-exec:src/realtime.process.test.ts",
+    "@openclaw/openshell-sandbox:dangerous-exec:src/backend.e2e.test.ts",
+    ...Array.from(
+      { length: 2 },
+      () => "@openclaw/openshell-sandbox:dangerous-exec:src/openshell-core.test.ts",
+    ),
+  ];
+}
+
 function syntheticResultsForFindings(findings: readonly string[]): ScanPackageResult[] {
   const findingsByPackage = new Map<string, string[]>();
   for (const finding of findings) {
@@ -229,13 +234,17 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts",
     ];
 
-    expect(resolveReviewedSourceLayout(current)?.id).toBe("current");
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.1")?.id).toBe("current");
+    for (const context of ["", "release/2026.9.1", "release/2026.9.2", "release/2026.9.3"]) {
+      expect(resolveReviewedSourceLayout(current, context)?.id, context).toBe("current");
+    }
     expect(resolveReviewedSourceLayout(frozenLegacy, "release/2026.9.1")).toBeUndefined();
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.2")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(current, "release/2026.9.4")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy)).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
       "extended-stable-2026.6.33",
+    );
+    expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.7.33")?.id).toBe(
+      "extended-stable-2026.7.33",
     );
     expect(
       resolveReviewedSourceLayout(frozenLegacy.slice(0, -1), "extended-stable/2026.6.33"),
@@ -273,6 +282,181 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       }),
     ).toMatchObject({ layout: null, status: "fail" });
   });
+
+  it("matches the recorded 2026.7.33 inert package scan inventory exactly", () => {
+    const packageResults = syntheticResultsForFindings(frozen2026_7_33ReviewedFindings()).map(
+      (result) => ({
+        ...result,
+        expectedReviewedCriticalFindings: result.reviewedCriticalFindings.filter((finding) =>
+          finding.includes(".test.ts"),
+        ),
+      }),
+    );
+    const frozen = buildPluginNpmSecurityScanReport({
+      candidateSha: CANDIDATE_SHA,
+      packageResults,
+      targetContextRef: "extended-stable/2026.7.33",
+      toolingSha: TOOLING_SHA,
+    });
+
+    expect(frozen).toMatchObject({
+      candidateSha: CANDIDATE_SHA,
+      errors: [],
+      layout: "extended-stable-2026.7.33",
+      status: "pass",
+    });
+    const legacyPackageResults = packageResults.map((result) => ({
+      ...result,
+      expectedReviewedCriticalFindings:
+        result.packageName === "@openclaw/acpx"
+          ? result.expectedReviewedCriticalFindings.slice(0, 1)
+          : result.expectedReviewedCriticalFindings,
+    }));
+    expect(
+      buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: legacyPackageResults,
+        targetContextRef: "extended-stable/2026.6.33",
+        toolingSha: TOOLING_SHA,
+      }).status,
+    ).toBe("fail");
+  });
+  it.each([0, 1, 2])(
+    "preserves frozen doctor counts while shrinking current policy: %s",
+    async (count) => {
+      const packageName = "@openclaw/codex";
+      const probe = 'import { spawn } from "node:child_process";\nspawn(process.execPath, []);\n';
+      const artifact = writePluginArtifact({
+        extensionId: "codex",
+        packageName,
+        files: {
+          "src/app-server/transport-stdio.ts": probe,
+          "src/app-server/sandbox-exec-server/sandbox-child.ts": probe,
+          "src/app-server/transport-process-snapshot.ts": probe,
+          "src/doctor.ts":
+            'import { spawn } from "node:child_process";\n' +
+            "spawn(process.execPath, []);\n".repeat(count),
+          "src/unreviewed.ts": probe,
+        },
+      });
+      for (const context of ["", "release/2026.9.1", "release/2026.9.2", "release/2026.9.3"]) {
+        const frozen = context === "release/2026.9.1" || context === "release/2026.9.2";
+        const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
+        expect(scanned.scanErrors).toEqual([]);
+        const result = scanned.packageResults[0]!;
+        expect(result.unexpectedCriticalFindings.map((finding) => finding.path).toSorted()).toEqual(
+          [
+            ...Array.from({ length: frozen ? 0 : count }, () => "src/doctor.ts"),
+            "src/unreviewed.ts",
+          ],
+        );
+        const report = buildPluginNpmSecurityScanReport({
+          candidateSha: CANDIDATE_SHA,
+          packageResults: scanned.packageResults,
+          targetContextRef: context,
+          toolingSha: TOOLING_SHA,
+        });
+        expect(report.status).toBe("fail"); // The unknown finding is never admitted.
+        expect(
+          report.errors.filter((error) =>
+            error.startsWith(`${packageName}: reviewed critical inventory mismatch`),
+          ),
+        ).toHaveLength(frozen && count !== 1 ? 1 : 0);
+      }
+    },
+  );
+
+  it.each([null, 0, 2, 3, 4])(
+    "requires exactly three reviewed one-shot fixture spawns when packed: %s",
+    async (count) => {
+      const packageName = "@openclaw/codex";
+      const fixturePath = "src/app-server/run-attempt-one-shot-cleanup.test.ts";
+      const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
+      const spawnProbe =
+        'import { spawn } from "node:child_process";\nspawn(process.execPath, []);\n';
+      const artifact = writePluginArtifact({
+        extensionId: "codex",
+        packageName,
+        files: {
+          "src/app-server/transport-stdio.ts": spawnProbe,
+          "src/app-server/sandbox-exec-server/sandbox-child.ts": spawnProbe,
+          "src/app-server/transport-process-snapshot.ts": spawnProbe,
+          ...(count === null
+            ? {}
+            : {
+                [fixturePath]:
+                  'import { spawn } from "node:child_process";\n' +
+                  "spawn(process.execPath, []);\n".repeat(count),
+              }),
+        },
+      });
+      const scanned = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.3");
+      expect(scanned.scanErrors).toEqual([]);
+      expect(scanned.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
+      expect(scanned.packageResults[0]?.expectedReviewedCriticalFindings).toEqual(
+        count === null ? [] : Array.from({ length: 3 }, () => fixtureKey),
+      );
+      const report = buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: scanned.packageResults,
+        targetContextRef: "release/2026.9.3",
+        toolingSha: TOOLING_SHA,
+      });
+      expect(report.errors.filter((error) => error.startsWith(`${packageName}:`))).toEqual(
+        count === null || count === 3
+          ? []
+          : [expect.stringContaining("reviewed critical inventory mismatch")],
+      );
+    },
+  );
+
+  it.each([1, 2])(
+    "reviews exactly one current hardware probe, preserving frozen policy: %s",
+    async (count) => {
+      const packageName = "@openclaw/llama-cpp-provider";
+      const hardwareKey = `${packageName}:dangerous-exec:src/hardware.ts`;
+      const installerKey = `${packageName}:dangerous-exec:src/llama-server-install.ts`;
+      const probe =
+        'import { execFile } from "node:child_process";\nexecFile("/usr/bin/vm_stat", []);\n';
+      const artifact = writePluginArtifact({
+        extensionId: "llama-cpp",
+        files: {
+          "src/hardware.ts": probe + (count === 2 ? 'execFile("/bin/df", ["-P", "/tmp"]);\n' : ""),
+          "src/llama-server-install.ts": probe,
+        },
+        packageName,
+      });
+      const current = await scanPublishablePluginPackages([artifact.artifact]);
+      expect(current.scanErrors).toEqual([]);
+      expect(current.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
+      expect(current.packageResults[0]?.reviewedCriticalFindings).toEqual([
+        ...Array.from({ length: count }, () => hardwareKey),
+        installerKey,
+      ]);
+      const currentReport = buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: [
+          ...current.packageResults,
+          syntheticResult("@openclaw/codex", { reviewedCriticalFindings: currentLayoutFindings() }),
+        ],
+        toolingSha: TOOLING_SHA,
+      });
+      const packageErrors = currentReport.errors.filter((error) =>
+        error.startsWith(`${packageName}:`),
+      );
+      expect(packageErrors).toEqual(
+        count === 1 ? [] : [expect.stringContaining("reviewed critical inventory mismatch")],
+      );
+
+      const frozen = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.1");
+      expect(frozen.scanErrors).toEqual([]);
+      expect(frozen.packageResults[0]?.reviewedCriticalFindings).toEqual([installerKey]);
+      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toHaveLength(count);
+      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toEqual(
+        expect.arrayContaining([{ line: 2, path: "src/hardware.ts", ruleId: "dangerous-exec" }]),
+      );
+    },
+  );
 
   it("scans checked-in malicious code without running candidate hooks or helpers", async () => {
     const candidateRoot = tempDirs.make("openclaw-plugin-security-inert-pack-");
@@ -759,200 +943,6 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     expect(constrainPluginNpmSecurityScanReport(report, 64).errors).toEqual([
       "Plugin npm security scan report exceeded the byte limit.",
     ]);
-  });
-
-  it("writes sanitized exact-identity reports for timeout, heap, and RSS failures", () => {
-    const root = tempDirs.make("openclaw-plugin-npm-security-runner-");
-    const timeoutChild = join(root, "timeout.mjs");
-    const oomChild = join(root, "oom.mjs");
-    const rssChild = join(root, "rss.mjs");
-    writeFileSync(timeoutChild, "await new Promise(() => {});\n", "utf8");
-    writeFileSync(
-      oomChild,
-      "const values = [];\nwhile (true) values.push(new Array(100000).fill(Math.random()));\n",
-      "utf8",
-    );
-    writeFileSync(
-      rssChild,
-      "globalThis.value = Buffer.alloc(64 * 1024 * 1024, 1);\nsetInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    for (const [label, child, timeoutMs, heapMb, rssMb, expectedError] of [
-      ["timeout", timeoutChild, "25", "128", "1024", "timed out"],
-      ["oom", oomChild, "10000", "16", "1024", "exceeded its process limit"],
-      ["rss", rssChild, "10000", "128", "16", "exceeded its RSS limit"],
-    ] as const) {
-      const reportPath = join(root, `${label}.json`);
-      const result = spawnSync(
-        process.execPath,
-        [
-          "scripts/plugin-npm-security-scan-runner.mjs",
-          "--artifact-root",
-          join(root, "artifacts"),
-          "--candidate-sha",
-          CANDIDATE_SHA,
-          "--expected-packages-json",
-          "[]",
-          "--tooling-sha",
-          TOOLING_SHA,
-          "--report",
-          reportPath,
-        ],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            NODE_ENV: "test",
-            OPENCLAW_PLUGIN_SECURITY_RUNNER_CHILD: child,
-            OPENCLAW_PLUGIN_SECURITY_RUNNER_HEAP_MB: heapMb,
-            OPENCLAW_PLUGIN_SECURITY_RUNNER_RSS_MB: rssMb,
-            OPENCLAW_PLUGIN_SECURITY_RUNNER_TIMEOUT_MS: timeoutMs,
-          },
-          timeout: 15_000,
-        },
-      );
-      const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
-        candidateSha: string;
-        errors: string[];
-        toolingSha: string;
-      };
-      expect(result.status).toBe(1);
-      expect(report).toMatchObject({
-        candidateSha: CANDIDATE_SHA,
-        toolingSha: TOOLING_SHA,
-      });
-      expect(report.errors).toContainEqual(expect.stringContaining(expectedError));
-      expect(`${result.stdout}${result.stderr}${JSON.stringify(report)}`).not.toContain(root);
-    }
-  }, 30_000);
-
-  it.skipIf(process.platform === "win32").each([
-    ["SIGINT", 130],
-    ["SIGTERM", 143],
-  ] as const)(
-    "joins scanner descendants and records cancellation on %s",
-    async (signal, exitCode) => {
-      const root = tempDirs.make("openclaw-plugin-npm-security-cancel-");
-      const childPath = join(root, "child.mjs");
-      const childPidPath = join(root, "child.pid");
-      const descendantPidPath = join(root, "descendant.pid");
-      const reportPath = join(root, "report.json");
-      writeFileSync(
-        childPath,
-        `import fs from "node:fs";
-import { spawn } from "node:child_process";
-setInterval(() => {}, 1000);
-fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
-const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-descendant.once("spawn", () => fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid)));
-descendant.unref();
-`,
-        "utf8",
-      );
-      const wrapper = spawn(
-        process.execPath,
-        [
-          "scripts/plugin-npm-security-scan-runner.mjs",
-          "--artifact-root",
-          root,
-          "--candidate-sha",
-          CANDIDATE_SHA,
-          "--tooling-sha",
-          TOOLING_SHA,
-          "--report",
-          reportPath,
-        ],
-        {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            NODE_ENV: "test",
-            OPENCLAW_PLUGIN_SECURITY_RUNNER_CHILD: childPath,
-          },
-          stdio: "ignore",
-        },
-      );
-      const closed = waitForChildClose(wrapper, 10_000);
-      let childPid: number | undefined;
-      let descendantPid: number | undefined;
-      try {
-        childPid = await waitForPidFile(childPidPath, 5_000);
-        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
-        expect(isProcessAlive(childPid)).toBe(true);
-        expect(isProcessAlive(descendantPid)).toBe(true);
-        wrapper.kill(signal);
-        const result = await closed;
-        expect(isProcessAlive(childPid)).toBe(false);
-        expect(isProcessAlive(descendantPid)).toBe(false);
-        expect(result).toEqual({ code: exitCode, signal: null });
-        expect(JSON.parse(readFileSync(reportPath, "utf8"))).toMatchObject({
-          candidateSha: CANDIDATE_SHA,
-          toolingSha: TOOLING_SHA,
-          status: "fail",
-          errors: [`Plugin npm security scanner cancelled by ${signal}.`],
-        });
-      } finally {
-        if (wrapper.exitCode === null && wrapper.signalCode === null) {
-          wrapper.kill("SIGKILL");
-        }
-        await closed;
-        if (childPid) {
-          try {
-            process.kill(-childPid, "SIGKILL");
-          } catch (error) {
-            expect(error).toMatchObject({ code: "ESRCH" });
-          }
-          await waitForDead(childPid, 2_000);
-        }
-        if (descendantPid) {
-          await waitForDead(descendantPid, 2_000);
-        }
-      }
-    },
-  );
-
-  it("fails closed when RSS measurement is unavailable", () => {
-    const root = tempDirs.make("openclaw-plugin-npm-security-rss-measurement-");
-    const child = join(root, "child.mjs");
-    const binDir = join(root, "bin");
-    const reportPath = join(root, "report.json");
-    mkdirSync(binDir);
-    writeFileSync(child, "setInterval(() => {}, 1_000);\n", "utf8");
-    writeFileSync(join(binDir, "ps"), "#!/bin/sh\nexit 1\n", "utf8");
-    chmodSync(join(binDir, "ps"), 0o755);
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        "scripts/plugin-npm-security-scan-runner.mjs",
-        "--artifact-root",
-        join(root, "artifacts"),
-        "--candidate-sha",
-        CANDIDATE_SHA,
-        "--expected-packages-json",
-        "[]",
-        "--tooling-sha",
-        TOOLING_SHA,
-        "--report",
-        reportPath,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NODE_ENV: "test",
-          OPENCLAW_PLUGIN_SECURITY_RUNNER_CHILD: child,
-          OPENCLAW_PLUGIN_SECURITY_RUNNER_TIMEOUT_MS: "5000",
-          PATH: `${binDir}:${process.env.PATH}`,
-        },
-        timeout: 10_000,
-      },
-    );
-    const report = JSON.parse(readFileSync(reportPath, "utf8")) as { errors: string[] };
-    expect(result.status).toBe(1);
-    expect(report.errors).toContain("Plugin npm security scanner could not measure RSS.");
   });
 
   it("retains the complete current-root publishable plugin inventory contract", async () => {

@@ -572,6 +572,7 @@ describe("legacy workspace Doctor migration", () => {
     "symlink",
     "hardlink",
     "invalid-json",
+    "invalid-bootstrap-timestamp",
     "invalid-attestation",
     "oversized-attestation",
   ] as const)("rejects %s without changing canonical state", async (kind) => {
@@ -601,6 +602,12 @@ describe("legacy workspace Doctor migration", () => {
         await fsp.symlink(targetPath, setupPath);
       } else if (kind === "hardlink") {
         await fsp.link(targetPath, setupPath);
+      } else if (kind === "invalid-bootstrap-timestamp") {
+        await fsp.writeFile(
+          setupPath,
+          JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-15T10:00:00Z" }),
+          "utf8",
+        );
       } else {
         await fsp.writeFile(setupPath, "{invalid", "utf8");
       }
@@ -610,6 +617,9 @@ describe("legacy workspace Doctor migration", () => {
 
     expect(result.warnings[0]).toMatch(/legacy workspace/i);
     expect(result.warnings[0]).toContain(sourcePath);
+    expect(result.warnings[0]).toContain("Stop the Gateway");
+    expect(result.warnings[0]).toContain(".rejected-<timestamp>");
+    expect(result.warnings[0]).toContain("openclaw doctor --fix");
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
     const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
@@ -618,6 +628,20 @@ describe("legacy workspace Doctor migration", () => {
         .db.prepare("SELECT workspace_key FROM workspace_setup_state WHERE workspace_key = ?")
         .get(identity.workspaceKey),
     ).toBeUndefined();
+    if (kind === "invalid-bootstrap-timestamp") {
+      const original = await fsp.readFile(sourcePath);
+      const retainedPath = `${sourcePath}.rejected-2026-07-15T11-00-00`;
+      expect(() =>
+        assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
+      ).toThrow(/requires migration/);
+      await fsp.rename(sourcePath, retainedPath);
+      expect(await fsp.readFile(retainedPath)).toEqual(original);
+      expect(detect(context).hasLegacy).toBe(false);
+      expect(await migrate(context)).toEqual({ changes: [], warnings: [] });
+      expect(() =>
+        assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
+      ).not.toThrow();
+    }
   });
 
   it("discards an empty reserved hashed attestation and unblocks the workspace", async () => {

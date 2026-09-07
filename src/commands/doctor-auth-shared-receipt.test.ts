@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { loadPersistedSharedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { deletePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,

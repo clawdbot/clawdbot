@@ -26,7 +26,10 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
-import { prepareSessionWorkerPlacementMutationCheck } from "../worker-environments/session-placement-lifecycle.js";
+import {
+  prepareSessionWorkerPlacementMutationCheck,
+  SessionWorkerPlacementStopError,
+} from "../worker-environments/session-placement-lifecycle.js";
 import {
   prepareSessionLifecycleDrain,
   type SessionLifecycleDrain,
@@ -269,6 +272,11 @@ export async function prepareSessionPatchArchive(params: {
       ...(fresh.entry ? { entry: fresh.entry } : {}),
     });
   } catch (error) {
+    if (error instanceof SessionWorkerPlacementStopError) {
+      return err(
+        errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: error.state !== "failed" }),
+      );
+    }
     if (
       error instanceof SessionMutationAuthorizationChangedError ||
       error instanceof ModelAccountConnectAuthorityError
@@ -351,11 +359,10 @@ export async function prepareSessionPatchWorktreeTransition(params: {
       scope: params.scope,
       commitGuard,
     });
-  if (!params.archived) {
-    await synchronize(params.entry);
-  }
+  // Carry the exact restored binding through the later metadata commit.
+  const assertCommitAllowed = params.archived ? commitGuard : await synchronize(params.entry);
   return {
-    assertCommitAllowed: commitGuard,
+    assertCommitAllowed,
     afterCommit: params.archived
       ? async (entry) => {
           try {

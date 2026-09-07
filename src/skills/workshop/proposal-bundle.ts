@@ -69,13 +69,19 @@ export async function buildSkillProposalEvaluationBundles(params: {
   };
 }
 
-export async function readSkillProposalTargetTreeSha256(skillDir: string): Promise<string> {
-  return hashSkillTree(await readSkillTreeFiles(skillDir));
+export async function readSkillProposalTargetTreeSha256(
+  skillDir: string,
+  options: { includeRootMetadata?: boolean } = {},
+): Promise<string> {
+  return hashSkillTree(await readSkillTreeFiles(skillDir, options.includeRootMetadata));
 }
 
-async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBundleFile[]> {
+async function readSkillTreeFiles(
+  skillDir: string,
+  includeRootMetadata = false,
+): Promise<PluginHookSkillBundleFile[]> {
   const include = (entry: WalkDirectoryEntry) =>
-    entry.depth > 1 || !EXCLUDED_ROOT_DIRS.has(entry.name);
+    includeRootMetadata || entry.depth > 1 || !EXCLUDED_ROOT_DIRS.has(entry.name);
   const scanned = await walkDirectory(skillDir, {
     // Inspect one extra level so deeper content cannot silently disappear from the hash.
     maxDepth: MAX_EVALUATION_PATH_DEPTH + 1,

@@ -5,8 +5,9 @@ import type { ChatProps } from "../chat-view.ts";
 import { openSlot, type SidebarLayout } from "../sidebar-layout.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import "./chat-sidebar.ts";
+import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
 import { resetTaskDetail, type TaskDetailHost } from "./chat-task-detail-state.ts";
 import { renderTaskDetailPanel } from "./chat-task-detail.ts";
 import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
@@ -19,7 +20,7 @@ function detailSlotOpen(layout: SidebarLayout): boolean {
 }
 
 export function openTaskDetailId(
-  content: SidebarContent | null | undefined,
+  content: SidebarSelection | null | undefined,
   layout: SidebarLayout,
 ): string | undefined {
   return content?.kind === "task" && detailSlotOpen(layout) ? content.taskId : undefined;
@@ -58,9 +59,14 @@ export function renderChatDetailSlot(params: {
       .content=${content}
       .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
       .attachmentRuntime=${{
+        sessionKey: params.chat.sessionKey,
+        agentId: params.chat.fullMessageAgentId,
+        policyKey: assistantMediaPolicyKey(
+          params.chat.selectedSession,
+          params.chat.mediaPolicyEpoch,
+        ),
         authToken: params.chat.assistantAttachmentAuthToken,
         connectionEpoch: params.chat.connectionEpoch,
-        localMediaPreviewRoots: params.chat.localMediaPreviewRoots ?? [],
         resourceBasePath: params.chat.resourceBasePath,
         resolveArtifactDownload: params.chat.resolveArtifactDownload,
       }}
@@ -68,6 +74,7 @@ export function renderChatDetailSlot(params: {
       .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
       .embedSandboxMode=${host.embedSandboxMode}
       .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
+      .githubRepo=${params.chat.githubRepo}
       .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
         openSessionWorkspaceFile(host, target)}
       .onOpenSessionLink=${params.chat.onOpenSessionLink}

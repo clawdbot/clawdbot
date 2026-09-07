@@ -81,7 +81,7 @@ describe("session tool factories", () => {
     });
     expect(created.details).toMatchObject({ changed: true, created: true });
     const listed = await tools.ls.execute("list-literal-directory", { path: "@directory" });
-    expect(listed.content).toEqual([{ type: "text", text: "new.txt" }]);
+    expect(listed.content).toEqual([{ type: "text", text: '"new.txt"' }]);
     await expect(fs.readFile(path.join(cwd, "@directory/new.txt"), "utf8")).resolves.toBe(
       "literal child\n",
     );
@@ -224,9 +224,7 @@ describe("session tool factories", () => {
         find: { operations: { exists: () => true, glob: () => [path.join(cwd, "remote.ts")] } },
         ls: {
           operations: {
-            exists: () => true,
-            stat: (absolutePath) => ({ isDirectory: () => absolutePath === cwd }),
-            readdir: () => ["remote.ts"],
+            readDirectory: () => [{ name: "remote.ts", isDirectory: false }],
           },
         },
       });
@@ -234,7 +232,7 @@ describe("session tool factories", () => {
       const found = await requireTool(tools, "find").execute("find", { pattern: "*.ts" });
       const listed = await requireTool(tools, "ls").execute("ls", {});
       expect(found.content).toEqual([{ type: "text", text: "remote.ts" }]);
-      expect(listed.content).toEqual([{ type: "text", text: "remote.ts" }]);
+      expect(listed.content).toEqual([{ type: "text", text: '"remote.ts"' }]);
     },
   );
 });

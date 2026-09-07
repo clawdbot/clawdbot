@@ -1,11 +1,9 @@
 // Builds detached, platform-specific restart scripts for update handoff.
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
-import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -18,7 +16,12 @@ import {
   resolveGatewayRestartLogPath,
   shellEscapeRestartLogValue,
 } from "../../daemon/restart-logs.js";
-import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
+import {
+  buildHiddenLauncherScript,
+  encodeWindowsLauncherScript,
+} from "../../daemon/schtasks-layout.js";
+import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "../../process/exec-spawn.js";
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -35,6 +38,10 @@ function isWindowsTaskNameSafe(value: string): boolean {
 }
 
 function powerShellSingleQuote(value: string): string {
+  // The standalone helper is read through stdin, whose code page varies by host.
+  if (/[^\x20-\x7e]/u.test(value)) {
+    return `([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(value, "utf8").toString("base64")}')))`;
+  }
   return `'${value.replace(/'/g, "''")}'`;
 }
 
@@ -135,6 +142,7 @@ export async function prepareRestartScript(
 
   let scriptContent;
   let filename;
+  let windowsWrapper: string | undefined;
 
   try {
     if (platform === "linux") {
@@ -246,19 +254,28 @@ exit "$status"
       const quotedGatewayScriptPath = powerShellSingleQuote(gatewayScriptPath);
       const expectedGatewayArgv = windowsGatewayArgv.map(powerShellSingleQuote).join(", ");
       filename = `openclaw-restart-${timestamp}.cmd`;
-      scriptContent = `@echo off
+      windowsWrapper = `@echo off
 REM Standalone restart script - survives parent process termination.
-REM Keep this as a cmd wrapper so Group Policy script execution policies
-REM cannot block the update restart handoff before schtasks.exe runs.
+REM Read fixed commands from stdin so Group Policy file-signing restrictions
+REM do not prevent recovery. The companion contains ASCII-only script text.
 setlocal
-set "OPENCLAW_RESTART_SCRIPT=%~f0"
 set "OPENCLAW_RESTART_SCRIPT_DIR=%~dp0."
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:OPENCLAW_RESTART_SCRIPT; $s=Get-Content -Raw -LiteralPath $p; $m='# POWERSHELL'; $i=$s.IndexOf($m); if ($i -lt 0) { exit 1 }; Invoke-Expression $s.Substring($i)"
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command - < "%~dpn0.ps1" > "%~dpn0.out"
 set "status=%ERRORLEVEL%"
+REM PowerShell can exit zero for malformed or incomplete stdin without running it.
+findstr /x /c:"OPENCLAW_RESTART_COMPLETE" "%~dpn0.out" >nul 2>&1
+if errorlevel 1 set "status=1"
+REM This dedicated cmd process must exit instead of returning to a deleted batch file.
+(
+del "%~dpn0.out" >nul 2>&1
+del "%~dpn0.ps1" >nul 2>&1
+del "%~f0.vbs" >nul 2>&1
 del "%~f0" >nul 2>&1
 rmdir "%OPENCLAW_RESTART_SCRIPT_DIR%" >nul 2>&1
-exit /b %status%
-# POWERSHELL
+exit %status%
+)
+`;
+      scriptContent = `
 # Wait briefly to ensure file locks are released after update.
 $ErrorActionPreference = "Continue"
 Start-Sleep -Seconds 2
@@ -351,124 +368,58 @@ function Get-OpenClawScheduledTaskState {
   return "Unknown"
 }
 
-$nativeSource = @'
-using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-
-namespace OpenClaw.Restart {
-  public sealed class ProcessLease : IDisposable {
-    private IntPtr handle;
-    public long CreationTimeFileTime { get; private set; }
-
-    internal ProcessLease(IntPtr handle, long creationTimeFileTime) {
-      this.handle = handle;
-      CreationTimeFileTime = creationTimeFileTime;
-    }
-
-    public bool Terminate() {
-      return handle != IntPtr.Zero && NativeMethods.TerminateProcess(handle, 1);
-    }
-
-    public void Dispose() {
-      if (handle != IntPtr.Zero) {
-        NativeMethods.CloseHandle(handle);
-        handle = IntPtr.Zero;
-      }
-    }
-  }
-
-  public static class NativeMethods {
-    private const uint PROCESS_TERMINATE = 0x0001;
-    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct FILETIME {
-      public uint Low;
-      public uint High;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetProcessTimes(
-      IntPtr process,
-      out FILETIME creation,
-      out FILETIME exit,
-      out FILETIME kernel,
-      out FILETIME user
-    );
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    internal static extern bool TerminateProcess(IntPtr process, uint exitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    internal static extern bool CloseHandle(IntPtr handle);
-
-    [DllImport("shell32.dll", SetLastError = true)]
-    private static extern IntPtr CommandLineToArgvW(
-      [MarshalAs(UnmanagedType.LPWStr)] string commandLine,
-      out int argumentCount
-    );
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr LocalFree(IntPtr memory);
-
-    public static ProcessLease TryOpenProcess(int processId) {
-      IntPtr handle = OpenProcess(
-        PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
-        false,
-        processId
-      );
-      if (handle == IntPtr.Zero) {
-        return null;
-      }
-
-      FILETIME creation;
-      FILETIME exit;
-      FILETIME kernel;
-      FILETIME user;
-      if (!GetProcessTimes(handle, out creation, out exit, out kernel, out user)) {
-        CloseHandle(handle);
-        return null;
-      }
-
-      long creationTime = ((long)creation.High << 32) | creation.Low;
-      // Win32_Process.CreationDate exposes microseconds. Truncate FILETIME's
-      // finer 100-nanosecond digit so both identity sources compare exactly.
-      long normalizedCreationTime = creationTime - (creationTime % 10);
-      return new ProcessLease(handle, normalizedCreationTime);
-    }
-
-    public static string[] ParseCommandLine(string commandLine) {
-      int argumentCount;
-      IntPtr arguments = CommandLineToArgvW(commandLine, out argumentCount);
-      if (arguments == IntPtr.Zero) {
-        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-      }
-      try {
-        var result = new List<string>(argumentCount);
-        for (int index = 0; index < argumentCount; index++) {
-          IntPtr argument = Marshal.ReadIntPtr(arguments, index * IntPtr.Size);
-          result.Add(Marshal.PtrToStringUni(argument));
-        }
-        return result.ToArray();
-      } finally {
-        LocalFree(arguments);
-      }
-    }
-  }
-}
-'@
-
-try {
-  Add-Type -TypeDefinition $nativeSource -Language CSharp -ErrorAction Stop
-} catch {
-  Write-RestartLog "openclaw restart native ownership helper unavailable source=update error=$($_.Exception.Message)"
-}
-
 # OPENCLAW_RESTART_KILL_POLICY_BEGIN
+function Split-OpenClawWindowsCommandLine {
+  param([string]$CommandLine)
+  if (-not $CommandLine) { return @() }
+  $arguments = [Collections.Generic.List[string]]::new()
+  $index = 0
+  # Shell32 treats argv[0] as a path, without backslash/quote escapes.
+  if ($CommandLine[0] -eq '"') {
+    $end = $CommandLine.IndexOf('"', 1)
+    if ($end -lt 0) { $end = $CommandLine.Length }
+    $arguments.Add($CommandLine.Substring(1, $end - 1))
+    $index = [Math]::Min($end + 1, $CommandLine.Length)
+  } else {
+    while ($index -lt $CommandLine.Length -and $CommandLine[$index] -ne ' ' -and [int]$CommandLine[$index] -ne 9) { $index++ }
+    $arguments.Add($CommandLine.Substring(0, $index))
+  }
+  while ($index -lt $CommandLine.Length) {
+    while ($index -lt $CommandLine.Length -and ($CommandLine[$index] -eq ' ' -or [int]$CommandLine[$index] -eq 9)) { $index++ }
+    if ($index -eq $CommandLine.Length) { break }
+    $argument = [Text.StringBuilder]::new()
+    $quoted = 0
+    while ($index -lt $CommandLine.Length) {
+      $character = $CommandLine[$index]
+      if ($quoted -eq 0 -and ($character -eq ' ' -or [int]$character -eq 9)) { break }
+      $slashes = 0
+      while ($index -lt $CommandLine.Length -and $CommandLine[$index] -eq '\\') { $slashes++; $index++ }
+      if ($index -lt $CommandLine.Length -and $CommandLine[$index] -eq '"') {
+        [void]$argument.Append(('\\' * [int][Math]::Floor($slashes / 2)))
+        if ($slashes % 2 -eq 1) {
+          [void]$argument.Append('"')
+          $index++
+        }
+        # Consecutive unescaped quotes produce one literal quote per three;
+        # only a remainder of one leaves the argument quoted.
+        $quotes = $quoted
+        while ($index -lt $CommandLine.Length -and $CommandLine[$index] -eq '"') { $quotes++; $index++ }
+        [void]$argument.Append(('"' * [int][Math]::Floor($quotes / 3)))
+        $quoted = [int]($quotes % 3 -eq 1)
+      } else {
+        [void]$argument.Append(('\\' * $slashes))
+        if ($index -eq $CommandLine.Length) { break }
+        $character = $CommandLine[$index]
+        if ($quoted -eq 0 -and ($character -eq ' ' -or [int]$character -eq 9)) { break }
+        [void]$argument.Append($character)
+        $index++
+      }
+    }
+    $arguments.Add($argument.ToString())
+  }
+  return $arguments.ToArray()
+}
+
 function Get-OpenClawListenerSnapshot {
   param([int]$Port)
 
@@ -537,7 +488,7 @@ function Get-OpenClawProcessFacts {
     return [pscustomobject]@{
       ProcessId = [int]$process.ProcessId
       CreationTimeFileTime = [string]$creationTimeFileTime
-      Argv = @([OpenClaw.Restart.NativeMethods]::ParseCommandLine([string]$process.CommandLine))
+      Argv = @(Split-OpenClawWindowsCommandLine -CommandLine ([string]$process.CommandLine))
     }
   } catch {
     Write-RestartLog "openclaw restart process query failed source=update pid=$ProcessId error=$($_.Exception.Message)"
@@ -621,7 +572,7 @@ function Invoke-OpenClawVerifiedListenerKill {
     [string[]]$ExpectedArgv,
     [scriptblock]$ProcessQuery = { param([int]$QueryPid) Get-OpenClawProcessFacts -ProcessId $QueryPid },
     [scriptblock]$ListenerQuery = { param([int]$QueryPort) Get-OpenClawListenerSnapshot -Port $QueryPort },
-    [scriptblock]$ProcessOpen = { param([int]$QueryPid) [OpenClaw.Restart.NativeMethods]::TryOpenProcess($QueryPid) }
+    [scriptblock]$ProcessOpen = { param([int]$QueryPid) [Diagnostics.Process]::GetProcessById($QueryPid) }
   )
 
   $observedProcess = & $ProcessQuery $ProcessId
@@ -646,13 +597,18 @@ function Invoke-OpenClawVerifiedListenerKill {
       return
     }
 
+    # Force the Process object to retain its handle before reading identity.
+    # StartTime and Kill then use that handle, including if the PID is recycled.
+    [void]$lease.Handle
+    $heldCreationTime = [long]$lease.StartTime.ToUniversalTime().ToFileTimeUtc()
+    $heldCreationTime -= $heldCreationTime % 10
     $recheckedListeners = & $ListenerQuery $Port
     $recheckedProcess = & $ProcessQuery $ProcessId
     $decisionParams = @{
       CandidatePid = $ProcessId
       ExpectedArgv = $ExpectedArgv
       ObservedProcess = $observedProcess
-      HeldProcessCreationTimeFileTime = [string]$lease.CreationTimeFileTime
+      HeldProcessCreationTimeFileTime = [string]$heldCreationTime
       RecheckedListeners = $recheckedListeners
       RecheckedProcess = $recheckedProcess
     }
@@ -662,11 +618,8 @@ function Invoke-OpenClawVerifiedListenerKill {
       return
     }
 
-    if ($lease.Terminate()) {
-      Write-RestartLog "openclaw restart killed stale listener source=update pid=$ProcessId"
-    } else {
-      Write-RestartLog "openclaw restart failed to kill stale listener source=update pid=$ProcessId"
-    }
+    $lease.Kill()
+    Write-RestartLog "openclaw restart killed stale listener source=update pid=$ProcessId"
   } catch {
     Write-RestartLog "openclaw restart ownership verification failed source=update pid=$ProcessId error=$($_.Exception.Message)"
   } finally {
@@ -747,6 +700,7 @@ if ($status -eq 0) {
   Write-RestartLog "openclaw restart failed source=update status=$status"
 }
 
+[Console]::Out.WriteLine("OPENCLAW_RESTART_COMPLETE")
 exit $status
 `;
     } else {
@@ -756,7 +710,23 @@ exit $status
     const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-"));
     const scriptPath = path.join(scriptDir, filename);
     try {
-      await fs.writeFile(scriptPath, scriptContent, { mode: 0o755, flag: "wx" });
+      if (windowsWrapper) {
+        // Stdin executes one statement at a time. One literal block requires the
+        // entire helper to parse successfully before any restart action runs.
+        await fs.writeFile(scriptPath.replace(/\.cmd$/u, ".ps1"), `& {\n${scriptContent}\n}\n\n`, {
+          mode: 0o700,
+          flag: "wx",
+        });
+        await fs.writeFile(
+          `${scriptPath}.vbs`,
+          encodeWindowsLauncherScript({
+            format: "vbs",
+            content: buildHiddenLauncherScript({ scriptPath }),
+          }),
+          { mode: 0o700, flag: "wx" },
+        );
+      }
+      await fs.writeFile(scriptPath, windowsWrapper ?? scriptContent, { mode: 0o755, flag: "wx" });
     } catch (error) {
       await fs.rm(scriptDir, { recursive: true, force: true }).catch(() => {});
       throw error;
@@ -768,31 +738,25 @@ exit $status
   }
 }
 
-/**
- * Executes the prepared restart script as a **detached** process.
- *
- * The script must outlive the CLI process because the CLI itself is part
- * of the service being restarted — `systemctl restart` / `launchctl
- * kickstart -k` will terminate the current process tree.  Using
- * `spawn({ detached: true })` + `unref()` ensures the script survives
- * the parent's exit.
- *
- * Resolves immediately after spawning; the script runs independently.
- */
-export async function runRestartScript(scriptPath: string): Promise<void> {
+/** Observe native acceptance separately from the caller's subsequent health check. */
+export async function runRestartScript(scriptPath: string, timeoutMs: number): Promise<boolean> {
   const isWindows = process.platform === "win32";
-  const file = isWindows ? getWindowsCmdExePath() : "/bin/sh";
-  const args = isWindows ? ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)] : [scriptPath];
+  // WScript supplies the hidden console that PowerShell stdin needs while the
+  // outer helper remains detached from the updater's lifetime.
+  const file = isWindows ? getWindowsSystem32ExePath("wscript.exe") : "/bin/sh";
+  const args = isWindows ? ["//B", "//Nologo", `${scriptPath}.vbs`] : [scriptPath];
 
   try {
-    const child = spawn(file, args, {
+    await spawnCommand([file, ...args], {
+      // Keep the detached, stream-independent handoff on every platform, but
+      // observe its result before classifying failed health as an activation refusal.
       detached: true,
       stdio: "ignore",
-      windowsHide: true,
+      timeout: timeoutMs,
+      forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
     });
-    child.on("error", () => {});
-    child.unref();
+    return true;
   } catch {
-    // Restart handoff is best-effort; update completion must not crash here.
+    return false;
   }
 }

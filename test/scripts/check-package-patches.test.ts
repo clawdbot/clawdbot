@@ -58,8 +58,7 @@ describe("check-package-patches", () => {
       ["@awesome.me/webawesome@3.12.0", "patches/@awesome.me__webawesome@3.12.0.patch"],
       ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
       ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
-      ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
-      ["vitest@4.1.11", "patches/vitest@4.1.11.patch"],
+      ["vitest@5.0.0", "patches/vitest@5.0.0.patch"],
       ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0.patch"],
     ] as const;
     const dir = makeRepo();

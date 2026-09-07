@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Question, QuestionAnswers } from "../../packages/gateway-protocol/src/index.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   QuestionManager,
   QuestionManagerError,
@@ -66,7 +67,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  manager.reset();
+  manager.close();
   vi.useRealTimers();
 });
 
@@ -199,6 +200,136 @@ describe("QuestionManager", () => {
     });
   });
 
+  it("retires local questions without cancelling truth or refreshing human-input recovery", async () => {
+    const onResolved = vi.fn();
+    const releaseHumanInputWait = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved,
+      registerHumanInputWait: () => releaseHumanInputWait,
+    });
+    const waiting = manager.waitAnswer(record.id, 5_000);
+
+    manager.reset();
+    await expect(waiting).resolves.toEqual({ status: "pending" });
+    expect(record.status).toBe("pending");
+    expect(manager.get(record.id)).toBeNull();
+    expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(false);
+    await vi.advanceTimersByTimeAsync(10_000 + QUESTION_RESOLVED_ENTRY_GRACE_MS);
+    expect(onResolved).not.toHaveBeenCalled();
+    expect(manager.request({ id: record.id, questions, timeoutMs: 10_000 }).status).toBe("pending");
+  });
+
+  it("permanently closes admission without reset reopening the retired owner", () => {
+    const releaseHumanInputWait = vi.fn();
+    const onResolved = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved,
+      registerHumanInputWait: () => releaseHumanInputWait,
+    });
+    manager.close();
+    manager.reset();
+    manager.close();
+    expect(() => manager.request({ questions, timeoutMs: 10_000 })).toThrow(
+      "Question manager is closed",
+    );
+    expect(manager.get(record.id)).toBeNull();
+    expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(false);
+    expect(onResolved).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not recreate a retention timer when resolution closes the manager reentrantly", () => {
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved: () => manager.close(),
+    });
+    expect(manager.resolve(record.id, answers)).toEqual({ status: "answered", answers });
+    expect(manager.get(record.id)).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves an answer recorded before human-input release reentrantly closes its observer", async () => {
+    const observer = new AsyncWorkScope();
+    const releaseHumanInputWait = vi.fn(() => observer.beginClose());
+    const onResolved = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved,
+      registerHumanInputWait: () => releaseHumanInputWait,
+    });
+    const waiting = observer.track(() => manager.waitAnswer(record.id));
+    try {
+      manager.resolve(record.id, answers);
+      await expect(waiting).resolves.toEqual({ status: "answered", answers });
+      expect(manager.get(record.id)).toMatchObject({ status: "answered", answers });
+      expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(true);
+      expect(onResolved).toHaveBeenCalledExactlyOnceWith({
+        id: record.id,
+        status: "answered",
+        answers,
+      });
+    } finally {
+      manager.close();
+      await waiting;
+      await observer.drain();
+    }
+  });
+
+  it("detaches only the closing observer without releasing the question's human-input wait", async () => {
+    const observer = new AsyncWorkScope();
+    const onResolved = vi.fn();
+    const releaseHumanInputWait = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved,
+      registerHumanInputWait: () => releaseHumanInputWait,
+    });
+    let closingObserverSettled = false;
+    let otherObserverSettled = false;
+    const closingObserver = observer
+      .track(() => manager.waitAnswer(record.id, 5_000))
+      .then((result) => {
+        closingObserverSettled = true;
+        return result;
+      });
+    const otherObserver = manager.waitAnswer(record.id, 5_000).then((result) => {
+      otherObserverSettled = true;
+      return result;
+    });
+    try {
+      observer.beginClose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(closingObserverSettled).toBe(true);
+      expect(otherObserverSettled).toBe(false);
+      await expect(closingObserver).resolves.toEqual({ status: "pending" });
+      await observer.drain();
+      expect(manager.get(record.id)?.status).toBe("pending");
+      expect(onResolved).not.toHaveBeenCalled();
+      expect(releaseHumanInputWait).not.toHaveBeenCalled();
+
+      manager.resolve(record.id, answers);
+      await expect(otherObserver).resolves.toEqual({ status: "answered", answers });
+      expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(true);
+      expect(onResolved).toHaveBeenCalledExactlyOnceWith({
+        id: record.id,
+        status: "answered",
+        answers,
+      });
+    } finally {
+      // Owner retirement is post-observer cleanup, not the cancellation mechanism being tested.
+      manager.close();
+      await Promise.all([closingObserver, otherObserver]);
+      await observer.drain();
+    }
+  });
+
   it("times out one waiter without resolving the question", async () => {
     const record = manager.request({ questions, timeoutMs: 10_000 });
     const waiting = manager.waitAnswer(record.id, 50);
@@ -285,6 +416,6 @@ describe("answer canonicalization", () => {
       status: "answered",
       answers: { answers: { pick: ["Two"] } },
     });
-    localManager.reset();
+    localManager.close();
   });
 });

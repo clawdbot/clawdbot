@@ -1,8 +1,8 @@
 // Capacity-edge regressions cover stopped direct runs and saturated scheduled work.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -14,20 +14,19 @@ import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.js";
 import { stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { run } from "./ops-run.js";
-import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
 const capacityFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-run-admission-capacity-",
 });
 
-type CronStateParams = Parameters<typeof createCronServiceState>[0] & {
+type CronStateParams = Parameters<typeof createCronRegressionState>[0] & {
   testAdmissionLimit?: number;
 };
 
 function createAdmissionTestState(params: CronStateParams) {
   const { testAdmissionLimit, ...stateParams } = params;
-  const state = createCronServiceState(stateParams);
+  const state = createCronRegressionState(stateParams);
   if (testAdmissionLimit !== undefined) {
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - testAdmissionLimit;
   }
@@ -53,13 +52,9 @@ describe("cron service run admission capacity edges", () => {
     const activeStarted = createDeferred();
     const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
         if (runningJob.id === activeJob.id) {
           activeStarted.resolve();
@@ -112,13 +107,9 @@ describe("cron service run admission capacity edges", () => {
       return { status: "ok" as const, summary: "should not run" };
     });
     const state = createAdmissionTestState({
-      cronEnabled: true,
       storePath: store.storePath,
       testAdmissionLimit: 1,
-      log: noopLogger,
       nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
 

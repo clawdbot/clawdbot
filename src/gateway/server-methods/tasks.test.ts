@@ -899,7 +899,7 @@ describe("tasks gateway handlers", () => {
     expect(terminal.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
   });
 
-  it("cancels running task records and returns the updated task", async () => {
+  it("does not report cancellation for an ordinary task without a live owner", async () => {
     const task = createTaskRecord({
       runtime: "cli",
       requesterSessionKey: "agent:main:main",
@@ -918,10 +918,10 @@ describe("tasks gateway handlers", () => {
 
     expect(calls[0]?.[0]).toBe(true);
     expect(payload?.found).toBe(true);
-    expect(payload?.cancelled).toBe(true);
+    expect(payload?.cancelled).toBe(false);
     expect(payload?.task?.id).toBe(task.taskId);
-    expect(payload?.task?.status).toBe("cancelled");
-    expect(payload?.task?.error).toBe("user stopped task");
+    expect(payload?.task?.status).toBe("running");
+    expect(payload?.task?.error).toBeUndefined();
   });
 
   it("cancels ACP tasks through the live Gateway handler and control runtime", async () => {

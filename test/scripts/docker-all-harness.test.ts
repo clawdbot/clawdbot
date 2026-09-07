@@ -55,6 +55,7 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
   lane: process.env.OPENCLAW_DOCKER_ALL_LANE_NAME,
   cwd: process.cwd(),
   phase: process.argv[2],
+  skipDockerBuild: process.env.OPENCLAW_SKIP_DOCKER_BUILD,
   registry: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
   registryVersion: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION,
   registrySha256: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256,
@@ -225,21 +226,34 @@ function runFixture(
 }
 
 describe("Docker scheduler trusted harness execution", () => {
-  posixIt("preserves prepared core dependencies for a package-only lane", () => {
-    const fixture = setupFixture("split", false, true);
-    const { result } = runFixture(fixture, "split", ["docker-package-install"], {
-      env: { OPENCLAW_CURRENT_PACKAGE_VERSION: "", OPENCLAW_CURRENT_PACKAGE_SHA256: "" },
-    });
+  posixIt(
+    "preserves prepared core dependencies without shared builds for a package-only lane",
+    () => {
+      const fixture = setupFixture("split", false, true);
+      const { result } = runFixture(fixture, "split", ["docker-package-install"], {
+        env: {
+          OPENCLAW_CURRENT_PACKAGE_VERSION: "",
+          OPENCLAW_CURRENT_PACKAGE_SHA256: "",
+          OPENCLAW_DOCKER_ALL_BUILD: "1",
+        },
+      });
 
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(fixture.marker, "utf8").trim())).toMatchObject({
-      lane: "docker-package-install",
-      package: fixture.tarball,
-      registry: fixture.registry,
-      registryVersion: "2026.8.1",
-      registrySha256: fixture.registrySha256,
-    });
-  });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const calls = readFileSync(fixture.marker, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        lane: "docker-package-install",
+        package: fixture.tarball,
+        registry: fixture.registry,
+        registryVersion: "2026.8.1",
+        registrySha256: fixture.registrySha256,
+        skipDockerBuild: "0",
+      });
+    },
+  );
 
   posixIt.each([
     { failure: "timeout", attempts: 1, passed: false },

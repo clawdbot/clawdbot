@@ -322,7 +322,6 @@ describe("scripts/ui windows spawn behavior", () => {
           "scripts/lib/build-identity.mts",
           "scripts/lib/output-root-guard.mjs",
           "scripts/lib/record-shared.mjs",
-          "scripts/lib/windows-cmd-helpers-runtime.mts",
           "ui/package.json",
           "ui/src/build-info-normalizers.ts",
           "packages/normalization-core/src/record-coerce.ts",
@@ -522,7 +521,8 @@ require("node:module").syncBuiltinESMExports();
             timeout: 10_000,
           });
           expect(control.error).toBeUndefined();
-          expect(fs.readFileSync(accessLog, "utf8")).toContain("readdirSync");
+          // Prove the guard detects raw tsx cache access without coupling to its disk I/O strategy.
+          expect(fs.readFileSync(accessLog, "utf8").trim()).not.toBe("");
           fs.unlinkSync(accessLog);
         }
         const result = spawnSync(

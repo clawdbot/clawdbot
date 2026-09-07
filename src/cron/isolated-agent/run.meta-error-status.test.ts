@@ -1,5 +1,6 @@
 // Run meta error tests cover status reporting when cron run metadata fails.
 import { describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../agents/failover-error.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -34,9 +35,11 @@ function mockAgentRun({
 } = {}) {
   runWithModelFallbackMock.mockResolvedValueOnce({
     result: {
-      payloads: [],
-      ...result,
-      meta: { agentMeta: { usage }, ...meta },
+      result: {
+        payloads: [],
+        ...result,
+        meta: { agentMeta: { usage }, ...meta },
+      },
     },
     provider,
     model,
@@ -80,6 +83,21 @@ function mockDeliveryFailure(error: string, deliveryPayloads: unknown[] = []) {
 
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
+
+  it("preserves a provider failure reason independently of its message", async () => {
+    const message = "Saved selection requires an update.";
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new FailoverError(message, { reason: "model_not_found", provider: "openai" }),
+    );
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: message,
+      errorClassification: { kind: "reason", reason: "model_not_found" },
+    });
+  });
 
   it("marks a run-level error with empty payloads as a cron error", async () => {
     mockAgentRun({

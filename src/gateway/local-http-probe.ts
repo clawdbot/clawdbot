@@ -22,6 +22,7 @@ export type ConfiguredGatewayLocalProbe = {
     pathname: "/healthz" | "/readyz";
     port: number;
     timeoutMs: number;
+    signal?: AbortSignal;
   }): Promise<GatewayHttpProbeResponse | null>;
   resolveWebSocketTarget(port: number): Promise<GatewayLocalProbeTarget | null>;
 };
@@ -36,11 +37,13 @@ export async function requestGatewayLocalHttpProbe(params: {
   port: number;
   timeoutMs: number;
   tlsFingerprint?: string;
+  signal?: AbortSignal;
 }): Promise<GatewayHttpProbeResponse | null> {
+  params.signal?.throwIfAborted();
   if (params.timeoutMs <= 0) {
     return null;
   }
-  return await new Promise<GatewayHttpProbeResponse | null>((resolve) => {
+  const response = await new Promise<GatewayHttpProbeResponse | null>((resolve) => {
     let settled = false;
     const finish = (result: GatewayHttpProbeResponse | null) => {
       if (settled) {
@@ -58,6 +61,7 @@ export async function requestGatewayLocalHttpProbe(params: {
         path: params.pathname,
         method: "GET",
         timeout: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
         // Self-signed local Gateway certificates are trusted only by the exact
         // configured pin below; never accept them on ordinary HTTPS requests.
         ...(params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
@@ -105,6 +109,8 @@ export async function requestGatewayLocalHttpProbe(params: {
     });
     req.end();
   });
+  params.signal?.throwIfAborted();
+  return response;
 }
 
 export function createConfiguredGatewayLocalProbe(

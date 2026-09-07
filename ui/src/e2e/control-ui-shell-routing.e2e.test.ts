@@ -5,6 +5,7 @@ import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -156,7 +157,9 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
       const confirmation = page.locator("openclaw-gateway-url-confirmation");
       await confirmation.waitFor();
       expect(await confirmation.getByText(explicitGatewayUrl, { exact: true }).count()).toBe(1);
-      await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+      await confirmation
+        .getByRole("button", { name: "Switch to 127.0.0.1:29991", exact: true })
+        .click();
 
       await gateway.waitForRequest("connect");
       await page.locator("openclaw-app-shell").waitFor();
@@ -234,10 +237,12 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
       );
       expect(unprefixedPublicAssetRequests).toEqual([]);
 
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(artifactDir, "connected-shell.png"),
-      });
+      await writeFile(
+        path.join(artifactDir, "connected-shell.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          page.locator(".chat-main"),
+        ]),
+      );
       await writeFile(
         path.join(artifactDir, "behavior-summary.json"),
         `${JSON.stringify(

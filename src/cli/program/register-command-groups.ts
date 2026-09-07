@@ -7,6 +7,7 @@ import { registerLazyCommand } from "./register-lazy-command.js";
 export type CommandGroupPlaceholder = {
   name: string;
   description: string;
+  hidden?: boolean;
   options?: readonly CommandGroupPlaceholderOption[];
 };
 
@@ -68,6 +69,7 @@ export function registerLazyCommandGroup(
     program,
     name: placeholder.name,
     description: placeholder.description,
+    hidden: placeholder.hidden,
     options: placeholder.options,
     removeNames: getCommandGroupNames(entry),
     register: () => entry.register(program),

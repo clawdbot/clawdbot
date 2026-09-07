@@ -9,12 +9,9 @@ import type {
   SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
-import { continueLocalCodexSession } from "./session-catalog-adoption.js";
-import { archiveLocalCodexSession } from "./session-catalog-archive.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import { listCodexSessionCatalog, readCodexSessionTranscript } from "./session-catalog-listing.js";
-import { continueNodeCodexSession } from "./session-catalog-node-continue.js";
 import {
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -23,7 +20,6 @@ import {
   CODEX_LOCAL_SESSION_HOST_ID,
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   isInteractiveThreadSource,
-  parseCatalogPage,
 } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
@@ -31,6 +27,7 @@ import {
   openCodexCatalogTerminal,
   resolveLocalCodexTerminalExecutable,
   startCodexCatalogTerminal,
+  type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import type {
   CodexSessionCatalogControlFactory,
@@ -158,6 +155,7 @@ function registerCodexSessionCatalog(params: {
   control: CodexSessionCatalogControlFactory;
   getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
+  resolveRuntimeOptions: CodexTerminalConfigSources["resolveRuntimeOptions"];
 }): void {
   const catalogHomes = (agentId: string, allowProcessHomeFallback?: boolean) => {
     const homes = params.control.homesForAgent(agentId);
@@ -200,6 +198,7 @@ function registerCodexSessionCatalog(params: {
     supportsProcessHomeIsolation: true,
     resolveCreateSession: ({ agentId }) =>
       resolveCodexCatalogCreateSession(
+        params.api.runtime.modelConfig,
         params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
         agentId,
       ),
@@ -210,6 +209,8 @@ function registerCodexSessionCatalog(params: {
         allowProcessHomeFallback,
         listNodes,
         onHost,
+        waitUntil,
+        signal,
         sessionEntries,
         ...gatewayQuery
       } = query;
@@ -220,6 +221,7 @@ function registerCodexSessionCatalog(params: {
         canStartTerminal:
           host.kind === "gateway"
             ? localTerminalAvailable &&
+              host.hostId === CODEX_LOCAL_SESSION_HOST_ID &&
               localHomes.some(
                 (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
               )
@@ -234,6 +236,8 @@ function registerCodexSessionCatalog(params: {
           control: params.control,
           query: gatewayQuery,
           listNodes,
+          waitUntil,
+          signal,
           sessionEntries,
           localHomes,
           ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
@@ -334,13 +338,18 @@ function registerCodexSessionCatalog(params: {
         control,
         getPluginConfig: params.getPluginConfig,
         getRuntimeConfig: params.getRuntimeConfig,
-        parseCatalogPage,
+        resolveRuntimeOptions: params.resolveRuntimeOptions,
         ...(source ? { source } : {}),
         ...request,
         agentId,
       });
     },
     startTerminalSession: async (request) => {
+      if (!request.nodeId && request.hostId && request.hostId !== CODEX_LOCAL_SESSION_HOST_ID) {
+        throw new CatalogParamsError(
+          "Codex terminal host is unavailable; select the local machine or a connected node",
+        );
+      }
       const source = request.nodeId
         ? undefined
         : resolveLocalCatalogHomeForThread({
@@ -353,6 +362,7 @@ function registerCodexSessionCatalog(params: {
       return await startCodexCatalogTerminal({
         getPluginConfig: params.getPluginConfig,
         getRuntimeConfig: params.getRuntimeConfig,
+        resolveRuntimeOptions: params.resolveRuntimeOptions,
         ...request,
         source,
       });
@@ -369,3 +379,24 @@ export const codexSessionCatalogRuntime = {
   continueNode: continueNodeCodexSession,
   archiveLocal: archiveLocalCodexSession,
 };
+
+async function continueLocalCodexSession(
+  ...args: Parameters<typeof import("./session-catalog-adoption.js").continueLocalCodexSession>
+) {
+  const { continueLocalCodexSession: run } = await import("./session-catalog-adoption.js");
+  return run(...args);
+}
+
+async function archiveLocalCodexSession(
+  ...args: Parameters<typeof import("./session-catalog-archive.js").archiveLocalCodexSession>
+) {
+  const { archiveLocalCodexSession: run } = await import("./session-catalog-archive.js");
+  return run(...args);
+}
+
+async function continueNodeCodexSession(
+  ...args: Parameters<typeof import("./session-catalog-node-continue.js").continueNodeCodexSession>
+) {
+  const { continueNodeCodexSession: run } = await import("./session-catalog-node-continue.js");
+  return run(...args);
+}

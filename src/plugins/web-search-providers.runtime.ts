@@ -1,5 +1,4 @@
 // Runtime bridge for web-search providers supplied by plugins.
-import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
@@ -9,50 +8,26 @@ import {
 } from "./web-provider-public-artifacts.js";
 import {
   mapRegistryProviders,
+  resolveBundledWebProviderResolutionConfig,
   resolveManifestDeclaredWebProviderCandidatePluginIds,
 } from "./web-provider-resolution-shared.js";
-import { resolvePluginWebProviders } from "./web-provider-runtime-shared.js";
 import {
-  resolveBundledWebSearchResolutionConfig,
-  sortWebSearchProviders,
-} from "./web-search-providers.shared.js";
-
-function resolveWebSearchCandidatePluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-  origin?: PluginManifestRecord["origin"];
-  manifestRecords?: readonly PluginManifestRecord[];
-}): string[] | undefined {
-  return resolveManifestDeclaredWebProviderCandidatePluginIds({
-    contract: "webSearchProviders",
-    configKey: "webSearch",
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    onlyPluginIds: params.onlyPluginIds,
-    origin: params.origin,
-    manifestRecords: params.manifestRecords,
-  });
-}
-
-function mapRegistryWebSearchProviders(params: {
-  registry: ReturnType<typeof loadOpenClawPlugins>;
-  onlyPluginIds?: readonly string[];
-}): PluginWebSearchProviderEntry[] {
-  return mapRegistryProviders({
-    entries: params.registry.webSearchProviders,
-    onlyPluginIds: params.onlyPluginIds,
-    sortProviders: sortWebSearchProviders,
-  });
-}
+  resolvePluginWebProviders,
+  type WebProviderRuntimeResolution,
+} from "./web-provider-runtime-shared.js";
 
 const providerResolution = {
-  resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,
-  resolveCandidatePluginIds: resolveWebSearchCandidatePluginIds,
-  mapRegistryProviders: mapRegistryWebSearchProviders,
-};
+  resolveBundledResolutionConfig: (params) =>
+    resolveBundledWebProviderResolutionConfig({ ...params, contract: "webSearchProviders" }),
+  resolveCandidatePluginIds: (params) =>
+    resolveManifestDeclaredWebProviderCandidatePluginIds({
+      ...params,
+      contract: "webSearchProviders",
+      configKey: "webSearch",
+    }),
+  mapRegistryProviders: ({ registry, onlyPluginIds }) =>
+    mapRegistryProviders({ entries: registry.webSearchProviders, onlyPluginIds }),
+} satisfies WebProviderRuntimeResolution<PluginWebSearchProviderEntry>;
 
 function resolveLazyBundledWebSearchProviders(
   params: Parameters<typeof resolveEnabledBundledWebSearchProvidersFromPublicArtifacts>[0],

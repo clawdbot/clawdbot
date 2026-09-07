@@ -15,7 +15,7 @@ import {
   expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { renderControlUiAgentFailureCopy } from "../agents/failover/user-copy.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
@@ -29,7 +29,7 @@ import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./r
 import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
+type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
 
 const TEST_PRIMARY_PROFILE_ID = "openai:primary@example.test";
 const TEST_SECONDARY_PROFILE_ID = "openai:secondary@example.test";

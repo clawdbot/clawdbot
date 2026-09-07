@@ -84,6 +84,9 @@ export function createProviderModelRoutesResolver(params: {
       ? resolveDirectBundledProviderPolicySurface(provider)
       : params.surface;
   const resolveModelRoutes = surface?.resolveModelRoutes;
+  if (!resolveModelRoutes) {
+    return () => null;
+  }
   const providerConfig = resolveMergedModelProviderConfig(params.config, provider);
   // Runtime defaults copy catalog capabilities into configured model rows. Route
   // eligibility must read the authored view or metadata looks like request behavior.
@@ -122,9 +125,6 @@ export function createProviderModelRoutesResolver(params: {
   const env = params.env ?? process.env;
 
   return (observed) => {
-    if (!resolveModelRoutes) {
-      return null;
-    }
     const modelId = normalizeModelId(provider, observed?.modelId, surface);
     const configuredModel = modelId ? configuredModels.get(modelId) : undefined;
     const requestTransportOverrides = modelId

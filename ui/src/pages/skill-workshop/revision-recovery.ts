@@ -51,7 +51,6 @@ export class SkillWorkshopRevisionRecoveryController {
     instructions: string;
     proposal: SkillWorkshopProposal;
     proposalAgentId: string;
-    state: SkillWorkshopState;
   }): Promise<SkillWorkshopRevisionAdmissionOutcome> {
     const admissions = skillWorkshopRevisionAdmissionsFor(params.context);
     const run = this.recoveryId
@@ -71,7 +70,6 @@ export class SkillWorkshopRevisionRecoveryController {
               ? { proposalOriginSessionKey: params.proposal.origin.sessionKey }
               : {}),
             proposalSlug: params.proposal.slug,
-            useCurrentChatForRevisions: params.state.skillWorkshopUseCurrentChatForRevisions,
           },
           (entry, materialize) =>
             requestSkillWorkshopRevisionAdmission({

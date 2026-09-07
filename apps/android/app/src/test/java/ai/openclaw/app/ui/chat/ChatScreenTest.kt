@@ -132,7 +132,7 @@ class ChatScreenTest {
   }
 
   @Test
-  fun composerPrimaryActionKeepsRunStopSeparateFromLiveTalk() {
+  fun composerPrimaryActionSendsDraftsDuringRunsAndKeepsTalkStopIndependent() {
     assertEquals(
       ChatComposerPrimaryAction.Stop,
       resolveChatComposerPrimaryAction(talkActive = true, runActive = true, hasContent = true),
@@ -142,12 +142,16 @@ class ChatScreenTest {
       resolveChatComposerPrimaryAction(talkActive = true, runActive = false, hasContent = true),
     )
     assertEquals(
-      ChatComposerPrimaryAction.Stop,
+      ChatComposerPrimaryAction.Send,
       resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = true),
     )
     assertEquals(
       ChatComposerPrimaryAction.Send,
       resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = true),
+    )
+    assertEquals(
+      ChatComposerPrimaryAction.Stop,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = false),
     )
     assertEquals(
       ChatComposerPrimaryAction.StartTalk,

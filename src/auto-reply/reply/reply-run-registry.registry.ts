@@ -17,26 +17,30 @@ import {
   type ReplyRunRegistry,
 } from "./reply-run-registry.contracts.js";
 import { resolveReplyMessageInjectionRejection } from "./reply-run-registry.message-injection.js";
-import {
-  createReplyOperation,
-  expireStaleReplyOperation,
-  forceClearReplyOperation,
-} from "./reply-run-registry.operation.js";
+import { createReplyOperation, forceClearReplyOperation } from "./reply-run-registry.operation.js";
 import {
   clearReplyRunState,
   evictReplyOperationByOperation,
+  expireStaleReplyOperation,
   getAttachedBackend,
   isReplyOperationPreBackendPhase,
   isReplyRunCompacting,
   isReplyRunEvidenceStale,
   markReplyRunDiagnosticProgress,
+  mergeReplyRunAdmissionSource,
   replyRunState,
   resolveReplyRunForCurrentSessionId,
   resolveReplyRunWaitKey,
   type ReplyRunAdmissionBarrier,
+  type ReplyRunAdmissionSource,
 } from "./reply-run-registry.state.js";
 
 type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
+
+type ReplyRunAdmissionSettlement = {
+  settled: boolean;
+  sources?: ReplyRunAdmissionSource[];
+};
 
 type ReplyRunWaiter = {
   finish: (ended: boolean) => void;
@@ -290,20 +294,20 @@ async function waitForReplyRunAdmissionBarrier(params: {
   sessionKey: string;
   signal?: AbortSignal;
   timeoutMs?: number | null;
-}): Promise<{ settled: boolean; sessionId?: string }> {
+}): Promise<ReplyRunAdmissionSettlement> {
   const deadline =
     typeof params.timeoutMs === "number"
       ? Date.now() +
         resolveTimerTimeoutMs(params.timeoutMs, params.minimumTimeoutMs, params.minimumTimeoutMs)
       : undefined;
-  let sessionId: string | undefined;
+  const sources = new Map<ReplyRunAdmissionSource["databaseIdentity"], ReplyRunAdmissionSource>();
   while (true) {
     if (params.signal?.aborted) {
       return { settled: false };
     }
     const barrier = params.barriersByKey.get(params.sessionKey);
     if (!barrier) {
-      return { settled: true, sessionId };
+      return { settled: true, ...(sources.size ? { sources: [...sources.values()] } : {}) };
     }
     const remainingMs = deadline === undefined ? undefined : deadline - Date.now();
     if (remainingMs !== undefined && remainingMs <= 0) {
@@ -342,7 +346,15 @@ async function waitForReplyRunAdmissionBarrier(params: {
     if (!outcome) {
       return { settled: false };
     }
-    sessionId = barrier.sessionId;
+    for (const [identity, source] of barrier.sources) {
+      sources.set(
+        identity,
+        mergeReplyRunAdmissionSource(
+          { ...source, sessionIds: new Set(source.sessionIds) },
+          sources.get(identity),
+        ),
+      );
+    }
   }
 }
 
@@ -350,7 +362,7 @@ export async function waitForReplyRunFollowupAdmission(
   sessionKey: string,
   timeoutMs: number,
   opts?: { signal?: AbortSignal },
-): Promise<{ settled: boolean; sessionId?: string }> {
+): Promise<ReplyRunAdmissionSettlement> {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
   return normalizedSessionKey
     ? await waitForReplyRunAdmissionBarrier({
@@ -367,7 +379,7 @@ export async function waitForReplyRunSuccessorAdmission(
   sessionKey: string,
   timeoutMs?: number | null,
   opts?: { signal?: AbortSignal },
-): Promise<{ settled: boolean; sessionId?: string }> {
+): Promise<ReplyRunAdmissionSettlement> {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
   return normalizedSessionKey
     ? await waitForReplyRunAdmissionBarrier({

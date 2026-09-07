@@ -25,6 +25,7 @@ export function renderDeviceEntryMenu(
     deviceId?: string;
     desktopEnvironment?: string;
     pendingRequestId?: string;
+    onEditAlias?: () => void;
     onRemove?: () => void;
   },
 ) {
@@ -45,6 +46,11 @@ export function renderDeviceEntryMenu(
           case "copy":
             if (entry.deviceId) {
               void copyDeviceId(entry.deviceId);
+            }
+            break;
+          case "editAlias":
+            if (props.canManagePairing) {
+              entry.onEditAlias?.();
             }
             break;
           case "approve":
@@ -105,6 +111,16 @@ export function renderDeviceEntryMenu(
         entry.deviceId
           ? html`<wa-dropdown-item value="copy"
               >${t("devices.inventory.copyDeviceId")}</wa-dropdown-item
+            >`
+          : nothing
+      }
+      ${
+        entry.onEditAlias
+          ? html`<wa-dropdown-item
+              value="editAlias"
+              ?disabled=${!props.canManagePairing}
+              title=${pairingHint}
+              >${t("devices.inventory.editAlias")}</wa-dropdown-item
             >`
           : nothing
       }

@@ -2138,19 +2138,13 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    await expect(
-      fs.access(path.join(fixture.workspaceDir, "skills", "tweet-helper", "SKILL.md")),
-    ).resolves.toBeUndefined();
-    await expect(
-      fs.access(path.join(fixture.workspaceDir, "skills", "personal-style", "SKILL.md")),
-    ).resolves.toBeUndefined();
-    await expect(
-      fs.access(path.join(reportDir, "archive", "config.toml")),
-    ).resolves.toBeUndefined();
+    await fs.access(path.join(fixture.workspaceDir, "skills", "tweet-helper", "SKILL.md"));
+    await fs.access(path.join(fixture.workspaceDir, "skills", "personal-style", "SKILL.md"));
+    await fs.access(path.join(reportDir, "archive", "config.toml"));
     expectRecordFields(findItem(result.items, "plugin:documents:1"), { status: "skipped" });
     expectRecordFields(findItem(result.items, "skill:tweet-helper"), { status: "migrated" });
     expectRecordFields(findItem(result.items, "archive:config.toml"), { status: "migrated" });
-    await expect(fs.access(path.join(reportDir, "report.json"))).resolves.toBeUndefined();
+    await fs.access(path.join(reportDir, "report.json"));
   });
 
   it("installs selected curated plugins during apply and writes codexPlugins config", async () => {

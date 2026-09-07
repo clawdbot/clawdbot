@@ -265,6 +265,14 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
           // Replace the browsing context so a superseded document cannot race
           // the new wrapper's first private bridge-port offer.
           const nextInner = createInner();
+          nextInner.addEventListener("load", () => {
+            if (inner !== nextInner || typeof params.renderId !== "string") return;
+            window.parent.postMessage({
+              jsonrpc: "2.0",
+              method: "ui/notifications/sandbox-resource-loaded",
+              params: { renderId: params.renderId },
+            }, hostOrigin);
+          }, { once: true });
           widgetPortsOffered.clear();
           nextInner.srcdoc = guardedHtml;
           inner.replaceWith(nextInner);

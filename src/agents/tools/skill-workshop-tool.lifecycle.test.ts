@@ -1,20 +1,33 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 async function proposalDraftPath(proposalId: string): Promise<string> {
-  const record = await readSkillProposalRecord(proposalId, { env: testState.env });
+  const record = await readSkillProposalRecord(
+    proposalId,
+    { config: {}, env: testState.env },
+    {},
+    { config: {} },
+  );
   if (!record) {
     throw new Error(`expected stored proposal ${proposalId}`);
   }
@@ -86,17 +99,28 @@ describe("skill_workshop terminal lifecycle", () => {
           }),
         ).resolves.toMatchObject({ details: { id: details.id, status: expectedStatus } });
         await expect(
-          readSkillProposalRecord(details.id, { env: testState.env }),
+          readSkillProposalRecord(
+            details.id,
+            { config: {}, env: testState.env },
+            {},
+            { config: {} },
+          ),
         ).resolves.toMatchObject({ status: expectedStatus });
         expect(
           listSkillProposalEvents({
-            workspaceDir,
+            config: {},
             proposalId: details.id,
             env: testState.env,
           }).events.at(-1)?.type,
         ).toBe(expectedStatus);
         await expect(
-          fs.access(path.join(workspaceDir, "skills", `${action}-${damage}`, "SKILL.md")),
+          fs.access(
+            path.join(
+              resolveWorkshopSkillsDir({}, "main", testState.env),
+              `${action}-${damage}`,
+              "SKILL.md",
+            ),
+          ),
         ).rejects.toThrow();
       }
     }

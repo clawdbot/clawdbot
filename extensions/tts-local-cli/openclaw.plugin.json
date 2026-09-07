@@ -1,5 +1,6 @@
 {
   "id": "tts-local-cli",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

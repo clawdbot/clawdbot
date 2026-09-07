@@ -211,7 +211,7 @@ async function resizeImageBase64IfNeeded(params: {
   const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
   const sideGrid = buildImageResizeSideGrid(params.maxDimensionPx, sideStart);
 
-  let smallest: { buffer: Buffer; size: number } | null = null;
+  let smallestSize: number | undefined;
   let processorUnavailableError: unknown;
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
@@ -230,8 +230,8 @@ async function resizeImageBase64IfNeeded(params: {
         }
         throw err;
       }
-      if (!smallest || out.byteLength < smallest.size) {
-        smallest = { buffer: out, size: out.byteLength };
+      if (smallestSize === undefined || out.byteLength < smallestSize) {
+        smallestSize = out.byteLength;
       }
       if (out.byteLength <= params.maxBytes) {
         const sourcePixels =
@@ -283,12 +283,12 @@ async function resizeImageBase64IfNeeded(params: {
     throw toErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
-  const best = smallest?.buffer ?? buf;
+  const bestSize = smallestSize ?? buf.byteLength;
   const sourcePixels =
     typeof width === "number" && typeof height === "number" ? `${width}x${height}px` : "unknown";
   const sourceWithFile = params.fileName ? `${params.fileName} ${sourcePixels}` : sourcePixels;
   log.warn(
-    `Image resize failed to fit limits: ${sourceWithFile} best=${formatBytesShort(best.byteLength)} limit=${formatBytesShort(params.maxBytes)}`,
+    `Image resize failed to fit limits: ${sourceWithFile} best=${formatBytesShort(bestSize)} limit=${formatBytesShort(params.maxBytes)}`,
     {
       label: params.label,
       fileName: params.fileName,
@@ -298,13 +298,13 @@ async function resizeImageBase64IfNeeded(params: {
       sourceBytes: buf.byteLength,
       maxDimensionPx: params.maxDimensionPx,
       maxBytes: params.maxBytes,
-      smallestCandidateBytes: best.byteLength,
+      smallestCandidateBytes: bestSize,
       triggerOverBytes: overBytes,
       triggerOverDimensions: overDimensions,
     },
   );
   throw new Error(
-    `Image could not be reduced below ${formatBytesShort(params.maxBytes)} (got ${formatBytesShort(best.byteLength)})`,
+    `Image could not be reduced below ${formatBytesShort(params.maxBytes)} (got ${formatBytesShort(bestSize)})`,
   );
 }
 

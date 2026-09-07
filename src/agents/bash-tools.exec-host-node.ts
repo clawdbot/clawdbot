@@ -25,7 +25,6 @@ import {
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
-import { shouldAwaitExecApprovalInline } from "./bash-tools.exec-approval-wait.js";
 import {
   formatNodeInvokeFailureFollowup,
   invokeNodeSystemRun,
@@ -391,7 +390,8 @@ export async function executeNodeHostCommand(
     }
 
     if (!inlineApprovedByAsk) {
-      // Human approval may complete after this tool call returns, so follow-up delivery owns invocation.
+      // Keep routed approvals in the owning turn unless its caller explicitly
+      // delegates completion to a detached follow-up.
       const approvalRoute = await execHostShared.createExecApprovalRequestRoute({
         warnings: params.warnings,
         approvalRunningNoticeMs: params.approvalRunningNoticeMs,
@@ -442,7 +442,7 @@ export async function executeNodeHostCommand(
         inlineFallbackPolicy = currentFallback;
         inlineApprovalDecision = null;
         inlineApprovalId = approvalId;
-      } else if (unavailableReason === null && shouldAwaitExecApprovalInline(params)) {
+      } else if (unavailableReason === null && params.approvalFollowupMode === undefined) {
         // Keep the admitted turn alive while its approval is pending. Returning
         // approval-pending here closes the authority before the operator can act.
         const outcome = await execHostShared.resolveExecApprovalWaitOutcome({
@@ -488,6 +488,7 @@ export async function executeNodeHostCommand(
           turnSourceTo: params.turnSourceTo,
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,
+          direct: params.approvalFollowupMode === "direct",
         });
         const sendApprovalRequestFailedFollowup = async (): Promise<void> => {
           if (!params.signal?.aborted) {

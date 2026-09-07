@@ -3,7 +3,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { resolveComposerAvailability } from "./chat-composer-availability.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
 
 function placementSession(
@@ -58,22 +57,6 @@ describe("chat placement composer presentation", () => {
     expect(result.state.kind).toBe(kind);
     expect(result.blocksSend).toBe(kind !== "ready");
     expect(result.busyMessage).toBe(busyMessage ?? null);
-    expect(
-      resolveComposerAvailability({
-        catalog: false,
-        catalogCanSend: false,
-        catalogDisabledReason: null,
-        modelSetupRequired: false,
-        baseDisabledReason: null,
-        baseDisabledReasonTone: "danger",
-        selectedSessionArchived: false,
-        restartRecoveryTombstoned: false,
-        placement: result,
-        sendHoldReason: null,
-        placementStartupPending: false,
-        sessionDisabledBanner: undefined,
-      }).canSend,
-    ).toBe(kind === "ready");
   });
 
   it.each(["restart", "stop-first"] as const)(

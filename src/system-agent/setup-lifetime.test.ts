@@ -17,7 +17,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { executeSystemAgentOperation } from "./operations-execute.js";
 import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
-import { installSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
+import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
 
 const preparation = vi.hoisted(() => ({
   gateway: undefined as (() => Promise<void>) | undefined,
@@ -77,7 +77,7 @@ it.each([
   const entered = createDeferred();
   const resume = createDeferred();
   let paused = false;
-  let metadata: ReturnType<typeof installSystemAgentPluginMetadataTestSnapshot> | undefined;
+  let metadata: ReturnType<typeof createSystemAgentPluginMetadataTestSnapshot> | undefined;
   let completion: Promise<unknown> | undefined;
   const { runtime, lines } = createSystemAgentTestRuntime();
   const workspace = state.workspaceDir;
@@ -110,9 +110,7 @@ it.each([
   };
   try {
     await state.writeConfig(config);
-    metadata = installSystemAgentPluginMetadataTestSnapshot(
-      (await readConfigFileSnapshot()).config,
-    );
+    metadata = createSystemAgentPluginMetadataTestSnapshot((await readConfigFileSnapshot()).config);
     const beforeRaw = await fs.readFile(state.configPath, "utf8");
     if (phase === "config") {
       preparation.gateway = pause;
@@ -146,18 +144,22 @@ it.each([
         entered.resolve();
       };
     }
-    completion = executeSystemAgentOperation({ kind: "setup", workspace }, runtime, {
-      approved: true,
-      ...(loss === "direct" ? {} : { beforePersistentApply }),
-      deps: {
-        setupSurface: "gateway",
-        loadOverview: async () => ({ defaultModel: model }) as SystemAgentOverview,
-        verifyInferenceConfig: async () => ({ ok: true, modelRef: model, latencyMs: 1 }),
-      },
-    }).then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
+    completion = metadata
+      .run(() =>
+        executeSystemAgentOperation({ kind: "setup", workspace }, runtime, {
+          approved: true,
+          ...(loss === "direct" ? {} : { beforePersistentApply }),
+          deps: {
+            setupSurface: "gateway",
+            loadOverview: async () => ({ defaultModel: model }) as SystemAgentOverview,
+            verifyInferenceConfig: async () => ({ ok: true, modelRef: model, latencyMs: 1 }),
+          },
+        }),
+      )
+      .then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
     await withTestTimeout(
       Promise.race([
         entered.promise,
@@ -228,7 +230,6 @@ it.each([
     await completion;
     admission.close();
     replacement?.close();
-    metadata?.restore();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();

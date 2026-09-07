@@ -10,6 +10,7 @@ import {
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 type ApplicationConfigAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
@@ -30,7 +31,6 @@ type ApplicationConfig = {
   serverBuildId?: string | null;
   devGitBranch: string | null;
   environment: ControlUiEnvironment | null;
-  localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
@@ -64,7 +64,6 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   serverBuildId: null,
   devGitBranch: null,
   environment: null,
-  localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
@@ -111,7 +110,6 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     serverBuildId: parsed.serverBuildId ?? null,
     devGitBranch: parsed.devGitBranch?.trim() || null,
     environment: parsed.environment ?? null,
-    localMediaPreviewRoots: parsed.localMediaPreviewRoots ?? [],
     embedSandboxMode: parsed.embedSandbox ?? "scripts",
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
@@ -253,7 +251,9 @@ export function createApplicationConfigCapability(params: {
         if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
           // CSP headers cannot change on a live document. Reload in either
           // direction so the document and accepted terminal state stay aligned.
-          window.location.reload();
+          if (canReloadControlUiDocument()) {
+            window.location.reload();
+          }
           return next;
         }
         current = next;

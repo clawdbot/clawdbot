@@ -3,11 +3,9 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../infra/sqlite-transaction.js";
 import { loggingState } from "../logging/state.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -15,12 +13,11 @@ import {
 } from "./openclaw-state-db.js";
 import { startOpenClawStateLeaseHeartbeat } from "./openclaw-state-lease-heartbeat.js";
 import {
+  acquireOpenClawStateLeaseInTransaction,
   readOpenClawStateLeaseExpiry,
+  releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
-
-type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
-type LeaseKysely = ReturnType<typeof getNodeSqliteKysely<LeaseDatabase>>;
 
 type OpenClawStateLeaseDatabase = {
   scope: "shared";
@@ -190,14 +187,14 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
 function withLeaseWriteTransaction<T>(
   database: OpenClawStateLeaseDatabase,
   operationLabel: string,
-  operation: (db: DatabaseSync, kysely: LeaseKysely) => T,
+  operation: (db: DatabaseSync) => T,
   busyTimeoutMs = LEASE_DB_BUSY_TIMEOUT_MS,
 ): T {
   const stateDatabase = openOpenClawStateDatabase(database.options);
   const run = () =>
     runOpenClawStateWriteTransaction(
-      ({ db }) => operation(db, getNodeSqliteKysely<LeaseDatabase>(db)),
-      database.options,
+      ({ db }) => operation(db),
+      { ...database.options, database: stateDatabase },
       { operationLabel, busyTimeoutMs },
     );
   return runWithSqliteBusyTimeout(stateDatabase.db, busyTimeoutMs, run);
@@ -217,37 +214,9 @@ function tryAcquire(
     leaseMs: number;
   },
 ): number | undefined {
-  return withLeaseWriteTransaction(params.database, params.operationLabel, (db, kysely) => {
-    // BEGIN IMMEDIATE may wait on SQLite. Sample only after admission so a
-    // successful insert never commits an already-expired lease.
-    const now = Date.now();
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .deleteFrom("state_leases")
-        .where("scope", "=", params.scope)
-        .where("lease_key", "=", params.key)
-        .where("expires_at", "<=", now),
-    );
-    const expiresAt = now + params.leaseMs;
-    const inserted = executeSqliteQuerySync(
-      db,
-      kysely
-        .insertInto("state_leases")
-        .values({
-          scope: params.scope,
-          lease_key: params.key,
-          owner: params.owner,
-          expires_at: expiresAt,
-          heartbeat_at: now,
-          payload_json: null,
-          created_at: now,
-          updated_at: now,
-        })
-        .onConflict((conflict) => conflict.columns(["scope", "lease_key"]).doNothing()),
-    );
-    return inserted.numAffectedRows === 1n ? expiresAt : undefined;
-  });
+  return withLeaseWriteTransaction(params.database, params.operationLabel, (db) =>
+    acquireOpenClawStateLeaseInTransaction(db, params, params.leaseMs),
+  );
 }
 
 function renew(
@@ -312,16 +281,9 @@ function release(
     operationLabel: string;
   },
 ): void {
-  withLeaseWriteTransaction(params.database, params.operationLabel, (db, kysely) => {
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .deleteFrom("state_leases")
-        .where("scope", "=", params.scope)
-        .where("lease_key", "=", params.key)
-        .where("owner", "=", params.owner),
-    );
-  });
+  withLeaseWriteTransaction(params.database, params.operationLabel, (db) =>
+    releaseOpenClawStateLeaseInTransaction(db, params),
+  );
 }
 
 async function releaseBestEffort(params: Parameters<typeof release>[0]): Promise<void> {

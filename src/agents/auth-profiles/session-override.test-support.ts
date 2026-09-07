@@ -43,9 +43,15 @@ const authStoreMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./store.js", () => ({
-  ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
+vi.mock("./store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: () => authStoreMocks.state.store,
+  findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+    authStoreMocks.state.store.profiles[profileId],
   hasAnyAuthProfileStoreSource: authStoreMocks.hasAnyAuthProfileStoreSource,
+}));
+vi.mock("./store-runtime.js", () => ({
+  ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
 }));
 
 vi.mock("./usage.js", () => ({

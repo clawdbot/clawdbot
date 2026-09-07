@@ -62,7 +62,7 @@ public struct TalkDirectiveParseResult: Equatable, Sendable {
 }
 
 public enum TalkVoiceAliases {
-    public static func normalizedMap(_ value: AnyCodable?) -> [String: String] {
+    static func normalizedMap(_ value: AnyCodable?) -> [String: String] {
         value?.dictionaryValue?.reduce(into: [:]) { result, entry in
             let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let value = entry.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

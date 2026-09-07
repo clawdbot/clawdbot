@@ -88,6 +88,7 @@ import type {
   ProviderCacheTtlEligibilityContext,
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
+  ProviderReconcileLocalServiceContext,
 } from "./provider-transport.types.js";
 
 export type ProviderPlugin = {
@@ -307,6 +308,12 @@ export type ProviderPlugin = {
    */
   createStreamFn?: (ctx: ProviderCreateStreamFnContext) => StreamFn | null | undefined;
   /**
+   * Opt custom streams into the internal stable/dynamic system-prompt boundary.
+   * The transport must consume the boundary before sending its provider payload.
+   * Otherwise the host strips it before invoking the custom stream.
+   */
+  supportsSystemPromptCacheBoundary?: boolean;
+  /**
    * Provider-owned stream wrapper applied after generic OpenClaw wrappers.
    *
    * Typical uses: provider attribution headers, request-body rewrites, or
@@ -321,6 +328,8 @@ export type ProviderPlugin = {
    * the embedded agent runtime.
    */
   wrapSimpleCompletionStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  /** Cheap, idempotent provider repair after local-service health and before each request. */
+  reconcileLocalService?: (ctx: ProviderReconcileLocalServiceContext) => Promise<void>;
   /**
    * Provider-owned native transport turn identity.
    *

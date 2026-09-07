@@ -3,10 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import {
-  prepareSqliteReadOnlyLocationSync,
-  prepareSqliteReadOnlyLocationSyncInProcess,
-} from "../infra/sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -21,6 +18,17 @@ type OpenClawStateReadOnlyDatabase = {
 };
 
 type ReusedOpenClawStateReadOnlyDatabase<T> = { reused: false } | { reused: true; value: T };
+
+/** Missing runtime tables are empty only before state grows beyond checkpoint bootstrap. */
+export function hasOpenClawStateTablesBeyondStartupCheckpoint(db: DatabaseSync): boolean {
+  return (
+    /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
+      .prepare(
+        "SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name NOT IN ('schema_meta', 'state_leases') LIMIT 1",
+      )
+      .get() !== undefined
+  );
+}
 
 function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
@@ -130,12 +138,9 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   if (existingPath === undefined) {
     return undefined;
   }
-  // In-process preparation is safe only when this process holds no writable
-  // handle. Otherwise closing the snapshot source can drop the writer's POSIX locks.
-  const prepare = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(pathname)
-    ? prepareSqliteReadOnlyLocationSync
-    : prepareSqliteReadOnlyLocationSyncInProcess;
-  const prepared = prepare(existingPath);
+  // Cache absence cannot rule out caller-owned SQLite handles. Copy in a child
+  // so closing a source descriptor cannot release this process's POSIX locks.
+  const prepared = prepareSqliteReadOnlyLocationSync(existingPath);
   try {
     return withFreshOpenClawStateDatabaseReadOnly(
       operation,

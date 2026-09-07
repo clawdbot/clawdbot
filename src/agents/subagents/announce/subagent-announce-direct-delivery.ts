@@ -85,19 +85,14 @@ async function runAnnounceAgentCall(params: {
   const signal = params.signal
     ? AbortSignal.any([params.signal, deadline.signal])
     : deadline.signal;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let executionStarted = false;
-  const armDeadline = () => {
-    clearTimeout(timer);
-    if (params.timeoutMs !== undefined) {
-      timer = setTimeout(
-        () => deadline.abort(new Error("gateway request timeout for agent")),
-        params.timeoutMs,
-      );
-      timer.unref?.();
-    }
-  };
-  armDeadline();
+  const timer =
+    params.timeoutMs === undefined
+      ? undefined
+      : setTimeout(
+          () => deadline.abort(new Error("gateway request timeout for agent")),
+          params.timeoutMs,
+        );
+  timer?.unref?.();
   try {
     return await dispatchSubagentAnnounceAgent(params.agentParams, {
       cancelOnDeadline: true,
@@ -108,20 +103,16 @@ async function runAnnounceAgentCall(params: {
       operatorRoleActor: { kind: "system" },
       delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
       signal,
-      // Accepted follow-ups belong to session admission. Waiting behind a busy
-      // parent must not spend the completion's execution budget or retry quota.
-      onAccepted: () => {
-        if (!executionStarted) {
-          clearTimeout(timer);
-        }
-      },
+      // Accepted queue waits belong to session admission; execution belongs to
+      // the requester runtime budget, not the announcement handoff deadline.
+      onAccepted: () => clearTimeout(timer),
       onExecutionStarted: () => {
         signal.throwIfAborted();
         if (!params.isExecutionAllowed()) {
           throw new SourceOwnerChangedError();
         }
-        executionStarted = true;
-        armDeadline();
+        // Execution can be observed before acceptance on an already-running replay.
+        clearTimeout(timer);
       },
       resolveGatewayContext: params.resolveGatewayContext,
     });
@@ -563,6 +554,21 @@ export async function sendSubagentAnnounceDirectly(params: {
         disposition: automaticEvidence.mayHaveSent ? "ambiguous" : "intentional_non_delivery",
         terminal: automaticEvidence.mayHaveSent ? undefined : true,
       };
+    }
+    if (
+      asOptionalRecord(directAnnounceResponse)?.status === "ok" &&
+      directAnnounceResult?.meta?.yielded === true &&
+      !directAnnounceResult.meta.error &&
+      !directAnnounceResult.meta.aborted &&
+      directAnnounceResult.requesterContinuationSettled === true &&
+      !hasFinalMessagingToolDelivery &&
+      !automaticFinalDelivered &&
+      !hasVisibleNonSilentGatewayPayload
+    ) {
+      // Core persisted responsibility for the next wave (or observed it already
+      // completed). Acknowledge an empty wake without inventing a visible final;
+      // existing real final evidence still follows its normal path below.
+      return { delivered: true, path: "direct" };
     }
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),

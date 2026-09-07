@@ -10,8 +10,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
-import { readChatHistoryMessageId } from "./chat-history-pages.js";
 
 type HistoryPage = {
   messages: unknown[];
@@ -24,6 +24,7 @@ type HistoryPage = {
 
 type HistoryRequest = {
   limit?: number;
+  maxBytes?: number;
   messageId?: string;
   offset?: number;
 };
@@ -113,9 +114,9 @@ describe("CLI-imported history anchors", () => {
       await withImportedHistory(
         method,
         6,
-        "External conversation",
+        "External conversation ".repeat(100),
         async ({ read, importedIds }) => {
-          const newest = await read({ limit: 2 });
+          const newest = await read({ limit: 2, maxBytes: 1024 });
           expect(newest.messages).toHaveLength(8);
           expect(newest).toMatchObject({
             completeSnapshot: true,

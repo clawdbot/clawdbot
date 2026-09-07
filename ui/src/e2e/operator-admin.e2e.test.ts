@@ -1,8 +1,10 @@
 // Control UI E2E coverage for operator-facing Skills, Nodes, and exec approvals administration.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -138,15 +140,19 @@ async function selectAgentOnAgentsPage(page: Page, name: string) {
     .toBe(name);
 }
 
-async function screenshot(page: Page, name: string) {
+async function screenshot(
+  page: Page,
+  name: string,
+  content: Locator,
+  surface = page.locator(".shell"),
+) {
   if (!captureUiProof) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, surface, [content]),
+  );
 }
 
 suite.define(() => {
@@ -244,7 +250,12 @@ suite.define(() => {
         dangerouslyForceUnsafeInstall: false,
       });
       await expect.poll(() => dialog.getByText("Installed Deploy Helper").isVisible()).toBe(true);
-      await screenshot(page, "01-reviewer-skill-installed.png");
+      await screenshot(
+        page,
+        "01-reviewer-skill-installed.png",
+        dialog.getByText("Installed Deploy Helper"),
+        dialog.locator("dialog"),
+      );
 
       await page.goto(`${suite.server.baseUrl}nodes`);
       await Promise.all([
@@ -268,7 +279,11 @@ suite.define(() => {
             .isVisible(),
         )
         .toBe(true);
-      await screenshot(page, "02-connected-node-inventory.png");
+      await screenshot(
+        page,
+        "02-connected-node-inventory.png",
+        page.locator(".device-entry__facts"),
+      );
     } finally {
       await context.close();
     }
@@ -359,6 +374,7 @@ suite.define(() => {
         "skills.proposals.list": {
           proposals: [proposal],
           schema: "openclaw.skill-workshop.proposals-manifest.v1",
+          installedSkills: [],
           updatedAt: proposal.updatedAt,
         },
         "skills.proposals.historyStatus": {
@@ -384,7 +400,7 @@ suite.define(() => {
       await expect.poll(() => identitySave.isDisabled()).toBe(true);
       await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
-      await screenshot(page, "05-read-only-agents.png");
+      await screenshot(page, "05-read-only-agents.png", setDefault);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
       await gateway.waitForRequest("agents.files.list");
@@ -443,11 +459,11 @@ suite.define(() => {
       await expect.poll(() => install.isDisabled()).toBe(true);
       await install.click({ force: true });
       expect(await gateway.getRequests("skills.install")).toHaveLength(0);
-      await screenshot(page, "06-read-only-skills.png");
+      await screenshot(page, "06-read-only-skills.png", install, skillDialog.locator("dialog"));
 
       await page.goto(`${suite.server.baseUrl}skills/workshop`);
       await gateway.waitForRequest("skills.proposals.list");
-      await page.locator("#skill-workshop-mode-tab-board").click();
+      await page.locator("#skill-workshop-mode-tab-suggestions").click();
       const actionButtons = page.locator(".sw-action-bar button");
       const evaluate = actionButtons.nth(0);
       const apply = actionButtons.nth(1);
@@ -475,7 +491,7 @@ suite.define(() => {
       await expect.poll(() => scanHistory.isDisabled()).toBe(true);
       await scanHistory.click({ force: true });
       expect(await gateway.getRequests("skills.proposals.historyScan")).toHaveLength(0);
-      await screenshot(page, "07-read-only-workshop.png");
+      await screenshot(page, "07-read-only-workshop.png", scanHistory);
     } finally {
       await context.close();
     }
@@ -607,7 +623,11 @@ suite.define(() => {
         .locator("wa-switch");
       await autoAllowSwitch.click();
       await page.getByRole("textbox", { name: "Pattern" }).fill("/usr/bin/gh");
-      await screenshot(page, "03-reviewer-approval-edits.png");
+      await screenshot(
+        page,
+        "03-reviewer-approval-edits.png",
+        page.getByRole("textbox", { name: "Pattern" }),
+      );
 
       await gateway.setMethodResponse("exec.approvals.get", appliedApprovals);
       const getRequestsBeforeSave = (await gateway.getRequests("exec.approvals.get")).length;
@@ -640,7 +660,7 @@ suite.define(() => {
         .toBe("/usr/bin/gh");
       await expect.poll(() => saveButton.isDisabled()).toBe(true);
       expect(await page.getByRole("alert").count()).toBe(0);
-      await screenshot(page, "04-reviewer-approval-applied.png");
+      await screenshot(page, "04-reviewer-approval-applied.png", saveButton);
     } finally {
       await context.close();
     }

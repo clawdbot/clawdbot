@@ -1,8 +1,21 @@
-import { beforeAll, beforeEach, vi } from "vitest";
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+
+let ledgerHome: TempHomeEnv | undefined;
+beforeEach(async () => {
+  ledgerHome = await createTempHomeEnv("openclaw-update-rpc-");
+});
+afterEach(async () => {
+  await ledgerHome?.restore();
+  ledgerHome = undefined;
+});
 
 export const sentinelState: {
   capturedPayload?: RestartSentinelPayload;
@@ -56,6 +69,90 @@ export const startManagedServiceUpdateHandoffMock = vi.fn<
   handoffId: params?.handoffId ?? "handoff-default",
   installRoot: params?.root ?? "/tmp/openclaw",
 }));
+export const transferManagedServiceUpdateHandoffMock = vi.fn<
+  typeof import("../../infra/update-managed-service-handoff.js").transferManagedServiceUpdateHandoff
+>(async () => true);
+export const cancelManagedServiceUpdateHandoffMock = vi.fn<
+  typeof import("../../infra/update-managed-service-handoff.js").cancelManagedServiceUpdateHandoff
+>(async () => "restored-in-process");
+
+/** Drive real helper pipes while a disposable process stands in for the serving Gateway. */
+export async function withTransferredUpdateHandoff(
+  root: string,
+  onNotice: (runId: string) => Promise<void>,
+  run: (activate: () => Promise<void>) => Promise<void>,
+) {
+  await fs.mkdir(root, { recursive: true });
+  const activatePath = path.join(root, "activate");
+  const updatedPath = path.join(root, "updated");
+  const updaterPath = path.join(root, "updater.cjs");
+  await fs.writeFile(
+    updaterPath,
+    `
+    const fs = require("node:fs");
+    process.stdin.once("end", () => process.exit(1));
+    process.stdin.once("data", (reply) => {
+      if (reply.toString() !== "parked\\n") process.exit(2);
+      fs.writeFileSync(${JSON.stringify(updatedPath)}, "updated");
+      process.stdout.write(JSON.stringify({ root: ${JSON.stringify(root)}, status: "ok", mode: "npm" }));
+      process.stdin.destroy();
+    });
+    const gate = setInterval(() => {
+      if (!fs.existsSync(${JSON.stringify(activatePath)})) return;
+      clearInterval(gate);
+      process.stdout.write("park\\n");
+    }, 5);
+  `,
+  );
+  const tempRoot = await import("../../infra/tmp-openclaw-dir.js");
+  const tmp = vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  const handoff = await vi.importActual<
+    typeof import("../../infra/update-managed-service-handoff.js")
+  >("../../infra/update-managed-service-handoff.js");
+  const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    stdio: ["pipe", "ignore", "ignore"],
+  });
+  let helper: Awaited<ReturnType<typeof handoff.startManagedServiceUpdateHandoff>> | undefined;
+  startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
+    helper = await handoff.startManagedServiceUpdateHandoff({
+      ...params,
+      root,
+      supervisor: null,
+      parentPid: parent.pid,
+      execPath: process.execPath,
+      argv1: updaterPath,
+      runId: undefined,
+      meta: {},
+      beforePark: async () => {
+        await params.beforePark?.();
+        await onNotice(params.runId!);
+        expect(parent.exitCode).toBeNull();
+        parent.stdin?.end();
+      },
+    });
+    return helper;
+  });
+  transferManagedServiceUpdateHandoffMock.mockImplementationOnce(
+    handoff.transferManagedServiceUpdateHandoff,
+  );
+  try {
+    await run(() => fs.writeFile(activatePath, "activate"));
+    await vi.waitFor(() => fs.access(updatedPath), { timeout: 5_000 });
+  } finally {
+    parent.stdin?.end();
+    if (helper?.pid) {
+      try {
+        process.kill(helper.pid, "SIGKILL");
+      } catch {
+        /* Already exited. */
+      }
+    }
+    if (helper) {
+      await fs.rm(path.dirname(helper.logPath), { recursive: true, force: true });
+    }
+    tmp.mockRestore();
+  }
+}
 
 export const sendGatewayLifecycleNoticeMock = vi.fn(async () => true);
 export const resolveGatewayLifecycleNoticeRouteMock = vi.fn(
@@ -86,8 +183,10 @@ export const runPostCoreFinalizeAfterGatewayUpdateMock = vi.fn<
 >(async () => ({ status: "skipped", reason: "not-git-update" }));
 
 export type UpdateRunPayload = {
+  runId: string;
   ok: boolean;
   ackDelivered: boolean;
+  message?: string;
   result?: { status?: string; reason?: string; mode?: string };
   handoff?: { status?: string; command?: string; message?: string };
   sentinel?: { persisted?: boolean };
@@ -101,8 +200,9 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/commands.flags.js", () => ({ isRestartEnabled: isRestartEnabledMock }));
 
-vi.mock("../../config/sessions.js", () => ({
-  extractDeliveryInfo: (sessionKey: string | undefined) => {
+vi.mock("../../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions.js")>()),
+  extractDeliveryInfo: vi.fn((sessionKey: string | undefined) => {
     if (!sessionKey) {
       return { deliveryContext: undefined, threadId: undefined };
     }
@@ -117,7 +217,7 @@ vi.mock("../../config/sessions.js", () => ({
       deliveryContext: { channel: "webchat", to: "webchat:user-123", accountId: "default" },
       threadId: undefined,
     };
-  },
+  }),
 }));
 
 vi.mock("../../infra/restart-sentinel.js", async () => {
@@ -146,7 +246,8 @@ vi.mock("../../version.js", () => ({
   },
 }));
 
-vi.mock("../../infra/supervisor-markers.js", () => ({
+vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/supervisor-markers.js")>()),
   detectRespawnSupervisor: detectRespawnSupervisorMock,
 }));
 
@@ -187,6 +288,8 @@ vi.mock("../../infra/update-post-core-finalize.js", async () => {
 });
 
 vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
+  validateUpdateRunsGetParams: () => true,
+  validateUpdateRunsListParams: () => true,
   validateUpdateStatusParams: () => true,
   validateUpdateStatusResult: () => true,
   validateUpdateRunParams: () => true,
@@ -214,6 +317,8 @@ vi.mock("../../infra/update-managed-service-handoff.js", async () => ({
     "../../infra/update-managed-service-handoff.js",
   )),
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
+  transferManagedServiceUpdateHandoff: transferManagedServiceUpdateHandoffMock,
+  cancelManagedServiceUpdateHandoff: cancelManagedServiceUpdateHandoffMock,
 }));
 
 vi.mock("./validation.js", () => ({
@@ -260,7 +365,7 @@ beforeEach(() => {
   });
   detectRespawnSupervisorMock.mockReset();
   detectRespawnSupervisorMock.mockReturnValue(null);
-  runGatewayUpdateMock.mockClear();
+  runGatewayUpdateMock.mockReset();
   runGatewayUpdateMock.mockResolvedValue({
     status: "ok",
     mode: "npm",
@@ -288,7 +393,9 @@ beforeEach(() => {
   refreshLatestUpdateRestartSentinelMock.mockClear();
   refreshLatestUpdateRestartSentinelMock.mockResolvedValue(null);
   recordLatestUpdateRestartSentinelMock.mockClear();
-  startManagedServiceUpdateHandoffMock.mockClear();
+  startManagedServiceUpdateHandoffMock.mockReset();
+  transferManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
+  cancelManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue("restored-in-process");
   startManagedServiceUpdateHandoffMock.mockImplementation(async (params) => ({
     status: "started",
     pid: 12345,

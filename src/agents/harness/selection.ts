@@ -10,9 +10,11 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRefOwnership } from "../../plugins/providers.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import {
   isHostScopedAgentToolActive,
@@ -21,6 +23,7 @@ import {
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
+import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -471,7 +474,9 @@ export async function runAgentHarnessAttempt(
     }
     assertCurrent();
     // Promote approved input before the host binds annotation to its exact stored row.
-    await internalParams.userTurnTranscriptRecorder.persistApproved();
+    await internalParams.userTurnTranscriptRecorder.persistApproved({
+      cwd: internalParams.cwd ?? internalParams.workspaceDir,
+    });
     assertCurrent();
   }
   if (nativeSessionRuntime) {
@@ -532,9 +537,31 @@ export async function runAgentHarnessAttempt(
                       : input;
                   },
               (prepared) =>
-                pluginAttempt.runWithHostScope(() =>
-                  runAgentHarnessLifecycleAttempt(harness, prepared),
-                ),
+                pluginAttempt.runWithHostScope(() => {
+                  if (prepared.trigger !== "user" || !prepared.sessionKey) {
+                    return runAgentHarnessLifecycleAttempt(harness, prepared);
+                  }
+                  const note = claimHeartbeatContextForUserRun({
+                    ...prepared,
+                    agentId: resolveSessionAgentIds(prepared).sessionAgentId,
+                    storePath: prepared.sessionTarget?.storePath,
+                    detached: prepared.sessionPersistence === "detached",
+                    assertCurrent: resolveAdmittedRunActiveAssertion(
+                      internalParams.admittedRunContext,
+                      prepared.abortSignal,
+                    ),
+                  });
+                  if (!note) {
+                    return runAgentHarnessLifecycleAttempt(harness, prepared);
+                  }
+                  return runAgentHarnessLifecycleAttempt(harness, {
+                    ...prepared,
+                    currentInboundContext: appendCurrentInboundContext(
+                      prepared.currentInboundContext,
+                      [{ kind: "heartbeat-outcome", text: note }],
+                    ),
+                  });
+                }),
             ),
         );
       }),
@@ -704,8 +731,10 @@ function withoutPluginHarnessPrivateState(
   // separate projections can drift and expose authority on less common operations.
   const {
     admittedRunContext: _admittedRunContext,
+    assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,
     onContextAccountingEvent: _onContextAccountingEvent,
+    onCompactionRequestBudget: _onCompactionRequestBudget,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
     hostCapabilities: _hostCapabilities,
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,

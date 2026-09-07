@@ -83,6 +83,34 @@ describe("session auth selection prepared facts", () => {
     });
   });
 
+  it("retains a removed explicit pin that also names the configured default", async () => {
+    await withAuthState(async (state) => {
+      configureProfiles();
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: 1,
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        authProfileOverrideSource: "user",
+      };
+      const params = {
+        agentDir: state.agentDir(),
+        sessionEntry,
+        configuredProfileId: TEST_PRIMARY_PROFILE_ID,
+      };
+      await expect(select(params)).resolves.toMatchObject({
+        profileId: TEST_PRIMARY_PROFILE_ID,
+        source: "user",
+      });
+      delete authStoreMocks.state.store.profiles[TEST_PRIMARY_PROFILE_ID];
+
+      await expect(select(params)).resolves.toMatchObject({
+        profileId: TEST_PRIMARY_PROFILE_ID,
+        source: "user",
+      });
+      expect(sessionEntry.authProfileOverride).toBe(TEST_PRIMARY_PROFILE_ID);
+    });
+  });
+
   it("returns prepared facts after automatic rotation", async () => {
     await withAuthState(async (state) => {
       configureProfiles();

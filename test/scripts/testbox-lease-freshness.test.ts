@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import {
   prepareTestboxLeaseFreshness,
@@ -67,27 +67,32 @@ describe("Testbox lease freshness", () => {
     expect(fixture.prepare()).toEqual(prepared);
   });
 
-  it("invalidates saved proof when executable source-sync owners change", () => {
+  it("invalidates saved proof when source-sync or workspace preparation owners change", () => {
     const fixture = createLeaseFixture();
-    mkdirSync(join(fixture.root, "scripts"));
+    const workflow = ".github/workflows/custom-testbox.yml";
     const owners = [
-      "crabbox-wrapper.mjs",
-      "crabbox-wrapper.mts",
-      "crabbox-source-capsule.mts",
-      "crabbox-source-receiver.mts",
+      "scripts/crabbox-wrapper.mjs",
+      "scripts/crabbox-wrapper.mts",
+      "scripts/crabbox-source-capsule.mts",
+      "scripts/crabbox-source-receiver.mts",
+      ".github/actions/prepare-testbox-shell/action.yml",
+      workflow,
     ];
     for (const owner of owners) {
-      writeFileSync(join(fixture.root, "scripts", owner), "original\n");
+      const file = join(fixture.root, owner);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "original\n");
     }
-    fixture.git(["add", "scripts"]);
+    fixture.git(["add", "."]);
     fixture.advanceBase();
-    recordTestboxLeaseFreshness(fixture.prepare());
+    const prepare = () => fixture.prepare(["--blacksmith-workflow", workflow]);
+    recordTestboxLeaseFreshness(prepare());
     writeFileSync(join(fixture.root, "unrelated-source.ts"), "source change\n");
-    expect(() => fixture.prepare()).not.toThrow();
+    expect(() => prepare()).not.toThrow();
     for (const owner of owners) {
-      const file = join(fixture.root, "scripts", owner);
+      const file = join(fixture.root, owner);
       writeFileSync(file, "changed executable owner\n");
-      expect(() => fixture.prepare(), owner).toThrow("environmentDigest");
+      expect(() => prepare(), owner).toThrow("environmentDigest");
       writeFileSync(file, "original\n");
     }
   });

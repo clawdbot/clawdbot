@@ -5,8 +5,8 @@
  * contexts while allowing CLI, Gateway, and local service clients.
  */
 import type { NextFunction, Request, Response } from "express";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isLoopbackHost } from "../gateway/net.js";
 
 function firstHeader(value: string | string[] | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");

@@ -184,12 +184,15 @@ describe("session delivery clock-jump integration", () => {
         await scheduleSessionDelivery(id);
 
         await vi.waitFor(
-          async () => expect(await loadPendingSessionDeliveries()).toStrictEqual([]),
+          async () => {
+            expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+            // Queue settlement can precede the client's WebSocket event callback.
+            expect(chatEvents.join("\n")).toContain("CLOCK_JUMP DELIVERED");
+          },
           { timeout: 15_000, interval: 50 },
         );
         expect(providerRequests).toHaveLength(1);
         expect(providerRequests[0]).toContain("clock-jump proof marker");
-        expect(chatEvents.join("\n")).toContain("CLOCK_JUMP DELIVERED");
         expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
         expect(getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id)).toBe("completed");
       } finally {

@@ -63,10 +63,13 @@ type MatrixIdbSnapshotChunk = {
 
 export type MatrixIdbSnapshotRecord = MatrixIdbSnapshotMeta | MatrixIdbSnapshotChunk;
 
-type AsyncStore<T> = Pick<PluginStateKeyedStore<T>, "delete" | "entries" | "lookup" | "register">;
+type AsyncStore<T> = Pick<
+  PluginStateKeyedStore<T>,
+  "delete" | "entries" | "lookup" | "lookupMany" | "register"
+>;
 type SyncStore<T> = Pick<
   PluginStateSyncKeyedStore<T>,
-  "delete" | "entries" | "lookup" | "register"
+  "delete" | "entries" | "lookup" | "lookupMany" | "register"
 >;
 
 export function openMatrixRecoveryKeyStoreOptions(storageRootDir: string) {
@@ -231,7 +234,7 @@ export function writeMatrixIdbSnapshotJson(params: {
 }
 
 export async function readMatrixIdbSnapshotJsonFromStore(params: {
-  store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup">;
+  store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup" | "lookupMany">;
 }): Promise<string | null> {
   return await readIdbSnapshotJsonFromAsyncStore(params.store);
 }
@@ -447,33 +450,43 @@ function archiveLegacyStateFileIfPossible(filePath: string): boolean {
   return true;
 }
 
-function readIdbSnapshotJsonFromStore(store: Pick<SyncStore<MatrixIdbSnapshotRecord>, "lookup">) {
+function readIdbSnapshotJsonFromStore(
+  store: Pick<SyncStore<MatrixIdbSnapshotRecord>, "lookup" | "lookupMany">,
+) {
   const meta = store.lookup(idbMetaKey());
   if (!isIdbSnapshotMeta(meta)) {
     return null;
   }
-  const chunks = readIdbSnapshotChunks(meta, (key) => store.lookup(key));
+  const chunks = readIdbSnapshotChunks(meta, store);
   return chunks ? chunks.join("") : null;
 }
 
 async function readIdbSnapshotJsonFromAsyncStore(
-  store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup">,
+  store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup" | "lookupMany">,
 ): Promise<string | null> {
   const meta = await store.lookup(idbMetaKey());
   if (!isIdbSnapshotMeta(meta)) {
     return null;
   }
-  const chunks = await readIdbSnapshotChunksAsync(meta, (key) => store.lookup(key));
+  const chunks = await readIdbSnapshotChunksAsync(meta, store);
   return chunks ? chunks.join("") : null;
 }
 
 function readIdbSnapshotChunks(
   meta: MatrixIdbSnapshotMeta,
-  lookup: (key: string) => MatrixIdbSnapshotRecord | undefined,
+  store: Pick<SyncStore<MatrixIdbSnapshotRecord>, "lookup" | "lookupMany">,
 ): string[] | null {
+  // Published Matrix packages also support hosts predating optional lookupMany.
+  const records = store.lookupMany?.(
+    Array.from({ length: meta.chunkCount }, (_, index) => idbChunkKey(meta.generation, index)),
+  );
   const chunks: string[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const chunk = lookup(idbChunkKey(meta.generation, index));
+    const result = records?.[index];
+    if (result && !result.ok) {
+      throw result.error;
+    }
+    const chunk = records ? result?.value : store.lookup(idbChunkKey(meta.generation, index));
     if (!isIdbSnapshotChunk(chunk) || chunk.index !== index) {
       return null;
     }
@@ -488,11 +501,18 @@ function readIdbSnapshotChunks(
 
 async function readIdbSnapshotChunksAsync(
   meta: MatrixIdbSnapshotMeta,
-  lookup: (key: string) => Promise<MatrixIdbSnapshotRecord | undefined>,
+  store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup" | "lookupMany">,
 ): Promise<string[] | null> {
+  const records = await store.lookupMany?.(
+    Array.from({ length: meta.chunkCount }, (_, index) => idbChunkKey(meta.generation, index)),
+  );
   const chunks: string[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const chunk = await lookup(idbChunkKey(meta.generation, index));
+    const result = records?.[index];
+    if (result && !result.ok) {
+      throw result.error;
+    }
+    const chunk = records ? result?.value : await store.lookup(idbChunkKey(meta.generation, index));
     if (!isIdbSnapshotChunk(chunk) || chunk.index !== index) {
       return null;
     }

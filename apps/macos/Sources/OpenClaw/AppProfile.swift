@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OpenClawIPC
 
 struct AppProfile: Equatable, Sendable {
     struct ValidationError: LocalizedError, Equatable, Sendable {
@@ -12,7 +13,6 @@ struct AppProfile: Equatable, Sendable {
     }
 
     static let current = Self(environment: ProcessInfo.processInfo.environment)
-    private static let reservedLaunchAgentNames: Set<String> = ["gateway", "mac", "node"]
 
     let name: String?
     let validationError: ValidationError?
@@ -24,7 +24,7 @@ struct AppProfile: Equatable, Sendable {
             self.validationError = nil
             return
         }
-        if let reason = Self.invalidReason(raw) {
+        if let reason = MacControlProfile.validationReason(raw) {
             self.name = nil
             self.validationError = ValidationError(rawValue: raw, reason: reason)
             return
@@ -57,8 +57,7 @@ struct AppProfile: Equatable, Sendable {
     }
 
     func stateDirectoryURL(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
-        let directory = self.name.map { ".openclaw-\($0)" } ?? ".openclaw"
-        return homeDirectory.appendingPathComponent(directory, isDirectory: true)
+        MacControlProfile.stateDirectoryURL(name: self.name, homeDirectory: homeDirectory)
     }
 
     var cliRootArguments: [String] {
@@ -89,27 +88,6 @@ struct AppProfile: Equatable, Sendable {
             hash = (hash ^ UInt32(byte)) &* 16_777_619
         }
         return 20000 + Int(hash % 40000)
-    }
-
-    private static func invalidReason(_ value: String) -> String? {
-        // Mirror src/cli/profile-utils.ts, then apply the stricter macOS native-service rules.
-        guard value.utf8.count <= 64,
-              value.utf8.first.map(self.isASCIIAlphanumeric) == true,
-              value.utf8.allSatisfy({ Self.isASCIIAlphanumeric($0) || $0 == 45 || $0 == 95 })
-        else {
-            return "use 1-64 letters, numbers, underscores, or hyphens, starting with a letter or number"
-        }
-        guard value == value.lowercased() else {
-            return "macOS profile names must be lowercase so state and LaunchAgent identities cannot collide"
-        }
-        guard !self.reservedLaunchAgentNames.contains(value) else {
-            return "\"\(value)\" is reserved by an existing OpenClaw LaunchAgent"
-        }
-        return nil
-    }
-
-    private static func isASCIIAlphanumeric(_ byte: UInt8) -> Bool {
-        (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
     }
 }
 

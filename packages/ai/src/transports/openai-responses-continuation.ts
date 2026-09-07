@@ -5,6 +5,7 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
+  canReferenceResponsesReasoningHistory,
   replayResponsesReasoningUpdates,
   type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
@@ -17,6 +18,7 @@ export type ResponsesContinuationRequest = Record<string, unknown> & {
   input?: Array<ResponseInput[number] | ResponsesConfigurationUpdate>;
   previous_response_id?: string;
 };
+export type ResponsesSteeringContinuationMode = "automatic" | "required-input";
 export type ResponsesContinuationState = {
   lastRequest: ResponsesContinuationRequest;
   lastResponseId: string;
@@ -88,10 +90,28 @@ function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse =
   });
 }
 
+export function responsesContinuationRequestFingerprint(
+  request: ResponsesContinuationRequest,
+): string {
+  const serialized = JSON.stringify(requestWithoutInput(request));
+  return sha256Hex(stableStringify(JSON.parse(serialized)));
+}
+
+export function responsesContinuationPrefixFingerprint(
+  input: readonly unknown[],
+  output: readonly unknown[] = [],
+): string {
+  const serialized = JSON.stringify([
+    ...normalizeAssistantReplayInput(input),
+    ...normalizeAssistantReplayInput(output, true),
+  ]);
+  return sha256Hex(stableStringify(JSON.parse(serialized)));
+}
+
 export function resolveResponsesContinuationRequest(
   continuation: ResponsesContinuationState | undefined,
   request: ResponsesContinuationRequest,
-  options?: { allowNewReasoningUpdate?: boolean },
+  steering?: ResponsesSteeringContinuationMode,
 ): {
   request: ResponsesContinuationRequest;
   fullRequest?: ResponsesContinuationRequest;
@@ -103,13 +123,21 @@ export function resolveResponsesContinuationRequest(
   if (request.previous_response_id) {
     return { request, continuationStatus: "explicit_previous_response_id" };
   }
+  // Referenced controls remain active even when omitted from the wire delta.
+  // Check compatibility whether the caller supplied them or needs rehydration.
+  if (!canReferenceResponsesReasoningHistory(continuation.lastRequest, request)) {
+    return { request, continuationStatus: "request_changed" };
+  }
   const prepared = replayResponsesReasoningUpdates(
     continuation.lastRequest,
     request,
     continuation.lastResponseItems.length,
-    options,
+    steering,
   );
+  // Required input creates a new response with current settings. The same
+  // history validation below still binds it to the accepted steering's parent.
   if (
+    steering !== "required-input" &&
     !jsonValuesEqual(requestWithoutInput(prepared), requestWithoutInput(continuation.lastRequest))
   ) {
     return { request, continuationStatus: "request_changed" };
@@ -185,6 +213,7 @@ export function claimOpenAIResponsesHttpContinuation(
   params: HttpContinuationIdentity & {
     sessionId: string;
     request: ResponsesContinuationRequest;
+    restoreRequest?: () => ResponsesContinuationRequest;
   },
 ) {
   const key = `${params.sessionId}\0${connectionIdentity(params)}`;
@@ -198,11 +227,13 @@ export function claimOpenAIResponsesHttpContinuation(
   const claimed = { kind: "claimed", sessionId: params.sessionId } as const;
   httpContinuationEntries.set(key, claimed);
   try {
+    const request =
+      previous?.kind === "ready" ? params.request : (params.restoreRequest?.() ?? params.request);
     const resolved = resolveResponsesContinuationRequest(
       previous?.kind === "ready" ? previous.state : undefined,
-      params.request,
+      request,
     );
-    const fullRequest = resolved.fullRequest ?? params.request;
+    const fullRequest = resolved.fullRequest ?? request;
     return {
       // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.
       request: params.request.store === false ? fullRequest : resolved.request,

@@ -38,12 +38,10 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
   }),
 }));
 
-const {
-  listManagedPlugins,
-  refreshManagedPluginMetadata,
-  setManagedPluginEnabled,
-  uninstallManagedPlugin,
-} = await import("./management-service.js");
+const { listManagedPlugins, refreshManagedPluginMetadata } =
+  await import("./management-service.js");
+const { setManagedPluginEnabled } = await import("./management-mutations.js");
+const { uninstallManagedPlugin } = await import("./management-uninstall.js");
 const roots: string[] = [];
 
 beforeEach(() => {

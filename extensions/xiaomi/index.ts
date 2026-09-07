@@ -19,7 +19,7 @@ import {
   upsertAuthProfileWithLockOrThrow,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   applyModelCompatPatch,
   buildProviderReplayFamilyHooks,
@@ -105,17 +105,17 @@ async function resolveXiaomiCatalog(params: {
   if (params.requireBaseUrl === true && !explicitBaseUrl) {
     return null;
   }
-  return {
-    provider: await buildOpenAICompatibleLiveModelProviderConfig({
-      providerId: params.providerId,
-      providerConfig: {
-        ...params.buildProvider(),
-        ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-      },
-      apiKey: auth.apiKey,
-      discoveryApiKey: auth.discoveryApiKey,
-    }),
-  };
+  return await buildOpenAICompatibleLiveProviderCatalog({
+    discoveryMode: "strict",
+    providerId: params.providerId,
+    providerConfig: {
+      ...params.buildProvider(),
+      ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+    },
+    apiKey: auth.apiKey,
+    discoveryApiKey: auth.discoveryApiKey,
+    profileId: auth.profileId,
+  });
 }
 
 function buildXiaomiKeyMismatchMessage(params: {

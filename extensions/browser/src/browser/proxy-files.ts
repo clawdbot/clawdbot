@@ -96,6 +96,7 @@ export async function persistBrowserProxyResultFiles(result: unknown, files: unk
       file.mimeType,
       "browser",
       BROWSER_PROXY_MAX_FILE_BYTES,
+      file.path,
     );
     mapping.set(file.path, saved.path);
   }

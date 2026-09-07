@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.design
 
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
+import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -8,7 +9,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -84,7 +84,7 @@ fun OpenClawMascot(
       return@LaunchedEffect
     }
     while (true) {
-      withFrameNanos { frameTimeNanos ->
+      withInfiniteAnimationFrameNanos { frameTimeNanos ->
         val timeSeconds = frameTimeNanos / 1_000_000_000.0
         animator.setMood(effectiveMascotMood(mood = mood, tinted = tint != null), timeSeconds)
         pose = animator.poseAt(timeSeconds)

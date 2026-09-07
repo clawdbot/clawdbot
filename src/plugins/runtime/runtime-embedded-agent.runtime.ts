@@ -33,8 +33,9 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
   params.abortSignal?.throwIfAborted();
   const decisionOccurrenceId = randomUUID();
   let admittedRunContext: AdmittedRunContext | undefined;
+  const config = params.config ?? getRuntimeConfig();
   const preparedRunAdmission = prepareAgentRunAdmission({
-    cfg: params.config ?? getRuntimeConfig(),
+    cfg: config,
     operationalRunInstance: createOperationalRunInstanceRef(params.runId),
     facts: {
       runId: params.runId,
@@ -77,7 +78,7 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
   params.abortSignal?.addEventListener("abort", close, { once: true });
   try {
     params.abortSignal?.throwIfAborted();
-    const result = await runEmbeddedAgentCore({ ...params, preparedRunAdmission });
+    const result = await runEmbeddedAgentCore({ ...params, config, preparedRunAdmission });
     if (admittedRunContext && getAdmittedRunDelegatedAuthority(admittedRunContext)) {
       recordRuntimeActionDecision({
         token: admittedRunContext.executionIdentityToken,

@@ -1,5 +1,5 @@
 import { formatUiError } from "../format-error.ts";
-import { WidgetSandboxHost } from "../widget-sandbox-host.ts";
+import { WidgetRenderTimeoutError, WidgetSandboxHost } from "../widget-sandbox-host.ts";
 import type { BoardWidget } from "./types.ts";
 import type { BoardWidgetFrameUrl } from "./view-types.ts";
 import {
@@ -11,6 +11,7 @@ import {
 type BoardWidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
   widget: BoardWidget;
+  bridgeEnabled?: boolean;
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
@@ -23,6 +24,7 @@ type BoardWidgetSandboxHostOptions = {
   onUnauthorized: (widget: BoardWidget) => void;
   onReadyTimeout: () => void;
   onLoaded: () => void;
+  onRendered?: () => void;
   onError: (error: unknown) => void;
 };
 
@@ -154,7 +156,7 @@ export class BoardWidgetSandboxHost {
     }
     if (event.data?.type === "openclaw:widget-bridge-port-offer") {
       const port = event.ports[0];
-      if (!port || this.bridgePort) {
+      if (this.options.bridgeEnabled === false || !port || this.bridgePort) {
         port?.close();
         return;
       }
@@ -174,6 +176,9 @@ export class BoardWidgetSandboxHost {
   }
 
   private handleBridgeMessage(data: unknown): void {
+    if (this.options.bridgeEnabled === false) {
+      return;
+    }
     if (
       data &&
       typeof data === "object" &&
@@ -277,12 +282,16 @@ export class BoardWidgetSandboxHost {
     // Ticket renewal keeps the same generation, while delete/recreate gets a
     // new one even if the name, source path, bytes, and revision are reused.
     const generation = this.options.widget.viewGeneration ?? this.options.widget.viewTicket ?? "";
-    return `${sourceIdentity}\0${this.options.widget.revision}\0${generation}`;
+    // Switching between an interactive board and a passive preview must replace
+    // the wrapper document so no previously adopted bridge port crosses modes.
+    const bridgeMode = this.options.bridgeEnabled === false ? "passive" : "interactive";
+    return `${sourceIdentity}\0${this.options.widget.revision}\0${generation}\0${bridgeMode}`;
   }
 
   private postHostInit(): void {
     const ticket = this.options.widget.viewTicket;
     if (
+      this.options.bridgeEnabled === false ||
       !this.documentHost.ready ||
       !this.active ||
       !this.bridgePort ||
@@ -317,7 +326,12 @@ export class BoardWidgetSandboxHost {
         this.options.onLoaded();
         this.postHostInit();
       },
+      onRendered: options.onRendered ? () => this.options.onRendered?.() : undefined,
       onError: (error) => {
+        if (error instanceof WidgetRenderTimeoutError) {
+          this.options.onError(error);
+          return;
+        }
         if (error instanceof WidgetDocumentError) {
           if (error.kind === "unauthorized") {
             this.options.onUnauthorized(this.options.widget);

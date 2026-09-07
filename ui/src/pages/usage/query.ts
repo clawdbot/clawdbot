@@ -1,6 +1,5 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { extractQueryTerms } from "./helpers.ts";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./types.ts";
 
@@ -121,11 +120,43 @@ type QuerySuggestion = {
   value: string;
 };
 
-const buildQuerySuggestions = (
-  query: string,
-  sessions: UsageSessionEntry[],
+type UsageFilterOptions = Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
+
+function appendFilterValues<T>(
+  values: string[],
+  entries: readonly T[],
+  read: (entry: T) => string | undefined,
+  limit = 12,
+): void {
+  for (const entry of entries) {
+    if (values.length >= limit) {
+      break;
+    }
+    const value = read(entry);
+    if (value && !values.includes(value)) {
+      values.push(value);
+    }
+  }
+}
+
+export function buildUsageFilterOptions(
+  sessions: readonly UsageSessionEntry[],
   aggregates?: UsageAggregates | null,
-): QuerySuggestion[] => {
+): UsageFilterOptions {
+  const options: UsageFilterOptions = { agent: [], channel: [], provider: [], model: [], tool: [] };
+  appendFilterValues(options.agent, sessions, (session) => session.agentId, 6);
+  appendFilterValues(options.channel, sessions, (session) => session.channel);
+  appendFilterValues(options.provider, sessions, (session) => session.modelProvider);
+  // Overrides follow every observed provider, preserving the menu's first-seen order.
+  appendFilterValues(options.provider, sessions, (session) => session.providerOverride);
+  appendFilterValues(options.provider, aggregates?.byProvider ?? [], (entry) => entry.provider);
+  appendFilterValues(options.model, sessions, (session) => session.model);
+  appendFilterValues(options.model, aggregates?.byModel ?? [], (entry) => entry.model);
+  appendFilterValues(options.tool, aggregates?.tools.tools ?? [], (entry) => entry.name);
+  return options;
+}
+
+const buildQuerySuggestions = (query: string, options: UsageFilterOptions): QuerySuggestion[] => {
   const trimmed = query.trim();
   if (!trimmed) {
     return [];
@@ -141,23 +172,6 @@ const buildQuerySuggestions = (
 
   const key = normalizeLowercaseStringOrEmpty(rawKey);
   const value = normalizeLowercaseStringOrEmpty(rawValue);
-
-  const unique = (items: Array<string | undefined>): string[] => {
-    return uniqueStrings(items.filter((item): item is string => Boolean(item)));
-  };
-
-  const agents = unique(sessions.map((s) => s.agentId)).slice(0, 6);
-  const channels = unique(sessions.map((s) => s.channel)).slice(0, 6);
-  const providers = unique([
-    ...sessions.map((s) => s.modelProvider),
-    ...sessions.map((s) => s.providerOverride),
-    ...(aggregates?.byProvider.map((p) => p.provider) ?? []),
-  ]).slice(0, 6);
-  const models = unique([
-    ...sessions.map((s) => s.model),
-    ...(aggregates?.byModel.map((m) => m.model) ?? []),
-  ]).slice(0, 6);
-  const tools = unique(aggregates?.tools.tools.map((t) => t.name) ?? []).slice(0, 6);
 
   if (!key) {
     return [
@@ -175,7 +189,7 @@ const buildQuerySuggestions = (
 
   const suggestions: QuerySuggestion[] = [];
   const addValues = (prefix: string, values: string[]) => {
-    for (const val of values) {
+    for (const val of values.slice(0, 6)) {
       if (!value || normalizeLowercaseStringOrEmpty(val).includes(value)) {
         suggestions.push({ label: `${prefix}:${val}`, value: `${prefix}:${val}` });
       }
@@ -184,19 +198,19 @@ const buildQuerySuggestions = (
 
   switch (key) {
     case "agent":
-      addValues("agent", agents);
+      addValues("agent", options.agent);
       break;
     case "channel":
-      addValues("channel", channels);
+      addValues("channel", options.channel);
       break;
     case "provider":
-      addValues("provider", providers);
+      addValues("provider", options.provider);
       break;
     case "model":
-      addValues("model", models);
+      addValues("model", options.model);
       break;
     case "tool":
-      addValues("tool", tools);
+      addValues("tool", options.tool);
       break;
     case "has":
       ["errors", "tools", "context", "usage", "model", "provider"].forEach((entry) => {

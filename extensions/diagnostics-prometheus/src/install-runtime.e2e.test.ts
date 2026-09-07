@@ -1,5 +1,6 @@
 // Proves the external Prometheus plugin's managed install and trusted runtime boundary.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -254,7 +255,9 @@ async function waitForGateway(params: {
 }
 
 describe("diagnostics-prometheus managed install runtime", () => {
-  it("installs the exact official package and exports metrics at Gateway startup", async () => {
+  it("installs the exact official package and exports metrics at Gateway startup", async ({
+    signal,
+  }) => {
     const workspace = await tempWorkspace({
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: "openclaw-prometheus-install-",
@@ -265,7 +268,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const gatewayLog = path.join(root, "gateway.log");
-    const gatewayToken = "prometheus-managed-install-test-token";
+    const gatewayPassword = "prometheus-managed-install-test-password";
     const gatewayPort = await reservePort();
     await fs.mkdir(home, { recursive: true });
     await fs.mkdir(stateDir, { recursive: true });
@@ -278,7 +281,27 @@ describe("diagnostics-prometheus managed install runtime", () => {
             mode: "local",
             bind: "loopback",
             port: gatewayPort,
-            auth: { mode: "token", token: gatewayToken },
+            trustedProxies: ["127.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              password: gatewayPassword,
+              trustedProxy: {
+                allowLoopback: true,
+                allowUsers: ["restricted-scraper@example.com"],
+                requiredHeaders: ["x-forwarded-proto"],
+                userHeader: "x-forwarded-user",
+              },
+            },
+            roles: {
+              default: "metrics-denied",
+              definitions: {
+                "metrics-denied": {
+                  agents: "*",
+                  scopes: ["operator.approvals"],
+                  sessions: { others: "none" },
+                },
+              },
+            },
           },
         },
         null,
@@ -355,6 +378,9 @@ describe("diagnostics-prometheus managed install runtime", () => {
       },
     );
     children.push(gateway);
+    const gatewayClosed = once(gateway, "close", { signal });
+    // Setup can fail before this waiter is awaited; afterEach still owns forced cleanup.
+    void gatewayClosed.catch(() => {});
     await gatewayLogHandle.close();
     await waitForGateway({ child: gateway, logPath: gatewayLog, port: gatewayPort });
 
@@ -362,7 +388,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const unauthenticated = await fetch(url);
     expect([401, 403]).toContain(unauthenticated.status);
     const authenticated = await fetch(url, {
-      headers: { authorization: `Bearer ${gatewayToken}` },
+      headers: { authorization: `Bearer ${gatewayPassword}` },
     });
     const body = await authenticated.text();
     expect(authenticated.status).toBe(200);
@@ -370,9 +396,28 @@ describe("diagnostics-prometheus managed install runtime", () => {
     expect(body).toContain(
       'openclaw_telemetry_exporter_total{exporter="diagnostics-prometheus",reason="configured",signal="metrics",status="started"} 1',
     );
+    const restrictedHeaders = {
+      "x-forwarded-for": "203.0.113.25",
+      "x-forwarded-proto": "https",
+      "x-forwarded-user": "restricted-scraper@example.com",
+    };
+    const restricted = await fetch(url, { headers: restrictedHeaders });
+    const restrictedBody = await restricted.text();
+    expect(restricted.status).toBe(403);
+    expect(restricted.headers.get("cache-control")).toBe("no-store");
+    expect(restrictedBody).toBe("missing scope: operator.read");
+    expect(restrictedBody).not.toContain("openclaw_telemetry_exporter_total");
+
+    const restrictedHead = await fetch(url, { headers: restrictedHeaders, method: "HEAD" });
+    expect(restrictedHead.status).toBe(403);
+    expect(restrictedHead.headers.get("cache-control")).toBe("no-store");
+    expect(restrictedHead.headers.get("content-length")).not.toBe(
+      authenticated.headers.get("content-length"),
+    );
+    expect(await restrictedHead.text()).toBe("");
     const scrapeEventLoopMetrics = async () => {
       const response = await fetch(url, {
-        headers: { authorization: `Bearer ${gatewayToken}` },
+        headers: { authorization: `Bearer ${gatewayPassword}` },
       });
       expect(response.status).toBe(200);
       const lines = (await response.text())
@@ -396,7 +441,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
       // Healthy monitor windows complete after one second; readiness owns this read.
       await delay(1_100);
       const response = await fetch(`http://127.0.0.1:${gatewayPort}/readyz`, {
-        headers: { authorization: `Bearer ${gatewayToken}` },
+        headers: { authorization: `Bearer ${gatewayPassword}` },
       });
       expect(response.status).toBe(200);
       const readiness = (await response.json()) as {
@@ -439,8 +484,20 @@ describe("diagnostics-prometheus managed install runtime", () => {
     expect(gatewayLogs).not.toContain(
       "diagnostics-prometheus: internal diagnostics capability unavailable",
     );
-    await stopChildProcess(gateway, 5_000);
-    expect(gateway.exitCode).toBe(0);
-    expect(gateway.signalCode).toBeNull();
+    try {
+      // Graceful stop drains legitimate startup work; the forced reaper is cleanup only.
+      expect(gateway.kill("SIGTERM")).toBe(true);
+      await gatewayClosed;
+      expect(gateway.exitCode).toBe(0);
+      expect(gateway.signalCode).toBeNull();
+    } catch (cause) {
+      const termination = { exitCode: gateway.exitCode, signalCode: gateway.signalCode };
+      // Snapshot termination before reading the log that afterEach will remove.
+      const shutdownLogs = await fs.readFile(gatewayLog, "utf8");
+      throw new Error(
+        `Gateway shutdown failed: ${JSON.stringify(termination)}\n${shutdownLogs.slice(-8_000)}`,
+        { cause },
+      );
+    }
   }, 300_000);
 });

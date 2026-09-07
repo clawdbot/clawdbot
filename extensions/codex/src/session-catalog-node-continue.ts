@@ -4,6 +4,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createSessionCatalogAdoptionCoordinator,
+  publishSessionCatalogHost,
   sessionCatalogAdoptedSourceKey,
 } from "openclaw/plugin-sdk/session-catalog";
 import type { CodexThread } from "./app-server/protocol.js";
@@ -20,17 +21,16 @@ import {
   type CodexNodeHistory,
   type CodexSessionDisposition,
 } from "./session-catalog-node-adoption.js";
+import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
 import {
   catalogError,
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-  CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
   MAX_SESSION_ID_LENGTH,
   filterCatalogPageByTitle,
   isInteractiveThreadSource,
   boundedCatalogString,
-  MAX_ACTION_CATALOG_PAGES,
   MAX_TRANSCRIPT_PAGE_LIMIT,
   NODE_INVOKE_TIMEOUT_MS,
   parseCatalogPage,
@@ -95,6 +95,8 @@ export async function listPairedNode(params: {
   adoptedSessions: ReadonlyMap<string, AdoptedSessionEntry>;
   terminalCapabilities: Pick<CodexSessionCatalogHost, "canOpenTerminalCodex" | "canStartTerminal">;
   onHost?: (host: CodexSessionCatalogHost) => void;
+  waitUntil?: (completion: Promise<void>) => void;
+  signal?: AbortSignal;
 }): Promise<CodexSessionCatalogHost> {
   const hostId = `node:${params.node.nodeId}`;
   const common = {
@@ -133,6 +135,7 @@ export async function listPairedNode(params: {
         },
         timeoutMs: NODE_INVOKE_TIMEOUT_MS,
         scopes: ["operator.write"],
+        signal: params.signal,
       });
       const page = filterCatalogPageByTitle(
         parseCatalogPage(unwrapNodeInvokePayload(raw)),
@@ -156,11 +159,8 @@ export async function listPairedNode(params: {
       sessions: [],
       error: catalogError("NODE_INVOKE_FAILED", error),
     }));
-  if (params.onHost) {
-    // Keep the 8s aggregate response while allowing cold app-server discovery
-    // to replace that fail-soft page as soon as the node invoke really settles.
-    void eventualHost.then(params.onHost).catch(() => undefined);
-  }
+  // Retain publication through cold discovery without extending the fail-soft response.
+  publishSessionCatalogHost(params, eventualHost);
   try {
     return await withTimeout(
       eventualHost,
@@ -192,44 +192,6 @@ async function requireNodeForCodexContinue(params: {
     throw new CatalogParamsError("paired node does not permit Codex session continuation");
   }
   return { node, nodeId };
-}
-
-async function resolveNodeCodexRecord(params: {
-  agentId: string;
-  runtime: PluginRuntime;
-  nodeId: string;
-  threadId: string;
-}): Promise<CodexSessionCatalogSession> {
-  let cursor: string | undefined;
-  const seenCursors = new Set<string>();
-  for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
-    const raw = await params.runtime.nodes.invoke({
-      nodeId: params.nodeId,
-      command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-      params: {
-        agentId: params.agentId,
-        limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
-        ...(cursor ? { cursor } : {}),
-      },
-      timeoutMs: NODE_INVOKE_TIMEOUT_MS,
-      scopes: ["operator.write"],
-    });
-    const page = parseCatalogPage(unwrapNodeInvokePayload(raw));
-    const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
-    if (record) {
-      return record;
-    }
-    const nextCursor = page.nextCursor?.trim();
-    if (!nextCursor) {
-      break;
-    }
-    if (seenCursors.has(nextCursor)) {
-      throw new CatalogParamsError("Codex session eligibility could not be verified");
-    }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
-  }
-  throw new CatalogParamsError("Codex session is unavailable on the paired node");
 }
 
 function requireContinuableNodeRecord(record: CodexSessionCatalogSession): void {
@@ -307,12 +269,20 @@ async function continueNodeCodexSessionInner(params: {
     runtime: params.api.runtime,
     hostId: params.hostId,
   });
-  const record = await resolveNodeCodexRecord({
+  const lookup = await lookupNodeCodexCatalogRecord({
     agentId: params.agentId,
     runtime: params.api.runtime,
     nodeId,
     threadId: params.threadId,
   });
+  if (lookup.kind !== "found") {
+    throw new CatalogParamsError(
+      lookup.kind === "cursor-cycle"
+        ? "Codex session eligibility could not be verified"
+        : "Codex session is unavailable on the paired node",
+    );
+  }
+  const record = lookup.record;
   requireContinuableNodeRecord(record);
   const existing = findNodeAdoptedSessionEntry({
     agentId: params.agentId,

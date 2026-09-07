@@ -28,7 +28,8 @@ import {
   translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
+import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
@@ -206,6 +207,33 @@ describe("translation provider privacy and fallback", () => {
 });
 
 describe("control-ui-i18n generated ownership", () => {
+  it("includes lazy transcript copy and shared search labels in the generator catalog", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "--eval",
+        [
+          'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";',
+          "const catalog = loadControlUiSourceCatalog();",
+          "console.log(JSON.stringify(catalog));",
+        ].join("\n"),
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const catalog: unknown = JSON.parse(result.stdout);
+    const source = flattenControlUiCatalog(catalog, "en");
+    const lazyCopy = flattenControlUiCatalog(registerTranscriptsEnglish.catalog, "transcripts");
+    for (const [key, value] of lazyCopy) {
+      expect(source.get(key), key).toBe(value);
+    }
+    expect(source.get("meetingCapture.title")).toBe("Meeting capture");
+    expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");
+  });
+
   it("keeps generated locale snapshots out of source PRs", () => {
     expect(() =>
       assertControlUiGeneratedArtifactsIsolated([
@@ -357,21 +385,6 @@ async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void>
     });
   }
   throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
-}
-
-async function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 2_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
 }
 
 describe("control-ui-i18n process runner", () => {
@@ -782,7 +795,7 @@ describe("control-ui-i18n process runner", () => {
 
           runner.kill("SIGTERM");
 
-          await expect(waitForChildClose(runner)).resolves.toEqual({
+          await expect(waitForChildClose(runner, 2_000)).resolves.toEqual({
             code: null,
             signal: "SIGTERM",
           });

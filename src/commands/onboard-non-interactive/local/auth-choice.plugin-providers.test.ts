@@ -240,12 +240,12 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   it.each([
     { providerId: "lmstudio", modelRef: "lmstudio/qwen/qwen3-1.7b" },
     { providerId: "ollama", modelRef: "ollama/qwen3:8b" },
-  ])("auto-enables lean tools for verified $providerId onboarding", async (params) => {
+  ])("does not persist lean defaults for verified $providerId onboarding", async (params) => {
     const result = await applyProviderModelChoice(params);
 
     expect(result?.agents?.defaults?.model).toEqual({ primary: params.modelRef });
-    expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(true);
-    expect(result?.wizard?.localModelLeanAutoModel).toBe(params.modelRef);
+    expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
+    expect(result?.wizard).toBeUndefined();
   });
 
   it.each([
@@ -265,28 +265,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
 
     expect(result?.agents?.defaults?.model).toEqual({ primary: params.modelRef });
     expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(false);
-    expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
-  });
-
-  it("lifts onboarding-owned lean tools after verified hosted provider selection", async () => {
-    const previousModel = "ollama/qwen3:8b";
-    const result = await applyProviderModelChoice({
-      providerId: "openai",
-      modelRef: "openai/gpt-5.6-luna",
-      nextConfig: {
-        wizard: { localModelLeanAutoModel: previousModel },
-        agents: {
-          defaults: {
-            model: { primary: previousModel },
-            experimental: { localModelLean: true },
-          },
-        },
-      },
-    });
-
-    expect(result?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.6-luna" });
-    expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-    expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+    expect(result?.wizard).toBeUndefined();
   });
 
   it("preserves explicitly enabled lean tools for verified hosted providers", async () => {
@@ -303,7 +282,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     });
 
     expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(true);
-    expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+    expect(result?.wizard).toBeUndefined();
   });
 
   it("loads plugin providers for provider-plugin auth choices", async () => {
@@ -888,31 +867,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
 
       expect(result?.agents?.defaults?.model).toEqual({ primary: modelRef });
       expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-      expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
-    },
-  );
-
-  it.each(["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:120b-cloud"])(
-    "lifts onboarding-owned lean when Ollama switches to hosted model %s",
-    async (modelRef) => {
-      const previousModel = "ollama/qwen3:8b";
-      const result = await applyProviderModelChoice({
-        providerId: "ollama",
-        modelRef,
-        nextConfig: {
-          wizard: { localModelLeanAutoModel: previousModel },
-          agents: {
-            defaults: {
-              model: { primary: previousModel },
-              experimental: { localModelLean: true },
-            },
-          },
-        },
-      });
-
-      expect(result?.agents?.defaults?.model).toEqual({ primary: modelRef });
-      expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-      expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+      expect(result?.wizard).toBeUndefined();
     },
   );
 
@@ -932,7 +887,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       });
 
       expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(localModelLean);
-      expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+      expect(result?.wizard).toBeUndefined();
     },
   );
 });

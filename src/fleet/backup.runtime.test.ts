@@ -591,9 +591,31 @@ describe("fleet restore runtime", () => {
     );
   });
 
-  it("swaps state, repins config, and rotates the token", async () => {
+  it.each([
+    {
+      name: "generated previous default",
+      cache: "/home/node/.cache",
+      keys: [],
+      expectedCache: "/home/node/.openclaw/cache",
+    },
+    {
+      name: "explicit matching default",
+      cache: "/home/node/.openclaw/cache",
+      keys: ["XDG_CACHE_HOME"],
+      expectedCache: "/home/node/.openclaw/cache",
+    },
+    {
+      name: "explicit previous default",
+      cache: "/home/node/.cache",
+      keys: ["XDG_CACHE_HOME"],
+      expectedCache: "/home/node/.cache",
+    },
+  ])("restores state and token with $name", async ({ cache, keys, expectedCache }) => {
     const archive = await createArchive();
-    const containers = containerMock();
+    const current = inspection();
+    current.labels["openclaw.fleet.env-keys"] = keys.join(",");
+    current.environment.XDG_CACHE_HOME = cache;
+    const containers = containerMock(current);
     const result = await restoreFleetCell(restoreParams(containers, archive));
     await expect(fs.readFile(path.join(record.dataDir, "restored.txt"), "utf8")).resolves.toBe(
       "new-data",
@@ -606,6 +628,8 @@ describe("fleet restore runtime", () => {
     ) as { gateway?: { controlUi?: { allowedOrigins?: string[] } } };
     expect(config.gateway?.controlUi?.allowedOrigins).toContain("http://127.0.0.1:19100");
     expect(containers.run.mock.calls[0]?.[0].environment.OPENCLAW_GATEWAY_TOKEN).toBe("new-token");
+    expect(containers.run.mock.calls[0]?.[0].environment.XDG_CACHE_HOME).toBe(expectedCache);
+    expect(containers.run.mock.calls[0]?.[0].userEnvironmentKeys).toEqual(keys);
     // The disk limit must survive restore via the fleet label even on Podman,
     // whose inspect schema has no HostConfig.StorageOpt.
     expect(containers.run.mock.calls[0]?.[0].diskSize).toBe("10g");

@@ -31,9 +31,10 @@ type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridgeImpl>[0];
 type CopilotToolBridgeAttemptParams = NonNullable<CopilotToolBridgeInput["attemptParams"]>;
 type CopilotToolBridgeTestInput = Omit<
   CopilotToolBridgeInput,
-  "agentId" | "attemptParams" | "modelId" | "modelProvider" | "sessionId"
+  "agentId" | "attemptParams" | "modelId" | "modelProvider" | "sessionId" | "spawnWorkspaceDir"
 > &
   Partial<Pick<CopilotToolBridgeInput, "agentId" | "modelId" | "modelProvider" | "sessionId">> & {
+    spawnWorkspaceDir?: CopilotToolBridgeInput["spawnWorkspaceDir"];
     attemptParams?: Omit<CopilotToolBridgeAttemptParams, "hostCapabilities"> &
       Partial<Pick<CopilotToolBridgeAttemptParams, "hostCapabilities">>;
   };
@@ -49,6 +50,7 @@ function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
     modelId: "gpt-4o",
     modelProvider: "github-copilot",
     sessionId: "session-1",
+    spawnWorkspaceDir: undefined,
     ...baseInput,
     attemptParams: {
       ...attemptParams,
@@ -154,6 +156,7 @@ describe("createCopilotToolBridge", () => {
         modelId: "gpt-test",
         modelProvider: "github-copilot",
         sessionId: "session-1",
+        spawnWorkspaceDir: undefined,
       }),
     ).rejects.toThrow("Copilot attempt tools require host-bound capabilities");
     expect(createOpenClawCodingTools).not.toHaveBeenCalled();
@@ -811,6 +814,9 @@ describe("createCopilotToolBridge", () => {
         attemptParams: {
           agentAccountId: "acct-1",
           toolBindings,
+          clientCaps: ["inline-widgets"],
+          taskSuggestionDeliveryMode: "gateway",
+          approvalReviewerDeviceId: "reviewer-device",
           senderId: "sender-1",
           senderName: "Ada",
           senderUsername: "ada",
@@ -827,6 +833,7 @@ describe("createCopilotToolBridge", () => {
           currentThreadTs: "1700000000.000100",
           currentMessageId: "M-1",
           messageProvider: "slack",
+          pinnedWidgetAuthoring: true,
           messageTo: "U-1",
           messageThreadId: "1700000000.000100",
           replyToMode: "first",
@@ -844,6 +851,9 @@ describe("createCopilotToolBridge", () => {
       expect(opts).toMatchObject({
         agentAccountId: "acct-1",
         toolBindings,
+        clientCaps: ["inline-widgets"],
+        taskSuggestionDeliveryMode: "gateway",
+        approvalReviewerDeviceId: "reviewer-device",
         senderId: "sender-1",
         senderName: "Ada",
         senderUsername: "ada",
@@ -860,6 +870,7 @@ describe("createCopilotToolBridge", () => {
         currentThreadTs: "1700000000.000100",
         currentMessageId: "M-1",
         messageProvider: "slack",
+        pinnedWidgetAuthoring: true,
         messageTo: "U-1",
         messageThreadId: "1700000000.000100",
         replyToMode: "first",
@@ -1284,23 +1295,23 @@ describe("createCopilotToolBridge", () => {
       warn.mockRestore();
     });
 
-    it("requireExplicitMessageTarget defaults to isSubagentSessionKey(sessionKey) when undefined", async () => {
-      const { createOpenClawCodingTools, getOpts } = captureCall();
-
-      await createCopilotToolBridge({
-        // No requireExplicitMessageTarget; sessionKey looks like a
-        // subagent key so the default must be true. Mirrors PI
-        // attempt.ts:1097-1098.
-        attemptParams: { sessionKey: "subagent:envelope:abc" } as never,
-        createOpenClawCodingTools,
-      });
-
-      const opts = getOpts();
-      // We don't assert the exact boolean (subagent detection is owned
-      // by isSubagentSessionKey) — only that the bridge consulted the
-      // helper rather than emitting `undefined`.
-      expect(typeof opts.requireExplicitMessageTarget).toBe("boolean");
-    });
+    it.each([
+      { sessionKey: "agent:main:main", required: undefined, expected: false },
+      { sessionKey: "agent:main:subagent:child", required: undefined, expected: true },
+      { sessionKey: "agent:main:subagent:child", required: false, expected: false },
+      { sessionKey: "agent:main:main", required: true, expected: true },
+    ])(
+      "shares the resolved target requirement for $sessionKey / $required",
+      async ({ sessionKey, required, expected }) => {
+        const { createOpenClawCodingTools, getOpts } = captureCall();
+        const bridge = await createCopilotToolBridge({
+          attemptParams: { sessionKey, requireExplicitMessageTarget: required } as never,
+          createOpenClawCodingTools,
+        });
+        expect(getOpts().requireExplicitMessageTarget).toBe(expected);
+        expect(bridge.promptToolPolicy.requireExplicitMessageTarget).toBe(expected);
+      },
+    );
   });
 
   describe("sandbox forwarding (PR #86155 [P1])", () => {
@@ -1318,7 +1329,7 @@ describe("createCopilotToolBridge", () => {
       } as unknown as SandboxContext;
     }
 
-    it("defaults sandbox to undefined and derives spawnWorkspaceDir from workspaceDir when no sandbox is passed (back-compat)", async () => {
+    it("forwards an absent sandbox and prepared spawn workspace", async () => {
       const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
       await createCopilotToolBridge({
         createOpenClawCodingTools,
@@ -1332,8 +1343,6 @@ describe("createCopilotToolBridge", () => {
       };
       expect(opts.sandbox).toBeUndefined();
       expect(opts.workspaceDir).toBe("/workspace");
-      // resolveAttemptSpawnWorkspaceDir returns undefined for the
-      // no-sandbox path; the back-compat fallback emits that.
       expect(opts.spawnWorkspaceDir).toBeUndefined();
     });
 
@@ -1355,26 +1364,6 @@ describe("createCopilotToolBridge", () => {
       expect(opts.sandbox).toBe(sandbox);
       expect(opts.workspaceDir).toBe("/sandbox/copy");
       expect(opts.spawnWorkspaceDir).toBe("/original-workspace");
-    });
-
-    it("derives spawnWorkspaceDir from sandbox when caller omits it (fallback path)", async () => {
-      const sandbox = makeSandboxStub({ workspaceAccess: "ro" });
-      const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
-      await createCopilotToolBridge({
-        createOpenClawCodingTools,
-        sandbox,
-        sessionKey: "session-1",
-        workspaceDir: "/sandbox/copy",
-      });
-      const opts = (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        spawnWorkspaceDir?: unknown;
-      };
-      // Fallback derives spawnWorkspaceDir from (effective) workspaceDir
-      // since the caller didn't pre-compute one. For a ro/none sandbox
-      // this yields the effective dir (= sandbox copy). Production
-      // callers (attempt.ts) always pre-compute spawnWorkspaceDir from
-      // the original workspace; the fallback is for test fixtures.
-      expect(opts.spawnWorkspaceDir).toBe("/sandbox/copy");
     });
   });
 
@@ -2121,13 +2110,11 @@ describe("createCopilotToolBridge tool conversion", () => {
 
   it("reports direct tool failures and matching recovery to the host terminal observer", async () => {
     const error = new Error("delivery failed");
-    const execute = vi
-      .fn()
-      .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce({
-        content: [{ text: "delivered", type: "text" }],
-        details: { status: "ok" },
-      });
+    const result = {
+      content: [{ text: "delivered", type: "text" }],
+      details: { status: "ok" },
+    };
+    const execute = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(result);
     const observeToolTerminal = vi.fn(() => ({
       executionStarted: true,
       sideEffectEvidence: true,
@@ -2145,6 +2132,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(observeToolTerminal).toHaveBeenNthCalledWith(1, {
       toolCallId: "send-1",
       toolName: "message",
+      result: error,
       arguments: args,
       executionStarted: true,
       outcome: "failure",
@@ -2153,6 +2141,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(observeToolTerminal).toHaveBeenNthCalledWith(2, {
       toolCallId: "send-2",
       toolName: "message",
+      result,
       arguments: args,
       executionStarted: true,
       outcome: "success",
@@ -2323,8 +2312,9 @@ describe("createCopilotToolBridge tool conversion", () => {
       name: "memory_forget",
       result: textToolResult("unused"),
     });
+    const error = new Error("catalog delete failed");
     target.execute = vi.fn(async () => {
-      throw new Error("catalog delete failed");
+      throw error;
     });
     const args = { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" };
 
@@ -2346,6 +2336,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(observeToolTerminal).toHaveBeenCalledWith({
       toolCallId: "catalog-forget-1",
       toolName: "memory_forget",
+      result: error,
       arguments: args,
       executionStarted: true,
       outcome: "failure",

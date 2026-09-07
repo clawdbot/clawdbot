@@ -49,7 +49,24 @@ final class BackgroundWakeRefreshAttempt: @unchecked Sendable {
 
 @MainActor
 enum OpenClawAppModelRegistry {
-    static var appModel: NodeAppModel?
+    static var appModel: NodeAppModel? {
+        didSet {
+            guard let appModel, self.pendingLiveVoiceStart else { return }
+            self.pendingLiveVoiceStart = false
+            appModel.requestLiveVoiceStart()
+        }
+    }
+
+    /// App Intents can arrive before SwiftUI installs the single application model.
+    private static var pendingLiveVoiceStart = false
+
+    static func requestLiveVoiceStart() {
+        guard let appModel else {
+            self.pendingLiveVoiceStart = true
+            return
+        }
+        appModel.requestLiveVoiceStart()
+    }
 }
 
 @MainActor
@@ -177,7 +194,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         guard let route = DeepLinkParser.parse(url) else { return }
 
         switch route {
-        case .agent, .dashboard:
+        case .agent, .dashboard, .gatewayAdd:
             await model.handleDeepLink(url: url)
         case let .gateway(link):
             model.stageGatewaySetupLink(link)
@@ -675,6 +692,8 @@ struct OpenClawApp: App {
     init() {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
+        (UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard)
+            .removeObject(forKey: "share.defaultInstruction")
         OpenClawType.installUIKitAppearance()
         let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
         #if DEBUG

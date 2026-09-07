@@ -324,13 +324,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    configSnapshot,
-    configWriteOptions,
     env: installEnv,
     explicitToken: opts.token,
-    autoGenerateWhenMissing: true,
-    persistGeneratedToken: true,
-    persistence: { readConfigFileSnapshotForWrite, replaceConfigFile },
+    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
   });
   if (tokenResolution.unavailableReason) {
     fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);

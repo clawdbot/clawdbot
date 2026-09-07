@@ -41,6 +41,23 @@ export const SessionVisibilitySetResultSchema = closedObject({
   visibility: SessionVisibilitySchema,
 });
 
+export const SessionPublicShareSchema = closedObject({
+  token: Type.String({ pattern: "^v1\\.[A-Za-z0-9_-]+$", maxLength: 7000 }),
+  createdAt: Type.Integer({ minimum: 0 }),
+});
+
+export const SessionPublicShareSetParamsSchema = closedObject({
+  ...SessionSharingTargetParamsSchema,
+  expectedSessionId: NonEmptyString,
+  enabled: Type.Boolean(),
+});
+
+export const SessionPublicShareSetResultSchema = closedObject({
+  ok: Type.Literal(true),
+  sessionKey: NonEmptyString,
+  publicShare: Type.Optional(SessionPublicShareSchema),
+});
+
 export const SessionMembersListParamsSchema = closedObject(SessionSharingTargetParamsSchema);
 
 export const SessionMemberSchema = closedObject({
@@ -62,6 +79,7 @@ export const SessionMemberEvidenceSchema = Object.assign(
 
 export const SessionMembersListResultSchema = closedObject({
   sessionKey: NonEmptyString,
+  publicShare: Type.Optional(SessionPublicShareSchema),
   owner: Type.Optional(SessionSharingIdentitySchema),
   members: Type.Array(SessionMemberSchema),
   identities: Type.Array(SessionSharingIdentitySchema),
@@ -71,6 +89,7 @@ export const SessionMembersListResultSchema = closedObject({
 
 export const SessionMembersListEvidenceResultSchema = closedObject({
   sessionKey: NonEmptyString,
+  publicShare: Type.Optional(SessionPublicShareSchema),
   owner: Type.Optional(SessionSharingIdentitySchema),
   members: Type.Array(SessionMemberEvidenceSchema),
   identities: Type.Array(SessionSharingIdentitySchema),
@@ -122,6 +141,9 @@ export type SessionSharingIdentity = Static<typeof SessionSharingIdentitySchema>
 export type SessionSharingAction = Static<typeof SessionSharingActionSchema>;
 export type SessionVisibilitySetParams = Static<typeof SessionVisibilitySetParamsSchema>;
 export type SessionVisibilitySetResult = Static<typeof SessionVisibilitySetResultSchema>;
+export type SessionPublicShare = Static<typeof SessionPublicShareSchema>;
+export type SessionPublicShareSetParams = Static<typeof SessionPublicShareSetParamsSchema>;
+export type SessionPublicShareSetResult = Static<typeof SessionPublicShareSetResultSchema>;
 export type SessionMembersListParams = Static<typeof SessionMembersListParamsSchema>;
 export type SessionMember = Static<typeof SessionMemberSchema>;
 export type SessionMemberEvidence = Static<typeof SessionMemberEvidenceSchema>;

@@ -574,7 +574,7 @@ internal class MicCaptureManager(
 
             ack.isTerminalFailure -> {
               completePendingTurn()
-              _statusText.value = nativeText("Send failed: Chat failed before the run started; try again.")
+              _statusText.value = nativeText("Voice request failed")
             }
 
             runId == null -> {

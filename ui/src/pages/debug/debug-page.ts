@@ -193,6 +193,8 @@ class DebugPage extends OpenClawLightDomElement {
 
   override render() {
     const debugView = renderDebug({
+      connected: this.gateway.connected,
+      offlineStable: this.gateway.snapshot?.offlineStable ?? false,
       loading: this.diagnosticsTask.status === TaskStatus.PENDING,
       status: this.debugStatus,
       health: this.debugHealth,

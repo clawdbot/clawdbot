@@ -417,7 +417,7 @@ describe("runtime config capability", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(getCount).toBe(2);
-    patchGate.resolve({ hash: "hash-2" });
+    patchGate.resolve({ config: { count: 2 }, hash: "hash-2" });
     await vi.advanceTimersByTimeAsync(0);
     await expect(patchPromise).resolves.toBe(true);
     runtimeConfig.dispose();
@@ -689,7 +689,10 @@ describe("runtime config capability", () => {
       if (method === "config.set") {
         return deadSet.promise;
       }
-      return Promise.resolve({});
+      return Promise.resolve({
+        config: { count: 1, ui: { prefs: { themeMode: "dark" } } },
+        hash: "hash-2",
+      });
     });
     const { runtimeConfig, publish } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],
@@ -737,7 +740,7 @@ describe("runtime config capability", () => {
     await vi.waitFor(() => expect(patchCalls).toBe(1));
     publish(false);
     publish(true);
-    firstPatch.resolve({});
+    firstPatch.resolve({ config: { count: 1 }, noop: true });
 
     await expect(stalePatch).resolves.toBe(false);
     await expect(staleSet).resolves.toBe(false);
@@ -776,7 +779,7 @@ describe("runtime config capability", () => {
       auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["config.get", "config.patch", "config.set"] },
     } as GatewayHelloOk);
-    firstPatch.resolve({});
+    firstPatch.resolve({ config: { count: 1 }, noop: true });
 
     await patch;
     await expect(save).resolves.toBe(false);

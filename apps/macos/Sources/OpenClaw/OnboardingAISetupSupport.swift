@@ -10,27 +10,33 @@ extension OnboardingAISetupModel {
     /// alive long enough for approval plus the post-login inference probe.
     static let providerAuthRequestTimeoutMs: Double = 1_200_000
 
+    enum SetupIntent {
+        case inspectOnly
+        case resumePending
+        case startSetup
+    }
+
     enum ActivationRequest {
-        case candidate(kind: String, modelRef: String, label: String, tryNextOnFailure: Bool)
+        case candidate(kind: String, modelRef: String, label: String)
         case manual(key: String, provider: ManualProvider)
 
         var kind: String {
             switch self {
-            case let .candidate(kind, _, _, _): kind
+            case let .candidate(kind, _, _): kind
             case .manual: "api-key"
             }
         }
 
         var modelRef: String? {
             switch self {
-            case let .candidate(_, modelRef, _, _): modelRef
+            case let .candidate(_, modelRef, _): modelRef
             case .manual: nil
             }
         }
 
         var label: String {
             switch self {
-            case let .candidate(_, _, label, _): label
+            case let .candidate(_, _, label): label
             case let .manual(_, provider): provider.label
             }
         }
@@ -43,17 +49,10 @@ extension OnboardingAISetupModel {
             }
         }
 
-        var tryNextOnFailure: Bool {
-            switch self {
-            case let .candidate(_, _, _, tryNext): tryNext
-            case .manual: false
-            }
-        }
-
         @MainActor
         func params(supportsExactModel: Bool) -> [String: AnyCodable] {
             switch self {
-            case let .candidate(kind, modelRef, _, _):
+            case let .candidate(kind, modelRef, _):
                 OnboardingAISetupModel.activationParams(
                     kind: kind,
                     modelRef: modelRef,
@@ -125,6 +124,8 @@ extension OnboardingAISetupModel {
         let authOptions: [AuthOption]?
         let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
+        let nativeSessionCatalogs: [NativeSessionCatalog]?
+        let nativeSessionCatalogPreferenceRequired: Bool?
         let configuredModel: String?
         let setupComplete: Bool?
 
@@ -146,11 +147,14 @@ extension OnboardingAISetupModel {
     }
 
     static func activationWizardResult(
+        done: Bool,
         status: String?,
         error: String?,
-        modelActivation: [String: AnyCodable]?) -> Result<ActivateResult, Error>
+        preparedModelRef: String?,
+        modelActivation: [String: AnyCodable]?,
+        activationRejection: [String: AnyCodable]?) -> Result<ActivateResult, Error>
     {
-        if status == "done",
+        if status == "done", activationRejection == nil,
            let modelRef = modelActivation?["modelRef"]?.value as? String,
            !modelRef.isEmpty
         {
@@ -161,8 +165,18 @@ extension OnboardingAISetupModel {
                 error: nil,
                 gatewayRestartRequired: modelActivation?["gatewayRestartRequired"]?.value as? Bool))
         }
-        if status == "cancelled" {
+        if status == "cancelled", modelActivation == nil, activationRejection == nil {
             return .failure(OnboardingAISetupError.activationCancelled)
+        }
+        // A settled runner can have failed after promotion. Only its explicit,
+        // complete pre-promotion rejection permits another setup mutation.
+        if done, status == "error", modelActivation == nil, preparedModelRef == nil,
+           let rejection = activationRejection, rejection.count == 2,
+           rejection["disposition"]?.value as? String == "rejected-before-promotion",
+           let failureStatus = rejection["status"]?.value as? String,
+           ["auth", "rate_limit", "billing", "timeout", "format", "unavailable", "unknown"].contains(failureStatus)
+        {
+            return .failure(OnboardingAISetupError.activationRejected(status: failureStatus, error: error))
         }
         return .failure(status == "error"
             ? OnboardingAISetupError.activationFailed(error ?? "AI setup failed.")
@@ -219,7 +233,7 @@ extension OnboardingAISetupModel {
 
     enum PendingVerificationOutcome: Equatable {
         case connected
-        case freshSetupAllowed
+        case freshSetupAllowed(AttemptContext)
         case notConnected
         case superseded
     }
@@ -254,6 +268,16 @@ extension OnboardingAISetupModel {
         let brandId: String?
     }
 
+    struct NativeSessionCatalog: Identifiable, Equatable, Decodable {
+        let pluginId: String
+        let label: String
+        let detail: String?
+
+        var id: String {
+            self.pluginId
+        }
+    }
+
     struct PrepareOption: Identifiable, Equatable, Decodable {
         let id: String
         let label: String
@@ -274,7 +298,7 @@ extension OnboardingAISetupModel {
         let id: String
         let presentation: CandidatePresentation?
         switch request {
-        case let .candidate(kind, _, _, _):
+        case let .candidate(kind, _, _):
             id = kind
             presentation = self.candidatePresentation[kind]
         case let .manual(_, provider):
@@ -338,6 +362,25 @@ extension OnboardingAISetupModel {
         return false
     }
 
+    var nativeSessionCatalogSummary: String {
+        self.nativeSessionCatalogs.map(\.label).formatted(.list(type: .and))
+    }
+
+    var busyReason: String? {
+        // Every connection attempt must make quitting mid-setup confirmable.
+        if self.phase == .testing || self.manualTesting ||
+            self.phase == .detecting && self.pendingActivationVerification
+        {
+            "OpenClaw is testing your AI connection."
+        } else if self.activeAuthOption != nil {
+            self.isPreparingModel
+                ? "OpenClaw is preparing a local model."
+                : "OpenClaw is completing provider sign-in."
+        } else {
+            nil
+        }
+    }
+
     var isBusy: Bool {
         self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
             self.pendingActivationVerification
@@ -361,20 +404,6 @@ extension OnboardingAISetupModel {
         default: nil
         }
         self.advanceProviderAuth(stepID: step.id, value: value)
-    }
-
-    /// Candidates the automatic ladder may try: skip definitively logged-out
-    /// installs and anything already attempted.
-    func autoCandidateAfter(kind: String?) -> Candidate? {
-        let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
-            index + 1
-        } else {
-            0
-        }
-        guard startIndex <= self.candidates.count else { return nil }
-        return self.candidates[startIndex...].first { candidate in
-            candidate.credentials != false && self.statuses[candidate.kind] == .untried
-        }
     }
 
     func startProviderPrepare(_ option: PrepareOption) {
@@ -479,20 +508,23 @@ extension OnboardingAISetupModel {
             : 150_000
     }
 
-    static func activationFailure(_ error: Error) -> Failure {
-        if case OnboardingAISetupError.activationCancelled = error {
-            return Failure(summary: error.localizedDescription, detail: nil)
+    static func activationFailure(_ error: Error, label: String) -> Failure {
+        switch error {
+        case OnboardingAISetupError.activationCancelled:
+            Failure(summary: error.localizedDescription, detail: nil)
+        case let OnboardingAISetupError.activationRejected(status, detail):
+            self.failure(label: label, status: status, error: detail)
+        default:
+            self.transportFailure(error.localizedDescription)
         }
-        return self.transportFailure(error.localizedDescription)
     }
 
     static func activationFailureIsDefinitive(_ error: Error) -> Bool {
-        if case OnboardingAISetupError.activationCancelled = error {
+        switch error {
+        case OnboardingAISetupError.activationCancelled, OnboardingAISetupError.activationRejected:
             return true
-        }
-        // A terminal wizard error arrives after its runner and setup admission settle.
-        if case OnboardingAISetupError.activationFailed = error {
-            return true
+        default:
+            break
         }
         if let response = error as? GatewayResponseError {
             let code = response.code.uppercased()
@@ -615,6 +647,7 @@ enum OnboardingAISetupError: LocalizedError {
     case activationCancelled
     case activationOutcomeUnavailable
     case activationFailed(String)
+    case activationRejected(status: String, error: String?)
 
     var errorDescription: String? {
         switch self {
@@ -624,6 +657,8 @@ enum OnboardingAISetupError: LocalizedError {
             "AI setup ended before its result was received. OpenClaw will verify the Gateway before trying again."
         case let .activationFailed(message):
             message
+        case let .activationRejected(_, error):
+            error ?? "AI setup failed."
         case .providerCatalogUnavailable:
             "The Gateway is running an older OpenClaw version that doesn’t provide the " +
                 "supported provider list. Update OpenClaw on the gateway, then try again."

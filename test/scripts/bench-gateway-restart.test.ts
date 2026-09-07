@@ -8,7 +8,15 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
-import { requestProbeStatus } from "../../scripts/lib/gateway-bench-probes.ts";
+import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
+import { parseProcessRssKb, requestProbeStatus } from "../../scripts/lib/gateway-bench-probes.ts";
+import {
+  collectOutputLines,
+  collectTraceLine,
+  flushOutputLineBuffers,
+  parseNonNegativeInt,
+  parsePositiveInt,
+} from "../../scripts/lib/gateway-bench-runtime.ts";
 import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -113,8 +121,8 @@ describe("gateway restart benchmark script", () => {
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
-    expect(testing.parsePositiveInt("5", 1, "--restarts")).toBe(5);
-    expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
+    expect(parsePositiveInt("5", 1, "--restarts")).toBe(5);
+    expect(parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
     expect(
       testing.parseOptions([
         "--case",
@@ -131,7 +139,7 @@ describe("gateway restart benchmark script", () => {
       output: "restart.json",
       restarts: 2,
     });
-    expect(() => testing.parsePositiveInt("2abc", 1, "--restarts")).toThrow(
+    expect(() => parsePositiveInt("2abc", 1, "--restarts")).toThrow(
       /--restarts must be an integer/u,
     );
     expect(() => testing.parseOptions(["--output", "--case", "skipChannels"])).toThrow(
@@ -166,13 +174,13 @@ describe("gateway restart benchmark script", () => {
   });
 
   it("buffers child output lines split across chunks", () => {
-    const first = testing.collectOutputLines("", "[gateway] restart trace: restart.ready 12");
+    const first = collectOutputLines("", "[gateway] restart trace: restart.ready 12");
     expect(first.lines).toEqual([]);
 
-    const second = testing.collectOutputLines(first.carry, ".5ms total=45.0ms\r");
+    const second = collectOutputLines(first.carry, ".5ms total=45.0ms\r");
     expect(second.lines).toEqual([]);
 
-    const third = testing.collectOutputLines(second.carry, "\n[gateway] ready\npartial");
+    const third = collectOutputLines(second.carry, "\n[gateway] ready\npartial");
     expect(third.lines).toEqual([
       "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
       "[gateway] ready",
@@ -217,7 +225,7 @@ describe("gateway restart benchmark script", () => {
     };
     const lines: string[] = [];
 
-    testing.flushOutputLineBuffers(buffers, (line) => lines.push(line), 1);
+    flushOutputLineBuffers(buffers, (line) => lines.push(line), 1);
 
     expect(lines).toEqual([]);
     expect(buffers).toEqual({
@@ -233,7 +241,7 @@ describe("gateway restart benchmark script", () => {
     };
     const lines: string[] = [];
 
-    testing.flushOutputLineBuffers(buffers, (line) => lines.push(line), 1, {
+    flushOutputLineBuffers(buffers, (line) => lines.push(line), 1, {
       flushPartial: true,
     });
 
@@ -258,11 +266,11 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   it("rejects malformed ps RSS samples", () => {
-    expect(testing.parseProcessRssKb("4096\n")).toBe(4096);
-    expect(testing.parseProcessRssKb("4096kb\n")).toBeNull();
-    expect(testing.parseProcessRssKb("4096 8192\n")).toBeNull();
-    expect(testing.parseProcessRssKb("0\n")).toBeNull();
-    expect(testing.parseProcessRssKb("")).toBeNull();
+    expect(parseProcessRssKb("4096\n")).toBe(4096);
+    expect(parseProcessRssKb("4096kb\n")).toBeNull();
+    expect(parseProcessRssKb("4096 8192\n")).toBeNull();
+    expect(parseProcessRssKb("0\n")).toBeNull();
+    expect(parseProcessRssKb("")).toBeNull();
   });
 
   it("accepts healthy probe headers without waiting for the response body", async () => {
@@ -374,7 +382,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   it("parses restart trace metrics including resource Count fields", () => {
     const restartTrace: Record<string, number> = {};
 
-    testing.collectTraceLine(
+    collectTraceLine(
       "[gateway] restart trace: restart.ready 12.5ms total=45.0ms rssMb=200.5 heapUsedMb=80.1 activeHandlesCount=12 activeTimersCount=2 indexPlugins=50",
       "restart trace",
       restartTrace,
@@ -410,7 +418,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   registerStopChildBehaviorTests({
-    stopChild: testing.stopChild,
+    stopChild,
     queuedExitCode: 0,
   });
 

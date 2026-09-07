@@ -85,6 +85,10 @@ vi.mock("./session-utils.js", () => ({
 
 vi.mock("./session-transcript-readers.js", () => ({
   readSessionMessagesAsync: readSessionMessagesMock,
+  readSessionMessagesMatchingIdAsync: async (scope: unknown, messageId: string) =>
+    (await readSessionMessagesMock(scope)).filter(
+      (message: { __openclaw?: { id?: string } }) => message["__openclaw"]?.id === messageId,
+    ),
   readSessionMessagesWithSourceAsync: async (...args: unknown[]) => ({
     messages: await readSessionMessagesMock(...args),
   }),
@@ -448,31 +452,89 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body.toString("utf-8")).toBe("original-image");
   });
 
-  it("serves Unicode media filenames with an encoded content disposition", async () => {
-    const { attachmentId, sessionKey } = await createFixture(stateDir, {
-      filename: "音声.mp3",
+  it.each([
+    {
+      kind: "audio",
       contentType: "audio/mpeg",
-      body: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
-    });
-    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      filename: "音声.mp3",
+      variant: "full",
+      encodedFilename: "%E9%9F%B3%E5%A3%B0.mp3",
+    },
+    {
+      kind: "audio",
+      contentType: "audio/wav",
+      filename: "recording%20take.wav",
+      variant: "full",
+      encodedFilename: "recording%2520take.wav",
+    },
+    {
+      kind: "video",
+      contentType: "video/mp4",
+      filename: "recording%20take.mp4",
+      variant: "full",
+      encodedFilename: "recording%2520take.mp4",
+    },
+    {
+      kind: "image",
+      contentType: "image/png",
+      filename: "progress%20chart.png",
+      variant: "full",
+      encodedFilename: "progress%2520chart.png",
+    },
+    {
+      kind: "image",
+      contentType: "image/png",
+      filename: "progress%20chart.png",
+      variant: "thumbnail",
+      encodedFilename: "progress%2520chart-thumbnail.png",
+    },
+    {
+      kind: "document",
+      contentType: "text/plain",
+      filename: "progress%20report.txt",
+      variant: "full",
+      encodedFilename: "progress%2520report.txt",
+    },
+  ])(
+    "preserves $filename in $variant download metadata",
+    async ({ kind, contentType, filename, variant, encodedFilename }) => {
+      const { attachmentId, sessionKey } = await createFixture(stateDir, {
+        filename,
+        contentType,
+        body:
+          kind === "image"
+            ? createSolidPngBuffer(16, 8, { r: 24, g: 64, b: 128 })
+            : Buffer.from("media"),
+      });
+      const route = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}`;
+      const fullUrl = `${route}/full`;
+      const block =
+        kind === "document"
+          ? { type: "attachment", attachment: { url: fullUrl } }
+          : { type: kind, url: fullUrl, openUrl: fullUrl };
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: `${route}/${variant}`,
+        authResponse: { authMethod: "token" },
+        transcriptMessages: [
+          {
+            role: "assistant",
+            content: [block],
+            __openclaw: { id: "msg-1" },
+          },
+        ],
+      });
 
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName,
-      authResponse: { authMethod: "token" },
-      transcriptMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "audio", url: pathName, openUrl: pathName }],
-          __openclaw: { id: "msg-1" },
-        },
-      ],
-    });
-
-    expect(result.statusCode).toBe(200);
-    expect(result.headers["content-disposition"]).toContain("filename*=UTF-8''");
-    expect(result.headers["content-disposition"]).toContain("%E9%9F%B3%E5%A3%B0.mp3");
-  });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["content-type"]).toBe(contentType);
+      expect(result.headers["content-disposition"]).toContain(
+        `filename*=UTF-8''${encodedFilename}`,
+      );
+      expect(result.headers["content-disposition"]).toMatch(
+        kind === "document" ? /^attachment;/ : /^inline;/,
+      );
+    },
+  );
 
   it("serves a byte range from the validated managed image", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
@@ -575,36 +637,139 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     }
   });
 
-  it.each(["GET", "HEAD"])(
-    "revalidates managed media ETags before ranges for %s",
-    async (method) => {
-      const { attachmentId, sessionKey } = await createFixture(stateDir);
+  it.each<{
+    name: string;
+    method?: string;
+    range?: string;
+    ifRange?: string;
+    validator: string | string[] | ((etag: string) => string);
+    expectedStatus: number;
+  }>([
+    {
+      name: "quoted comma/star GET",
+      validator: '"client,*,tag"',
+      expectedStatus: 200,
+    },
+    {
+      name: "quoted comma/star HEAD",
+      method: "HEAD",
+      validator: '"client,*,tag"',
+      expectedStatus: 200,
+    },
+    {
+      name: "quoted comma/star range",
+      range: "bytes=2-5",
+      validator: '"client,*,tag"',
+      expectedStatus: 206,
+    },
+    {
+      name: "weak quoted comma/star range",
+      range: "bytes=2-5",
+      validator: 'W/"client,*,tag"',
+      expectedStatus: 206,
+    },
+    {
+      name: "multiple nonmatching fields",
+      validator: ['"client,*,tag"', '"other"'],
+      expectedStatus: 200,
+    },
+    {
+      name: "quoted literal asterisk",
+      validator: '"*"',
+      expectedStatus: 200,
+    },
+    {
+      name: "ordinary stale range",
+      range: "bytes=2-5",
+      validator: '"stale"',
+      expectedStatus: 206,
+    },
+    {
+      name: "strong match",
+      validator: (etag: string) => etag,
+      expectedStatus: 304,
+    },
+    {
+      name: "weak HEAD match before If-Range",
+      method: "HEAD",
+      range: "bytes=2-5",
+      ifRange: '"stale"',
+      validator: (etag: string) => `W/${etag}`,
+      expectedStatus: 304,
+    },
+    {
+      name: "matching list before If-Range",
+      range: "bytes=2-5",
+      ifRange: '"stale"',
+      validator: (etag: string) => `"other", W/${etag}`,
+      expectedStatus: 304,
+    },
+    {
+      name: "standalone wildcard",
+      validator: "*",
+      expectedStatus: 304,
+    },
+    {
+      name: "literal backslash before a matching tag",
+      validator: (etag: string) => String.raw`"trailing\", ` + etag,
+      expectedStatus: 304,
+    },
+  ])(
+    "honors $name for managed media",
+    async ({ method = "GET", range, ifRange, validator, expectedStatus }) => {
+      const body = Buffer.from("0123456789");
+      const { attachmentId, sessionKey } = await createFixture(stateDir, {
+        filename: "report.txt",
+        contentType: "text/plain",
+        body,
+      });
       const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
-      const initial = await requestManagedImage({
+      const request = {
         stateDir,
         pathName,
         authResponse: { authMethod: "token" },
-      });
-      const etag = initial.result.headers.etag;
+        transcriptMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "attachment", attachment: { url: pathName } }],
+            __openclaw: { id: "msg-1" },
+          },
+        ],
+      };
+      const initial = await requestManagedImage(request);
+      const etag = String(initial.result.headers.etag);
       expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
 
+      const ifNoneMatch = typeof validator === "function" ? validator(etag) : validator;
       const { result } = await requestManagedImage({
-        stateDir,
-        pathName,
+        ...request,
         method,
-        authResponse: { authMethod: "token" },
-        headers: {
-          "if-none-match": `W/${String(etag)}`,
-          range: "bytes=0-3",
-          "if-range": '"stale"',
-        },
+        headers: [
+          "Host",
+          "127.0.0.1",
+          ...[ifNoneMatch].flat().flatMap((value) => ["if-none-match", value]),
+          ...(range ? ["range", range] : []),
+          ...(ifRange ? ["if-range", ifRange] : []),
+        ],
       });
 
-      expect(result.statusCode).toBe(304);
+      expect(result.statusCode).toBe(expectedStatus);
       expect(result.headers.etag).toBe(etag);
-      expect(result.headers["content-length"]).toBeUndefined();
-      expect(result.headers["content-range"]).toBeUndefined();
-      expect(result.body).toHaveLength(0);
+      expect(result.headers["content-type"]).toBe("text/plain");
+      expect(result.headers["content-disposition"]).toContain('filename="report.txt"');
+      expect(result.headers["content-length"]).toBe(
+        expectedStatus === 304 ? undefined : expectedStatus === 206 ? "4" : "10",
+      );
+      expect(result.headers["content-range"]).toBe(
+        expectedStatus === 206 ? "bytes 2-5/10" : undefined,
+      );
+      expect(result.body.toString("utf8")).toBe(
+        method === "HEAD" || expectedStatus === 304
+          ? ""
+          : expectedStatus === 206
+            ? "2345"
+            : "0123456789",
+      );
     },
   );
 
@@ -745,6 +910,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-type"]).toBe("audio/x-caf");
+    expect(result.headers["cache-control"]).toBe("private, no-cache");
+    expect(result.headers.etag).toBeUndefined();
+    expect(result.headers["last-modified"]).toBeUndefined();
     expect(result.body).toEqual(body);
   });
 
@@ -821,6 +989,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       expect.objectContaining({ mimeType: "audio/mpeg", kind: "audio" }),
     );
     expect(result.statusCode).toBe(200);
+    expect(result.headers["cache-control"]).toBe("private, no-cache");
+    expect(result.headers.etag).toBeUndefined();
+    expect(result.headers["last-modified"]).toBeUndefined();
     expect(result.body).toEqual(body);
   });
 
@@ -828,12 +999,13 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const transcodedPath = path.join(stateDir, "cached-voice.m4a");
     const transcoded = Buffer.from("normalized-audio");
     await fs.writeFile(transcodedPath, transcoded);
-    resolvePlaybackTranscodeMock.mockResolvedValueOnce({
+    const playback = {
       kind: "transcoded",
       path: transcodedPath,
       contentType: "audio/mp4",
       extension: ".m4a",
-    });
+    } as const;
+    resolvePlaybackTranscodeMock.mockResolvedValueOnce(playback);
     const { attachmentId, sessionKey } = await createFixture(stateDir, {
       filename: "voice.caf",
       contentType: "audio/x-caf",
@@ -849,27 +1021,48 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
     expect(result.statusCode).toBe(206);
     expect(result.headers["content-type"]).toBe("audio/mp4");
+    expect(result.headers["cache-control"]).toBe("private, no-cache");
+    expect(result.headers.etag).toBeUndefined();
+    expect(result.headers["last-modified"]).toBeUndefined();
     expect(result.headers["content-disposition"]).toContain('filename="voice.m4a"');
     expect(result.headers["content-range"]).toBe(`bytes 11-15/${transcoded.byteLength}`);
     expect(result.body.toString("utf8")).toBe("audio");
+
+    for (const method of ["GET", "HEAD"]) {
+      resolvePlaybackTranscodeMock.mockResolvedValueOnce(playback);
+      const exists = await requestManagedImage({
+        stateDir,
+        pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
+        authResponse: { authMethod: "token" },
+        method,
+        headers: { "if-none-match": "*", range: "bytes=11-15" },
+      });
+      expect(exists.result.statusCode).toBe(304);
+      expect(exists.result.headers.etag).toBeUndefined();
+      expect(exists.result.headers["content-length"]).toBeUndefined();
+      expect(exists.result.body).toHaveLength(0);
+    }
   });
 
-  it("advertises byte ranges without a body for HEAD", async () => {
-    const { attachmentId, sessionKey } = await createFixture(stateDir);
+  it.each(["", "?playback=1"])(
+    "advertises immutable image byte ranges without a body for HEAD%s",
+    async (query) => {
+      const { attachmentId, sessionKey } = await createFixture(stateDir);
 
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
-      method: "HEAD",
-      authResponse: { authMethod: "token" },
-    });
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full${query}`,
+        method: "HEAD",
+        authResponse: { authMethod: "token" },
+      });
 
-    expect(result.statusCode).toBe(200);
-    expect(result.headers["accept-ranges"]).toBe("bytes");
-    expect(result.headers["content-length"]).toBe("14");
-    expect(result.headers.etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
-    expect(result.body).toHaveLength(0);
-  });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["accept-ranges"]).toBe("bytes");
+      expect(result.headers["content-length"]).toBe("14");
+      expect(result.headers.etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+      expect(result.body).toHaveLength(0);
+    },
+  );
 
   it("serves an empty managed image without a body", async () => {
     const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir);

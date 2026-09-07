@@ -24,7 +24,7 @@ suite.define(() => {
     { colorScheme: "light", pointer: "coarse", textScale: 100, width: 390 },
     { colorScheme: "dark", pointer: "fine", textScale: 140, width: 1440 },
   ] as const)(
-    "keeps one $colorScheme child-row placeholder stable at $width px with a $pointer pointer and $textScale% text",
+    "keeps $colorScheme child rows stable through loading and refresh at $width px with a $pointer pointer and $textScale% text",
     async ({ colorScheme, pointer, textScale, width }) => {
       const baseTime = Date.parse("2026-09-04T12:00:00.000Z");
       const activeKey = "agent:main:loading-active";
@@ -140,6 +140,32 @@ suite.define(() => {
         expect(childGeometry.left).toBe(loadingGeometry.left);
         // Chromium can quantize empty and text line boxes 1/64 CSS px apart.
         expect(childGeometry.rowHeight).toBeCloseTo(loadingGeometry.rowHeight, 1);
+
+        const childMatch = { spawnedBy: parentKey };
+        const childRequests = (await gateway.getRequests("sessions.list", childMatch)).length;
+        await gateway.deferNext("sessions.list", childMatch);
+        await gateway.emitGatewayEvent("sessions.changed", {
+          key: activeKey,
+          sessionKey: activeKey,
+          reason: "run",
+          updatedAt: baseTime + 2,
+        });
+        await gateway.waitForRequest("sessions.list", {
+          after: childRequests,
+          match: childMatch,
+        });
+        expect(await page.locator(".sidebar-session-tree__loading").count()).toBe(0);
+        expect(await child.isVisible()).toBe(true);
+
+        await gateway.resolveDeferred(
+          "sessions.list",
+          sessionsListResponse([
+            { ...childRow, label: "Updated research", updatedAt: baseTime + 3 },
+          ]),
+        );
+        await expect.poll(() => child.textContent()).toContain("Updated research");
+        expect(await page.locator(".sidebar-session-tree__loading").count()).toBe(0);
+        expect(await child.count()).toBe(1);
       } finally {
         await context.close();
       }

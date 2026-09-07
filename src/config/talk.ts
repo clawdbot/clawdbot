@@ -1,5 +1,6 @@
 // Normalizes talk-mode config for voice and channel interactions.
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import { asFiniteNumberInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeFastMode,
@@ -23,20 +24,6 @@ function normalizeTalkSecretInput(value: unknown): TalkProviderConfig["apiKey"] 
     return trimmed.length > 0 ? trimmed : undefined;
   }
   return coerceSecretRef(value) ?? undefined;
-}
-
-function normalizeSilenceTimeoutMs(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    return undefined;
-  }
-  return value;
-}
-
-function normalizeVadThreshold(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
-    return undefined;
-  }
-  return value;
 }
 
 function normalizePositiveInteger(value: unknown): number | undefined {
@@ -140,7 +127,7 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   ) {
     normalized.transport = source.transport;
   }
-  const vadThreshold = normalizeVadThreshold(source.vadThreshold);
+  const vadThreshold = asFiniteNumberInRange(source.vadThreshold, { min: 0, max: 1 });
   if (vadThreshold !== undefined) {
     normalized.vadThreshold = vadThreshold;
   }
@@ -233,7 +220,7 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (typeof consultFastMode === "boolean") {
     normalized.consultFastMode = consultFastMode;
   }
-  const silenceTimeoutMs = normalizeSilenceTimeoutMs(source.silenceTimeoutMs);
+  const silenceTimeoutMs = normalizePositiveInteger(source.silenceTimeoutMs);
   if (silenceTimeoutMs !== undefined) {
     normalized.silenceTimeoutMs = silenceTimeoutMs;
   }

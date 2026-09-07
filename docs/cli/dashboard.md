@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw dashboard` (securely open the Control UI)"
 read_when:
   - You want to open or re-pair the Control UI from the Gateway host
   - You want to print the URL without launching a browser
-title: "Dashboard"
+title: "Dashboard CLI"
 ---
 
 # `openclaw dashboard`
@@ -60,6 +60,9 @@ Notes:
 - `browserUrl` carries a single-use, ten-minute bootstrap in the URL fragment. The Control UI strips
   it immediately, binds it to the browser's signed device identity, and stores only the resulting
   administrator per-device credential. Another browser profile cannot inherit or replay that grant.
+- The pairing link includes its Gateway destination. If another Gateway is selected in the browser,
+  confirm the destination before pairing; canceling keeps the existing selection. This also applies
+  when a Gateway update reloads the dashboard before pairing completes.
 - Follows `gateway.tls.enabled`: TLS-enabled gateways print/open `https://` Control UI URLs and connect over `wss://`.
 - For `lan` or a wildcard `custom` bind, same-host launches always use loopback because a wildcard is not a browser destination. Plaintext `tailnet` and `custom` binds also use `127.0.0.1` so the browser has a secure context; TLS-enabled specific hosts keep the configured address so certificate names match.
 - Before delivering an authenticated loopback URL for a specific-interface bind, the command probes the configured interface and verifies that it and `127.0.0.1` are owned by the same Gateway process. Ambiguous listener ownership fails closed with status guidance.

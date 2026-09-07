@@ -360,6 +360,33 @@ describe("prepareSqliteReadOnlyLocation", () => {
     expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
   });
 
+  it.each([
+    { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess },
+    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess },
+  ])("preserves malformed header diagnostics during $mode inspection", async ({ prepare }) => {
+    const databasePath = createTempDatabasePath();
+    fs.writeFileSync(databasePath, "not a sqlite database");
+    const before = readFamily(databasePath);
+    let prepared: Awaited<ReturnType<typeof prepare>> | undefined;
+    try {
+      await expect(
+        (async () => {
+          prepared = await prepare(databasePath);
+          const sqlite = requireNodeSqlite();
+          const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+          try {
+            snapshot.prepare("PRAGMA user_version;").get();
+          } finally {
+            snapshot.close();
+          }
+        })(),
+      ).rejects.toThrow("file is not a database");
+    } finally {
+      prepared?.cleanup();
+    }
+    expect(readFamily(databasePath)).toEqual(before);
+  });
+
   it("preserves source corruption without reporting a snapshot staging quota failure", async () => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-corrupt-source-");
     const sqlite = requireNodeSqlite();

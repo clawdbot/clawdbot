@@ -1,7 +1,12 @@
 // Matrix tests cover event helpers plugin behavior.
 import { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
 import { describe, expect, it, vi } from "vitest";
-import { buildHttpError, matrixEventToRaw, parseMxc } from "./event-helpers.js";
+import {
+  buildHttpError,
+  getMatrixEventProjection,
+  matrixEventToRaw,
+  parseMxc,
+} from "./event-helpers.js";
 
 const makeEditedMessageEvent = (): MatrixEvent => {
   const event = new MatrixEvent({
@@ -159,6 +164,30 @@ describe("event-helpers", () => {
     expect(matrixEventToRaw(event).content["m.relates_to"]).toEqual({
       "m.in_reply_to": { event_id: "$parent" },
     });
+    expect(matrixEventToRaw(event)).not.toHaveProperty("decryptionFailure");
+  });
+
+  it("retains the SDK decryption-failure fact without replacing its display content", () => {
+    const event = new MatrixEvent({
+      event_id: "$unreadable",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      content: {
+        msgtype: "m.bad.encrypted",
+        body: "Synthetic missing session key",
+        "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+      },
+    });
+    vi.spyOn(event, "isDecryptionFailure").mockReturnValue(true);
+    expect(event.isDecryptionFailure()).toBe(true);
+    const raw = matrixEventToRaw(event);
+    expect(getMatrixEventProjection(raw)?.decryptionFailure).toBe(true);
+    expect(raw.content.msgtype).toBe("m.bad.encrypted");
+    expect(raw.content["m.relates_to"]).toEqual({ rel_type: "m.replace", event_id: "$original" });
+    expect(raw.content.body).toBe(event.getContent().body);
+    const literal = new MatrixEvent({ type: "m.room.message", content: event.getContent() });
+    expect(getMatrixEventProjection(matrixEventToRaw(literal))?.decryptionFailure).toBe(false);
+    expect(getMatrixEventProjection({ ...raw, decryptionFailure: true })).toBeUndefined();
   });
 
   it("preserves packed wire state keys when clear state is unavailable", () => {

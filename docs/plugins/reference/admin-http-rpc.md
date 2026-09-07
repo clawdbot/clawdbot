@@ -2,10 +2,13 @@
 summary: "OpenClaw admin HTTP RPC endpoint."
 read_when:
   - You are installing, configuring, or auditing the admin-http-rpc plugin
-title: "Admin Http Rpc plugin"
+title: "Admin Http Rpc plugin reference"
 ---
 
-# Admin Http Rpc plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 OpenClaw admin HTTP RPC endpoint.
 
@@ -16,7 +19,7 @@ OpenClaw admin HTTP RPC endpoint.
 
 ## Surface
 
-contracts: `gatewayMethodDispatch`
+- Contracts: `gatewayMethodDispatch`
 
 ## Related docs
 

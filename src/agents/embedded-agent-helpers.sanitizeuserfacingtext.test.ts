@@ -6,9 +6,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
+import { createCommandError } from "../process/command-error.js";
+import type { SpawnResult } from "../process/exec-result.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  dropStaleOpenAIReasoning,
   isMessagingToolDuplicate,
   normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
@@ -25,6 +27,15 @@ describe("sanitizeUserFacingText", () => {
   it("strips final tags", () => {
     expect(sanitizeUserFacingText("<final>Hello</final>")).toBe("Hello");
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
+  });
+
+  it.each([
+    'Example:\n```xml\n<final data-model="demo">payload</final>\n```',
+    "Write `<final>payload</final>` as XML.",
+  ])("preserves literal final tags through user-facing sanitization: %s", (example) => {
+    expect(sanitizeUserFacingText(`${example}\n<final>Outside answer</final>`)).toBe(
+      `${example}\nOutside answer`,
+    );
   });
 
   it("strips self-closing and attributed final tags", () => {
@@ -203,6 +214,53 @@ describe("sanitizeUserFacingText", () => {
       }),
     ).toBe("LLM request failed: connection refused by the provider endpoint.");
   });
+
+  it("preserves the production Git inventory timeout and its hint instead of provider copy", () => {
+    const header =
+      "Error: git ls-tree -r --format=%(objectsize) c79ad267ba623c1a323f1f6e8b60228bd5a30ce5 -- failed (timed out after 120 seconds; signal SIGTERM):";
+    const hint = "Check repository access and disk space.";
+    const text = `${header}\n…\n4514\n4168\n…\n${hint}`;
+    const rendered = renderUserFacingText(text, { errorContext: true });
+    expect(rendered).toBe(`${header} ${hint}`);
+    expect(rendered).not.toBe("LLM request timed out.");
+  });
+
+  it.each([
+    ["Error: fetch failed", "LLM request failed: network connection error."],
+    ["Error: request timed out", "LLM request timed out."],
+  ])("keeps provider presentation for unmarked errors: %s", (text, expected) => {
+    expect(renderUserFacingText(text, { errorContext: true })).toBe(expected);
+  });
+
+  it.each([
+    { termination: "exit", code: 23, signal: null },
+    { termination: "no-output-timeout", code: null, signal: "SIGTERM" },
+    { termination: "signal", code: null, signal: "SIGKILL" },
+    { termination: "signal", code: null, signal: null },
+    { termination: "exit", code: null, signal: null, outputLimitExceeded: true },
+    { termination: "exit", code: null, signal: null },
+  ] satisfies Array<Partial<SpawnResult>>)(
+    "preserves command failure metadata and the bounded recovery tail: %j",
+    (metadata) => {
+      const error = createCommandError(
+        "worktree setup",
+        {
+          stdout: "",
+          stderr: `Provider rate limit reached\nCreate   the fixture input and retry ${"x".repeat(600)}`,
+          killed: false,
+          ...metadata,
+        },
+        { timeoutMs: 120_000 },
+      );
+      const header = String(error).split("\n", 1)[0];
+      const rendered = renderUserFacingText(String(error), { errorContext: true });
+      expect(rendered).toContain(`${header} Create the fixture input and retry`);
+      expect(rendered).not.toContain("Provider rate limit");
+      expect(rendered).not.toMatch(/\s{2,}/u);
+      expect(rendered.length).toBeLessThanOrEqual(500);
+      expect(rendered).toMatch(/\.\.\.$/u);
+    },
+  );
 
   it.each(["disk full", "ENOSPC: no space left on device"])(
     "rewrites disk-space failures with errorContext: %s",
@@ -734,50 +792,34 @@ describe("stripThoughtSignatures", () => {
   });
 });
 
-describe("downgradeOpenAIReasoningBlocks", () => {
-  it("keeps reasoning signatures when followed by content", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          { type: "text", text: "answer" },
-        ],
-      },
-    ];
+describe("dropStaleOpenAIReasoning", () => {
+  it.each([undefined, "synthetic-completed-reasoning"])(
+    "drops reasoning at the model switch boundary (encrypted: %s)",
+    (encryptedContent) => {
+      const input = [
+        {
+          role: "assistant",
+          timestamp: 2,
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_123",
+                type: "reasoning",
+                encrypted_content: encryptedContent,
+              }),
+            },
+            { type: "text", text: "answer" },
+          ],
+        },
+      ];
 
-    expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
-    ).toEqual(input);
-  });
-
-  it("drops replayable reasoning at the switch boundary even with following content", () => {
-    const input = [
-      {
-        role: "assistant",
-        timestamp: 2,
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          { type: "text", text: "answer" },
-        ],
-      },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(
-        input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoningBefore: 2 },
-      ),
-    ).toEqual([{ role: "assistant", timestamp: 2, content: [{ type: "text", text: "answer" }] }]);
-  });
+      expect(
+        dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
+      ).toEqual([{ role: "assistant", timestamp: 2, content: [{ type: "text", text: "answer" }] }]);
+    },
+  );
 
   it("drops the paired message id when replayable reasoning is dropped", () => {
     const input = [
@@ -799,35 +841,8 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ];
 
     expect(
-      downgradeOpenAIReasoningBlocks(
-        input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoningBefore: 2 },
-      ),
+      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
     ).toEqual([{ role: "assistant", content: [{ type: "text", text: "answer" }] }]);
-  });
-
-  it("keeps the paired message id when reasoning is preserved", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          {
-            type: "text",
-            text: "answer",
-            textSignature: JSON.stringify({ v: 1, id: "msg_123" }),
-          },
-        ],
-      },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
-    ).toEqual(input);
   });
 
   it("drops paired message ids across every text block when reasoning is dropped", () => {
@@ -855,10 +870,7 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ];
 
     expect(
-      downgradeOpenAIReasoningBlocks(
-        input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoningBefore: 2 },
-      ),
+      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
     ).toEqual([
       {
         role: "assistant",
@@ -879,45 +891,6 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ]);
   });
 
-  it("drops orphaned reasoning blocks without following content", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinkingSignature: JSON.stringify({ id: "rs_abc", type: "reasoning" }),
-          },
-        ],
-      },
-      { role: "user", content: "next" },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
-    ).toEqual([{ role: "user", content: "next" }]);
-  });
-
-  it("drops object-form orphaned signatures", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinkingSignature: { id: "rs_obj", type: "reasoning" },
-          },
-        ],
-      },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(
-        input as unknown as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-      ),
-    ).toStrictEqual([]);
-  });
-
   it("keeps non-reasoning thinking signatures", () => {
     const input = [
       {
@@ -933,31 +906,8 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ];
 
     expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
+      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
     ).toEqual(input);
-  });
-
-  it("is idempotent for orphaned reasoning cleanup", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinkingSignature: JSON.stringify({ id: "rs_orphan", type: "reasoning" }),
-          },
-        ],
-      },
-      { role: "user", content: "next" },
-    ];
-
-    const once = downgradeOpenAIReasoningBlocks(
-      input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-    );
-    const twice = downgradeOpenAIReasoningBlocks(
-      once as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-    );
-    expect(twice).toEqual(once);
   });
 });
 

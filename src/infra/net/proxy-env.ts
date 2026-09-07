@@ -102,9 +102,10 @@ export function shouldUseEnvHttpProxyForUrl(
   targetUrl: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
+  let parsed: URL;
   let protocol: "http" | "https";
   try {
-    const parsed = new URL(targetUrl);
+    parsed = new URL(targetUrl);
     if (parsed.protocol === "http:") {
       protocol = "http";
     } else if (parsed.protocol === "https:") {
@@ -116,7 +117,7 @@ export function shouldUseEnvHttpProxyForUrl(
     return false;
   }
 
-  return hasEnvHttpProxyConfigured(protocol, env) && !matchesNoProxy(targetUrl, env);
+  return hasEnvHttpProxyConfigured(protocol, env) && !matchesNoProxy(parsed, env);
 }
 
 /**
@@ -126,6 +127,7 @@ export function shouldUseEnvHttpProxyForUrl(
  * (`undici/lib/dispatcher/env-http-proxy-agent.js`):
  * - Entries separated by commas OR whitespace (undici splits on `/[,\s]/`)
  * - Case-insensitive
+ * - A single trailing DNS dot is ignored in both hosts and entries
  * - Lower-case `no_proxy` shadows upper-case `NO_PROXY`, including blank values
  * - Empty or missing → no bypass
  * - Bare `*` value → bypass everything
@@ -147,7 +149,10 @@ export function shouldUseEnvHttpProxyForUrl(
  * in provider HTTP helpers; see openclaw#64974 review thread on NO_PROXY
  * SSRF bypass.
  */
-export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
+export function matchesNoProxy(
+  targetUrl: string | URL,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   const raw = env.no_proxy ?? env.NO_PROXY ?? "";
   if (!raw) {
     return false;
@@ -155,12 +160,16 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
 
   let parsed: URL;
   try {
-    parsed = new URL(targetUrl);
+    parsed = targetUrl instanceof URL ? targetUrl : new URL(targetUrl);
   } catch {
     return false;
   }
 
-  const targetHost = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  // Keep the eligibility gate aligned with Undici so direct bypasses retain DNS pinning.
+  const targetHost = parsed.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/^(.+)\.$/, "$1");
   if (!targetHost) {
     return false;
   }
@@ -169,6 +178,7 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     return true;
   }
 
+  const targetIpv4 = parseIpv4Address(targetHost);
   const targetPort =
     parsed.port !== ""
       ? parsed.port
@@ -217,12 +227,12 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     // Mirror undici: strip optional leading `*` followed by `.` so both
     // `.example.com` and `*.example.com` normalize to `example.com`. That also
     // means apex hosts still match those entries after normalization.
-    const normalizedEntry = entryHost.replace(/^\*\./, "").replace(/^\./, "");
+    const normalizedEntry = entryHost.replace(/^\*?\./, "").replace(/^(.+)\.$/, "$1");
     if (!normalizedEntry || normalizedEntry === "*") {
       continue;
     }
 
-    if (matchesIpv4NoProxyPattern(targetHost, normalizedEntry)) {
+    if (matchesIpv4NoProxyPattern(targetIpv4, normalizedEntry)) {
       return true;
     }
 
@@ -255,8 +265,7 @@ function parseIpv4Address(host: string): number | undefined {
   return value >>> 0;
 }
 
-function matchesIpv4NoProxyPattern(targetHost: string, entryHost: string): boolean {
-  const target = parseIpv4Address(targetHost);
+function matchesIpv4NoProxyPattern(target: number | undefined, entryHost: string): boolean {
   if (target === undefined) {
     return false;
   }
@@ -275,7 +284,6 @@ function matchesIpv4NoProxyPattern(targetHost: string, entryHost: string): boole
   if (!entryHost.includes("*")) {
     return false;
   }
-  const targetParts = targetHost.split(".");
   const patternParts = entryHost.split(".");
   if (patternParts.length > 4 || patternParts.length === 0) {
     return false;
@@ -287,9 +295,9 @@ function matchesIpv4NoProxyPattern(targetHost: string, entryHost: string): boole
       }
       continue;
     }
-    if (!/^\d{1,3}$/.test(part) || Number(part) !== Number(targetParts[index])) {
+    if (!/^\d{1,3}$/.test(part) || Number(part) !== ((target >>> ((3 - index) * 8)) & 255)) {
       return false;
     }
   }
-  return patternParts.length === targetParts.length;
+  return patternParts.length === 4;
 }

@@ -1,0 +1,106 @@
+/* Loaded only for the document-start native embed capability. */
+html.openclaw-native-embed .shell--embed {
+  --shell-nav-width: 0px;
+  --shell-topbar-height: 0px;
+  --shell-chrome-safe-area-left: 0px;
+
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "content";
+  padding: var(--safe-area-top) var(--safe-area-right) var(--safe-area-bottom) var(--safe-area-left);
+}
+
+.shell--embed-settings > .content {
+  --content-inline-padding: var(--space-4);
+  --settings-header-inline-padding: 0px;
+
+  min-width: 0;
+  padding: var(--space-4);
+}
+
+.native-embed-header,
+.settings-embed-list {
+  width: 100%;
+  max-width: 760px;
+  margin-inline: auto;
+}
+
+.native-embed-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+  padding-bottom: var(--space-3);
+}
+
+.native-embed-header .page-title {
+  min-width: 0;
+  font-size: calc(24px * var(--control-ui-text-scale));
+  overflow-wrap: anywhere;
+}
+
+.native-embed-header__back {
+  min-width: 44px;
+  min-height: 44px;
+  flex: 0 0 auto;
+}
+
+.native-embed-header__back svg {
+  width: 20px;
+  height: 20px;
+}
+
+.native-embed-header > openclaw-settings-save-indicator {
+  margin-inline-start: auto;
+}
+
+.shell--embed-settings .content-header .page-title {
+  display: none;
+}
+
+.shell--embed-settings .content-header,
+.shell--embed-settings .settings-page {
+  padding-inline: 0;
+}
+
+.settings-embed-list .settings-sidebar__nav {
+  overflow: visible;
+  padding-inline: 0;
+}
+
+.settings-embed-list .settings-sidebar__group {
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.settings-embed-list .settings-sidebar__group-label {
+  padding: var(--space-3) var(--space-4);
+}
+
+.settings-embed-list .settings-sidebar__item {
+  min-height: 48px;
+  padding: var(--space-3) var(--space-4);
+  font-size: 16px;
+}
+
+.settings-embed-list .settings-sidebar__item + .settings-sidebar__item {
+  border-top: 1px solid var(--border);
+}
+
+.settings-embed-list .settings-sidebar__item-label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.settings-embed-list .settings-row__chevron {
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .shell--embed-settings > .content {
+    --content-inline-padding: var(--space-3);
+
+    padding: var(--space-3);
+  }
+}

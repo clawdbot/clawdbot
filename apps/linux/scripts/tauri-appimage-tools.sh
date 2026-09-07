@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 prepare | verify {pre-build|post-build}" >&2
+  echo "usage: $0 architecture | runtime-path | prepare | verify {pre-build|post-build}" >&2
   exit 2
 }
 
@@ -11,25 +11,41 @@ fail() {
   exit 1
 }
 
-require_host() {
-  local host
-  host="$(uname -s)/$(uname -m)"
+host_architecture() {
+  local host os machine
+  os=$(uname -s)
+  machine=$(uname -m)
+  host="$os/$machine"
   case "$host" in
-    Linux/x86_64 | Linux/amd64) ;;
-    *) fail "unsupported host $host; expected Linux x86_64" ;;
+    Linux/x86_64 | Linux/amd64) printf 'x86_64\n' ;;
+    Linux/aarch64 | Linux/arm64) printf 'aarch64\n' ;;
+    *) fail "unsupported host $host; expected Linux x86_64 or aarch64" ;;
   esac
 }
 
-script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-manifest="$script_dir/tauri-appimage-tools-x86_64.tsv"
-[[ -f "$manifest" && ! -L "$manifest" ]] || fail "manifest must be a regular file: $manifest"
+require_cache_root() {
+  cache_root=${XDG_CACHE_HOME:-}
+  [[ -n "$cache_root" ]] || fail "XDG_CACHE_HOME must name a clean job-local cache"
+  [[ "$cache_root" == /* ]] || fail "XDG_CACHE_HOME must be an absolute path"
+}
 
-cache_root=${XDG_CACHE_HOME:-}
-[[ -n "$cache_root" ]] || fail "XDG_CACHE_HOME must name a clean job-local cache"
-[[ "$cache_root" == /* ]] || fail "XDG_CACHE_HOME must be an absolute path"
-tools_dir="$cache_root/tauri"
-runtime_name=".appimage-runtime-x86_64"
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+arch=
+cache_root=
+tools_dir=
+runtime_name=
+manifest=
 staging_dir=
+
+initialize_paths() {
+  arch=$(host_architecture)
+  require_cache_root
+  tools_dir="$cache_root/tauri"
+  runtime_name=".appimage-runtime-$arch"
+  manifest="$script_dir/tauri-appimage-tools-$arch.tsv"
+  [[ -f "$manifest" && ! -L "$manifest" ]] ||
+    fail "manifest must be a regular file: $manifest"
+}
 
 cleanup_staging() {
   [[ -z "$staging_dir" ]] || rm -rf -- "$staging_dir"
@@ -184,14 +200,25 @@ prepare() {
   trap - EXIT
 }
 
-require_host
 case ${1:-} in
+  architecture)
+    [[ $# -eq 1 ]] || usage
+    host_architecture
+    ;;
+  runtime-path)
+    [[ $# -eq 1 ]] || usage
+    arch=$(host_architecture)
+    require_cache_root
+    printf '%s/tauri/.appimage-runtime-%s\n' "$cache_root" "$arch"
+    ;;
   prepare)
     [[ $# -eq 1 ]] || usage
+    initialize_paths
     prepare
     ;;
   verify)
     [[ $# -eq 2 ]] || usage
+    initialize_paths
     verify_directory "$tools_dir" "$2"
     ;;
   *)

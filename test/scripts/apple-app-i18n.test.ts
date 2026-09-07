@@ -95,12 +95,9 @@ describe("Apple app i18n catalogs", () => {
       "Approval needed",
       "Agent: %@",
       "Connect a nearby Gateway",
-      "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
+      "Talk to Claw",
       "Expires in %@",
       "Location Services are off in iOS Settings.",
-      "Message Routing",
-      "No cards in %@",
-      "No proposals in %@",
       "Pending review",
       "Secure connection is required for this host.",
       "TLS required",
@@ -164,11 +161,12 @@ describe("Apple app i18n catalogs", () => {
     expect(keys.length).toBeGreaterThan(900);
     expect(keys).toEqual(
       expect.arrayContaining([
-        "Browse ClawHub",
+        "Connection",
         "Done in %@",
-        "Enable debug tools",
-        "Everyday OpenClaw app behavior.",
-        "General",
+        "Gateways",
+        "Live level",
+        "Microphone Test",
+        "Quick Chat shortcut",
         "Searching…",
         "Shelling",
         "Stopped",
@@ -248,36 +246,17 @@ describe("Apple app i18n catalogs", () => {
     expect(serialized.endsWith("\n")).toBe(true);
   });
 
-  it("keeps macOS settings literals localized and runtime values verbatim", async () => {
-    const [components, channels, clawHub, gateways, general, approvals, voiceWake] =
-      await Promise.all([
-        readFile("apps/macos/Sources/OpenClaw/SettingsComponents.swift", "utf8"),
-        readFile("apps/macos/Sources/OpenClaw/ChannelConfigForm.swift", "utf8"),
-        readFile("apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift", "utf8"),
-        readFile("apps/macos/Sources/OpenClaw/GatewaySettings.swift", "utf8"),
-        readFile("apps/macos/Sources/OpenClaw/GeneralSettings.swift", "utf8"),
-        readFile("apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift", "utf8"),
-        readFile("apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift", "utf8"),
-      ]);
+  it("keeps Connection window runtime values verbatim", async () => {
+    const [gateways, connection] = await Promise.all([
+      readFile("apps/macos/Sources/OpenClaw/GatewaySettings.swift", "utf8"),
+      readFile("apps/macos/Sources/OpenClaw/ConnectionSettingsView.swift", "utf8"),
+    ]);
 
-    expect(components).toContain("enum SettingsTextValue: ExpressibleByStringLiteral");
-    expect(components).toContain("case localized(LocalizedStringKey)");
-    expect(components).toContain("case verbatim(String)");
-    expect(components).toContain("let title: SettingsTextValue");
-    expect(components).not.toContain("let title: String");
-    expect(channels).toContain('title: label.map(SettingsTextValue.verbatim) ?? "Enabled"');
-    expect(channels).toContain("subtitle: help.map(SettingsTextValue.verbatim)");
-    expect(clawHub).toContain("title: .verbatim(self.skill.displayName)");
-    expect(gateways).toContain("subtitle: .verbatim(profile.url.absoluteString)");
-    expect(general).toContain(
-      "subtitle: self.controlChannelSubtitle.map(SettingsTextValue.verbatim)",
-    );
-    expect(approvals).toContain(
-      "subtitle: self.model.readErrorMessage.map(SettingsTextValue.verbatim)",
-    );
-    expect(approvals).toContain("subtitle: .localized(self.model.security.policyDescription)");
-    expect(approvals).toContain("subtitle: .localized(self.model.ask.policyDescription)");
-    expect(voiceWake).toContain('format: String(localized: "Language %lld")');
+    expect(gateways).toContain("Text(verbatim: profile.name)");
+    expect(gateways).toContain("Text(verbatim: profile.url.absoluteString)");
+    expect(connection).toContain("Text(self.connectionStatusSubtitle)");
+    expect(connection).toContain("Text(self.gatewayDiscovery.statusText)");
+    expect(connection).not.toContain("LocalizedStringKey(self.");
   });
 
   it("routes merged sites by coupled path and kind while preserving shipped translations", () => {
@@ -414,14 +393,6 @@ describe("Apple app i18n catalogs", () => {
 
   it("keeps custom component text on explicit localized or verbatim paths", async () => {
     const design = await readFile("apps/ios/Sources/Design/OpenClawProComponents.swift", "utf8");
-    const agentDetailComponents = await readFile(
-      "apps/ios/Sources/Design/AgentProDetailComponents.swift",
-      "utf8",
-    );
-    const agentDreaming = await readFile(
-      "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
-      "utf8",
-    );
     const settingsActions = await readFile(
       "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "utf8",
@@ -461,24 +432,6 @@ describe("Apple app i18n catalogs", () => {
     );
     expect(settings).toContain("self.value.text");
     expect(settings).not.toContain("Text(self.item.title)");
-    expect(agentDetailComponents).toContain(
-      "func agentProDetailMetric(label: OpenClawTextValue, value: String)",
-    );
-    expect(agentDetailComponents).toContain("Text(verbatim: value)");
-    expect(agentDetailComponents).toContain(
-      "func agentProEmptyDetailRow(\n    icon: String,\n    title: OpenClawTextValue,\n    detail: OpenClawTextValue)",
-    );
-    expect(agentDetailComponents).toContain("title.text");
-    expect(agentDetailComponents).toContain("detail.text");
-    expect(agentDetailComponents).not.toContain("func agentProDetailMetric(label: String");
-    expect(agentDetailComponents).not.toContain(
-      "func agentProEmptyDetailRow(icon: String, title: String",
-    );
-    expect(agentDreaming).toContain("agentProDetailMetric(");
-    expect(agentDreaming).toContain("agentProEmptyDetailRow(");
-    expect(agentDreaming).not.toContain("private func detailMetric(label: String");
-    expect(agentDreaming).not.toContain("private func detailMetric(");
-    expect(agentDreaming).not.toContain("private func emptyDetailRow(");
     expect(settingsActions).toContain(
       "func diagnosticCheckRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
     );
@@ -626,16 +579,18 @@ describe("Apple app i18n catalogs", () => {
       expect(english).toContain(
         '"^[%lld message](inflect: true)" = "^[%lld message](inflect: true)";',
       );
+      expect(english).toContain('"Quick Chat shortcut" = "Quick Chat shortcut";');
+      expect(english).toContain('"Microphone Test" = "Microphone Test";');
       const swedish = await readFile(
         path.join(outputDir, "sv.lproj", "Localizable.strings"),
         "utf8",
       );
-      expect(swedish).toContain('"Logout" = "Logga ut";');
+      expect(swedish).toContain('"Connection" = "Anslutning";');
       const turkish = await readFile(
         path.join(outputDir, "tr.lproj", "Localizable.strings"),
         "utf8",
       );
-      expect(turkish).toContain('"General" = "Genel";');
+      expect(turkish).toContain('"Connection" = "Bağlantı";');
       const frenchInfoPlist = await readFile(
         path.join(outputDir, "fr.lproj", "InfoPlist.strings"),
         "utf8",
@@ -652,7 +607,7 @@ describe("Apple app i18n catalogs", () => {
       ).resolves.toContain('"Save" = ');
       await expect(
         readFile(path.join(outputDir, "ja.lproj", "Localizable.strings"), "utf8"),
-      ).resolves.toContain('"Run now" = ');
+      ).resolves.toContain('"Done" = ');
       for (const localeDir of ["ja", "zh-Hans", "zh-Hant"]) {
         await expect(
           readFile(path.join(outputDir, `${localeDir}.lproj`, "InfoPlist.strings"), "utf8"),

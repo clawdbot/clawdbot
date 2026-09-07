@@ -155,6 +155,92 @@ test("terminal clear preserves exact authority until its outer owner closes", ()
   }
 });
 
+test.each(["parent", "approval"])("exact %s cleanup does not consult a revoked source", (kind) => {
+  let current = true;
+  const assertSourceCurrent = vi.fn(() => {
+    if (!current) {
+      throw new Error("source retired");
+    }
+  });
+  const parent = claimAgentRunDelegatedAuthority(
+    { instanceId: "source-cleanup-instance", runId: "source-cleanup-run" },
+    assertSourceCurrent,
+  );
+  const authority =
+    kind === "parent"
+      ? parent
+      : claimAgentRunApprovalAuthority(parent, [new AbortController().signal]);
+  current = false;
+  assertSourceCurrent.mockClear();
+  expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+  expect(assertSourceCurrent).not.toHaveBeenCalled();
+  if (kind === "approval") {
+    expect(releaseAgentRunDelegatedAuthority(parent)).toBe(true);
+  }
+  expect(getAgentRunContext("source-cleanup-run")).toBeUndefined();
+});
+
+test.each(["replacement", "restart"])(
+  "rechecks the exact owner after a source callback causes %s",
+  (outcome) => {
+    let duringCheck: (() => void) | undefined;
+    const sourceAssertion = () => {
+      const run = duringCheck;
+      duringCheck = undefined;
+      run?.();
+    };
+    const first = claimAgentRunDelegatedAuthority(
+      { instanceId: "source-first", runId: "source-run" },
+      sourceAssertion,
+    );
+    let successor: typeof first | undefined;
+    duringCheck = () => {
+      if (outcome === "restart") {
+        rotateAgentEventLifecycleGeneration();
+      }
+      successor = claimAgentRunDelegatedAuthority({
+        instanceId: "source-next",
+        runId: "source-run",
+      });
+    };
+    expect(validateAgentRunDelegatedAuthority(first)).toBe(false);
+    expect(validateAgentRunDelegatedAuthority(successor!)).toBe(true);
+    expect(releaseAgentRunDelegatedAuthority(first)).toBe(false);
+    expect(releaseAgentRunDelegatedAuthority(successor!)).toBe(true);
+  },
+);
+
+test.each(
+  [false, true].flatMap((revoked) =>
+    ["omitted", "replaced"].map((binding) => ({ revoked, binding })),
+  ),
+)(
+  "refuses a $binding source binding for the same instance (revoked=$revoked)",
+  ({ revoked, binding }) => {
+    const instance = { instanceId: "bound-instance", runId: "bound-run" };
+    let current = true;
+    const assertSourceCurrent = () => {
+      if (!current) {
+        throw new Error("source retired");
+      }
+    };
+    const authority = claimAgentRunDelegatedAuthority(instance, assertSourceCurrent);
+    const replacement = vi.fn();
+    try {
+      expect(claimAgentRunDelegatedAuthority(instance, assertSourceCurrent)).toBe(authority);
+      current = !revoked;
+      expect(() =>
+        claimAgentRunDelegatedAuthority(instance, binding === "replaced" ? replacement : undefined),
+      ).toThrow("already bound");
+      expect(replacement).not.toHaveBeenCalled();
+      // Refusing admission must leave the original owner available for exact cleanup.
+      expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+    } finally {
+      releaseAgentRunDelegatedAuthority(authority);
+    }
+  },
+);
+
 test("same-generation stale terminal clear cannot revoke a reused-run successor", () => {
   const runId = "same-generation-successor";
   claimAgentRunDelegatedAuthority({ instanceId: "old-instance", runId });

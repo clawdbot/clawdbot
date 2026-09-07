@@ -136,6 +136,7 @@ suite.define(() => {
         "Dashboard refresh unavailable",
       );
       expect(await dashboards.getByRole("alert").textContent()).toContain("Showing stale data");
+      expect(await dashboards.getByRole("alert").getByRole("button").count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.list", {
         cases: [
@@ -145,7 +146,8 @@ suite.define(() => {
           },
         ],
       });
-      await dashboards.getByRole("button", { name: "Retry", exact: true }).click();
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
       await dashboards.getByText("Updated deploy monitor", { exact: true }).waitFor();
       expect(await dashboards.getByRole("alert").count()).toBe(0);
       const after = (await gateway.getRequests("sessions.list")).filter(isDashboardRequest);
@@ -157,43 +159,87 @@ suite.define(() => {
     }
   });
 
-  it("retries an initial dashboard failure without claiming the list is empty", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1440 } });
-    const page = await context.newPage();
-    try {
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "sessions.list": {
+  it.each([false, true])(
+    "recovers an initial dashboard failure without claiming the list is empty (suspending: %s)",
+    async (suspending) => {
+      const context = await suite.browser.newContext({ viewport: { height: 900, width: 1440 } });
+      const page = await context.newPage();
+      try {
+        const gateway = await installMockGateway(page, {
+          gatewaySuspensionPhase: suspending ? "draining" : "accepting",
+          methodResponses: {
+            "sessions.list": {
+              cases: [
+                {
+                  match: { hasBoard: true },
+                  response: {
+                    __mockError: {
+                      code: "UNAVAILABLE",
+                      message: "Dashboard list unavailable",
+                      retryable: true,
+                      ...(suspending
+                        ? { details: { reason: "gateway-suspending", phase: "draining" } }
+                        : {}),
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}dashboards`);
+        const dashboards = page.locator("openclaw-dashboards-page");
+        if (suspending) {
+          await dashboards.locator('[aria-busy="true"]').waitFor();
+          expect(await dashboards.getByRole("alert").count()).toBe(0);
+        } else {
+          await dashboards.getByRole("alert").waitFor();
+          expect(await dashboards.getByRole("alert").textContent()).toContain(
+            "Dashboard list unavailable",
+          );
+          await gateway.setMethodResponse("sessions.list", {
             cases: [
               {
                 match: { hasBoard: true },
                 response: {
-                  __mockError: { code: "UNAVAILABLE", message: "Dashboard list unavailable" },
+                  __mockError: {
+                    code: "UNAVAILABLE",
+                    message: "Gateway is suspending",
+                    retryable: true,
+                    details: { reason: "gateway-suspending", phase: "draining" },
+                  },
                 },
               },
             ],
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}dashboards`);
-      const dashboards = page.locator("openclaw-dashboards-page");
-      await dashboards.getByRole("alert").waitFor();
-      expect(await dashboards.getByRole("alert").textContent()).toContain(
-        "Dashboard list unavailable",
-      );
-      expect(await dashboards.textContent()).not.toContain("Showing stale data");
-      expect(await dashboards.locator("[data-dashboards-empty]").count()).toBe(0);
-      const emptyResult = { ...sessionsResult("", "", 1), count: 0, sessions: [] };
-      await gateway.setMethodResponse("sessions.list", {
-        cases: [{ match: { hasBoard: true }, response: emptyResult }],
-      });
-      await dashboards.getByRole("button", { name: "Retry", exact: true }).click();
-      await dashboards.locator("[data-dashboards-empty]").waitFor();
-      expect(await dashboards.getByRole("alert").count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
+          });
+          await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
+          await gateway.emitGatewayEvent("sessions.changed", {
+            agentId: "main",
+            key: "agent:main:dashboard",
+            sessionKey: "agent:main:dashboard",
+            reason: "update",
+          });
+          await dashboards.locator('[aria-busy="true"]').waitFor();
+          expect(await dashboards.getByRole("alert").count()).toBe(0);
+        }
+        expect(await dashboards.getByRole("button", { name: "Retry", exact: true }).count()).toBe(
+          0,
+        );
+        expect(await dashboards.textContent()).not.toContain("Showing stale data");
+        expect(await dashboards.locator("[data-dashboards-empty]").count()).toBe(0);
+        const emptyResult = { ...sessionsResult("", "", 1), count: 0, sessions: [] };
+        await gateway.setMethodResponse("sessions.list", {
+          cases: [{ match: { hasBoard: true }, response: emptyResult }],
+        });
+        await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
+        await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+        await dashboards.locator("[data-dashboards-empty]").waitFor();
+        expect(await dashboards.getByRole("alert").count()).toBe(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("keeps dashboard query demand at one request per real browser tab", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
@@ -228,9 +274,19 @@ suite.define(() => {
 
       await Promise.all(
         tabs.map(async ({ gateway, page }) => {
-          await page.goto(suite.server.baseUrl);
+          // Chat hydrates its own Swarm child roster; start without that unrelated demand.
+          await page.goto(`${suite.server.baseUrl}new`);
           const canonical = await gateway.waitForRequest("sessions.list");
-          expect(isDashboardRequest(canonical)).toBe(false);
+          expect(canonical.params).toEqual({
+            agentId: "main",
+            configuredAgentsOnly: true,
+            includeDerivedTitles: true,
+            includeGlobal: true,
+            includeLastMessage: true,
+            includeUnknown: true,
+            limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+          });
+          await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
           await page.waitForFunction(() => {
             const app = document.querySelector("openclaw-app") as HTMLElement & {
               runtime?: { context: { agents: { state: { agentsList: unknown } } } };

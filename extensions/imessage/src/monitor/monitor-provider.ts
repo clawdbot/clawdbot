@@ -5,6 +5,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
+  resolveInboundDebounceMs,
   formatInboundMediaUnavailableText,
   resolveEnvelopeFormatOptions,
   runChannelInboundEvent,
@@ -36,7 +37,11 @@ import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-ru
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { getRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  createRuntimeConfigReader,
+  getRuntimeConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
@@ -358,6 +363,7 @@ async function waitForWatchSubscribeRetryDelay(params: {
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? getRuntimeConfig();
+  const readConfig = createRuntimeConfigReader(cfg);
   const accountInfo = resolveIMessageAccount({
     cfg,
     accountId: opts.accountId,
@@ -534,6 +540,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }>({
     cfg,
     channel: "imessage",
+    resolveDebounceMs: () => resolveInboundDebounceMs({ cfg: readConfig(), channel: "imessage" }),
     buildKey: (entry) => {
       const msg = entry.message;
       const sender = msg.sender?.trim();
@@ -1215,12 +1222,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
-          // visible tool-progress message. The suppress flag is what lets
-          // dispatch forward this callback even when verbose progress is off;
-          // allowProgress covers message_tool_only source delivery. Keep this on
-          // the direct instant/default path even when older imsg builds do not
-          // report native typing support.
+          // visible tool-progress message. The lifecycle flag lets dispatch
+          // forward it while text progress is hidden; allowProgress covers
+          // message_tool_only source delivery. Keep this on the direct
+          // instant/default path even when older imsg builds do not report
+          // native typing support.
           suppressDefaultToolProgressMessages: true,
+          allowToolLifecycleWhenProgressHidden: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;

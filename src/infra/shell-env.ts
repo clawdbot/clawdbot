@@ -1,5 +1,5 @@
 // Loads shell-derived environment variables for provider and command runtimes.
-import { execFileSync } from "node:child_process";
+import { type ExecFileSyncOptionsWithBufferEncoding, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -99,14 +99,18 @@ function execLoginShellEnvZero(params: {
   const args = useInteractiveBash
     ? ["-lic", LOGIN_SHELL_ENV_COMMAND]
     : ["-l", "-c", LOGIN_SHELL_ENV_COMMAND];
-  return params.exec(params.shell, args, {
+  // Interactive Bash must not take the CLI's controlling terminal. execFileSync forwards
+  // detached to spawnSync, but its options type omits it.
+  const options: ExecFileSyncOptionsWithBufferEncoding & { detached: boolean } = {
     encoding: "buffer",
     timeout: params.timeoutMs,
     maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
     env: params.env,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
-  });
+    detached: true,
+  };
+  return params.exec(params.shell, args, options);
 }
 
 function parseShellEnv(stdout: Buffer): Map<string, string> {

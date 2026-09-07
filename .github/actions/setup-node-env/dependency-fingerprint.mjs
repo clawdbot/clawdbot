@@ -39,6 +39,7 @@ const INSTALL_INPUT_FILES = [
   ".pnpmfile.cjs",
   "pnpmfile.cjs",
   ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+  ".github/actions/setup-node-env/install-dependencies.sh",
   "node-version.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "scripts/lib/package-dist-imports.mjs",

@@ -1,155 +1,51 @@
 ---
 name: taskflow
-description: "Coordinate multi-step detached tasks as one durable TaskFlow job with owner context, state, waits, and child tasks."
+description: "Run approval-gated workflows with durable TaskFlow state; distinguish workflow execution from linking real detached tasks."
 metadata: { "openclaw": { "emoji": "🪝" } }
 ---
 
 # TaskFlow
 
-Use TaskFlow when a job needs to outlive one prompt or one detached run, but you still want one owner session, one return context, and one place to inspect or resume the work.
+Use a managed TaskFlow for multi-step work with one owner, bounded state and explicit waits. A single detached ACP/subagent run with deliverable completion gets a mirrored flow automatically; it does not need a second managed flow.
 
-## When to use it
+## Run a workflow
 
-- Multi-step background work with one owner
-- Work that waits on detached ACP or subagent tasks
-- Jobs that may need to emit one clear update back to the owner
-- Jobs that need small persisted state between steps
-- Plugin or tool work that must survive restarts and revision conflicts cleanly
+Use the available `lobster` tool in a non-sandboxed session with the Lobster plugin installed, activated and allowed. This skill is guidance, not plugin registration: it does not provide an `api` object or a task-launch tool.
 
-## What TaskFlow owns
+The examples require Node on the Gateway host and use synthetic, already-classified data. They route every item, pause for approval, then return the routing result. They do not read mail, send messages, modify PRs or launch detached children. Paths below assume the Gateway working directory is the repository root; otherwise use the example file's absolute path.
 
-- flow identity
-- owner session and requester origin
-- `currentStep`, `stateJson`, and `waitJson`
-- linked child tasks and their parent flow id
-- finish, fail, cancel, waiting, and blocked state
-- revision tracking for conflict-safe mutations
-
-It does **not** own branching or business logic. Put that in Lobster, acpx, or the calling code.
-
-## Current runtime shape
-
-Canonical plugin/runtime entrypoint:
-
-- `api.runtime.tasks.managedFlows` is mutation-capable: create, advance, and cancel Task Flows.
-- `api.runtime.tasks.flows` is the read-only DTO view for listing and status lookups (`get`, `list`, `findLatest`, `resolve`, `getTaskSummary`).
-
-Binding:
-
-- `api.runtime.tasks.managedFlows.fromToolContext(ctx)` when you already have trusted tool context with `sessionKey`
-- `api.runtime.tasks.managedFlows.bindSession({ sessionKey, requesterOrigin })` when your binding layer already resolved the session and delivery context
-
-Managed-flow lifecycle:
-
-1. `createManaged(...)`
-2. `runTask(...)`
-3. `setWaiting(...)` when waiting on a person or an external system
-4. `resume(...)` when work can continue
-5. `finish(...)` or `fail(...)`
-6. `requestCancel(...)` or `cancel(...)` when the whole job should stop
-
-## Design constraints
-
-- Use **managed** TaskFlows when your code owns the orchestration.
-- One-task **mirrored** flows are created by core runtime for detached ACP/subagent work; this skill is mainly about managed flows.
-- Treat `stateJson` as the persisted state bag. There is no separate `setFlowOutput` or `appendFlowOutput` API.
-- Every mutating method after creation is revision-checked. Carry forward the latest `flow.revision` after each successful mutation.
-- `runTask(...)` links the child task to the flow. Use it instead of manually creating detached tasks when you want parent orchestration.
-- A linked child reaching a terminal state does not finish a managed flow. Compare
-  its result with the flow goal, schedule the next in-scope step, and call
-  `finish(...)` only after the goal's acceptance condition is verified.
-- Persist explicit acceptance state in `stateJson` for terminal-outcome workflows.
-  For example, a PR-landing flow should remain running or waiting through review
-  and CI, and finish only after the hosting service reports the PR as merged.
-
-## Example shape
-
-```ts
-const taskFlow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
-
-const created = taskFlow.createManaged({
-  controllerId: "my-plugin/inbox-triage",
-  goal: "triage inbox",
-  currentStep: "classify",
-  stateJson: {
-    businessThreads: [],
-    personalItems: [],
-    eodSummary: [],
-  },
-});
-
-const classify = taskFlow.runTask({
-  flowId: created.flowId,
-  runtime: "acp",
-  childSessionKey: "agent:main:subagent:classifier",
-  runId: "inbox-classify-1",
-  task: "Classify inbox messages",
-  status: "running",
-  startedAt: Date.now(),
-  lastEventAt: Date.now(),
-});
-
-if (!classify.created) {
-  throw new Error(classify.reason);
+```json
+{
+  "action": "run",
+  "pipeline": "skills/taskflow/examples/inbox-triage.lobster",
+  "flowControllerId": "lobster/inbox-triage",
+  "flowGoal": "Review synthetic inbox routing",
+  "maxStdoutBytes": 8192
 }
-
-const waiting = taskFlow.setWaiting({
-  flowId: created.flowId,
-  expectedRevision: created.revision,
-  currentStep: "await_business_reply",
-  stateJson: {
-    businessThreads: ["slack:thread-1"],
-    personalItems: [],
-    eodSummary: [],
-  },
-  waitJson: {
-    kind: "reply",
-    channel: "slack",
-    threadKey: "slack:thread-1",
-  },
-});
-
-if (!waiting.applied) {
-  throw new Error(waiting.code);
-}
-
-const resumed = taskFlow.resume({
-  flowId: waiting.flow.flowId,
-  expectedRevision: waiting.flow.revision,
-  status: "running",
-  currentStep: "finalize",
-  stateJson: waiting.flow.stateJson,
-});
-
-if (!resumed.applied) {
-  throw new Error(resumed.code);
-}
-
-taskFlow.finish({
-  flowId: resumed.flow.flowId,
-  expectedRevision: resumed.flow.revision,
-  stateJson: resumed.flow.stateJson,
-});
 ```
 
-## Keep conditionals above the runtime
+For PR intake, use `skills/taskflow/examples/pr-intake.lobster` and controller `lobster/pr-intake` instead. Its intents are `close`, `request_changes`, `refactor` and `maintainer_review`; no GitHub actions occur.
 
-Use the flow runtime for state and task linkage. Keep decisions in the authoring layer:
+## Approve and resume
 
-- `business` -> post to Slack and wait
-- `personal` -> notify the owner now
-- `later` -> append to an end-of-day summary bucket
+Read the tool result's `details` (also rendered as JSON text). It contains `status`, `requiresApproval`, `flow` and `mutation` directly, not a nested `envelope`.
 
-## Operational pattern
+1. For a non-cancelled result, require `mutation.applied === true`. Otherwise report its `code` and stop; workflow success alone does not prove the flow update persisted.
+2. For `needs_approval`, present `requiresApproval.prompt` and `items`, then wait for the user's decision.
+3. In the same owner session, build a separate `action: "resume"` call with the returned `resumeToken` as `token` (or the returned `approvalId`), `flowId` from `mutation.flow.flowId`, `flowExpectedRevision` from `mutation.flow.revision`, and `approve` set to the user's decision. Keep `maxStdoutBytes: 8192` on resume.
 
-- Store only the minimum state needed to resume.
-- Put human-readable wait reasons in `blockedSummary` or structured wait metadata in `waitJson`.
-- Use `getTaskSummary(flowId)` on `api.runtime.tasks.flows` when the orchestrator needs a compact health view of child work.
-- Use `requestCancel(...)` when a caller wants the flow to stop scheduling immediately.
-- Use `cancel(...)` when you also want active linked child tasks cancelled.
+Use the **post-mutation** revision, not the older top-level `flow.revision`. Set `approve: false` only when the user declines. On approval, check the new `mutation.applied` and flow status; on cancellation, check `mutation.cancelled`. Report errors, rejected mutations and pending cancellations rather than claiming completion. Do not blindly retry side effects after a revision conflict: reload and reconcile first.
 
-## Examples
+## Complete the goal
 
-- See `skills/taskflow/examples/inbox-triage.lobster`
-- See `skills/taskflow/examples/pr-intake.lobster`
-- See `skills/taskflow-inbox-triage/SKILL.md` for a concrete routing pattern
+A linked child reaching a terminal state does not finish a managed flow. Compare its result with the flow goal, schedule the next in-scope step, and call `finish(...)` only after the goal's acceptance condition is verified.
+
+Persist explicit acceptance state in `stateJson` for terminal-outcome workflows. For example, a PR-landing flow should remain running or waiting through review and CI, and finish only after the hosting service reports the PR as merged.
+
+## Durable state is not a scheduler
+
+TaskFlow records persist in SQLite. Controllers must reload the latest record and explicitly resume; arbitrary JavaScript and in-flight work are not replayed. Lobster approval pauses are not listeners for Slack replies. Keep persisted state to bounded IDs, route summaries and cursors, not full messages or histories.
+
+Plugin authors use `api.runtime.tasks.managedFlows`; `flows` and `runs` provide owner-scoped lookups. `runTask` links an **already launched, authoritative** ACP/subagent execution with matching owner and canonical run/session IDs; it never launches one. Do not invent IDs, timestamps or backing records. See the [plugin launch/link contract](https://docs.openclaw.ai/plugins/sdk-runtime) and [Task Flow](https://docs.openclaw.ai/automation/taskflow).
+
+For inbox routing and real-adapter requirements, read `skills/taskflow-inbox-triage/SKILL.md`. For tool setup, see [Lobster](https://docs.openclaw.ai/tools/lobster).

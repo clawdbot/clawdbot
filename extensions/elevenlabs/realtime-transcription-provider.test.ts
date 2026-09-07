@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
@@ -15,7 +16,9 @@ vi.mock("./config-api.js", () => ({
   resolveElevenLabsApiKeyWithProfileFallback: resolveElevenLabsApiKeyWithProfileFallbackMock,
 }));
 
-import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
+
+const realtimeHost = { createRealtimeTranscriptionWebSocketSession };
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -80,7 +83,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   });
 
   it("normalizes nested provider config", () => {
-    const provider = buildElevenLabsRealtimeTranscriptionProvider();
+    const provider = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost);
     const resolved = provider.resolveConfig?.({
       cfg: {} as OpenClawConfig,
       rawConfig: {
@@ -113,7 +116,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   });
 
   it("drops malformed numeric realtime config values", () => {
-    const provider = buildElevenLabsRealtimeTranscriptionProvider();
+    const provider = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost);
     const resolved = provider.resolveConfig?.({
       cfg: {} as OpenClawConfig,
       rawConfig: {
@@ -139,7 +142,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   });
 
   it("keeps realtime VAD numeric config inside provider ranges", () => {
-    const provider = buildElevenLabsRealtimeTranscriptionProvider();
+    const provider = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost);
     const resolved = provider.resolveConfig?.({
       cfg: {} as OpenClawConfig,
       rawConfig: {
@@ -167,7 +170,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   it("connects through the public session boundary with the configured URL params", async () => {
     const requests: URL[] = [];
     const baseUrl = await createRealtimeServer((url) => requests.push(url));
-    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
       providerConfig: {
         apiKey: "fixture-value",
         baseUrl,
@@ -201,7 +204,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     });
     const errorReceived = createDeferred<Error>();
     const onError = vi.fn(errorReceived.resolve);
-    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
     });
@@ -222,7 +225,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
       closeAfterEvents: true,
     });
     const onError = vi.fn();
-    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
     });
@@ -238,7 +241,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     });
     const errorReceived = createDeferred<Error>();
     const onError = vi.fn(errorReceived.resolve);
-    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
     });
@@ -263,7 +266,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     const onPartial = vi.fn();
     const transcriptReceived = createDeferred<string>();
     const onTranscript = vi.fn(transcriptReceived.resolve);
-    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
       onPartial,
@@ -375,7 +378,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     });
     const onSpeechStart = vi.fn();
     const onTranscript = vi.fn();
-    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
       onPartial,
@@ -420,7 +423,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
       }
     });
     const onTranscript = vi.fn();
-    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onPartial,
       onTranscript,
@@ -445,7 +448,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     resolveElevenLabsApiKeyWithProfileFallbackMock.mockReturnValue(null);
     vi.stubEnv("ELEVENLABS_API_KEY", "");
     vi.stubEnv("XI_API_KEY", "   ");
-    const provider = buildElevenLabsRealtimeTranscriptionProvider();
+    const provider = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost);
 
     expect(provider.isConfigured({ cfg: {} as OpenClawConfig, providerConfig: {} })).toBe(false);
     expect(() => provider.createSession({ providerConfig: {} })).toThrow(

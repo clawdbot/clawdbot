@@ -6,40 +6,11 @@ import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-s
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
+  normalizeAgentModelSelectionForConfig,
 } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
-
-function normalizeAgentModelConfigForAuthResult(value: unknown): unknown {
-  if (typeof value === "string") {
-    return normalizeAgentModelRefForConfig(value);
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-
-  let mutated = false;
-  const next: Record<string, unknown> = { ...(value as Record<string, unknown>) };
-  if (typeof next.primary === "string") {
-    const primary = normalizeAgentModelRefForConfig(next.primary);
-    if (primary !== next.primary) {
-      next.primary = primary;
-      mutated = true;
-    }
-  }
-  if (Array.isArray(next.fallbacks)) {
-    const originalFallbacks = next.fallbacks;
-    const fallbacks = originalFallbacks.map((fallback) =>
-      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
-    );
-    if (fallbacks.some((fallback, index) => fallback !== originalFallbacks[index])) {
-      next.fallbacks = fallbacks;
-      mutated = true;
-    }
-  }
-  return mutated ? next : value;
-}
 
 function normalizeProviderConfigModelIdsForAuthResult(
   provider: string,
@@ -72,7 +43,7 @@ function normalizeProviderAuthConfigPatchModelRefs(
     // legacy model refs here instead of letting retired ids leak into persisted defaults.
     let nextDefaults = defaults;
     if (defaults.model !== undefined) {
-      const model = normalizeAgentModelConfigForAuthResult(defaults.model);
+      const model = normalizeAgentModelSelectionForConfig(defaults.model);
       if (model !== defaults.model) {
         nextDefaults = { ...nextDefaults, model: model as typeof defaults.model };
       }

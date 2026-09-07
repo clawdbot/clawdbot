@@ -88,8 +88,9 @@ describe("GatewayChatClient operator scopes", () => {
     }
 
     vi.resetModules();
-    vi.doMock("ws", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("ws")>();
+    vi.doMock("../../packages/gateway-client/src/websocket.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../packages/gateway-client/src/websocket.js")>();
       return { ...actual, WebSocket: ScopeUpgradeWebSocket };
     });
     vi.doMock("../gateway/client.js", async (importOriginal) => {
@@ -265,7 +266,7 @@ describe("GatewayChatClient operator scopes", () => {
       });
     } finally {
       await Promise.all(clients.map((client) => client.stop()));
-      vi.doUnmock("ws");
+      vi.doUnmock("../../packages/gateway-client/src/websocket.js");
       vi.doUnmock("../gateway/client.js");
       vi.resetModules();
     }

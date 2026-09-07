@@ -7,6 +7,7 @@ import {
   saveAuthProfileStore,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
@@ -15,7 +16,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
-import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
 
 function clearMinimaxAuthEnv() {
   vi.stubEnv("MINIMAX_API_KEY", undefined);
@@ -45,7 +46,7 @@ function seedMinimaxPortalProfile(agentDir: string) {
 }
 
 describe("buildMinimaxSpeechProvider", () => {
-  const provider = buildMinimaxSpeechProvider();
+  const provider = buildMinimaxSpeechProvider({ isProviderAuthProfileConfigured });
 
   function resolveProviderConfig(
     params: Parameters<NonNullable<typeof provider.resolveConfig>>[0],

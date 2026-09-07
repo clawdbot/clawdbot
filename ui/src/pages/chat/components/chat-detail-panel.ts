@@ -10,6 +10,7 @@ import {
   scheduleStaleChunkReload,
 } from "../../../app/stale-chunk-reload.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
@@ -40,13 +41,12 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
   @property({ attribute: false }) execNode: string | null = null;
-  @property({ attribute: false }) attachmentRuntime: AttachmentSidebarRuntime = {
-    localMediaPreviewRoots: [],
-  };
+  @property({ attribute: false }) attachmentRuntime: AttachmentSidebarRuntime = {};
   @property() basePath = "";
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;
+  @property({ attribute: false }) githubRepo: MarkdownRenderOptions["githubRepo"] = null;
   @property({ type: Boolean }) embedded = false;
   @property({ attribute: false }) onOpenWorkspaceFile?:
     | ((target: { path: string; line?: number | null }) => void)
@@ -679,6 +679,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       canvasPluginSurfaceUrl: this.canvasPluginSurfaceUrl,
       embedSandboxMode: this.embedSandboxMode,
       allowExternalEmbedUrls: this.allowExternalEmbedUrls,
+      githubRepo: this.githubRepo,
       embedded: this.embedded,
       onClose: this.close,
       onOpenImage: this.onOpenImage ?? undefined,

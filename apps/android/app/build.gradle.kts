@@ -330,6 +330,7 @@ dependencies {
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.webkit)
+  implementation(libs.androidx.window)
 
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.tooling.preview)
@@ -451,7 +452,7 @@ val generateMermaidAssets =
   tasks.register<Exec>("generateMermaidAssets") {
     val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
     workingDir(repositoryRoot)
-    commandLine("pnpm", "--filter", "@openclaw/mermaid-renderer", "build")
+    commandLine("pnpm", "--dir", "packages/mermaid-renderer", "build")
     inputs
       .files(
         fileTree(repositoryRoot.resolve("packages/mermaid-renderer")) {

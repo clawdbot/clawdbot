@@ -1,78 +1,50 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { applySkillProposal, proposeCreateSkill } from "../../skills/workshop/service.js";
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { seedLegacyCollectionBackup } from "../../skills/workshop/collection-backup.test-support.js";
+import { resolveSkillCollectionBackupRoot } from "../../skills/workshop/collection-paths.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
-const cleanups: Array<() => Promise<void>> = [];
-
-afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map(async (cleanup) => await cleanup()));
-  await tempDirs.cleanup();
-});
+const config: OpenClawConfig = {
+  skills: { workshop: { autonomous: { mode: "auto" } } },
+};
 
 describe("skill_workshop collection restore", () => {
-  it("restores a canonical cleanup through the configured workspace alias", async () => {
-    const testState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-skill-collection-restore-state-",
-    });
-    cleanups.push(async () => await testState.cleanup());
-    const workspaceDir = await fs.realpath(
-      await tempDirs.make("openclaw-skill-collection-restore-"),
-    );
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      env: testState.env,
-      name: "duplicate",
-      description: "Duplicate procedure",
-      content: "# Duplicate procedure\n",
-    });
-    await applySkillProposal({
-      workspaceDir,
-      env: testState.env,
-      proposalId: proposal.record.id,
-      expectedRevisionHash: proposal.revisionHash,
-    });
-    const reviewTool = createSkillWorkshopTool({
-      workspaceDir,
-      env: testState.env,
-      collectionReconcile: { approvedSkillNames: new Set(["duplicate"]) },
-    });
-    await reviewTool.execute("read", { action: "read", skill_name: "duplicate" });
-    const reconciled = await reviewTool.execute("reconcile", {
-      action: "reconcile",
-      collection: [{ action: "drop", name: "duplicate", reason: "redundant" }],
-    });
-    const backupId = (reconciled.details as { backupId: string }).backupId;
-    const aliasParent = await tempDirs.make("openclaw-skill-collection-restore-alias-");
-    const workspaceAlias = path.join(aliasParent, "workspace-alias");
-    await fs.symlink(
-      workspaceDir,
-      workspaceAlias,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-
-    const foregroundTool = createSkillWorkshopTool({
-      workspaceDir: workspaceAlias,
-      env: testState.env,
-    });
-    const restored = await foregroundTool.execute("restore", { action: "restore_collection" });
-    expect(restored).toMatchObject({
-      content: [
-        {
-          type: "text",
-          text: `Restored skill collection backup ${backupId}: restored 1, removed 0.`,
+  it("restores a retained v2 backup through restore_collection", async () => {
+    const testState = await createOpenClawTestState({ layout: "state-only" });
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-restore-");
+    const skillsRoot = resolveWorkshopSkillsDir(config, "main", testState.env);
+    const skillFile = path.join(skillsRoot, "duplicate", "SKILL.md");
+    try {
+      await fs.mkdir(path.dirname(skillFile), { recursive: true });
+      await fs.writeFile(
+        skillFile,
+        "---\nname: duplicate\ndescription: Original\n---\n\n# Original\n",
+      );
+      await seedLegacyCollectionBackup(
+        skillsRoot,
+        resolveSkillCollectionBackupRoot(config, "main", testState.env),
+        async () => {
+          await fs.writeFile(skillFile, "---\nname: duplicate\ndescription: New\n---\n\n# New\n");
         },
-      ],
-      details: { backupId, restored: ["duplicate"], removed: [] },
-    });
+      );
 
-    await expect(
-      fs.readFile(path.join(workspaceAlias, "skills", "duplicate", "SKILL.md"), "utf8"),
-    ).resolves.toContain("Duplicate procedure");
+      const tool = createSkillWorkshopTool({
+        workspaceDir,
+        config,
+        agentId: "main",
+        env: testState.env,
+      });
+      await tool.execute("restore", { action: "restore_collection" });
+      await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
+    } finally {
+      await testState.cleanup();
+      await tempDirs.cleanup();
+    }
   });
 });

@@ -23,6 +23,9 @@ function runAlertAction(
     void confirmAndStartUpdate({
       startGatewayUpdate: () => void context.overlays.runUpdate(),
       watchUpdateProgress: createUpdateProgressWatcher(context),
+      onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),
+      onCheckStatus: () => context.overlays.refreshUpdateStatus(),
+      onReviewUpdate: () => context.navigate("updates"),
       updateAvailable: context.overlays.snapshot.updateAvailable,
       updateSchedule: context.overlays.snapshot.updateSchedule,
       viaNativeApp: hasNativeUpdateBridge(),

@@ -523,7 +523,14 @@ export function buildPluginCompatibilityWarnings(params?: PluginInspectParams): 
 export function buildPluginCompatibilityNotices(
   params?: PluginInspectParams,
 ): PluginCompatibilityNotice[] {
-  return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+  const registry = params?.report ?? buildPluginDiagnosticsReport(params);
+  return registry.plugins.flatMap((plugin) =>
+    buildCompatibilityNoticesForInspect({
+      plugin,
+      shape: buildPluginShapeSummary({ plugin, report: registry }).shape,
+      diagnostics: registry.diagnostics.filter((entry) => entry.pluginId === plugin.id),
+    }),
+  );
 }
 
 export function buildPluginCompatibilitySnapshotNotices(params?: {

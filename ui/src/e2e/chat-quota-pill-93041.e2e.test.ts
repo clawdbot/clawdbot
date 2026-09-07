@@ -1,16 +1,21 @@
 // Real-browser proof + regression for #93041: provider usage from models.authStatus remains
 // available in the desktop composer's context popover. Screenshots go to the ignored artifacts tree.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   controlUiSessionUrl,
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
@@ -200,11 +205,7 @@ async function openChat(
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   try {
-    context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    context = await suite.browser.newContext(createControlUiE2eContextOptions());
     page = await context.newPage();
     page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     const gateway = await installMockGateway(page, {
@@ -537,9 +538,7 @@ suite.define(() => {
       const { client: connectedClient } = connectRequest.params as {
         client: { instanceId: string };
       };
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBe(2);
+      await gateway.waitForRequest("models.authStatus", { match: { agentId: "main" } });
 
       expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
         sessionKey: "global",
@@ -575,9 +574,7 @@ suite.define(() => {
       });
       await setSelectedAgent(page, "Work");
       await expect.poll(async () => (await visibleAuthState(page)).agentId).toBe("work");
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThanOrEqual(3);
+      await gateway.waitForRequest("models.authStatus", { match: { agentId: "work" } });
       await expect
         .poll(() => visibleAuthState(page))
         .toEqual({
@@ -632,11 +629,12 @@ suite.define(() => {
       await setOwnershipProofCue(page, "Selected agent: Work | Work auth loading");
       await pauseForOwnershipProof(page);
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "01-work-loading.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "01-work-loading.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring"),
+          ]),
+        );
       }
 
       await replyToAgentMetadata(gateway, "main");
@@ -660,11 +658,12 @@ suite.define(() => {
       );
       await pauseForOwnershipProof(page);
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "02-after-delayed-main.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "02-after-delayed-main.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring"),
+          ]),
+        );
       }
 
       expect(delayedMainState.agentId).toBe("work");
@@ -672,15 +671,6 @@ suite.define(() => {
       expect(delayedMainState.account).not.toBe("main@example.test");
       expect(delayedMainState.displayName).not.toBe("Main OpenAI");
       expect(delayedMainState.plan).not.toBe("Main Pro");
-      const authRequests = await gateway.getRequests("models.authStatus");
-      const workAuthRequests = authRequests.filter(
-        (request) =>
-          typeof request.params === "object" &&
-          request.params !== null &&
-          "agentId" in request.params &&
-          request.params.agentId === "work",
-      );
-      expect(workAuthRequests.length).toBeGreaterThanOrEqual(2);
       const identityRequests = await gateway.getRequests("agent.identity.get");
       expect(
         identityRequests.filter(
@@ -705,11 +695,12 @@ suite.define(() => {
         });
       await setOwnershipProofCue(page, "Selected agent: Work | Work account and plan loaded");
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "03-work-settled.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "03-work-settled.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring"),
+          ]),
+        );
       }
       popover = await openVisibleQuotaPopover(page);
       expect(
@@ -733,11 +724,12 @@ suite.define(() => {
       );
       await pauseForOwnershipProof(page);
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "04-work-quota-popover.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "04-work-quota-popover.png"),
+          await takeControlUiViewportScreenshot(page, popover, [
+            popover.locator(".context-usage__limit").first(),
+          ]),
+        );
       }
     } finally {
       await page.close().catch(() => {});

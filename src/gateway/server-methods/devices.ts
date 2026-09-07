@@ -26,11 +26,15 @@ import {
   getPendingDevicePairing,
   listDevicePairing,
   removePairedDevice,
-  type DeviceAuthToken,
+  type PairedDevice,
   rejectDevicePairing,
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import type {
+  DevicePairingList,
+  PairedDevice as RedactedPairedDevice,
+} from "../device-pairing-list.types.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
@@ -59,9 +63,9 @@ const DEVICE_PAIR_APPROVAL_DENIED_MESSAGE = "device pairing approval denied";
 const DEVICE_PAIR_REJECTION_DENIED_MESSAGE = "device pairing rejection denied";
 
 function redactPairedDevice(
-  device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,
+  device: PairedDevice,
   opts?: { connected?: boolean },
-) {
+): RedactedPairedDevice {
   // Pairing lists are visible to operators; expose token lifecycle metadata
   // without returning raw token material or the internal approved-scope set.
   const { tokens, approvedScopes: _approvedScopes, ...rest } = device;
@@ -245,7 +249,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
             connected: context.hasConnectedClientsForDevice?.(device.deviceId.trim()) ?? false,
           }),
         ),
-      },
+      } satisfies DevicePairingList,
       undefined,
     );
   },
@@ -481,8 +485,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
         context.invalidateClientsForDevice?.(removed.deviceId, {
           reason: "device-pair-removed",
         });
+        await reconcileRevokedDeviceWorker(context, removed.deviceId);
       }
-      await reconcileRevokedDeviceWorker(context, removed.deviceId);
       context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
       emitDevicePairingLifecycleSecurityEvent({
         action: "device.pairing.removed",
@@ -784,22 +788,22 @@ export const deviceHandlers: GatewayRequestHandlers = {
       controlId: "device.token.revoke",
       role: entry.role,
     });
-    if (entry.role === "node") {
-      // Revoking a node token ends its authority like pairing removal does:
-      // run the same teardown owner so pending actions/work, wake state,
-      // surface caps, and worker placements are not stranded on a dead node.
-      clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
-      await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
-    }
-    // Preserve only this committed mutation's reply across its own invalidation;
-    // a caller revoked during the await cannot claim it or skip target teardown.
+    // Claim the reply and fence revoked clients before worker cleanup can yield.
+    // Cleanup and disconnect remain owned even when that claim fails.
     try {
-      holdGatewayPolicyResponse(respond);
+      try {
+        holdGatewayPolicyResponse(respond);
+      } finally {
+        context.invalidateClientsForDevice?.(normalizedDeviceId, {
+          role: entry.role,
+          reason: "device-token-revoked",
+        });
+        if (entry.role === "node") {
+          clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
+          await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
+        }
+      }
     } finally {
-      context.invalidateClientsForDevice?.(normalizedDeviceId, {
-        role: entry.role,
-        reason: "device-token-revoked",
-      });
       queueMicrotask(() => {
         context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
       });

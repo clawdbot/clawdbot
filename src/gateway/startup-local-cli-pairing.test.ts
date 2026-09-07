@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -12,10 +12,25 @@ import { READ_SCOPE } from "./operator-scopes.js";
 import { ensureStartupLocalCliPairing } from "./startup-local-cli-pairing.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("startup local CLI pairing", () => {
+  it("persists canonical Windows metadata for a new local CLI pairing", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    await withStateDirEnv("openclaw-startup-local-cli-pairing-", async () => {
+      const identity = loadOrCreateDeviceIdentity();
+
+      await expect(ensureStartupLocalCliPairing()).resolves.toBe("created");
+      await expect(getPairedDevice(identity.deviceId)).resolves.toMatchObject({
+        platform: "windows",
+        deviceFamily: "Windows",
+      });
+    });
+  });
+
   it("does not report a limited existing operator token as admin-ready", async () => {
     await withStateDirEnv("openclaw-startup-local-cli-pairing-", async () => {
       const identity = loadOrCreateDeviceIdentity();

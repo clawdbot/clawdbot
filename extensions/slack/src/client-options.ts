@@ -1,12 +1,14 @@
 // Slack plugin module implements client options behavior.
 import { createRequire } from "node:module";
-import type { RetryOptions, WebClientOptions } from "@slack/web-api";
+import { WebAPIRateLimitedError, type RetryOptions, type WebClientOptions } from "@slack/web-api";
 import {
   addActiveManagedProxyTlsOptions,
   resolveFetch,
   resolveEnvHttpProxyAgentOptions,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { isDebugProxyGlobalFetchPatchInstalled } from "openclaw/plugin-sdk/proxy-capture";
+import { parseRetryAfterHeaderSeconds, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { EnvHttpProxyAgent } from "undici";
 
 type SlackUndiciRuntime = Pick<typeof import("undici"), "EnvHttpProxyAgent" | "fetch">;
@@ -141,6 +143,48 @@ export function resolveSlackWriteClientOptions(
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
   resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
+  // A caller's nonzero SDK retry policy already owns rate-limit recovery.
+  if (resolved.rejectRateLimitedCalls !== true && resolved.retryConfig.retries === 0) {
+    const slackFetch = resolved.fetch ?? buildSlackFetch(dispatcher);
+    if (slackFetch) {
+      // Replay the SDK's serialized body, not chatStream.append(), which retains
+      // its buffer after rejection. Only an HTTP 429 proves this write was refused.
+      resolved.fetch = (input, init) =>
+        retryAsync(
+          async () => {
+            init?.signal?.throwIfAborted();
+            const response = await slackFetch(input, init);
+            if (response.status !== 429) {
+              return response;
+            }
+            const retryAfter = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
+            // Do not wait for peer EOF or a capture tee before retry/abort can proceed.
+            // SAFETY: Runtime fetch responses expose an optional standard body stream.
+            void (response as { body?: ReadableStream | null }).body
+              ?.cancel()
+              .catch(() => undefined);
+            init?.signal?.throwIfAborted();
+            // The shared abortable timer caps one sleep at this platform limit;
+            // refuse an unrepresentable delay instead of retrying before Slack allows.
+            if (retryAfter === undefined || retryAfter * 1000 > 2_147_000_000) {
+              return response;
+            }
+            throw new WebAPIRateLimitedError(retryAfter);
+          },
+          {
+            attempts: 3,
+            minDelayMs: 0,
+            maxDelayMs: 0,
+            shouldRetry: (error) => error instanceof WebAPIRateLimitedError,
+            retryAfterMs: (error) =>
+              error instanceof WebAPIRateLimitedError ? error.retryAfter * 1000 : undefined,
+            sleep: (delayMs) => sleepWithAbort(delayMs, init?.signal),
+          },
+        );
+    }
+    // Preserve the explicit opt-out and avoid SDK sleeps/retries after our budget.
+    resolved.rejectRateLimitedCalls = true;
+  }
   return resolved;
 }
 

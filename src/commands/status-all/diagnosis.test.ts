@@ -1,6 +1,10 @@
 // Status-all diagnosis tests cover port checks, restart logs, config issues, and safe diagnostic output.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ProgressReporter } from "../../cli/progress.js";
+import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 
 type GatewayLogPaths = {
   logDir: string;
@@ -41,6 +45,7 @@ vi.mock("./gateway.js", () => ({
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
 
 type DiagnosisParams = Parameters<typeof appendStatusAllDiagnosis>[0];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createProgressReporter(): ProgressReporter {
   return {
@@ -104,6 +109,104 @@ describe("status-all diagnosis port checks", () => {
     restartLogMocks.resolveGatewayRestartLogPath.mockReturnValue("/tmp/gateway-restart.log");
     gatewayMocks.readFileTailLines.mockResolvedValue([]);
     gatewayMocks.summarizeLogTail.mockImplementation((lines: string[]) => lines);
+  });
+
+  it("keeps first config issue locations and exact pairs before applying the display cap", async () => {
+    const params = createBaseParams([]);
+    const first = { path: "a", message: "b:c", sourceFile: "legacy.json", line: 7 };
+    const repeated = { ...first, sourceFile: "current.json", line: 9 };
+    params.snap = {
+      exists: true,
+      valid: false,
+      path: "config.json",
+      legacyIssues: [first, { path: "a:b", message: "c" }, first],
+      issues: [
+        repeated,
+        { path: "a", message: "different" },
+        ...Array.from({ length: 11 }, (_, index) => ({
+          path: `field${index}`,
+          message: "invalid",
+        })),
+        repeated,
+      ],
+    };
+    const original = structuredClone(params.snap);
+
+    await appendStatusAllDiagnosis(params);
+
+    const start = params.lines.indexOf("! Config: config.json");
+    const end = params.lines.indexOf("✓ Secret diagnostics (0)");
+    expect(params.lines.slice(start, end)).toEqual([
+      "! Config: config.json",
+      "  - legacy.json:7 — a: b:c",
+      "  - a:b: c",
+      "  - a: different",
+      "  - field0: invalid",
+      "  - field1: invalid",
+      "  - field2: invalid",
+      "  - field3: invalid",
+      "  - field4: invalid",
+      "  - field5: invalid",
+      "  - field6: invalid",
+      "  - field7: invalid",
+      "  - field8: invalid",
+      "  … +2 more",
+    ]);
+    expect(params.snap).toEqual(original);
+  });
+
+  it.each([
+    { state: "ready", eligible: 1, missing: 0 },
+    { state: "missing", eligible: 0, missing: 1 },
+    { state: "disabled", eligible: 0, missing: 0 },
+    { state: "blocked", eligible: 0, missing: 0 },
+    { state: "agent-excluded", eligible: 0, missing: 1 },
+    { state: "always", eligible: 1, missing: 0 },
+    { state: "unsupported-os", eligible: 0, missing: 1 },
+  ] as const)("reports skill readiness for $state", async ({ state, eligible, missing }) => {
+    const workspaceDir = tempDirs.make("openclaw-status-skills-");
+    const baseDir = path.join(workspaceDir, "skills", "fixture");
+    const params = createBaseParams([]);
+    params.skillStatus = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+      agentId: "qa",
+      config: {
+        plugins: { enabled: false },
+        agents: { entries: { qa: { skills: state === "agent-excluded" ? [] : ["fixture"] } } },
+        skills: {
+          allowBundled: ["other-fixture"],
+          entries: { fixture: { enabled: state !== "disabled" } },
+        },
+      },
+      entries: [
+        {
+          skill: createCanonicalFixtureSkill({
+            name: "fixture",
+            description: "Synthetic status readiness fixture",
+            filePath: path.join(baseDir, "SKILL.md"),
+            baseDir,
+            source: state === "blocked" ? "openclaw-bundled" : "openclaw-workspace",
+          }),
+          frontmatter: {},
+          metadata: {
+            always: state === "always",
+            requires: {
+              bins:
+                state === "ready" || state === "unsupported-os"
+                  ? []
+                  : ["openclaw-qa-readiness-absent-binary"],
+            },
+            ...(state === "unsupported-os" ? { os: ["openclaw-qa-unsupported-os"] } : {}),
+          },
+        },
+      ],
+    });
+
+    await appendStatusAllDiagnosis(params);
+
+    expect(params.lines.find((line) => line.includes("Skills:"))).toBe(
+      `${missing > 0 ? "!" : "✓"} Skills: ${eligible} eligible · ${missing} missing · ${workspaceDir}`,
+    );
   });
 
   it("retains queue warnings from a successful gateway health snapshot", async () => {
@@ -243,58 +346,38 @@ describe("status-all diagnosis port checks", () => {
     expect(output).not.toContain("Detected OpenClaw Gateway listener");
   });
 
-  it("adds direct update restart guidance for failed update sentinels", async () => {
-    const params = createBaseParams([]);
-    params.sentinel = {
-      payload: {
-        kind: "update",
-        status: "error",
-        ts: Date.now() - 60_000,
-        stats: {
-          mode: "npm",
-          reason: "managed-service-handoff-failed",
-          steps: [],
+  it.each([
+    {
+      status: "error",
+      reason: "managed-service-handoff-failed",
+      headline: "⚠️ OpenClaw update failed: managed-service-handoff-failed.",
+      hint: "Run openclaw triage to diagnose and repair the failed update.",
+    },
+    {
+      status: "skipped",
+      reason: "restart-health-pending",
+      headline: "⬆️ OpenClaw update in progress: restarting.",
+      hint: "Check progress with openclaw update status.",
+    },
+  ] as const)(
+    "includes the shared update report for $status sentinels",
+    async ({ status, reason, headline, hint }) => {
+      const params = createBaseParams([]);
+      params.sentinel = {
+        payload: {
+          kind: "update",
+          status,
+          ts: Date.now() - 60_000,
+          stats: { mode: "npm", reason, steps: [] },
         },
-      },
-    };
-
-    await appendStatusAllDiagnosis(params);
-
-    const output = params.lines.join("\n");
-    expect(output).toContain(
-      "Update restart: failed · managed-service-handoff-failed · run openclaw gateway status --deep",
-    );
-    expect(output).toContain("Update restart failed; run openclaw gateway status --deep.");
-    expect(output).toContain(
-      "If the service is down, run openclaw gateway restart or openclaw gateway install --force.",
-    );
-  });
-
-  it("adds direct update restart guidance for pending update sentinels", async () => {
-    const params = createBaseParams([]);
-    params.sentinel = {
-      payload: {
-        kind: "update",
-        status: "skipped",
-        ts: Date.now() - 60_000,
-        stats: {
-          mode: "npm",
-          reason: "restart-health-pending",
-          steps: [],
-        },
-      },
-    };
-
-    await appendStatusAllDiagnosis(params);
-
-    const output = params.lines.join("\n");
-    expect(output).toContain(
-      "Update restart: restart pending health verification · run openclaw gateway status --deep",
-    );
-    expect(output).toContain(
-      "Update restart is still pending; run openclaw update status --json for handoff state.",
-    );
-  });
+      };
+      await appendStatusAllDiagnosis(params);
+      const output = params.lines.join("\n");
+      expect(output).toContain(`Update restart: ${headline}`);
+      expect(output).toContain(hint);
+      expect(output).not.toContain("run openclaw gateway restart");
+    },
+  );
 
   it("emits a soft warning when no agent sessions were active in the last 30m", async () => {
     const params = createBaseParams([]);

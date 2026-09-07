@@ -5,9 +5,9 @@ import { compareOpenClawVersions } from "../config/version.js";
 import { clearBundledDiscoveryModeMemo } from "../plugins/bundled-discovery-state.js";
 import {
   importConfigMachineState,
-  readConfigMachineState,
   updateConfigMachineState,
-} from "../state/config-machine-state.js";
+} from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 
 const BUNDLED_DISCOVERY_STATE_CUTOVER_VERSION = "2026.7.2";
 

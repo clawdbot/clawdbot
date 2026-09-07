@@ -2,7 +2,13 @@
   "id": "reef",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "reef-keys-json-to-plugin-state" },
+      { "id": "reef-registration-json-to-plugin-state" },
+      { "id": "reef-audit-jsonl-to-plugin-state" },
+      { "id": "reef-runtime-files-to-plugin-state" },
+      { "id": "reef-config-trust-to-plugin-state" }
+    ]
   },
   "name": "Reef",
   "description": "Guarded end-to-end encrypted claw channel",

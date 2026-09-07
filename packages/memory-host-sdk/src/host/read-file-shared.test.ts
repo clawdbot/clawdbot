@@ -65,6 +65,25 @@ describe("memory read result slicing", () => {
     });
   });
 
+  it.each([
+    { content: "ab\nc\n", maxChars: 2, text: "ab", lines: 1, nextFrom: 2 },
+    { content: "a\n\nb\n", maxChars: 2, text: "a\n", lines: 2, nextFrom: 3 },
+    { content: "ab\nc\n", maxChars: 4, text: "ab\nc", lines: 2 },
+    { content: "\n\n", maxChars: 1, text: "\n", lines: 2 },
+  ])("preserves whole and blank lines at a $maxChars-character boundary", (fixture) => {
+    const { content, maxChars, text, lines, nextFrom } = fixture;
+    expect(buildMemoryReadResult({ content, maxChars, relPath: "memory/test.md" })).toEqual({
+      status: "ok",
+      path: "memory/test.md",
+      from: 1,
+      lines,
+      text: nextFrom
+        ? `${text}\n\n[More content available. Use from=${nextFrom} to continue.]`
+        : text,
+      ...(nextFrom ? { truncated: true, nextFrom } : {}),
+    });
+  });
+
   it("uses the default character budget for non-finite maxChars values", () => {
     expect(
       buildMemoryReadResultFromSlice({

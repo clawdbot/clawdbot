@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 // Control UI tests cover workboard status persistence behavior.
 import { expectDefined } from "@openclaw/normalization-core";
@@ -6,6 +6,8 @@ import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -22,7 +24,7 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.join(
+const artifactParent = path.join(
   process.cwd(),
   ".artifacts",
   "control-ui-e2e",
@@ -232,9 +234,6 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
         `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
       );
     }
-    if (captureUiProofEnabled) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
@@ -364,6 +363,9 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
   });
 
   it("persists edit/reopen fields and does not bounce a dragged linked card from stale lifecycle", async () => {
+    const artifactDir = captureUiProofEnabled
+      ? createControlUiE2eArtifactDir("workboard-status-persistence", artifactParent)
+      : "";
     const context = await browser.newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
@@ -509,10 +511,13 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
         .toBe("Edited notes survive reopening.");
       await expect.poll(() => workboardSelectLabel(page, "Priority")).toBe("High");
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "workboard-edit-reopen.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "workboard-edit-reopen.png"),
+          await takeControlUiViewportScreenshot(page, editDialog, [
+            page.getByLabel("Title"),
+            page.getByLabel("Notes"),
+          ]),
+        );
       }
       await page
         .locator(".workboard-draft > .workboard-modal__actions")
@@ -536,10 +541,12 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       });
       await waitForRequestCount(gateway, "workboard.cards.update", 1);
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "workboard-drag-running-persisted.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "workboard-drag-running-persisted.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            workboardCard(page, "Running", "Persisted renamed card"),
+          ]),
+        );
       }
     } finally {
       await context.close();

@@ -1,4 +1,6 @@
 // Doctor config-flow test utilities share mock input symbols and config fixtures across repair suites.
+import type { ConfigIncludeOwnership } from "../config/includes.js";
+
 const DOCTOR_CONFIG_TEST_INPUT = Symbol.for("openclaw.doctorConfigFlow.testInput");
 
 type DoctorConfigTestInput = {
@@ -6,6 +8,7 @@ type DoctorConfigTestInput = {
   parsed?: Record<string, unknown>;
   sourceConfigBeforeMigrations?: Record<string, unknown>;
   agentRosterIncludeOwned?: boolean;
+  includeProvenance?: ConfigIncludeOwnership[];
   exists: boolean;
   path: string;
   preflightMode: "fast" | "issues" | "compat";
@@ -134,6 +137,7 @@ export async function runDoctorConfigWithInput<T>(params: {
   parsedConfig?: Record<string, unknown>;
   sourceConfigBeforeMigrations?: Record<string, unknown>;
   agentRosterIncludeOwned?: boolean;
+  includeProvenance?: ConfigIncludeOwnership[];
   exists?: boolean;
   repair?: boolean;
   preflightMode?: "fast" | "issues" | "compat";
@@ -155,6 +159,9 @@ export async function runDoctorConfigWithInput<T>(params: {
       : {}),
     ...(params.agentRosterIncludeOwned !== undefined
       ? { agentRosterIncludeOwned: params.agentRosterIncludeOwned }
+      : {}),
+    ...(params.includeProvenance
+      ? { includeProvenance: structuredClone(params.includeProvenance) }
       : {}),
     exists: params.exists ?? true,
     path: "/virtual/.openclaw/openclaw.json",

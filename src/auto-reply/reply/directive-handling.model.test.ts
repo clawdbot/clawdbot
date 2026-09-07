@@ -112,7 +112,7 @@ vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
   persistStickyModelSelectionBestEffort: (params: {
     agentId: string;
     model: string;
-    target?: "agent" | "defaults";
+    target: "agent" | "defaults";
   }) => stickyModelMock.persistBestEffort(params),
 }));
 
@@ -174,7 +174,20 @@ vi.mock("./directive-handling.auth.js", () => ({
   },
 }));
 
-vi.mock("../../agents/auth-profiles/store.js", () => {
+vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
+  const store = () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  });
+  return {
+    ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+      authProfilesStoreMock.profiles[profileId],
+    getRuntimeAuthProfileStoreSnapshot: store,
+    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
+  };
+});
+vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
   const store = () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
@@ -182,10 +195,6 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
   return {
     ensureAuthProfileStore: store,
     ensureAuthProfileStoreForLocalUpdate: store,
-    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
-      authProfilesStoreMock.profiles[profileId],
-    getRuntimeAuthProfileStoreSnapshot: store,
-    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
     loadAuthProfileStore: store,
     loadAuthProfileStoreForRuntime: store,
     loadAuthProfileStoreForSecretsRuntime: store,
@@ -331,6 +340,7 @@ import {
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { ElevatedLevel } from "../thinking.js";
+import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
 let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js").maybeHandleModelDirectiveInfo;
@@ -339,7 +349,6 @@ let buildModelAliasIndex: typeof import("../../agents/model-selection.js").build
 let resolveModelSelectionFromDirective: typeof import("./directive-handling.model-selection.js").resolveModelSelectionFromDirective;
 let parseInlineSessionDirectives: typeof import("./directive-handling.parse.js").parseInlineSessionDirectives;
 let applyInlineDirectiveOverrides: typeof import("./get-reply-directives-apply.js").applyInlineDirectiveOverrides;
-let createFastTestModelSelectionState: typeof import("./model-selection.js").createFastTestModelSelectionState;
 
 beforeAll(async () => {
   ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
@@ -350,7 +359,6 @@ beforeAll(async () => {
     await import("./directive-handling.model-selection.js"));
   ({ parseInlineSessionDirectives } = await import("./directive-handling.parse.js"));
   ({ applyInlineDirectiveOverrides } = await import("./get-reply-directives-apply.js"));
-  ({ createFastTestModelSelectionState } = await import("./model-selection.js"));
 });
 const queueMocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
@@ -619,7 +627,7 @@ async function persistModelDirectiveForTest(params: {
   const model = params.model ?? "claude-opus-4-6";
   const agentId = params.agentId ?? "main";
   const sessionKey = `agent:${agentId}:dm:1`;
-  const modelState = createFastTestModelSelectionState({
+  const modelState = createModelSelectionStateFixture({
     agentCfg: cfg.agents?.defaults,
     provider,
     model,
@@ -693,7 +701,7 @@ async function persistModelDirectiveForTest(params: {
           directiveAck: undefined,
           errorText: Array.isArray(result.reply) ? result.reply[0]?.text : result.reply?.text,
         };
-  return { persisted, sessionEntry };
+  return { persisted, sessionEntry, result };
 }
 
 type HandleDirectiveParams = Parameters<typeof handleDirectiveOnly>[0];
@@ -1839,22 +1847,29 @@ describe("/model chat UX", () => {
     expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
   });
 
-  it("persists an atomic model/runtime/thinking transaction when the runtime supports it", async () => {
+  it("commits model/runtime selection while keeping supported mixed thinking on its turn", async () => {
     setOpenAiRuntimeScopedUltraProvider();
     const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
-    const { persisted } = await persistModelDirectiveForTest({
+    const { persisted, result } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-5.6-luna --runtime openclaw /think ultra please solve",
       allowedModelKeys: ["openai/gpt-5.6-luna"],
       sessionEntry,
     });
 
     expect(persisted.errorText).toBeUndefined();
+    expect(result).toMatchObject({
+      kind: "continue",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      directives: { thinkLevel: "ultra" },
+      directiveAck: { text: expect.stringContaining("Thinking level set to ultra.") },
+    });
     expect(sessionEntry).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-5.6-luna",
       modelOverrideSource: "user",
       agentRuntimeOverride: "openclaw",
-      thinkingLevel: "ultra",
+      thinkingLevel: "high",
     });
   });
 
@@ -1985,7 +2000,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
-  it("preserves an authorized unscoped effective-default selection", async () => {
+  it("keeps an authorized selection session-only without a default target", async () => {
     const sessionEntry = createSessionEntry();
     const result = await runHandleCommand("/model openai/gpt-4o", {
       sessionEntry,
@@ -1994,13 +2009,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     expect(result?.text).toContain("Model set to");
     expect(result?.text).toContain("openai/gpt-4o");
-    expect(result?.text).toContain("Configured default update requested.");
+    expect(result?.text).toContain("for this session only; configured default unchanged.");
     expect(result?.text).not.toContain("failed");
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
-    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
-      agentId: "main",
-      model: "openai/gpt-4o",
-    });
+    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
   it("preserves a compatible auth profile for a mixed model directive", async () => {

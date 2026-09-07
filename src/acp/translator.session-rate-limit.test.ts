@@ -5,8 +5,11 @@ import {
   createNewSessionRequest,
   createLoadSessionRequest,
 } from "./translator.bridge-test-helpers.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
@@ -15,7 +18,7 @@ vi.mock("./commands.js", () => ({
 describe("acp session creation rate limit", () => {
   it("rate limits excessive newSession bursts", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
       sessionCreateRateLimit: {
         maxRequests: 1,
@@ -31,7 +34,7 @@ describe("acp session creation rate limit", () => {
 
   it("does not count loadSession refreshes for an existing session ID", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
       sessionCreateRateLimit: {
         maxRequests: 1,
@@ -48,7 +51,7 @@ describe("acp session creation rate limit", () => {
 
   it("falls back for non-finite session creation rate limit overrides", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
       sessionCreateRateLimit: {
         maxRequests: Number.NaN,

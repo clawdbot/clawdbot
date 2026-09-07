@@ -172,6 +172,12 @@ which keeps the draft quiet: the headline, enabled commentary and reasoning,
 plan milestones, and any approval request or failed command still appear. Set
 it to `true` for the full rolling tool log.
 
+Native subagent spawn and activity events follow the same policy. They start
+the quiet work indicator; with the tool log enabled, lifecycle updates reuse a
+row for each worker. Messages to workers get separate entries because sending a
+message does not prove that a worker started running. Delegation prompts are not
+included in these progress rows.
+
 Tools can also emit typed progress while a single call is still running. That
 is how a slow fetch or search updates the visible draft before the tool
 returns its final result. The progress update is a partial tool result with
@@ -272,7 +278,7 @@ pre-tool commentary/preamble narration (💬, for example "I'll check... then
 [Streaming and chunking](/concepts/streaming#commentary-progress-lane) for the
 shared config shape across channels.
 
-With the commentary lane enabled, the latest accepted preamble remains the
+With the commentary lane enabled, the latest accepted preamble can supply the
 status headline while the same item also stays in the interleaved commentary
 history. The two positions are intentional: the bounded line history can scroll
 under the configured `maxLines` budget while the current status remains visible.
@@ -287,7 +293,7 @@ by default and does not bypass the normal activity gate for short turns.
 appear in the bounded interleaved commentary history.
 
 On Discord, when a utility model resolves for the agent — an explicit
-[`utilityModel`](/gateway/config-agents#agents-defaults-model), or the primary
+[`utilityModel`](/gateway/config-agents/models#agents-defaults-model), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
 Anthropic → `claude-haiku-4-5`) — it supplies a short plain-language filler
 when the model emits no preamble or has been quiet for about 20 seconds

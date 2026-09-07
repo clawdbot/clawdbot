@@ -606,11 +606,12 @@ export async function runPrCiSweeper({
       core.info(`pr-ci-sweeper: dry-run, would re-fire #${pr.number} (${verdict.reason})`);
       continue;
     }
-    // Revalidate immediately before mutating: a human close or a fresh push in
-    // the classify gap must win over the sweep.
+    // Revalidate immediately before mutating: changed PR eligibility or a fresh
+    // push in the classify gap must win over the sweep.
     const { data: fresh } = await github.rest.pulls.get({ owner, repo, pull_number: pr.number });
     if (
       fresh.state !== "open" ||
+      fresh.draft ||
       fresh.head.sha !== pr.head.sha ||
       fresh.auto_merge ||
       fresh.mergeable === false

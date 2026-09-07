@@ -18,13 +18,13 @@ import { buildQwenProvider, buildQwenTokenPlanProvider } from "./provider-catalo
 
 const qwenPresetAppliers = createModelCatalogPresetAppliers<[string]>({
   primaryModelRef: QWEN_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig, baseUrl: string) => {
+  resolveParams: (cfg: OpenClawConfig, baseUrl: string) => {
     const provider = buildQwenProvider({ baseUrl });
     return {
       providerId: "qwen",
       api: provider.api ?? "openai-completions",
       baseUrl,
-      catalogModels: provider.models ?? [],
+      catalogModels: cfg.models?.mode === "replace" ? (provider.models ?? []) : [],
       aliases: [
         ...(provider.models ?? []).flatMap((model) => [
           `qwen/${model.id}`,
@@ -38,13 +38,13 @@ const qwenPresetAppliers = createModelCatalogPresetAppliers<[string]>({
 
 const qwenTokenPlanPresetAppliers = createModelCatalogPresetAppliers<[string]>({
   primaryModelRef: QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig, baseUrl: string) => {
+  resolveParams: (cfg: OpenClawConfig, baseUrl: string) => {
     const provider = buildQwenTokenPlanProvider({ baseUrl });
     return {
       providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,
       api: provider.api ?? "openai-completions",
       baseUrl,
-      catalogModels: provider.models ?? [],
+      catalogModels: cfg.models?.mode === "replace" ? (provider.models ?? []) : [],
       aliases: [
         ...(provider.models ?? []).map((model) => `${QWEN_TOKEN_PLAN_PROVIDER_ID}/${model.id}`),
         { modelRef: QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF, alias: "Qwen Token Plan" },

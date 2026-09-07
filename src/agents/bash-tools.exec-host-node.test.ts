@@ -887,47 +887,52 @@ describe("executeNodeHostCommand", () => {
   });
 
   it.each([
-    { name: "an already-rejected approval", delayed: false },
-    { name: "an approval cancelled after the pending result", delayed: true },
-  ])("drops detached node execution without an unhandled rejection for $name", async (scenario) => {
-    const unhandledRejections = captureProcessUnhandledRejections();
+    { name: "an already-rejected approval", delayed: false, mode: "agent" },
+    { name: "an approval cancelled after the pending result", delayed: true, mode: "direct" },
+  ] as const)(
+    "drops detached node execution without an unhandled rejection for $name",
+    async (scenario) => {
+      const unhandledRejections = captureProcessUnhandledRejections();
 
-    try {
-      const pendingDecision = createDeferred<string | null | undefined>();
-      if (scenario.delayed) {
-        resolveApprovalDecisionOrUndefinedMock.mockReturnValueOnce(pendingDecision.promise);
-      } else {
-        resolveApprovalDecisionOrUndefinedMock.mockRejectedValueOnce(runAbortedApprovalError);
+      try {
+        const pendingDecision = createDeferred<string | null | undefined>();
+        if (scenario.delayed) {
+          resolveApprovalDecisionOrUndefinedMock.mockReturnValueOnce(pendingDecision.promise);
+        } else {
+          resolveApprovalDecisionOrUndefinedMock.mockRejectedValueOnce(runAbortedApprovalError);
+        }
+        resolveExecHostApprovalContextMock.mockReturnValue({
+          approvals: { allowlist: [], file: { version: 1, agents: {} } },
+          hostSecurity: "full",
+          hostAsk: "always",
+          askFallback: "deny",
+        });
+
+        const result = await executeNodeHostCommand(
+          createNodeHostRequest({ approvalFollowupMode: scenario.mode }),
+        );
+
+        expect(result.details?.status).toBe("approval-pending");
+        expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
+        if (scenario.delayed) {
+          pendingDecision.reject(runAbortedApprovalError);
+        }
+        await setImmediate();
+
+        expect(unhandledRejections.reasons).toEqual([]);
+        expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
+        expect(
+          callGatewayToolMock.mock.calls.some(
+            ([method, , params]) =>
+              method === "node.invoke" &&
+              (params as MockNodeInvokeParams | undefined)?.command === "system.run",
+          ),
+        ).toBe(false);
+      } finally {
+        unhandledRejections.restore();
       }
-      resolveExecHostApprovalContextMock.mockReturnValue({
-        approvals: { allowlist: [], file: { version: 1, agents: {} } },
-        hostSecurity: "full",
-        hostAsk: "always",
-        askFallback: "deny",
-      });
-
-      const result = await executeNodeHostCommand(createNodeHostRequest({}));
-
-      expect(result.details?.status).toBe("approval-pending");
-      expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
-      if (scenario.delayed) {
-        pendingDecision.reject(runAbortedApprovalError);
-      }
-      await setImmediate();
-
-      expect(unhandledRejections.reasons).toEqual([]);
-      expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
-      expect(
-        callGatewayToolMock.mock.calls.some(
-          ([method, , params]) =>
-            method === "node.invoke" &&
-            (params as MockNodeInvokeParams | undefined)?.command === "system.run",
-        ),
-      ).toBe(false);
-    } finally {
-      unhandledRejections.restore();
-    }
-  });
+    },
+  );
 
   it("consumes rejected detached node approval recovery and fallback follow-ups", async () => {
     const unhandledRejections = captureProcessUnhandledRejections();
@@ -944,7 +949,9 @@ describe("executeNodeHostCommand", () => {
         askFallback: "deny",
       });
 
-      const result = await executeNodeHostCommand(createNodeHostRequest({}));
+      const result = await executeNodeHostCommand(
+        createNodeHostRequest({ approvalFollowupMode: "agent" }),
+      );
 
       expect(result.details?.status).toBe("approval-pending");
       await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(2));
@@ -996,7 +1003,9 @@ describe("executeNodeHostCommand", () => {
       askFallback: "deny",
     });
 
-    const result = await executeNodeHostCommand(createNodeHostRequest({ ask: "always" }));
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({ approvalFollowupMode: "agent", ask: "always" }),
+    );
 
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => {
@@ -1042,7 +1051,9 @@ describe("executeNodeHostCommand", () => {
         askFallback: "deny",
       });
 
-      const result = await executeNodeHostCommand(createNodeHostRequest({ ask: "always" }));
+      const result = await executeNodeHostCommand(
+        createNodeHostRequest({ approvalFollowupMode: "agent", ask: "always" }),
+      );
 
       expect(result.details?.status).toBe("approval-pending");
       await vi.waitFor(() => {
@@ -1078,9 +1089,7 @@ describe("executeNodeHostCommand", () => {
     });
 
     const result = await executeNodeHostCommand(
-      createNodeHostRequest({
-        signal: abortController.signal,
-      }),
+      createNodeHostRequest({ approvalFollowupMode: "agent", signal: abortController.signal }),
     );
 
     expect(result.details?.status).toBe("approval-pending");
@@ -1110,7 +1119,9 @@ describe("executeNodeHostCommand", () => {
         askFallback: "deny",
       });
 
-      const result = await executeNodeHostCommand(createNodeHostRequest({}));
+      const result = await executeNodeHostCommand(
+        createNodeHostRequest({ approvalFollowupMode: "agent" }),
+      );
 
       expect(result.details?.status).toBe("approval-pending");
       await vi.waitFor(() => {
@@ -1142,9 +1153,7 @@ describe("executeNodeHostCommand", () => {
     });
 
     const result = await executeNodeHostCommand(
-      createNodeHostRequest({
-        signal: abortController.signal,
-      }),
+      createNodeHostRequest({ approvalFollowupMode: "agent", signal: abortController.signal }),
     );
 
     expect(result.details?.status).toBe("approval-pending");
@@ -1183,9 +1192,7 @@ describe("executeNodeHostCommand", () => {
       );
 
     const result = await executeNodeHostCommand(
-      createNodeHostRequest({
-        signal: abortController.signal,
-      }),
+      createNodeHostRequest({ approvalFollowupMode: "agent", signal: abortController.signal }),
     );
 
     expect(result.details?.status).toBe("approval-pending");
@@ -1220,7 +1227,9 @@ describe("executeNodeHostCommand", () => {
       });
 
       const results = await Promise.all(
-        Array.from({ length: 32 }, () => executeNodeHostCommand(createNodeHostRequest({}))),
+        Array.from({ length: 32 }, () =>
+          executeNodeHostCommand(createNodeHostRequest({ approvalFollowupMode: "agent" })),
+        ),
       );
 
       expect(results.every((result) => result.details?.status === "approval-pending")).toBe(true);
@@ -1297,9 +1306,7 @@ describe("executeNodeHostCommand", () => {
     });
 
     const result = await executeNodeHostCommand(
-      createNodeHostRequest({
-        signal: abortController.signal,
-      }),
+      createNodeHostRequest({ approvalFollowupMode: "agent", signal: abortController.signal }),
     );
 
     expect(result.details?.status).toBe("approval-pending");
@@ -1341,9 +1348,7 @@ describe("executeNodeHostCommand", () => {
       );
 
       const result = await executeNodeHostCommand(
-        createNodeHostRequest({
-          signal: abortController.signal,
-        }),
+        createNodeHostRequest({ approvalFollowupMode: "agent", signal: abortController.signal }),
       );
 
       expect(result.details?.status).toBe("approval-pending");
@@ -1379,7 +1384,9 @@ describe("executeNodeHostCommand", () => {
         askFallback: "deny",
       });
 
-    const result = await executeNodeHostCommand(createNodeHostRequest({}));
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({ approvalFollowupMode: "agent" }),
+    );
 
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => {
@@ -1502,7 +1509,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     await vi.waitFor(() => {
       expect(requireRunParams(requireGatewayCommand("system.run")).approvalSource).toBe(
         "ask-fallback",
@@ -1549,7 +1556,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     await vi.waitFor(() => {
       expect(requireRunParams(requireGatewayCommand("system.run"))).toEqual(
         expect.objectContaining({
@@ -1650,9 +1657,7 @@ describe("executeNodeHostCommand", () => {
     });
 
     const result = await executeNodeHostCommand(
-      createNodeHostRequest({
-        ask: "always",
-      }),
+      createNodeHostRequest({ approvalFollowupMode: "agent", ask: "always" }),
     );
 
     expect(result.details?.status).toBe("approval-pending");
@@ -1693,9 +1698,7 @@ describe("executeNodeHostCommand", () => {
     });
 
     const result = await executeNodeHostCommand(
-      createNodeHostRequest({
-        ask: "always",
-      }),
+      createNodeHostRequest({ approvalFollowupMode: "agent", ask: "always" }),
     );
 
     expect(result.details?.status).toBe("approval-pending");
@@ -1755,7 +1758,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     await vi.waitFor(() => {
       expect(requireRunParams(requireGatewayCommand("system.run"))).toEqual(
         expect.objectContaining({ approvalSource: "ask-fallback" }),
@@ -1778,7 +1781,9 @@ describe("executeNodeHostCommand", () => {
       createNodeGatewayHandler({ approvals: { version: 1, agents: {} }, stdout }),
     );
 
-    const result = await executeNodeHostCommand(createNodeHostRequest({}));
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({ approvalFollowupMode: "agent" }),
+    );
 
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => {
@@ -1798,34 +1803,46 @@ describe("executeNodeHostCommand", () => {
     expect(message).toContain(tailHead);
   });
 
-  it("keeps multiline async node approval follow-up output intact", async () => {
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "full",
-      hostAsk: "always",
-      askFallback: "deny",
-    });
-    const stdout = "first line\r\n\tindented\n\nlast line  \t\n";
-    const stderr = "warning: something\n";
-    callGatewayToolMock.mockImplementation(
-      createNodeGatewayHandler({ approvals: { version: 1, agents: {} }, stdout, stderr }),
-    );
+  it.each([
+    { mode: "agent", direct: false },
+    { mode: "direct", direct: true },
+  ] as const)(
+    "keeps multiline $mode node approval follow-up output intact",
+    async ({ mode, direct }) => {
+      resolveExecHostApprovalContextMock.mockReturnValue({
+        approvals: { allowlist: [], file: { version: 1, agents: {} } },
+        hostSecurity: "full",
+        hostAsk: "always",
+        askFallback: "deny",
+      });
+      const stdout = "first line\r\n\tindented\n\nlast line  \t\n";
+      const stderr = "warning: something\n";
+      callGatewayToolMock.mockImplementation(
+        createNodeGatewayHandler({ approvals: { version: 1, agents: {} }, stdout, stderr }),
+      );
 
-    const result = await executeNodeHostCommand(createNodeHostRequest({}));
+      const result = await executeNodeHostCommand(
+        createNodeHostRequest({ approvalFollowupMode: mode }),
+      );
 
-    expect(result.details?.status).toBe("approval-pending");
-    await vi.waitFor(() => {
-      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
-    });
-    const message = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1];
-    if (typeof message !== "string") {
-      throw new Error("expected follow-up message");
-    }
-    expect(message).toContain(`[stdout]\n${stdout}`);
-    expect(message).toContain(`[stderr]\n${stderr}`);
-    // The compact notify formatter would have collapsed every run of whitespace.
-    expect(message).not.toContain("first line indented last line");
-  });
+      expect(result.details?.status).toBe("approval-pending");
+      await vi.waitFor(() => {
+        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
+      });
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({ direct }),
+        expect.any(String),
+      );
+      const message = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1];
+      if (typeof message !== "string") {
+        throw new Error("expected follow-up message");
+      }
+      expect(message).toContain(`[stdout]\n${stdout}`);
+      expect(message).toContain(`[stderr]\n${stderr}`);
+      // The compact notify formatter would have collapsed every run of whitespace.
+      expect(message).not.toContain("first line indented last line");
+    },
+  );
 
   it("does not build a human approval prompt for node auto-review allows", async () => {
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
@@ -1926,6 +1943,7 @@ describe("executeNodeHostCommand", () => {
   ])("requests human approval when a node reviewer $name", async ({ reviewer }) => {
     const autoReviewer = vi.fn<ExecAutoReviewer>(reviewer);
     const warnings: string[] = [];
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("deny");
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: "allowlist",
@@ -1933,7 +1951,7 @@ describe("executeNodeHostCommand", () => {
       askFallback: "deny",
     });
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         security: "allowlist",
         ask: "on-miss",
@@ -1943,8 +1961,8 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
+    await expect(result).rejects.toThrow("exec denied: approval-required");
     expect(autoReviewer).toHaveBeenCalledTimes(1);
-    expect(result.details?.status).toBe("approval-pending");
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: "approval-1", host: "node" }),
@@ -2047,7 +2065,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     expect(autoReviewer).toHaveBeenCalledWith(
       expect.objectContaining({
         command: "rm -rf /tmp/work",
@@ -2232,7 +2250,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     expect(autoReviewer).toHaveBeenCalledWith(
       expect.objectContaining({
         command: `/bin/sh -lc "./scripts/untrusted.sh"`,
@@ -2402,7 +2420,7 @@ describe("executeNodeHostCommand", () => {
         }),
       );
 
-      expect(result.details?.status).toBe("approval-pending");
+      expect(result.details?.status).toBe("completed");
       expect(autoReviewer).not.toHaveBeenCalled();
       expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalled();
     },
@@ -2472,7 +2490,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     expect(autoReviewer).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalled();
   });
@@ -2561,7 +2579,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     expect(autoReviewer).toHaveBeenCalledTimes(1);
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(warnings.join("\n")).toContain("needs a person");
@@ -2628,7 +2646,7 @@ describe("executeNodeHostCommand", () => {
       return;
     }
     const result = await execution;
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     expect(autoReviewer).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(
@@ -2664,7 +2682,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     expect(autoReviewer).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(
@@ -2702,7 +2720,7 @@ describe("executeNodeHostCommand", () => {
         : { approvedByAsk: value.approvedByAsk, deniedReason: value.deniedReason },
     );
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         security: "allowlist",
         ask: "on-miss",
@@ -2711,17 +2729,9 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    await expect(result).rejects.toThrow("exec denied: approval-timeout");
     expect(autoReviewer).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
-      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          approvalId: "approval-1",
-          sessionKey: "requested-session",
-        }),
-        "Exec denied (node=node-1 id=approval-1, approval-timeout): bun ./script.ts",
-      );
-    });
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     expect(
       callGatewayToolMock.mock.calls.some(
         ([method, , params]) =>
@@ -2835,7 +2845,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     expect(autoReviewer).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(warnings).toContain(
@@ -2876,12 +2886,12 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     expect(autoReviewer).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
   });
 
-  it("requests human approval when node runtime policy requires ask always", async () => {
+  it("requests detached human approval when node runtime policy requires ask always", async () => {
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
       decision: "allow-once",
       risk: "low",
@@ -2910,6 +2920,7 @@ describe("executeNodeHostCommand", () => {
 
     const result = await executeNodeHostCommand(
       createNodeHostRequest({
+        approvalFollowupMode: "agent",
         security: "allowlist",
         ask: "on-miss",
         autoReview: true,
@@ -2961,7 +2972,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    expect(result.details?.status).toBe("completed");
     expect(autoReviewer).not.toHaveBeenCalled();
     expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
       ask: "always",
@@ -3011,7 +3022,7 @@ describe("executeNodeHostCommand", () => {
     });
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         command: "git status",
         security: "allowlist",
@@ -3019,7 +3030,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    await expect(result).rejects.toThrow("exec denied: request-failed");
     expect(resolveAllowAlwaysPersistenceDecisionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         commandText: '/bin/sh -lc "git status"',
@@ -3071,7 +3082,7 @@ describe("executeNodeHostCommand", () => {
         : { approvedByAsk: value.approvedByAsk, deniedReason: value.deniedReason },
     );
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         command: "echo 'unterminated",
         security: "allowlist",
@@ -3081,17 +3092,9 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    await expect(result).rejects.toThrow("exec denied: approval-timeout");
     expect(autoReviewer).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
-      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          approvalId: "approval-1",
-          sessionKey: "requested-session",
-        }),
-        "Exec denied (node=node-1 id=approval-1, approval-timeout): echo 'unterminated",
-      );
-    });
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     expect(
       callGatewayToolMock.mock.calls.some(
         ([method, , params]) =>
@@ -3134,7 +3137,7 @@ describe("executeNodeHostCommand", () => {
     );
 
     const warnings: string[] = [];
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         security: "allowlist",
         ask: "on-miss",
@@ -3144,17 +3147,9 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    await expect(result).rejects.toThrow("exec denied: approval-timeout");
     expect(warnings.join("\n")).toContain(decision.rationale);
-    await vi.waitFor(() => {
-      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          approvalId: "approval-1",
-          sessionKey: "requested-session",
-        }),
-        "Exec denied (node=node-1 id=approval-1, approval-timeout): bun ./script.ts",
-      );
-    });
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     expect(
       callGatewayToolMock.mock.calls.some(
         ([method, , params]) =>
@@ -3212,7 +3207,7 @@ describe("executeNodeHostCommand", () => {
     });
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         command: "tool --version",
         env: { PATH: "/trusted/bin:/usr/bin" },
@@ -3221,7 +3216,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    await expect(result).rejects.toThrow("exec denied: request-failed");
     expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
     expect(requireRegisteredApprovalRequest().env).toBeUndefined();
     const evalEnvs = evaluateShellAllowlistMock.mock.calls.map(
@@ -3297,7 +3292,7 @@ describe("executeNodeHostCommand", () => {
     expect(requireRunParams(requireGatewayCommand("system.run")).env).toBeUndefined();
   });
 
-  it("omits allow-always from node approval prompts when persistence is one-shot", async () => {
+  it("omits allow-always from detached node approval prompts when persistence is one-shot", async () => {
     mockGatewayInvokesWithNodeApprovals({ version: 1, agents: {} });
     usePolicyApprovalRequirementMock();
     resolveAllowAlwaysPersistenceDecisionMock.mockReturnValue({
@@ -3314,6 +3309,7 @@ describe("executeNodeHostCommand", () => {
 
     const result = await executeNodeHostCommand(
       createNodeHostRequest({
+        approvalFollowupMode: "agent",
         security: "allowlist",
         ask: "on-miss",
       }),
@@ -3426,7 +3422,7 @@ describe("executeNodeHostCommand", () => {
     });
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         command: "foo && bar",
         security: "allowlist",
@@ -3434,7 +3430,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    await expect(result).rejects.toThrow("exec denied: request-failed");
     expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
     expect(requiresExecApprovalMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -3472,7 +3468,7 @@ describe("executeNodeHostCommand", () => {
     });
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         command: "tool --version",
         security: "allowlist",
@@ -3480,7 +3476,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    await expect(result).rejects.toThrow("exec denied: request-failed");
     expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
     expect(requiresExecApprovalMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -3589,7 +3585,7 @@ describe("executeNodeHostCommand", () => {
     });
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         command: "foo a && foo b && missingcmd",
         security: "allowlist",
@@ -3597,7 +3593,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    await expect(result).rejects.toThrow("exec denied: request-failed");
     expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
     expect(requiresExecApprovalMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -3648,7 +3644,7 @@ describe("executeNodeHostCommand", () => {
     });
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         command: 'sh -c "/bin/echo ok && /bin/date" && missingcmd',
         security: "allowlist",
@@ -3656,7 +3652,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    await expect(result).rejects.toThrow("exec denied: request-failed");
     expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
     expect(requiresExecApprovalMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -3694,7 +3690,7 @@ describe("executeNodeHostCommand", () => {
     });
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         command: 'bash -lc "foo && missingcmd"',
         security: "allowlist",
@@ -3702,7 +3698,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
+    await expect(result).rejects.toThrow("exec denied: request-failed");
     expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
     expect(requiresExecApprovalMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -4212,23 +4208,15 @@ describe("executeNodeHostCommand", () => {
       askFallback: "full",
     });
 
-    const result = await executeNodeHostCommand(
+    const result = executeNodeHostCommand(
       createNodeHostRequest({
         command: "python3 -c 'print(1)'",
         strictInlineEval: true,
       }),
     );
 
-    expect(result.details?.status).toBe("approval-pending");
-    await vi.waitFor(() => {
-      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          approvalId: "approval-1",
-          sessionKey: "requested-session",
-        }),
-        "Exec denied (node=node-1 id=approval-1, approval-timeout): python3 -c 'print(1)'",
-      );
-    });
+    await expect(result).rejects.toThrow("exec denied: approval-timeout");
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
   });
 });

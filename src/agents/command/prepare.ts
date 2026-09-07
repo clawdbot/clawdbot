@@ -35,6 +35,11 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import {
+  resolveAcpPromptBody,
+  prependInternalEventContext,
+  resolveInternalEventTranscriptBody,
+} from "../internal-events.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
@@ -44,11 +49,6 @@ import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "../worktrees/run-lease.js";
-import {
-  resolveAcpPromptBody,
-  prependInternalEventContext,
-  resolveInternalEventTranscriptBody,
-} from "./attempt-execution.shared.js";
 import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
@@ -410,10 +410,11 @@ export async function prepareAgentCommandExecution(
     }
     const body =
       !isRawModelRun && acpResolution?.kind === "ready"
-        ? resolveAcpPromptBody(promptMessage, opts.internalEvents)
-        : prependInternalEventContext(promptMessage, opts.internalEvents);
+        ? resolveAcpPromptBody(promptMessage, opts.internalEvents, opts.inputProvenance)
+        : prependInternalEventContext(promptMessage, opts.internalEvents, opts.inputProvenance);
     const transcriptBody =
-      opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
+      opts.transcriptMessage ??
+      resolveInternalEventTranscriptBody(message, opts.internalEvents, opts.inputProvenance);
 
     const prepared = {
       opts: commandOpts,

@@ -68,16 +68,23 @@ With Lobster, the same job is one call that halts for approval and resumes:
 
 ## How it works
 
-OpenClaw runs Lobster workflows **in-process** using the bundled
-`@clawdbot/lobster` package as an embedded runner. No external `lobster`
-subprocess is spawned; the tool call returns a JSON envelope directly. If the
-pipeline halts for approval, the envelope carries a resume token (or a short
-approval ID) so you can continue later.
+The separately installed official `@openclaw/lobster` plugin runs Lobster
+workflows **in-process** using its embedded `@clawdbot/lobster` runtime. No
+external `lobster` subprocess is spawned; the tool call returns a JSON envelope
+directly. If the pipeline halts for approval, the envelope carries a resume
+token (or a short approval ID) so you can continue later.
 
 ## Enable
 
-Lobster is an **optional** plugin tool, not enabled by default. It ships
-bundled, so no separate install step is required - just allow the tool:
+Lobster is an **optional** plugin tool, not installed or enabled by default.
+Install the official plugin, then restart the Gateway:
+
+```bash
+openclaw plugins install @openclaw/lobster
+openclaw gateway restart
+```
+
+After the Gateway restarts, allow the tool globally:
 
 ```json
 {
@@ -178,7 +185,7 @@ For a **structured LLM step** inside a workflow, enable the optional
 
 ### Important limitation: embedded Lobster vs `openclaw.invoke`
 
-The bundled Lobster plugin runs workflows **in-process** inside the gateway.
+The installed Lobster plugin runs workflows **in-process** inside the gateway.
 In that embedded mode, `openclaw.invoke` does **not** automatically inherit a
 gateway URL/auth context for nested OpenClaw CLI tool calls.
 
@@ -319,11 +326,23 @@ run returned. `approve` is required.
 Passing `flowControllerId` and `flowGoal` on `run` (or `flowId` and
 `flowExpectedRevision` on `resume`) drives the call through the plugin
 runtime's managed [Task Flow](/automation/taskflow) API instead of returning
-a bare envelope: OpenClaw creates or resumes a durable flow record, applies the
-Lobster envelope to it (`waiting` on approval, `succeeded`/`failed`/`cancelled` on
-completion), and returns `{ ok, envelope, flow, mutation }`. This mode requires
-a bound Task Flow runtime and is intended for plugin/controller code that needs
-durable flow state across gateway restarts, not typical ad hoc agent use.
+a bare envelope: OpenClaw creates or resumes a durable flow record and applies
+the Lobster outcome to it (`waiting` on approval, `succeeded`/`failed`/`cancelled`
+on completion). The tool returns the envelope fields at the top level, alongside
+`flow` and `mutation`. Check `mutation.applied` for a successful state transition
+and carry forward **`mutation.flow.revision`**; top-level `flow` is the snapshot
+from before that transition. Cancellation instead reports `mutation.cancelled`.
+A workflow error is surfaced as a tool error after an attempted flow failure;
+inspect the persisted flow rather than assuming the failure write succeeded.
+
+This mode requires a non-sandboxed tool context with a bound session. It records
+a managed flow, not detached ACP/subagent tasks for each shell step. Flow state
+persists in OpenClaw SQLite; Lobster's approval checkpoint is separate and must
+also remain available for resume. After a restart, the controller must inspect
+the latest flow and explicitly resume it with the matching approval token or ID.
+Neither Task Flow nor a skill automatically replays arbitrary JavaScript. See
+[Task Flow](/automation/taskflow) for the runnable examples and child-linking
+contract.
 
 ## Output envelope
 

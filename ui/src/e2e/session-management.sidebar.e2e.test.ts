@@ -7,6 +7,7 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   actionOpacity,
   actionPointerEvents,
@@ -114,9 +115,22 @@ suite.define(() => {
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
+      // The parent is idle: its running child is summarized by the collapsed toggle
+      // on the right, never as a ring on the parent's own glyph.
       await expect
-        .poll(() => parent.locator(".session-run-spinner").getAttribute("aria-label"))
-        .toBe("Active run");
+        .poll(() => parent.locator(".sidebar-child-session-toggle--running").count())
+        .toBe(1);
+      expect(await parent.locator(".sidebar-session-indicator .session-glyph__ring").count()).toBe(
+        0,
+      );
+      const accessibility = await context.newCDPSession(page);
+      const collapsedTree = await accessibility.send("Accessibility.getFullAXTree");
+      const collapsedToggle = collapsedTree.nodes.find(
+        (node) =>
+          node.role?.value === "button" &&
+          node.name?.value === "Show 4 child sessions for Plan release",
+      );
+      expect(collapsedToggle?.description?.value).toBe("Active run");
       await captureUiProof(suite, page, "child-sessions-collapsed.png");
 
       await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
@@ -149,6 +163,15 @@ suite.define(() => {
       expect(await childToggle.getAttribute("class")).toContain(
         "sidebar-child-session-toggle--running",
       );
+      const expandedTree = await accessibility.send("Accessibility.getFullAXTree");
+      const expandedToggle = expandedTree.nodes.find(
+        (node) =>
+          node.role?.value === "button" &&
+          node.name?.value === "Hide 4 child sessions for Plan release",
+      );
+      expect(expandedToggle).toBeDefined();
+      expect(expandedToggle?.description?.value ?? "").toBe("");
+      await accessibility.detach();
       for (const child of [staleRunningChild, failedChild]) {
         expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
         expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
@@ -188,11 +211,7 @@ suite.define(() => {
   });
 
   it("dismisses fixed session menus before the sidebar or drawer hides", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -232,8 +251,9 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
       const openSessionMenu = async () => {
-        await row.hover();
-        await row.getByRole("button", { name: "Open session menu" }).click();
+        // Keep dismissal setup independent of hover while the sidebar expands.
+        await row.getByRole("button", { name: "Open session menu" }).focus();
+        await page.keyboard.press("Enter");
         await page
           .getByRole("menu", { name: "Actions for Research notes" })
           .waitFor({ state: "visible" });
@@ -346,11 +366,7 @@ suite.define(() => {
   });
 
   it("names session-row actions and tabs from their menu into the next visible session", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -435,11 +451,7 @@ suite.define(() => {
   });
 
   it("keeps sidebar sessions visible through transport and client replacement reconnects", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:disconnect-proof";
     const otherSessionKeys = ["agent:main:other-a", "agent:main:other-b"] as const;
@@ -530,11 +542,7 @@ suite.define(() => {
   });
 
   it("retains the selected session and one observer while reconnecting across route changes", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const firstKey = "agent:main:reconnect-first";
     const selectedKey = "agent:main:reconnect-selected";
@@ -792,7 +800,13 @@ suite.define(() => {
       await pinnedCandidate.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Unpin session" }).waitFor();
       expect(await page.getByRole("menuitem", { name: "Reset pinned items" }).count()).toBe(0);
-      await captureUiProof(suite, page, "sidebar-session-dropped-into-pinned.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sidebar-session-dropped-into-pinned.png",
+        page.locator('openclaw-session-menu > wa-dropdown [part="menu"]'),
+        [page.getByRole("menuitem", { name: "Unpin session" })],
+      );
     } finally {
       await context.close();
       if (proofVideo) {
@@ -828,11 +842,7 @@ suite.define(() => {
         sessionRow("agent:main:node-mcp-debug-4de003fbff138fcb9239c9378b2e", "", ts - 180_000),
       ];
     };
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await page.addInitScript(() => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");

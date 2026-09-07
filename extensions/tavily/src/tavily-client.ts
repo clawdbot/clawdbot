@@ -416,7 +416,3 @@ export async function runTavilyExtract(
   );
   return result;
 }
-
-export const testing = {
-  resolveEndpoint,
-};

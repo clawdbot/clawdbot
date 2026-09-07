@@ -201,6 +201,9 @@ describe("task-flow-registry store runtime", () => {
       expect(() => loadTaskFlowRegistryStateFromSqlite()).toThrow(
         "Invalid persisted task flow status",
       );
+      expect(() => loadTaskFlowRegistryStateFromSqliteReadOnly()).toThrow(
+        "Invalid persisted task flow status",
+      );
     });
   });
 
@@ -327,6 +330,7 @@ describe("task-flow-registry store runtime", () => {
       expect(restored.flows.size).toBe(1_100);
       expect(restored.flows.has("flow-large-0")).toBe(false);
       expect(restored.flows.has("flow-large-1199")).toBe(true);
+      expect(loadTaskFlowRegistryStateFromSqliteReadOnly()).toEqual(restored);
       expect(
         openOpenClawStateDatabase()
           .db.prepare(

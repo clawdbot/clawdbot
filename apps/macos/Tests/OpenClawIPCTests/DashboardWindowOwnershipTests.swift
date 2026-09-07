@@ -50,7 +50,7 @@ private actor DashboardWindowOwnershipEndpointGate {
 }
 
 actor DashboardWindowOwnershipPresentationGate {
-    private var requested = false
+    private var requested = AsyncTestGate()
     private var released = false
     private var requestCount = 0
     private var continuations: [CheckedContinuation<Void, Never>] = []
@@ -60,13 +60,14 @@ actor DashboardWindowOwnershipPresentationGate {
     }
 
     func hold() {
-        self.requested = false
+        // Reset between request cycles, after prior observers have returned.
+        self.requested = AsyncTestGate()
         self.released = false
     }
 
     @discardableResult
     func waitForRelease() async -> Int {
-        self.requested = true
+        self.requested.open()
         self.requestCount += 1
         let request = self.requestCount
         if !self.released {
@@ -78,9 +79,7 @@ actor DashboardWindowOwnershipPresentationGate {
     }
 
     func waitUntilRequested() async {
-        while !self.requested {
-            await Task.yield()
-        }
+        await self.requested.wait()
     }
 
     func numberOfRequests() -> Int {
@@ -651,8 +650,9 @@ struct DashboardWindowOwnershipTests {
         #expect(autosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
         #expect(controller._testDashboardDataStore === dataStore)
         #expect(!controller._testDashboardDataStore.isPersistent)
-        controller._testOpenLinkBrowser(server.url("/reader/first"))
-        #expect(controller._testLinkBrowserDataStore === dataStore)
+        try controller.nativeBrowser.open(tabId: "mac-first", url: server.url("/reader/first"))
+        #expect(try #require(controller.nativeBrowser.webView(for: "mac-first"))
+            .configuration.websiteDataStore === dataStore)
 
         await manager.handleEndpointState(.connecting(mode: .remote, detail: "Reconnecting"))
         let failure = try #require(manager._testController())
@@ -670,8 +670,9 @@ struct DashboardWindowOwnershipTests {
         #expect(recovered !== failure)
         #expect(recovered._testDashboardDataStore === dataStore)
         #expect(recovered.window?.frameAutosaveName == autosaveName)
-        recovered._testOpenLinkBrowser(server.url("/reader/recovered"))
-        #expect(recovered._testLinkBrowserDataStore === dataStore)
+        try recovered.nativeBrowser.open(tabId: "mac-recovered", url: server.url("/reader/recovered"))
+        #expect(try #require(recovered.nativeBrowser.webView(for: "mac-recovered"))
+            .configuration.websiteDataStore === dataStore)
     }
 
     @Test(arguments: [AppState.ConnectionMode.local, .remote])

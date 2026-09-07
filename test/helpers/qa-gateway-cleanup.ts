@@ -2,14 +2,15 @@
 // Surface diagnostic errors without interpreting them as process liveness.
 type StopOptions = { keepTemp?: boolean; preserveToDir?: string };
 
-export async function runQaGatewayFixture(
-  body: () => Promise<void>,
+export async function runQaGatewayFixture<T>(
+  body: () => Promise<T>,
   ...cleanups: Array<() => unknown>
-): Promise<void> {
+): Promise<T> {
   const errors: unknown[] = [];
+  const bodyResult = (async () => body())();
   // Keep cleanup phases ordered, but never let one failure skip later owners
   // or replace the startup/body error. Callers may settle a phase in parallel.
-  for (const phase of [body, ...cleanups]) {
+  for (const phase of [() => bodyResult, ...cleanups]) {
     try {
       await phase();
     } catch (error) {
@@ -22,6 +23,7 @@ export async function runQaGatewayFixture(
   if (errors.length > 0) {
     throw new AggregateError(errors, "QA gateway fixture failed");
   }
+  return bodyResult;
 }
 
 export async function stopQaGatewayFixture(

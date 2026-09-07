@@ -70,6 +70,20 @@ describe("Google SDK construction auth", () => {
     configureAiTransportHost({});
   });
 
+  it.each(["none", "short", "long"] as const)(
+    "identifies OpenCode conversations with %s cache retention",
+    async (cacheRetention) => {
+      await streamGoogle({ ...googleModel(), baseUrl: "https://opencode.ai/zen/v1" }, context, {
+        apiKey: "test",
+        sessionId: "conversation-123",
+        cacheRetention,
+      }).result();
+      expect(googleMockState.configs[0]).toMatchObject({
+        httpOptions: { headers: { "x-opencode-session": "conversation-123" } },
+      });
+    },
+  );
+
   it("unwraps Google API-key sentinels immediately before client construction", async () => {
     const buildModelFetch = vi.fn();
     configureAiTransportHost({

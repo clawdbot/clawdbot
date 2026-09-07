@@ -1,7 +1,8 @@
 // Covers config path resolution across env, home, and agent roots.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
@@ -15,6 +16,7 @@ import {
   pinRuntimePaths,
   resolveNativeServiceProfileConflict,
   resolveDefaultConfigCandidates,
+  resolveCanonicalConfigPath,
   resolveConfigPathCandidate,
   resolveConfigPath,
   resolveGatewayPort,
@@ -567,6 +569,22 @@ describe("state + config path candidates", () => {
       const resolved = resolveConfigPathCandidate({} as NodeJS.ProcessEnv, () => root);
       expect(resolved).toBe(legacyPath);
     });
+  });
+
+  it.each([
+    { name: "candidate", resolve: resolveConfigPathCandidate },
+    { name: "active", resolve: resolveConfigPath },
+    { name: "canonical", resolve: resolveCanonicalConfigPath },
+  ])("resolves explicit config selection in $name without filesystem discovery", ({ resolve }) => {
+    const home = path.resolve("config-selection-home");
+    const configPath = path.join(home, "selected.json");
+    const exists = vi.spyOn(fsSync, "existsSync").mockReturnValue(false);
+    try {
+      expect(resolve({ HOME: home, OPENCLAW_CONFIG_PATH: configPath })).toBe(configPath);
+      expect(exists).not.toHaveBeenCalled();
+    } finally {
+      exists.mockRestore();
+    }
   });
 
   it("respects state dir overrides when config is missing", async () => {

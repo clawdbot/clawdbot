@@ -174,6 +174,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
     targetMainKey: "main",
     stateDir: "/tmp/state",
     oauthDir: "/tmp/oauth",
+    pluginSessionStoreAgentIds: [],
     deviceAuth: {
       sourcePath: "/tmp/state/identity/device-auth.json",
       sourcePresent: false,
@@ -236,7 +237,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/agents/main/agent/openclaw-agent.sqlite",
       hasLegacy: false,
     },
-    worktrees: { hasLegacy: false, pathRewrites: [] },
+    worktrees: { hasLegacy: false, legacyIds: [], pathRewrites: [] },
     taskStateSidecars: {
       taskRunsPath: "/tmp/state/tasks/runs.sqlite",
       flowRunsPath: "/tmp/state/flows/registry.sqlite",
@@ -315,6 +316,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       knownChannelIds: [],
       defaultAccountIds: {},
       accountIds: {},
+      accountDiscoveryDeferred: false,
       hasLegacy: false,
     },
     warnings: [],
@@ -347,7 +349,6 @@ vi.mock("../skills/discovery/status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  getRuntimePluginRegistryForLoadOptions: () => null,
   isPluginRegistryLoadInFlight: () => false,
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
   loadPluginRegistryHandle: () => createEmptyPluginRegistry(),
@@ -464,6 +465,7 @@ vi.mock("../flows/doctor-health-contributions.js", () => ({
 vi.mock("../flows/doctor-core-checks.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../flows/doctor-core-checks.runtime.js")>()),
   collectRuntimeToolSchemaFindings: vi.fn().mockResolvedValue([]),
+  collectProviderCatalogProjectionFindings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
@@ -516,9 +518,9 @@ vi.mock("../agents/auth-profiles.js", async () => {
   };
 });
 
-vi.mock("../agents/auth-profiles/store.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/auth-profiles/store.js")>(
-    "../agents/auth-profiles/store.js",
+vi.mock("../agents/auth-profiles/store-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/auth-profiles/store-runtime.js")>(
+    "../agents/auth-profiles/store-runtime.js",
   );
   return {
     ...actual,

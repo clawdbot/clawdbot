@@ -101,7 +101,7 @@ describe("Canvas widget view", () => {
     expect(post).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "ui/notifications/sandbox-resource-ready",
-        params: { html: documentView.html },
+        params: { html: documentView.html, renderId: expect.any(String) },
       }),
       "http://gateway.example:8444",
     );

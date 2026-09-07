@@ -78,6 +78,19 @@ export function resolveSharedAuthStoreOwnership(
   return ownership;
 }
 
+/** Inspect copied state without pinning a runtime owner or changing SQLite artifacts. */
+export function inspectSharedAuthStoreOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+): SharedAuthStoreOwnership {
+  return parseSharedAuthStoreOwnership(
+    readConfigMachineState<unknown>(
+      SHARED_AUTH_STORE_STATE_KEY,
+      { env },
+      { artifactPreservingReadOnly: true },
+    ),
+  );
+}
+
 /** Update the process-stable cache after this process commits the ownership row. */
 export function noteCommittedSharedAuthStoreOwnership(
   ownership: SharedAuthStoreOwnership,

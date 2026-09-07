@@ -860,7 +860,7 @@ test.each([
     timedOut: false,
   },
 ] as const)(
-  "process log and poll preserve authoritative $name without log consuming the completion",
+  "process list, log, and poll preserve authoritative $name without consuming the completion",
   async ({ name, exitCode, exitSignal, status, exitReason, timedOut, ...optional }) => {
     const sessionId = `sess-terminal-${name.replaceAll(" ", "-")}`;
     const { processTool, session } = createProcessSessionHarness(sessionId);
@@ -869,6 +869,22 @@ test.each([
     appendOutput(session, "stderr", "terminal output\n");
     markExited(session, exitCode, exitSignal, status, exitReason, optional.noOutputTimedOut);
     recordNotifyOnExitRemoval(session, remove);
+
+    const list = await processTool.execute("toolcall-terminal-list", { action: "list" });
+    const listedSessions = (list.details as { sessions?: Array<{ sessionId?: string }> }).sessions;
+    const listed = listedSessions?.find((candidate) => candidate.sessionId === sessionId);
+    expect(listed).toMatchObject({
+      status,
+      sessionId,
+      exitCode: exitCode ?? undefined,
+      exitReason,
+      timedOut,
+      ...optional,
+    });
+    const listText = list.content[0]?.type === "text" ? list.content[0].text : "";
+    expect(listText).toContain(sessionId);
+    expect(listText.includes(`[${exitReason}]`)).toBe(timedOut);
+    expect(remove).not.toHaveBeenCalled();
 
     const log = await processTool.execute("toolcall-terminal-log", {
       action: "log",

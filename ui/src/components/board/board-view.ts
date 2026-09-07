@@ -86,6 +86,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardViewCallbacks;
   @property({ type: Boolean }) active = true;
+  @property({ type: Boolean }) bridgeEnabled = true;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
   @property({ type: Boolean }) fitAutoContent = false;
@@ -397,11 +398,11 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       const targetName = pointerElement?.closest<
         HTMLElementTagNameMap["openclaw-board-widget-cell"]
       >("openclaw-board-widget-cell")?.widget?.name;
-      const targetCell = layout(items).find((rect) => rect.name === targetName) ?? {
+      this.previewItems = previewDrag(items, gesture.name, {
+        name: targetName,
         x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
         y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
-      };
-      this.previewItems = previewDrag(items, gesture.name, targetCell).items;
+      });
       return;
     }
 
@@ -605,6 +606,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}
                 .active=${this.active}
+                .bridgeEnabled=${this.bridgeEnabled}
                 .dragging=${widget.name === this.gestureName}
                 .focusTabIndex=${widget.name === focusName ? 0 : -1}
                 .positionInSet=${(logicalPosition.get(widget.name) ?? 0) + 1}

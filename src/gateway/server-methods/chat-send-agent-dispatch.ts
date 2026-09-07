@@ -23,7 +23,7 @@ import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
-import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import { broadcastChatDelta, broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
@@ -173,13 +173,25 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
 
   let agentRunStarted = false;
   let replyDispatchRun: ReplyDispatchRun | undefined;
+  const isRunCurrent = () =>
+    !activeRunAbort.controller.signal.aborted &&
+    context.chatAbortControllers.get(clientRunId) === activeRunAbort.entry;
   const replyDispatch = createChatSendReplyDispatch({
     accountId,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
     isAgentRunStarted: () => agentRunStarted,
-    isRunCurrent: () =>
-      !activeRunAbort.controller.signal.aborted &&
-      context.chatAbortControllers.get(clientRunId) === activeRunAbort.entry,
+    isRunCurrent,
+    onCommandBlock: isInternalTextSlashCommandTurn
+      ? (text) =>
+          broadcastChatDelta({
+            context,
+            runId: clientRunId,
+            sessionKey,
+            agentId,
+            text,
+            isCurrent: isRunCurrent,
+          })
+      : undefined,
     getReplyDispatchRun: () => replyDispatchRun,
     logGateway: context.logGateway,
     session,
@@ -218,6 +230,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     admission,
     classifyFailure: classifyDispatchFailure,
     context,
+    isAgentRunStarted: () => agentRunStarted,
     isQueuedFollowupEnqueued: queuedFollowup.isEnqueued,
     persistUserTurnTranscript: persistGatewayUserTurnTranscript,
     session,

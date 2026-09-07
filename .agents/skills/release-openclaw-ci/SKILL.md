@@ -45,9 +45,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   npm publication, or `pnpm release:candidate`. Keep normal CI, npm
   qualification, Docker, Package Acceptance, performance, and soak gates intact.
 - macOS app signing/notarization/appcast and Windows Hub asset promotion run
-  in parallel with or after npm publication and never delay npm. Their own
-  qualification and artifact gates still apply; Windows Hub assets remain a
-  GitHub release finalization requirement.
+  in parallel with or after npm publication and never delay npm or GitHub
+  finalization. Their own qualification and artifact gates still apply; track
+  selected platforms through verified assets and updater evidence separately.
 - Do not set GitHub secrets from unvalidated 1Password candidates. If a candidate returns 401/403, leave the existing secret alone and report the exact missing provider.
 - Use `$one-password` for secret reads/writes: one persistent tmux session, targeted items only, no secret output.
 - Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.
@@ -235,6 +235,20 @@ trusted dispatch helper. Record the target SHA with the successful production
 build, precompressed-asset verification, and startup/largest-asset budget results;
 any failure blocks fanout. Do not substitute a dev server or raise budgets to admit
 the target.
+
+For local full E2E proof, prepare the frozen, dependency-ready proof checkout
+with private QA entries in the initial build:
+
+```bash
+OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build
+```
+
+Then run the selected E2E command with its normal readiness checks enabled.
+`scripts/lib/vitest-build-prerequisites.mts` requests private QA entries;
+`scripts/run-node.mts` triggers another full build when they are absent. This
+preflight avoids rebuilding solely for `missing_private_qa_dist`. Keep the flag
+scoped to this task-owned proof checkout and command. Publication package and
+image bytes remain owned by the release workflows and their sealed artifacts.
 
 Before full release validation:
 

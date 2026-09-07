@@ -52,6 +52,8 @@ export type ModelCallDiagnosticContext = {
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
   onStarted?: () => void;
+  onTerminal?: () => void;
+  onSucceeded?: (startedAt: number) => void;
   suppressPluginHooks?: boolean;
   requestTimeoutMs?: number;
 };
@@ -95,10 +97,10 @@ export type ModelCallObservationState = {
   outputMessages?: unknown[];
   usage?: ModelCallUsage;
   contentCapture?: DiagnosticModelContentCapturePolicy;
-  lastStreamProgressAt?: number;
   semanticProgressEmitted?: boolean;
   terminalEventEmitted?: boolean;
   terminalError?: Error;
+  terminalSucceeded?: boolean;
   suppressPluginHooks?: boolean;
 };
 export type ModelCallObserver = {
@@ -407,12 +409,21 @@ export function createModelLifecycle(params: {
   params.ctx.onStarted?.();
   const startedAt = Date.now();
   const propagatedOptions = withDiagnosticRequestContext(params.options, trace, observer, callId);
+  let terminalNotified = false;
   return {
     eventBase,
     observer,
     propagatedOptions,
     startedAt,
     emitCompleted() {
+      // Iterator exhaustion can emit diagnostics before result() supplies the terminal response.
+      if (!terminalNotified && (observer.state.terminalSucceeded || observer.state.terminalError)) {
+        terminalNotified = true;
+        params.ctx.onTerminal?.();
+        if (observer.state.terminalSucceeded && !observer.state.terminalError) {
+          params.ctx.onSucceeded?.(startedAt);
+        }
+      }
       emitModelCallEnded(
         eventBase,
         startedAt,

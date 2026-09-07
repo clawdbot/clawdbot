@@ -21,13 +21,6 @@ export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined
 }
 
 /**
- * Returns the package/install origin for a loaded channel plugin.
- */
-export function getLoadedChannelPluginOrigin(id: ChannelId): string | undefined {
-  return normalizeOptionalString(getLoadedChannelPluginEntryById(id)?.origin);
-}
-
-/**
  * Resolves the active channel implementation together with host-owned provenance.
  */
 export function resolveChannelPluginRegistration(id: ChannelId):

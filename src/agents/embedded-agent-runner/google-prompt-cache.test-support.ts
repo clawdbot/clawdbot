@@ -160,7 +160,6 @@ export function preparePromptCacheStream(params: {
       sessionManager: params.sessionManager,
       signal: params.signal,
       streamFn: params.streamFn,
-      systemPrompt: "Follow policy.",
     },
     {
       ...(params.buildGuardedFetch

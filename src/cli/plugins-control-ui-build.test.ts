@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createPluginImportFixture,
   unresolvedPluginImportCases,
@@ -106,6 +107,49 @@ describe("native plugin browser builds", () => {
     expect(built.asDateTimestampMs("0")).toBeUndefined();
     expect(built.asDateTimestampMs(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(built.truncateUtf16Safe("A😀B", 2)).toBe("A");
+  });
+
+  it("bundles SDK source instead of stale dist under NODE_ENV=production", async () => {
+    const project = await fixture();
+    const sdkRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-build-sdk-"));
+    directories.push(sdkRoot);
+    await Promise.all(
+      ["src/plugin-sdk", "dist/plugin-sdk", "extensions"].map((dir) =>
+        fs.mkdir(path.join(sdkRoot, dir), { recursive: true }),
+      ),
+    );
+    await fs.writeFile(
+      path.join(sdkRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        bin: { openclaw: "openclaw.mjs" },
+        exports: { "./plugin-sdk/control-ui": { default: "./dist/plugin-sdk/control-ui.js" } },
+      }),
+    );
+    await fs.writeFile(
+      path.join(sdkRoot, "src/plugin-sdk/control-ui.ts"),
+      'export const origin = "source";',
+    );
+    await fs.writeFile(
+      path.join(sdkRoot, "dist/plugin-sdk/control-ui.js"),
+      'export const origin = "stale dist";',
+    );
+    await fs.writeFile(
+      path.join(project.rootDir, project.source),
+      'export { origin } from "openclaw/plugin-sdk/control-ui";',
+    );
+    const build = (nodeEnv: string | undefined) =>
+      withEnvAsync({ NODE_ENV: nodeEnv, OPENCLAW_DEV_SOURCE_ROOT: sdkRoot }, () =>
+        buildPluginControlUi(project),
+      );
+
+    const development = await build(undefined);
+    const production = await build("production");
+
+    expect(production).toEqual(development);
+    const built = await import(pathToFileURL(path.join(project.rootDir, production.entry)).href);
+    expect(built.origin).toBe("source");
   });
 
   it.each(unresolvedPluginImportCases)(

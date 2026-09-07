@@ -28,7 +28,6 @@ import {
   isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
   launchFallbackTaskScript,
-  probeScheduledTaskExists,
   readScheduledTaskRuntime,
   removeStartupEntries,
   resolveFallbackRuntime,
@@ -40,6 +39,7 @@ import {
   terminateInstalledStartupRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type {
@@ -203,6 +203,8 @@ function parseScheduledTaskXmlEnabled(output: string): boolean | null {
 async function changeScheduledTaskEnabledState(params: {
   env: GatewayServiceEnv;
   enabled: boolean;
+  beforeMutation?: () => Promise<void>;
+  restoreOnFailure?: boolean;
 }): Promise<boolean> {
   const taskName = resolveTaskName(params.env);
   if (!params.enabled) {
@@ -225,15 +227,17 @@ async function changeScheduledTaskEnabledState(params: {
   }
 
   const action = params.enabled ? "/ENABLE" : "/DISABLE";
+  await params.beforeMutation?.();
   const result = await execSchtasks(["/Change", "/TN", taskName, action]);
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout).trim() || "unknown error";
     const changeError = new Error(
       `schtasks ${params.enabled ? "enable" : "disable"} failed: ${detail}`,
     );
-    if (!params.enabled) {
+    if (!params.enabled && params.restoreOnFailure !== false) {
       // A timeout can follow a committed /DISABLE, so restore the proven prior state.
       try {
+        await params.beforeMutation?.();
         const restore = await execSchtasks(["/Change", "/TN", taskName, "/ENABLE"]);
         if (restore.code !== 0) {
           const restoreDetail = (restore.stderr || restore.stdout).trim() || "unknown error";
@@ -254,14 +258,16 @@ async function changeScheduledTaskEnabledState(params: {
 
 export async function suspendScheduledTaskAutoStartForUpdate(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+  options?: { beforeMutation?: () => Promise<void>; restoreOnFailure?: boolean },
 ): Promise<boolean> {
-  return changeScheduledTaskEnabledState({ env, enabled: false });
+  return changeScheduledTaskEnabledState({ env, enabled: false, ...options });
 }
 
 export async function resumeScheduledTaskAutoStartAfterUpdate(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+  options?: { beforeMutation?: () => Promise<void> },
 ): Promise<boolean> {
-  return changeScheduledTaskEnabledState({ env, enabled: true });
+  return changeScheduledTaskEnabledState({ env, enabled: true, ...options });
 }
 
 async function shouldControlStartupEntry(env: GatewayServiceEnv): Promise<boolean> {

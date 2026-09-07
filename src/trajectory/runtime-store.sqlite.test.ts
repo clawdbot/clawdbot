@@ -121,6 +121,68 @@ describe("SQLite trajectory runtime store", () => {
     expect(events.map((event) => event.type)).toEqual(["event-3", "event-4"]);
   });
 
+  it("stops reading old event bodies once the retained byte window is full", async () => {
+    const history = Array.from({ length: 64 }, (_, index) =>
+      createTrajectoryEvent({ type: `old-${index}`, payloadSize: 64 * 1024 }),
+    );
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, history);
+    const newest = createTrajectoryEvent({ type: "newest" });
+    const retained = [...history.slice(-2), newest];
+    const maxRuntimeBytes = retained.reduce(
+      (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1,
+      0,
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
+    const prepare = database.db.prepare.bind(database.db);
+    let materializedEvents = 0;
+    const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      const iterate = statement.iterate.bind(statement);
+      vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
+        for (const row of iterate(...args)) {
+          if (typeof row.event_json === "string") {
+            materializedEvents += 1;
+          }
+          yield row;
+        }
+        return undefined;
+      });
+      return statement;
+    });
+    try {
+      appendSqliteTrajectoryRuntimeEvents({ maxRuntimeBytes, sessionId: "session-1", storePath }, [
+        newest,
+      ]);
+      expect(materializedEvents).toBeLessThanOrEqual(retained.length + 1);
+    } finally {
+      prepareSpy.mockRestore();
+    }
+    await expect(
+      loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
+    ).resolves.toEqual(retained);
+  });
+
+  it.each([0, -1])("keeps the exact UTF-8 byte window with a %i-byte adjustment", async (delta) => {
+    const events = ["old", "middle", "newest"].map((type) => {
+      const event = createTrajectoryEvent({ type });
+      event.data = { payload: "日本語🦞".repeat(20) };
+      return event;
+    });
+    const maxRuntimeBytes = events
+      .slice(-2)
+      .reduce(
+        (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1,
+        delta,
+      );
+    appendSqliteTrajectoryRuntimeEvents(
+      { maxRuntimeBytes, sessionId: "session-1", storePath },
+      events,
+    );
+    await expect(
+      loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
+    ).resolves.toEqual(events.slice(delta === 0 ? -2 : -1));
+  });
+
   it("loads a bounded trailing window in storage order", () => {
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
       createTrajectoryEvent({ type: "event-1" }),

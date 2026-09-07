@@ -31,7 +31,7 @@ export async function writeTsdownDeclarations(
   previousOutputs: (root: string) => string[],
   generatorEntry: string,
 ) {
-  const root = process.cwd();
+  const root = fs.realpathSync.native(process.cwd());
   const stages: string[] = [];
   const createStage = () => {
     const stage = createDeclarationStage(root);
@@ -40,7 +40,8 @@ export async function writeTsdownDeclarations(
   };
   const failures: unknown[] = [];
   try {
-    await withDistArtifactOwnership(root, async () => {
+    // The private child retains declared cwd ownership; snapshot/output paths are physical.
+    await withDistArtifactOwnership(process.cwd(), async () => {
       const { default: configs }: { default: typeof import("../../tsdown.config.ts").default } =
         await import(pathToFileURL(path.join(root, "tsdown.config.ts")).href);
       const staging = createStage();
@@ -183,7 +184,7 @@ export async function writeTsdownDeclarations(
             const sealed = after.seal(
               "tsconfig.json",
               group.identity,
-              readDeclarationInputs(group.output, [group.name]),
+              readDeclarationInputs(group.output, group.name),
               before,
               startedAt,
               liveDist,

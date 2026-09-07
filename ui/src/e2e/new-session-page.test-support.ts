@@ -1,7 +1,9 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { errors, type Locator, type Page } from "playwright";
 import { expect } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -66,6 +68,8 @@ const LOCATOR_TEXT_READ_TIMEOUT_MS = 500;
 const LOCATOR_TEXT_POLL_TIMEOUT_MS = 10_000;
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+type NewSessionProofSurface = { surface: Locator; content: readonly Locator[] };
 
 export const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
@@ -224,33 +228,51 @@ export async function captureUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
+  presentation?: NewSessionProofSurface,
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, path.join(owner.artifactDir, "cloud-worker-session"), fileName);
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "cloud-worker-session"),
+    fileName,
+    presentation,
+  );
 }
 
 export async function captureProjectUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
+  presentation?: NewSessionProofSurface,
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, path.join(owner.artifactDir, "project-registry"), fileName);
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "project-registry"),
+    fileName,
+    presentation,
+  );
 }
 
 export async function captureNewSessionComposerUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
+  presentation?: NewSessionProofSurface,
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, path.join(owner.artifactDir, "new-session-slash-menu"), fileName);
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "new-session-slash-menu"),
+    fileName,
+    presentation,
+  );
 }
 
 export async function captureEnvironmentMetadataUiProof(
@@ -272,14 +294,43 @@ export async function captureDeviceRuntimeUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
+  presentation?: NewSessionProofSurface,
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, path.join(owner.artifactDir, "device-runtime-gating"), fileName);
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "device-runtime-gating"),
+    fileName,
+    presentation,
+  );
 }
 
-async function captureProof(page: Page, artifactDir: string, fileName: string) {
+async function captureProof(
+  page: Page,
+  artifactDir: string,
+  fileName: string,
+  presentation?: NewSessionProofSurface,
+) {
+  if (page.video()) {
+    await mkdir(artifactDir, { recursive: true });
+    await writeFile(
+      path.join(artifactDir, fileName),
+      await takeControlUiViewportScreenshot(
+        page,
+        presentation?.surface ?? page.locator(".shell"),
+        presentation?.content ?? [
+          page
+            .locator(
+              ".new-session-page__message:visible, .new-session-page__starting .chat-group.user:visible, .agent-chat__composer-combobox textarea:visible",
+            )
+            .first(),
+        ],
+      ),
+    );
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     fullPage: true,

@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { createInstallGitCommitFixtureScript } from "./install-git-fixtures.js";
 import {
@@ -29,6 +30,7 @@ import {
 import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install.sh";
+const nodeExecutable = requireNodeTool("node");
 
 function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
   const home = mkdtempSync(join(tmpdir(), "openclaw-install-home-"));
@@ -50,7 +52,7 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
 }
 
 function linkNodeExecutable(bin: string) {
-  symlinkSync(process.execPath, join(bin, "node"));
+  symlinkSync(nodeExecutable, join(bin, "node"));
 }
 
 describe("install.sh", () => {
@@ -725,7 +727,7 @@ NODE
       apk() {
         printf 'apk:%s\\n' "$*"
         if [[ "$*" == *"nodejs-current"* ]]; then
-          NODE_FAKE_VERSION=v22.22.3
+          NODE_FAKE_VERSION=v24.16.0
         fi
       }
       node() {
@@ -1240,7 +1242,7 @@ NODE
         cat > "$bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec ${process.execPath} $repo/dist/entry.js "\\$@"
+exec ${nodeExecutable} $repo/dist/entry.js "\\$@"
 EOF
         chmod +x "$bin/openclaw"
         fake_npm="$root/npm"
@@ -1305,7 +1307,7 @@ EOF
       cat > "$bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec ${process.execPath} $repo/dist/entry.js "\\$@"
+exec ${nodeExecutable} $repo/dist/entry.js "\\$@"
 EOF
       chmod +x "$bin/openclaw"
       cat > "$launcher" <<'EOF'
@@ -2919,7 +2921,7 @@ EOF
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nvm-"));
     const home = join(tmp, "home");
     const systemBin = join(tmp, "system-bin");
-    const nvmBin = join(home, ".nvm/versions/node/v22.22.3/bin");
+    const nvmBin = join(home, ".nvm/versions/node/v24.16.0/bin");
     mkdirSync(systemBin, { recursive: true });
     mkdirSync(nvmBin, { recursive: true });
     mkdirSync(join(home, ".nvm"), { recursive: true });
@@ -2927,7 +2929,7 @@ EOF
     const systemNode = join(systemBin, "node");
     const nvmNode = join(nvmBin, "node");
     writeFileSync(systemNode, "#!/bin/sh\necho v8.11.3\n");
-    writeFileSync(nvmNode, "#!/bin/sh\necho v22.22.3\n");
+    writeFileSync(nvmNode, "#!/bin/sh\necho v24.16.0\n");
     chmodSync(systemNode, 0o755);
     chmodSync(nvmNode, 0o755);
     writeFileSync(
@@ -2937,7 +2939,7 @@ EOF
         "export NVM_DIR",
         "nvm() {",
         '  if [ "$1" = "use" ]; then',
-        '    export PATH="$NVM_DIR/versions/node/v22.22.3/bin:$PATH"',
+        '    export PATH="$NVM_DIR/versions/node/v24.16.0/bin:$PATH"',
         "    return 0",
         "  fi",
         "  return 0",
@@ -2974,7 +2976,7 @@ EOF
     const output = result?.stdout ?? "";
     expect(output).toContain("status=0");
     expect(output).toContain(`path=${nvmNode}`);
-    expect(output).toContain("version=v22.22.3");
+    expect(output).toContain("version=v24.16.0");
   });
 
   it("installs Homebrew lazily before macOS Git installs", () => {
@@ -3003,7 +3005,7 @@ EOF
     const staleNode = join(staleBin, "node");
     const supportedNode = join(supportedBin, "node");
     writeFileSync(staleNode, "#!/bin/sh\necho v20.20.0\n");
-    writeFileSync(supportedNode, "#!/bin/sh\necho v22.22.3\n");
+    writeFileSync(supportedNode, "#!/bin/sh\necho v24.16.0\n");
     chmodSync(staleNode, 0o755);
     chmodSync(supportedNode, 0o755);
 
@@ -3044,14 +3046,14 @@ EOF
     expect(output).toContain("promote=0");
     expect(output).toContain("active=0");
     expect(output).toContain(`path=${supportedNode}`);
-    expect(output).toContain("version=v22.22.3");
+    expect(output).toContain("version=v24.16.0");
   });
 
   it("mirrors the canonical release-label contract for existing Node runtimes", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
       engines?: { node?: string };
     };
-    expect(pkg.engines?.node).toBe(">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0");
+    expect(pkg.engines?.node).toBe(">=24.16.0 <25 || >=26.1.0");
 
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-floor-"));
     const bin = join(tmp, "bin");
@@ -3158,7 +3160,7 @@ EOF
       [
         "#!/usr/bin/env bash",
         'if [[ "${1:-}" == "-p" ]]; then echo "24 15"; exit 0; fi',
-        'if [[ "${1:-}" == "-v" ]]; then echo "v24.15.0"; exit 0; fi',
+        'if [[ "${1:-}" == "-v" ]]; then echo "v24.16.0"; exit 0; fi',
         "",
       ].join("\n"),
     );
@@ -4376,7 +4378,7 @@ HOOK
       writeFileSync(join(repo, "pnpm-lock.yaml"), "unchanged lock\n");
       writeFileSync(join(outer, "package.json"), '{"packageManager":"yarn@4.5.0"}');
       linkPnpmBootstrapShellTools(bin);
-      symlinkSync(process.execPath, join(bin, "node"));
+      symlinkSync(nodeExecutable, join(bin, "node"));
       const executable = (name: string, body: string) => {
         writeFileSync(join(bin, name), `#!/bin/bash\nset -eu\n${body}\n`);
         chmodSync(join(bin, name), 0o755);
@@ -4631,15 +4633,18 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     }
   });
 
-  it("gum spin preserves terminal stdin for direct interactive installs", () => {
-    // When needs_stdin_isolation returns false (direct interactive run),
-    // gum spin should NOT redirect stdin from /dev/null so that wrapped
-    // commands like Homebrew can still prompt the user via stdin.
+  it("gum spin preserves supplied stdin when isolation is disabled", () => {
+    // Force the non-isolating branch with known input, independently of the
+    // subprocess runtime's default stdin. This is inheritance proof, not a TTY probe.
     const dir = mkdtempSync(join(tmpdir(), "openclaw-install-sh-gum-stdin-"));
     try {
       const gumPath = join(dir, "gum");
       const commandPath = join(dir, "command");
       const stdinLog = join(dir, "stdin-source");
+      const stdinPath = join(dir, "stdin");
+      const inputLog = join(dir, "stdin-content");
+      const input = "spinner fixture input\n";
+      writeFileSync(stdinPath, input);
       // Gum stub: skip args up to and including "--", then run the rest
       writeFileSync(
         gumPath,
@@ -4654,26 +4659,32 @@ describe("install.sh macOS Homebrew Node behavior", () => {
 stdin_dev=$(stat -f '%d:%i' /dev/fd/0 2>/dev/null || stat -c '%d:%i' /dev/fd/0 2>/dev/null)
 null_dev=$(stat -f '%d:%i' /dev/null 2>/dev/null || stat -c '%d:%i' /dev/null 2>/dev/null)
 if [ "$stdin_dev" = "$null_dev" ]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+cat > "${inputLog}"
 exit 0
 `,
         { mode: 0o755 },
       );
 
-      const result = runInstallShell(`
+      const result = runInstallShell(
+        `
         set -euo pipefail
+        exec < "$STDIN_FIXTURE_PATH"
         source "${SCRIPT_PATH}"
         # Override needs_stdin_isolation to return false (direct interactive)
         needs_stdin_isolation() { return 1; }
         gum_is_tty() { return 0; }
         GUM="${gumPath}"
         run_with_spinner "Installing node" "${commandPath}"
-      `);
+      `,
+        { STDIN_FIXTURE_PATH: stdinPath },
+      );
 
       // The gum spin command should NOT have redirected stdin from /dev/null
       expect(result.status).toBe(0);
       // Assert the child command's stdin was NOT /dev/null
       const observed = readFileSync(stdinLog, "utf8").trim();
       expect(observed).toBe("other");
+      expect(readFileSync(inputLog, "utf8")).toBe(input);
       expect(script).toContain("needs_stdin_isolation; then");
       expect(script).toContain(
         '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',

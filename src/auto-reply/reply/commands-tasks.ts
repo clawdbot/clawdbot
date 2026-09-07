@@ -37,7 +37,7 @@ const TASK_RUNTIME_LABELS: Record<TaskRecord["runtime"], string> = {
 
 function formatTaskHeadline(snapshot: ReturnType<typeof buildTaskStatusSnapshot>): string {
   if (snapshot.totalCount === 0) {
-    return "All clear - nothing linked to this session right now.";
+    return "Task runs: none active or recent for this session.";
   }
   return `Current session: ${snapshot.activeCount} active · ${snapshot.totalCount} total`;
 }

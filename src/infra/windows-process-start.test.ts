@@ -34,6 +34,40 @@ describe("readWindowsProcessStartTimeSync", () => {
     expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsWmicExePath());
   });
 
+  it("projects supplied native context with Windows key precedence for both queries", () => {
+    const env = {
+      SYSTEMROOT: "D:\\Native",
+      SystemRoot: "E:\\Ignored",
+      WINDIR: "F:\\Ignored",
+      PATH: "native-path",
+      PSModuleAnalysisCachePath: "D:\\NativeCache",
+      DIAGNOSTIC_NEUTRAL_CANARY: "synthetic",
+      NODE_OPTIONS: "--synthetic-injection-must-not-be-inherited",
+    };
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "" }).mockReturnValueOnce({
+      status: 0,
+      stdout: Buffer.from("CreationDate=20260713092049.123456+120\r\n"),
+    });
+    expect(readWindowsProcessStartTimeSync(456, 1000, env)).toBe(
+      Date.parse("2026-07-13T07:20:49.123Z"),
+    );
+    expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(
+      "D:\\Native\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    );
+    expect(spawnSyncMock.mock.calls[1]?.[0]).toBe("D:\\Native\\System32\\wbem\\wmic.exe");
+    for (const call of spawnSyncMock.mock.calls) {
+      expect(call[2].env).toEqual({
+        SYSTEMROOT: "D:\\Native",
+        WINDIR: "F:\\Ignored",
+        PATH: "native-path",
+        PSModuleAnalysisCachePath: "D:\\NativeCache",
+      });
+      expect(call[2].timeout).toBeLessThanOrEqual(1000);
+    }
+    expect(env.SystemRoot).toBe("E:\\Ignored");
+    expect(env.DIAGNOSTIC_NEUTRAL_CANARY).toBe("synthetic");
+  });
+
   it("does not start WMIC once PowerShell has spent the whole budget", () => {
     vi.useFakeTimers();
     try {

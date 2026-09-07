@@ -1,4 +1,4 @@
-import type { TemplateResult } from "lit";
+import type { nothing, TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type {
@@ -87,6 +87,8 @@ export type ConfigProps = {
   /** Control UI rows that belong to the active schema section but are not Gateway config. */
   sectionPrelude?: TemplateResult;
   showSectionDocs?: boolean;
+  /** Curated content inside the active section; receives the canonical schema editor. */
+  renderSection?: (editor: TemplateResult | typeof nothing) => TemplateResult;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;

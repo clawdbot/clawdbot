@@ -261,22 +261,33 @@ async function buildPreparedDataForConfig(
   options: ModelsBrowseContext,
   control: { catalogFallback?: boolean; deadlineMs?: number },
 ): Promise<PreparedModelsProviderData> {
-  const project = (owner?: PreparedModelRuntimeSnapshot) =>
-    projectPreparedModelsProviderData(cfg, agentId, options, owner);
+  const agentDir = options.agentDir ?? (agentId ? resolveAgentDir(cfg, agentId) : undefined);
+  const catalogContext = {
+    config: cfg,
+    ...(agentId ? { agentId } : {}),
+    ...(agentDir ? { agentDir } : {}),
+    ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+  };
+  const project = (owner?: PreparedModelRuntimeSnapshot) => {
+    // Discovery can outlive the browse deadline; retain current configured rows and native auth.
+    const preparedOwner =
+      owner ??
+      preparedModelCatalog.getPreparedModelCatalogOwnerSnapshot({
+        ...catalogContext,
+        readOnly: true,
+      });
+    return projectPreparedModelsProviderData(cfg, agentId, options, preparedOwner);
+  };
   if (control.catalogFallback) {
     return project();
   }
-  const agentDir = options.agentDir ?? (agentId ? resolveAgentDir(cfg, agentId) : undefined);
   const result = await awaitWithinDeadline(
     () =>
       preparedModelCatalog.withPreparedModelCatalogOwner(
         {
-          config: cfg,
+          ...catalogContext,
           readOnly: !modelCatalogBrowseRequiresFullDiscovery({ cfg, agentId, view: options.view }),
           refreshFullCatalog: "stale",
-          ...(agentId ? { agentId } : {}),
-          ...(agentDir ? { agentDir } : {}),
-          ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
         },
         project,
       ),

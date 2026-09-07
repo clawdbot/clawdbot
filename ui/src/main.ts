@@ -5,6 +5,7 @@ import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
+  scheduleStaleChunkReload,
 } from "./app/stale-chunk-reload.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
 
@@ -26,14 +27,24 @@ if (isProd && "serviceWorker" in navigator) {
   swUrl.searchParams.set("v", currentControlUiBuildId);
   navigator.serviceWorker.addEventListener("message", (event) => {
     if (controlUiWorkerActivationRetires(event.data)) {
-      window.location.reload();
+      void scheduleStaleChunkReload({
+        canReload: () => event.source === navigator.serviceWorker.controller,
+      });
     }
     if (event.data?.type === "sw-version-probe") {
       event.ports[0]?.postMessage({ version: currentControlUiBuildId });
     }
   });
+  const refresh = () =>
+    import("./app/sw-refresh.runtime.ts")
+      .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
+      .catch((error: unknown) => {
+        console.warn("OpenClaw service worker refresh failed.", error);
+      });
+  navigator.serviceWorker.addEventListener("controllerchange", () => void refresh());
   void navigator.serviceWorker
     .register(swUrl, { updateViaCache: "none" })
+    .then(refresh)
     .catch((error: unknown) => {
       console.warn("OpenClaw service worker registration failed.", error);
     });

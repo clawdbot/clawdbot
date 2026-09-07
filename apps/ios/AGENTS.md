@@ -13,7 +13,7 @@ Root rules still apply. This file adds the iOS release guardrails.
 
 ## Licenses Screen
 
-- Maintain the Settings-tab Licenses screen when iOS app dependencies change.
+- Maintain the Settings Licenses screen when iOS app dependencies change.
 - Bundled license files live in `apps/ios/Resources/Licenses/`.
 - License files must be UTF-8 `.txt` files. Do not add Markdown, HTML, RTF, or generated plist license content.
 - The Licenses screen discovers bundled `.txt` files at runtime through `LicenseDocumentLoader`; do not hardcode individual license rows in Swift.
@@ -23,13 +23,13 @@ Root rules still apply. This file adds the iOS release guardrails.
 - When adding, removing, or upgrading iOS dependencies, audit whether `apps/ios/Resources/Licenses/` needs updates. Exclude dependencies owned by OpenClaw Foundation from the published license list.
 - When adding, removing, or replacing redistributed font binaries under `apps/ios/Sources/Fonts/`, update `apps/ios/THIRD_PARTY_FONTS.md` with immutable upstream source URLs and SHA-256 checksums for each bundled file.
 - Keep license detail bodies rendered as verbatim monospace text.
-- Keep the Settings Licenses row at the bottom Settings section with no section title unless product direction changes.
+- Keep Licenses in the offline Settings fallback's Device section and in the Dashboard's This iPhone/This iPad page through the native bridge panel.
 - When changing license loading or presentation, update `apps/ios/Tests/LicenseDocumentLoaderTests.swift` and `apps/ios/Tests/SwiftUIRenderSmokeTests.swift`, then run focused iOS tests.
 
 ## App Store Releases
 
 - Agent-driven App Store uploads must use only `pnpm ios:release:upload`.
-- Release preparation belongs to `scripts/mobile-release-version.ts`. Run its `--prepare` phase, capture `pnpm ios:release:plan -- --json`, run its `--finalize` phase, review and commit all five cutter outputs, then run `pnpm ios:release:upload` without release arguments.
+- Release preparation belongs to `scripts/mobile-release-version.ts`. Run its `--prepare` phase, capture `pnpm ios:release:plan -- --json`, run its `--finalize` phase, review all five cutter outputs, commit only the outputs whose bytes changed, then run `pnpm ios:release:upload` without release arguments.
 - The planner derives the gateway version from `apps/mobile/version.json`, reuses the one editable App Store revision for that gateway, retries an unreleased revision found in App Store Connect build-upload history, and allocates the next revision only after released history. Historical exact gateway versions consume revision zero.
 - Build allocation uses App Store Connect `buildUploads`, including awaiting, processing, failed, and complete uploads. Every Apple-visible attempt consumes its build number; retries increment the build within the same App Store revision.
 - Only one iOS release uploader may run at a time. Multiple active App Store versions, locked/in-review state, a different active gateway, unknown upload state, or revision exhaustion must fail closed for human resolution.

@@ -13,14 +13,14 @@ import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import {
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
+import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
@@ -110,6 +110,7 @@ interface SidebarMenusControllerHost
       | "sessionResultsByAgent"
       | "sessionsLoading"
       | "sessionsResult"
+      | "invalidateSessionCatalogs"
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
@@ -207,6 +208,28 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       beforeOpen: () => void this.dismissTransientMenus(),
       requestUpdate: () => host.requestUpdate(),
       terminalAvailable: () => host.terminalAvailable,
+      beginMutation: () => host.sessionData.beginSessionMutation(),
+      isMutationCurrent: (scope) => host.sessionData.isSessionMutationScopeCurrent(scope),
+      archive: (scope, params) => scope.client.request("sessions.catalog.archive", params),
+      afterDelete: async (scope, key) => {
+        host.sessionData.invalidateSessionCatalogs();
+        if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+          return;
+        }
+        const active = parseCatalogSessionKey(host.getRouteSessionKey());
+        if (
+          host.activeRouteId === "chat" &&
+          active?.catalogId === key.catalogId &&
+          active.hostId === key.hostId &&
+          active.threadId === key.threadId
+        ) {
+          host.onNavigate?.("chat", {
+            pathname: pathForRoute("chat", host.basePath),
+            search: "",
+            hash: "",
+          });
+        }
+      },
       navigate: ({ routeId, navigation }) => host.onNavigate?.(routeId, navigation),
     });
   }
@@ -404,7 +427,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     }
     const { selectedAgentId } = this.host.getSessionNavigationState();
     const store = sessionPullRequestsForGateway(context.gateway);
-    const pullRequestKey = scopedSessionPullRequestKey(
+    const pullRequestKey = scopedSessionArtifactKey(
       session.key,
       parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
     );

@@ -20,10 +20,14 @@ describe("Chrome MCP subprocess startup diagnostics", () => {
   let profileName: string;
   let homeDir: string;
   let options: NormalizedChromeMcpProfileOptions;
+  let ownsDescendant = false;
+  let expectsSubprocess = true;
 
   beforeEach(async () => {
     await resetChromeMcpSessionsForTest();
     warn.mockClear();
+    ownsDescendant = false;
+    expectsSubprocess = true;
     state = await createOpenClawTestState({ prefix: "chrome-mcp-startup-" });
     await state.writeConfig({ logging: { redactSensitive: "off" } });
     // Worker env overlays do not change native os.homedir(); the runner isolates both homes.
@@ -34,20 +38,32 @@ describe("Chrome MCP subprocess startup diagnostics", () => {
       "mcp-server.mjs",
       String.raw`
 import fs from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import readline from "node:readline";
 
 fs.writeFileSync(new URL("./pid", import.meta.url), String(process.pid));
 process.stdin.on("end", () => {
-  if (process.argv[4] === "shutdown") writeStartupDiagnostic();
   fs.writeFileSync(new URL("./stdin-ended", import.meta.url), "closed");
 });
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
 const detail = "startup-tail-é " + process.argv[3] + "/chrome/Profile 1 " +
   "wss://fixture-user:fixture-password@browser.example/chrome?token=fixture-token";
-const writeStartupDiagnostic = () =>
-  process.stderr.write("discarded-startup-prefix\n" + "x".repeat(9000) + "\n" + detail);
-if (process.argv[4] === undefined) {
-  writeStartupDiagnostic();
+const writeDiagnostic = () => process.stderr.write("discarded-startup-prefix\n" + "x".repeat(9000) + "\n" + detail);
+if (process.argv[5] === "stderr-on-close") {
+  const child = spawn(process.execPath, ["-e", 'const fs = require("node:fs"); process.send("ready"); setInterval(() => { if (fs.existsSync(process.argv[1])) process.exit(0); }, 10);', new URL("./descendant-stop", import.meta.url).pathname], {
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+  await once(child, "message");
+  fs.writeFileSync(new URL("./descendant-pid", import.meta.url), String(child.pid));
+  child.disconnect();
+  child.unref();
+  process.stdin.on("end", writeDiagnostic);
+} else if (process.argv[5] === "force-close") {
+  process.on("SIGTERM", writeDiagnostic);
+  setInterval(() => {}, 1000);
+} else if (process.argv[4] === undefined) {
+  writeDiagnostic();
 }
 const failureMethod = process.argv[2];
 for await (const line of readline.createInterface({ input: process.stdin })) {
@@ -80,7 +96,10 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     expect(pid).toBeGreaterThan(0);
     expect(pid).not.toBe(process.pid);
     await vi.waitFor(async () => {
-      expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
+      // Windows terminates the process tree before the transport can close stdin.
+      if (process.platform !== "win32") {
+        expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
+      }
       expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     });
     expect(getChromeMcpPid(profileName)).toBeNull();
@@ -89,23 +108,39 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   afterEach(async () => {
     try {
       await resetChromeMcpSessionsForTest();
-      await expectSubprocessClosed();
+      if (expectsSubprocess) {
+        await expectSubprocessClosed();
+      }
     } finally {
+      if (ownsDescendant) {
+        const pid = Number(await fs.readFile(state.statePath("descendant-pid"), "utf8"));
+        await fs.writeFile(state.statePath("descendant-stop"), "stop");
+        await vi.waitFor(() =>
+          expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" })),
+        );
+      }
       await state.cleanup();
     }
   });
 
   it.each([
-    { failureMethod: "initialize", ephemeral: false, stderrPhase: "startup" },
-    { failureMethod: "initialize", ephemeral: true, stderrPhase: "startup" },
-    { failureMethod: "tools/list", ephemeral: false, stderrPhase: "startup" },
-    { failureMethod: "initialize", ephemeral: true, stderrPhase: "shutdown" },
+    { failureMethod: "initialize", ephemeral: false, shutdownMode: "normal" },
+    { failureMethod: "initialize", ephemeral: true, shutdownMode: "normal" },
+    { failureMethod: "tools/list", ephemeral: false, shutdownMode: "normal" },
+    // Windows deliberately taskkills before closing stdin; graceful EOF is POSIX-only.
+    ...(process.platform === "win32"
+      ? []
+      : [
+          { failureMethod: "initialize", ephemeral: true, shutdownMode: "stderr-on-close" },
+          { failureMethod: "initialize", ephemeral: true, shutdownMode: "force-close" },
+        ]),
   ])(
-    "retains redacted $stderrPhase stderr on $failureMethod failure (ephemeral=$ephemeral)",
-    async ({ failureMethod, ephemeral, stderrPhase }) => {
+    "retains redacted stderr on $failureMethod failure (ephemeral=$ephemeral, shutdownMode=$shutdownMode)",
+    async ({ failureMethod, ephemeral, shutdownMode }) => {
       options.args[1] = failureMethod;
-      if (stderrPhase === "shutdown") {
-        options.args.push(stderrPhase);
+      if (shutdownMode !== "normal") {
+        ownsDescendant = shutdownMode === "stderr-on-close";
+        options.args.push("0", shutdownMode);
       }
       if (!ephemeral) {
         options.browserUrl =
@@ -119,9 +154,16 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       await expect(attempt).rejects.toThrow("~/chrome/Profile 1");
       await expect(attempt).rejects.not.toThrow(/fixture-user|fixture-password|fixture-token/);
       await expect(attempt).rejects.not.toThrow(homeDir);
+      if (ownsDescendant) {
+        const descendantPid = Number(await fs.readFile(state.statePath("descendant-pid"), "utf8"));
+        expect(descendantPid).toBeGreaterThan(0);
+        expect(() => process.kill(descendantPid, 0)).toThrow(
+          expect.objectContaining({ code: "ESRCH" }),
+        );
+      }
       await expectSubprocessClosed();
 
-      await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+      expect(warn).toHaveBeenCalledOnce();
       const diagnostic = warn.mock.calls[0]![0];
       expect(diagnostic).toContain('profile "~/profiles/fixture-profile"');
       expect(diagnostic).toContain("startup-tail-é ~/chrome/Profile 1");
@@ -133,7 +175,21 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       expect(tail).toMatch(/^x+\nstartup-tail-é /);
       expect(Buffer.byteLength(tail, "utf8")).toBeLessThanOrEqual(8192);
     },
+    // Forced shutdown crosses the SDK's two 2-second grace windows.
+    10_000,
   );
+
+  it("reports an unspawnable command without waiting for an unused stderr pipe", async () => {
+    expectsSubprocess = false;
+    options.command = state.statePath("missing-mcp-command");
+    const attempt = withChromeMcpLease(profileName, options, { ephemeral: true }, async () => {
+      throw new Error("failed startup must not admit an operation");
+    });
+
+    await expect(attempt).rejects.toThrow("ENOENT");
+    expect(warn).not.toHaveBeenCalled();
+    expect(getChromeMcpPid(profileName)).toBeNull();
+  });
 
   it.each([0, 2 * 1024 * 1024])(
     "keeps startup and tool calls usable with %i stderr bytes",

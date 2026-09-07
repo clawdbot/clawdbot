@@ -1,8 +1,9 @@
-// Control UI tests cover cron schedule presentation.
 import { afterEach, describe, expect, it } from "vitest";
+// Control UI tests cover cron schedule presentation.
+import { contextBudgetStatusFixture } from "../../../src/config/sessions/context-budget.test-support.js";
 import type { CronJob } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
-import { formatCronSchedule } from "./presenter.ts";
+import { formatCronPayload, formatCronSchedule, formatSessionTokens } from "./presenter.ts";
 
 function job(schedule: CronJob["schedule"]): CronJob {
   return {
@@ -68,4 +69,28 @@ describe("formatCronSchedule", () => {
       "On exit: ./watch.sh (cwd: /repo)",
     );
   });
+});
+
+describe("formatCronPayload", () => {
+  it("formats a Workshop review as an agent turn", () => {
+    expect(
+      formatCronPayload({
+        ...job({ kind: "every", everyMs: 60_000 }),
+        payload: { kind: "agentTurn", message: "Review the Workshop collection." },
+      }),
+    ).toBe("Agent: Review the Workshop collection.");
+  });
+});
+
+it("formats session detail against its last-run prompt budget", () => {
+  expect(
+    formatSessionTokens({
+      key: "main",
+      kind: "direct",
+      updatedAt: 2,
+      totalTokens: 160_000,
+      contextTokens: 200_000,
+      contextBudgetStatus: contextBudgetStatusFixture(),
+    }),
+  ).toBe("160000 / 180000");
 });

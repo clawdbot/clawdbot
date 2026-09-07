@@ -1,3 +1,4 @@
+import { toUSVString } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
@@ -39,7 +40,10 @@ import type {
   ProjectedLifecycleMutation,
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
+import {
+  addRetainedWindowSessionReferences,
+  collectSessionStateIdsForEntry,
+} from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   parseSessionEntryJson as parseSessionEntryRow,
@@ -148,28 +152,42 @@ function sqliteTranscriptStateHasMarker(params: {
   transcriptContentMarker: string;
 }): boolean {
   const db = getSessionKysely(params.database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     params.database.db,
     db
       .selectFrom("transcript_events")
       .select("event_json")
       .where("session_id", "=", params.sessionId)
       .orderBy("seq", "asc"),
-  ).rows;
-  return rows.some((row) => row.event_json.includes(params.transcriptContentMarker));
+  );
+  // Consume every row so late SQLite errors still abort cleanup planning.
+  let hasMarker = false;
+  for (const row of rows) {
+    hasMarker ||= row.event_json.includes(params.transcriptContentMarker);
+  }
+  return hasMarker;
 }
 
 /** Session ids protected by live node state. */
 export function readReferencedSessionIds(
   database: OpenClawAgentDatabase,
   excludedSessionKeys: ReadonlySet<string> = new Set(),
+  candidateSessionIds?: readonly string[],
+  diskBudget?: { preserveRecentMs?: number | null },
 ): Set<string> {
   const db = getSessionKysely(database.db);
+  // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
+  const excludedKeys = [...excludedSessionKeys].filter(
+    (key) => toUSVString(key) === key && !key.includes("\0") && !/[\uFFFE\uFFFF]/u.test(key),
+  );
   const rows = iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_nodes")
-      .select([sessionEntryMetadataJson, "current_session_id", "session_key"]),
+      .select([sessionEntryMetadataJson, "current_session_id", "session_key"])
+      .$if(excludedKeys.length > 0, (query) =>
+        query.where("session_key", "not in", sqliteStringSet(excludedKeys)),
+      ),
   );
   const sessionIds = new Set<string>();
   for (const row of rows) {
@@ -185,7 +203,16 @@ export function readReferencedSessionIds(
       sessionIds.add(sessionId);
     }
   }
-  return sessionIds;
+  addRetainedWindowSessionReferences(
+    database,
+    sessionIds,
+    excludedSessionKeys,
+    candidateSessionIds,
+    diskBudget,
+  );
+  return candidateSessionIds
+    ? new Set(candidateSessionIds.filter((sessionId) => sessionIds.has(sessionId)))
+    : sessionIds;
 }
 
 // Projects references after a lifecycle mutation so reset/delete can archive
@@ -237,12 +264,18 @@ export function deleteMaterializedSessionStatePlans(
   excludedSessionKeys?: ReadonlySet<string>,
   /** Synchronous mutation notification; durable completion still belongs to COMMIT. */
   onDeleted?: () => void,
+  diskBudget?: { preserveRecentMs?: number | null },
 ): SessionLifecycleArchivedTranscript[] {
   if (plans.length === 0) {
     return [];
   }
   const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
-  const referencedSessionIds = readReferencedSessionIds(database, excludedSessionKeys);
+  const referencedSessionIds = readReferencedSessionIds(
+    database,
+    excludedSessionKeys,
+    plans.map((plan) => plan.sessionId),
+    diskBudget,
+  );
   for (const sessionId of protectedSessionIds ?? []) {
     referencedSessionIds.add(sessionId);
   }
@@ -279,8 +312,7 @@ export function planSessionStateAfterEntryRemoval(params: {
 }): SessionStateDeletePlan[] {
   const referencedSessionIds =
     params.referencedSessionIds ?? readReferencedSessionIds(params.database);
-  const plans: SessionStateDeletePlan[] = [];
-  for (const sessionId of collectSessionStateIdsForEntry(params.entry)) {
+  return collectSessionStateIdsForEntry(params.entry).flatMap((sessionId) => {
     const plan = planSessionStateDeleteIfUnreferenced({
       archiveTranscript: params.archiveTranscript,
       archiveDirectory: params.archiveDirectory,
@@ -289,11 +321,8 @@ export function planSessionStateAfterEntryRemoval(params: {
       referencedSessionIds,
       sessionId,
     });
-    if (plan) {
-      plans.push(plan);
-    }
-  }
-  return plans;
+    return plan ? [plan] : [];
+  });
 }
 
 /** Ids of every persisted generation owned by the given logical session keys. */

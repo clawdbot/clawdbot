@@ -2,26 +2,10 @@ import { describe, expect, it } from "vitest";
 import { stripMarkdownForTwitch } from "./markdown.js";
 
 describe("stripMarkdownForTwitch", () => {
-  it.each([
-    [
-      "keeps labeled link destinations",
-      "Read **the [docs](https://example.com/docs)**",
+  it("keeps labeled link destinations", () => {
+    expect(stripMarkdownForTwitch("Read **the [docs](https://example.com/docs)**")).toBe(
       "Read the docs (https://example.com/docs)",
-    ],
-  ])("%s", (_name, input, expected) => {
-    expect(stripMarkdownForTwitch(input)).toBe(expected);
-  });
-});
-
-describe("Twitch plain text", () => {
-  it.each([
-    ["foo_bar_baz", "foo_bar_baz"],
-    ["https://cdn.example/my_file_name.png", "https://cdn.example/my_file_name.png"],
-    ["привет_мир_тест", "привет_мир_тест"],
-    ["東京_駅_前", "東京_駅_前"],
-    ["e\u0301_mail_.txt", "e\u0301_mail_.txt"],
-  ])("preserves intraword underscores in %s", (input, expected) => {
-    expect(stripMarkdownForTwitch(input)).toBe(expected);
+    );
   });
 
   it("strips standalone underscore emphasis across lines", () => {

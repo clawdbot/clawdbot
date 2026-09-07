@@ -230,6 +230,56 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
   });
 
+  it("renders every additional-context value with its native role before the current input", () => {
+    const telegram = generated.find(
+      (file) =>
+        path.basename(file.path) ===
+        CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO],
+    )!.content;
+    const turnSection = renderedPromptSection(
+      telegram,
+      "## Turn Start Params",
+      "## Reconstructed Model-Bound Prompt Layers",
+    );
+    const turn = JSON.parse(turnSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
+      additionalContext: Record<string, { kind: "application" | "untrusted"; value: string }>;
+    };
+    expect(Object.keys(turn.additionalContext)).toEqual(
+      expect.arrayContaining(["openclaw_current_sender", "openclaw_temporal_context"]),
+    );
+    let previous = telegram.indexOf("### Developer: Codex Collaboration Mode Instructions");
+    const userInput = telegram.indexOf("### User: Turn Input Text");
+    const contextTexts: string[] = [];
+    // Canonical ASCII keys in Codex's BTreeMap order, independent of the renderer's sorter.
+    const keyOrder = [
+      "openclaw_current_sender",
+      "openclaw_source_delivery",
+      "openclaw_temporal_context",
+    ].filter((key) => Object.hasOwn(turn.additionalContext, key));
+    expect(keyOrder).toHaveLength(Object.keys(turn.additionalContext).length);
+    for (const key of keyOrder) {
+      const entry = turn.additionalContext[key]!;
+      const role = entry.kind === "application" ? "Developer" : "User";
+      const tag = entry.kind === "application" ? key : `external_${key}`;
+      const index = telegram.indexOf(`### ${role}: OpenClaw Additional Context (${key})`);
+      expect(index).toBeGreaterThan(previous);
+      expect(index).toBeLessThan(userInput);
+      const text = `<${tag}>${entry.value}</${tag}>`;
+      expect(telegram.slice(index, userInput)).toContain(text);
+      contextTexts.push(text);
+      previous = index;
+    }
+    const statsSection = renderedPromptSection(
+      telegram,
+      "### Rough Text Token Estimates",
+      "### System: Codex Model Instructions",
+    );
+    const stats = JSON.parse(statsSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
+      additionalContext: { chars: number };
+    };
+    expect(stats.additionalContext.chars).toBe(contextTexts.join("\n\n").length);
+  });
+
   it("uses normal Codex collaboration instructions for every scheduled heartbeat", async () => {
     const [direct, group, heartbeat] = await Promise.all([
       materializeCodexPromptSnapshot("telegram-direct"),

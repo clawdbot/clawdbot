@@ -272,7 +272,11 @@ describe("SQLite session handle lifecycle", () => {
     let stalledWorker: Worker | undefined;
     startSessionTranscriptIndexReconcile({
       ...databaseOptions,
-      createWorker: () => {
+      createWorker: (filename, options) => {
+        // Stall the planner only; let its recovery worker finish real cleanup.
+        if (stalledWorker) {
+          return new Worker(filename, options);
+        }
         stalledWorker = new Worker("setInterval(() => {}, 1_000)", { eval: true });
         return stalledWorker;
       },

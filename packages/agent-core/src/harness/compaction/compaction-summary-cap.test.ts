@@ -80,9 +80,13 @@ describe("split-turn compaction summary cap", () => {
     const nearCapPreviousSummary = `${"p".repeat(
       MAX_SUMMARY_CHARS - fileOperations.length,
     )}${fileOperations}`;
-    const runCompaction = (previousSummary = nearCapPreviousSummary) =>
+    const runCompaction = (
+      previousSummary = nearCapPreviousSummary,
+      budget?: { summaryTokenBudget: number; latestUnresolvedUserRequest: string },
+    ) =>
       compact(
         {
+          ...budget,
           firstKeptEntryId: "kept-entry",
           messagesToSummarize: [],
           turnPrefixMessages: [
@@ -163,5 +167,22 @@ describe("split-turn compaction summary cap", () => {
     expect(oversizedPrefixResult.value.summary).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
     expect(oversizedPrefixResult.value.summary.endsWith(fileOperations)).toBe(true);
     expect(streamFn).toHaveBeenCalledTimes(3);
+
+    fileOps.read = new Set([`src/${"r".repeat(830)}.ts`]);
+    fileOps.edited = new Set([`src/${"w".repeat(820)}.ts`]);
+    prefixSummary = "The split turn still needs its archive result.";
+    const budgeted = await runCompaction(nearCapPreviousSummary, {
+      summaryTokenBudget: 1_000,
+      latestUnresolvedUserRequest: "Current request details. ".repeat(32),
+    });
+    expect(budgeted.ok).toBe(true);
+    if (!budgeted.ok) {
+      throw budgeted.error;
+    }
+    expect(budgeted.value.summary.length).toBeLessThanOrEqual(4_000);
+    expect(budgeted.value.summary).toContain(prefixSummary);
+    expect(budgeted.value.summary).toContain(TURN_CONTEXT_HEADING);
+    expect(budgeted.value.summary).toContain([...fileOps.read][0]);
+    expect(budgeted.value.summary).toContain([...fileOps.edited][0]);
   });
 });

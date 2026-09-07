@@ -209,7 +209,7 @@ merge_framework_machos() {
   }
 
   while IFS= read -r -d '' file; do
-    if /usr/bin/file "$file" | /usr/bin/grep -q "Mach-O"; then
+    if /usr/bin/file "$file" | /usr/bin/grep "Mach-O" >/dev/null; then
       local rel="${file#"$primary"/}"
       local primary_archs
       primary_archs=$(archs_for "$file")
@@ -225,7 +225,7 @@ merge_framework_machos() {
           rm -rf "$tmp_dir"
           exit 1
         fi
-        if /usr/bin/file "$other_file" | /usr/bin/grep -q "Mach-O"; then
+        if /usr/bin/file "$other_file" | /usr/bin/grep "Mach-O" >/dev/null; then
           local other_archs
           other_archs=$(archs_for "$other_file")
           IFS=' ' read -r -a other_arch_array <<< "$other_archs"
@@ -371,6 +371,18 @@ chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
+echo "🚚 Copying macOS control CLI"
+cp "$(mac_cli_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/openclaw-mac"
+if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+  MAC_CLI_BIN_INPUTS=()
+  for arch in "${BUILD_ARCHS[@]}"; do
+    MAC_CLI_BIN_INPUTS+=("$(mac_cli_bin_for_arch "$arch")")
+  done
+  /usr/bin/lipo -create "${MAC_CLI_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/openclaw-mac"
+fi
+chmod +x "$APP_ROOT/Contents/MacOS/openclaw-mac"
+/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/openclaw-mac" 2>/dev/null || true
+
 if [[ "$SKIP_MLX_TTS" == "1" ]]; then
   echo "🔇 Skipping MLX TTS helper copy (OPENCLAW_SKIP_MLX_TTS=1) — bundle omits Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
 else
@@ -416,8 +428,17 @@ else
   echo "WARN: Swift compatibility library not found at $SWIFT_COMPAT_LIB (continuing)" >&2
 fi
 
-echo "🖼  Copying app icon"
-cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns" "$APP_ROOT/Contents/Resources/OpenClaw.icns"
+echo "🖼  Compiling app icon"
+xcrun actool "$ROOT_DIR/apps/macos/Icon.icon" \
+  --compile "$APP_ROOT/Contents/Resources" \
+  --output-format human-readable-text --notices --warnings --errors \
+  --output-partial-info-plist "$APP_STAGE_DIR/icon.plist" \
+  --app-icon Icon --include-all-app-icons --enable-on-demand-resources NO \
+  --development-region en --target-device mac \
+  --minimum-deployment-target "$(plist_print_required "$APP_ROOT/Contents/Info.plist" LSMinimumSystemVersion)" \
+  --platform macosx
+mv "$APP_ROOT/Contents/Resources/Icon.icns" "$APP_ROOT/Contents/Resources/OpenClaw.icns"
+cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/AppIcons" "$APP_ROOT/Contents/Resources/AppIcons"
 
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
@@ -438,6 +459,11 @@ else
   echo "🖥  Staging embedded CUA driver"
   "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
 fi
+
+echo "📦 Staging browser sign-in helper"
+for arch in "${BUILD_ARCHS[@]}"; do
+  bash "$ROOT_DIR/scripts/stage-cloudflared-macos.sh" "$arch" "$APP_ROOT/Contents/Resources/cloudflared"
+done
 
 echo "📦 Copying CLI installer"
 INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"

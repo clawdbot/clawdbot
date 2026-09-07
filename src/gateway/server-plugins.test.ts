@@ -20,6 +20,7 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { withEnv } from "../test-utils/env.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
@@ -280,10 +281,15 @@ function createTestLog() {
 }
 
 function createTestContext(label: string): GatewayRequestContext {
-  return bindTestAgentTurns({ label } as unknown as GatewayRequestContext);
+  const config = {};
+  return bindTestAgentTurns({
+    label,
+    getRuntimeConfig: () => config,
+  } as unknown as GatewayRequestContext);
 }
 
 function bindTestAgentTurns(context: GatewayRequestContext): GatewayRequestContext {
+  context.trackExecution = trackAsyncWork;
   context.createAgentTurnFacade ??= (principal) =>
     createInternalAgentTurnFacade({ ...principal, getContext: () => context });
   return context;
@@ -570,6 +576,25 @@ describe("loadGatewayPlugins", () => {
       "[plugins] failed to load plugin: boom (plugin=telegram, source=/tmp/telegram/index.ts)",
     );
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  test("logs warn-level plugin diagnostics through the warn sink, not info", () => {
+    const diagnostics: PluginDiagnostic[] = [
+      {
+        level: "warn",
+        pluginId: "beads",
+        source: "/tmp/beads/index.ts",
+        message: 'typed hook "before_prompt_build" blocked by policy',
+      },
+    ];
+    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
+    const log = loadGatewayStartupPluginsForTest();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      '[plugins] typed hook "before_prompt_build" blocked by policy (plugin=beads, source=/tmp/beads/index.ts)',
+    );
+    expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("[plugins] typed hook"));
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   test("does not re-log a quarantined plugin verification diagnostic", () => {
@@ -1507,6 +1532,33 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedParams()).toEqual({ to: "+15550001234" });
     expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+  });
+
+  test.each([
+    { pluginId: "community-plugin", reason: /Plugin "community-plugin" is neither\./ },
+    { pluginId: "missing-plugin", reason: /Plugin "missing-plugin" is neither\./ },
+    { pluginId: undefined, reason: /This call carries no plugin identity\./ },
+  ])("explains the Gateway refusal for plugin identity $pluginId", async ({ pluginId, reason }) => {
+    loadOpenClawPlugins.mockReturnValue(
+      addLoadedPlugin(createRegistry([]), { id: "community-plugin", origin: "global" }),
+    );
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-refused"));
+    const runtime = createRuntimeFromLastGatewayLoad();
+
+    const request = pluginId
+      ? gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId, pluginOrigin: "global" },
+          () => runtime.gateway.request("sessions.list", {}),
+        )
+      : runtime.gateway.request("sessions.list", {});
+
+    await expect(request).rejects.toThrow(reason);
+    await expect(request).rejects.toThrow("bundled or trusted official plugins");
+    await expect(request).rejects.toThrow(
+      "https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-gateway",
+    );
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
   test("lets trusted official plugins request explicit Gateway scopes", async () => {

@@ -284,6 +284,7 @@ describe("sendGatewayHello update detail scope", () => {
   it.each(["exit", "cleanup", "replacement"] as const)(
     "retires an announced Serve connection on route %s and renews its hello",
     async (withdrawal) => {
+      const gatewayMethods = ["health", "config.get"];
       const exited = createDeferredCore();
       tailscaleClaim.mockResolvedValue({
         exited: exited.promise,
@@ -320,6 +321,7 @@ describe("sendGatewayHello update detail scope", () => {
             ...context,
             handler: {
               ...context.handler,
+              gatewayMethods,
               socket,
               close: (code?: number, reason?: string) => socket.close(code, reason),
             },
@@ -337,6 +339,7 @@ describe("sendGatewayHello update detail scope", () => {
       };
       try {
         const original = await connect();
+        expect(original.hello.features.methods).toEqual(gatewayMethods);
         expect(original.hello.snapshot.controlUiIdentityUrl).toBe(
           "https://gateway.tailnet.ts.net/",
         );
@@ -357,6 +360,7 @@ describe("sendGatewayHello update detail scope", () => {
           expect(original.close).toHaveBeenCalledWith(1012, expect.anything()),
         );
         const renewed = await connect();
+        expect(renewed.hello.features.methods).toEqual(gatewayMethods);
         expect(renewed.hello.snapshot.controlUiIdentityUrl).toBe(
           withdrawal === "replacement" ? "https://replacement.tailnet.ts.net/" : undefined,
         );
@@ -447,6 +451,9 @@ describe("sendGatewayHello update detail scope", () => {
     expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
     expect(helloPayload(context)?.features.capabilities).toContain(
       GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+    );
+    expect(helloPayload(context)?.features.capabilities).toContain(
+      GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
     );
     expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
   });

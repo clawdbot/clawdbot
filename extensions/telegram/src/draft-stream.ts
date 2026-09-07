@@ -58,27 +58,27 @@ export type TelegramDraftStream = {
   flush: () => Promise<void>;
   waitForInFlight: () => Promise<void>;
   messageId: () => number | undefined;
-  lastDeliveredText?: () => string;
-  currentMessageSnapshot?: () => TelegramDraftMessageSnapshot | undefined;
+  lastDeliveredText: () => string;
+  currentMessageSnapshot: () => TelegramDraftMessageSnapshot | undefined;
   clear: () => Promise<void>;
   stop: () => Promise<void>;
   /** Stop without a final flush or delete. */
-  discard?: () => Promise<void>;
+  discard: () => Promise<void>;
   /** Prepared final content not yet accepted after retained pagination pages. */
-  remainingFinalContent?: () => TelegramDraftMessageSnapshot | undefined;
+  remainingFinalContent: () => TelegramDraftMessageSnapshot | undefined;
   /** True while a pending or visible draft owns a first/batched reply target. */
-  hasConsumedReplyTarget?: () => boolean;
+  hasConsumedReplyTarget: () => boolean;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
   /**
    * Reposition the window: rewind so the next update creates a new message,
    * and schedule the superseded message's delete for AFTER the new one lands
    * (post-new-then-delete-old, never delete-then-repost — avoids the client
-   * scroll-jump). Returns the superseded message id, if any.
+   * scroll-jump).
    */
-  rotateToNewMessageDeferringDelete: () => number | undefined;
+  rotateToNewMessageDeferringDelete: () => void;
   /** True when a preview sendMessage was attempted but the response was lost. */
-  sendMayHaveLanded?: () => boolean;
+  sendMayHaveLanded: () => boolean;
 };
 
 type TelegramDraftUpdate = string | { resolveText: () => string | undefined };
@@ -107,6 +107,8 @@ function fallbackSnapshot(plainText: string): TelegramDraftMessageSnapshot {
 
 export type TelegramDraftPreview = {
   text: string;
+  /** A complete progress update can send before a token stream reaches its debounce threshold. */
+  complete?: true;
   parseMode?: "HTML";
   richMessage?: TelegramInputRichMessage;
   markdownSource?: {
@@ -476,7 +478,10 @@ export function createTelegramDraftStream(params: {
     streamVisibleSinceMs = visibleSinceMs;
     return true;
   };
-  const sendOrEditPlannedPage = async (page: PlannedTelegramDraftPage): Promise<boolean> => {
+  const sendOrEditPlannedPage = async (
+    page: PlannedTelegramDraftPage,
+    complete = false,
+  ): Promise<boolean> => {
     const renderedPreviewKey = JSON.stringify([
       page.sourceTextMode,
       page.sourceText,
@@ -487,7 +492,12 @@ export function createTelegramDraftStream(params: {
     }
     const sendGeneration = generation;
 
-    if (typeof streamMessageId !== "number" && minInitialChars != null && !streamState.final) {
+    if (
+      typeof streamMessageId !== "number" &&
+      minInitialChars != null &&
+      !streamState.final &&
+      !complete
+    ) {
       if (page.plainText.length < minInitialChars) {
         return false;
       }
@@ -632,7 +642,7 @@ export function createTelegramDraftStream(params: {
     }
     if (!streamState.final) {
       finalPagePlan = undefined;
-      const sent = await sendOrEditPlannedPage(firstPage);
+      const sent = await sendOrEditPlannedPage(firstPage, fullPreview.complete);
       if (sent) {
         lastDeliveredText = pages.length === 1 ? trimmed : firstPage.plainText.trimEnd();
       }
@@ -894,9 +904,9 @@ export function createTelegramDraftStream(params: {
   // (below anything posted since), then delete the superseded one AFTER a short
   // delay so the new message lands first. Post-new-then-delete-old — never
   // delete-then-repost, which scroll-jumps the Telegram client (the on-off
-  // durable-🧠 jump). Returns the superseded message id (for tests).
+  // durable-🧠 jump).
   const REPOSITION_DELETE_DELAY_MS = 1_500;
-  const rotateToNewMessageDeferringDelete = (): number | undefined => {
+  const rotateToNewMessageDeferringDelete = (): void => {
     const supersededMessageId = streamMessageId;
     const supersededVisibleSince = streamVisibleSinceMs;
     // A FIRST send may still be in flight (no id yet): mark its generation so the
@@ -914,9 +924,7 @@ export function createTelegramDraftStream(params: {
         supersededVisibleSince,
         REPOSITION_DELETE_DELAY_MS,
       );
-      return supersededMessageId;
     }
-    return undefined;
   };
 
   params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);

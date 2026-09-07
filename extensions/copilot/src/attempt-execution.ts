@@ -487,6 +487,7 @@ export async function runCopilotExecution(context: {
       }
       activeRunHandleRef = registerCopilotActiveRun({
         abortActiveSession,
+        agentId: sessionAgentId,
         bridge,
         canAcceptSteering: () => initialSdkUserValidated,
         startedAtMs: input.startedAtMs,

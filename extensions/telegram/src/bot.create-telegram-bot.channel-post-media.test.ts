@@ -976,16 +976,14 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
-  it.each([
-    { name: "a photo download fails", firstMessageId: 401, abort: false },
-    { name: "classic polling aborts a download", firstMessageId: 98081, abort: true },
-  ])("keeps live album delivery when $name", async ({ firstMessageId, abort }) => {
+  it("keeps album delivery when a photo download fails", async () => {
+    const firstMessageId = 401;
     setOpenChannelPostConfig();
     const shutdown = new AbortController();
     const mediaPath = "/tmp/live-album-first.jpg";
     saveRemoteMedia
       .mockResolvedValueOnce({ path: mediaPath, contentType: "image/jpeg" })
-      .mockImplementationOnce(() => rejectTelegramAlbumDownload(shutdown, abort));
+      .mockImplementationOnce(() => rejectTelegramAlbumDownload(shutdown, false));
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       createTelegramBot({
