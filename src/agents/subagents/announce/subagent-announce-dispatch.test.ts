@@ -139,6 +139,42 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("does not fallback-steer after a terminal retryable direct-primary pending result", async () => {
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      reason: "completion_handoff_pending" as const,
+      disposition: "retryable" as const,
+      terminal: true,
+    }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "retryable",
+      terminal: true,
+    });
+    expect(result.phases).toEqual([
+      {
+        phase: "direct-primary",
+        delivered: false,
+        path: "direct",
+        reason: "completion_handoff_pending",
+        error: undefined,
+      },
+    ]);
+  });
+
   it("does not fallback-steer after an ambiguous completion direct failure", async () => {
     const steer = vi.fn(async () => ({ status: "steered" }) as const);
     const direct = vi.fn(async () => ({

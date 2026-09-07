@@ -102,6 +102,7 @@ afterEach(() => {
   sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
   setActivePluginRegistry(createTestRegistry());
   testing.setDepsForTest();
+  testing.clearRetainedCompletionHandoffKeysForTest();
   sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mockClear();
   sessionDeliveryQueueMocks.releaseSessionDeliveryClaim.mockClear();
   sessionDeliveryQueueMocks.scheduleSessionDelivery.mockClear();
@@ -658,6 +659,12 @@ async function deliverSlackChannelAnnouncement(params: {
   callGateway: typeof runtimeCallGateway;
   isActive?: boolean;
   sessionId?: string;
+  runId?: string;
+  requesterSessionActivity?: () => {
+    sessionId?: string;
+    runId?: string;
+    isActive: boolean;
+  };
   expectsCompletionMessage?: boolean;
   directIdempotencyKey: string;
   requesterSessionKey?: string;
@@ -689,10 +696,13 @@ async function deliverSlackChannelAnnouncement(params: {
   } as const;
   testing.setDepsForTest({
     callGateway: params.callGateway,
-    getRequesterSessionActivity: () => ({
-      sessionId: params.sessionId ?? "requester-session-channel",
-      isActive: params.isActive === true,
-    }),
+    getRequesterSessionActivity:
+      params.requesterSessionActivity ??
+      (() => ({
+        sessionId: params.sessionId ?? "requester-session-channel",
+        ...(params.runId ? { runId: params.runId } : {}),
+        isActive: params.isActive === true,
+      })),
     getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     ...(params.requesterSessionEntry
       ? {
@@ -3948,25 +3958,234 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("preserves pending completion announce delivery without media fallback", async () => {
+  it("keeps an in-flight completion retryable until its terminal reply without fallback", async () => {
+    const directIdempotencyKey = "announce-channel-completion-pending";
     const callGateway = createGatewayMock({
-      runId: "subagent:child:ok",
-      status: "accepted",
-      acceptedAt: Date.now(),
+      runId: directIdempotencyKey,
+      status: "in_flight",
+      admissionPending: true,
     });
     const sendMessage = createSendMessageMock();
-    const result = await deliverSlackChannelAnnouncement({
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    const params = {
       callGateway,
       sendMessage,
-      directIdempotencyKey: "announce-channel-completion-pending",
+      queueEmbeddedAgentMessageWithOutcome,
+      directIdempotencyKey,
       internalEvents: taskCompletionEvents({
         childSessionId: "child-session-id",
         taskLabel: "channel completion smoke",
       }),
-    });
+    };
+    const pending = await deliverSlackChannelAnnouncement(params);
 
-    expectDeliveryPath(result, "direct");
+    expect(pending).toMatchObject({
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "retryable",
+      terminal: true,
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+        },
+      ],
+    });
+    expect(pending.requesterVisibleFinalDelivered).toBeUndefined();
     expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    vi.mocked(callGateway).mockResolvedValue({
+      runId: directIdempotencyKey,
+      status: "ok",
+      result: {
+        payloads: [{ text: "The delegated task is complete." }],
+        deliveryStatus: sentDeliveryStatus,
+      },
+    });
+    const delivered = await deliverSlackChannelAnnouncement(params);
+
+    expect(delivered).toMatchObject({
+      delivered: true,
+      path: "direct",
+      requesterVisibleFinalDelivered: true,
+    });
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.map(
+          (call) => (call[0] as { params?: Record<string, unknown> })?.params?.idempotencyKey,
+        ),
+    ).toEqual([directIdempotencyKey, directIdempotencyKey]);
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not self-steer when a pending handoff becomes active between retries", async () => {
+    const directIdempotencyKey = "announce-channel-completion-pending-rejoin";
+    const callGateway = createGatewayMock({
+      runId: directIdempotencyKey,
+      status: "in_flight",
+      admissionPending: true,
+    });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    let attempt = 0;
+    const requesterSessionActivity = () => {
+      attempt += 1;
+      if (attempt === 1) {
+        return {
+          sessionId: "requester-session-channel",
+          isActive: false,
+        };
+      }
+      // Original handoff is now the active requester run (same idempotency/run id).
+      return {
+        sessionId: "requester-session-channel",
+        runId: directIdempotencyKey,
+        isActive: true,
+      };
+    };
+    const params = {
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      requesterSessionActivity,
+      directIdempotencyKey,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        taskLabel: "channel completion rejoin",
+      }),
+    };
+
+    const pending = await deliverSlackChannelAnnouncement(params);
+    expect(pending).toMatchObject({
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "retryable",
+      terminal: true,
+    });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+
+    // Retry while the original handoff is still active: fence self-steer and
+    // rejoin via same-key Gateway replay instead of enqueueing into itself.
+    const stillPending = await deliverSlackChannelAnnouncement(params);
+    expect(stillPending).toMatchObject({
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "retryable",
+      terminal: true,
+    });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    vi.mocked(callGateway).mockResolvedValue({
+      runId: directIdempotencyKey,
+      status: "ok",
+      result: {
+        payloads: [{ text: "The delegated task is complete." }],
+        deliveryStatus: sentDeliveryStatus,
+      },
+    });
+    const delivered = await deliverSlackChannelAnnouncement(params);
+
+    expect(delivered).toMatchObject({
+      delivered: true,
+      path: "direct",
+      requesterVisibleFinalDelivered: true,
+    });
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.map(
+          (call) => (call[0] as { params?: Record<string, unknown> })?.params?.idempotencyKey,
+        ),
+    ).toEqual([directIdempotencyKey, directIdempotencyKey, directIdempotencyKey]);
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("replays the original handoff after it settles even when a successor requester run is active", async () => {
+    const directIdempotencyKey = "announce-channel-completion-successor-rejoin";
+    const callGateway = createGatewayMock({
+      runId: directIdempotencyKey,
+      status: "in_flight",
+      admissionPending: true,
+    });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    let attempt = 0;
+    const requesterSessionActivity = () => {
+      attempt += 1;
+      if (attempt === 1) {
+        return {
+          sessionId: "requester-session-channel",
+          isActive: false,
+        };
+      }
+      // Original handoff A has settled; successor requester run B is active.
+      // Identity checks no longer match A, but retained ownership must still
+      // join Gateway replay instead of steering into B.
+      return {
+        sessionId: "requester-session-channel",
+        runId: "successor-requester-run-b",
+        isActive: true,
+      };
+    };
+    const params = {
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      requesterSessionActivity,
+      directIdempotencyKey,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        taskLabel: "channel completion successor rejoin",
+      }),
+    };
+
+    const pending = await deliverSlackChannelAnnouncement(params);
+    expect(pending).toMatchObject({
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "retryable",
+      terminal: true,
+    });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+
+    vi.mocked(callGateway).mockResolvedValue({
+      runId: directIdempotencyKey,
+      status: "ok",
+      result: {
+        payloads: [{ text: "The delegated task is complete." }],
+        deliveryStatus: sentDeliveryStatus,
+      },
+    });
+    const delivered = await deliverSlackChannelAnnouncement(params);
+
+    expect(delivered).toMatchObject({
+      delivered: true,
+      path: "direct",
+      requesterVisibleFinalDelivered: true,
+    });
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.map(
+          (call) => (call[0] as { params?: Record<string, unknown> })?.params?.idempotencyKey,
+        ),
+    ).toEqual([directIdempotencyKey, directIdempotencyKey]);
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -4903,6 +5122,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   const deliveredRequesterFinal = { delivered: true, path: "direct" } as const;
+  const pendingRequesterHandoff = {
+    delivered: false,
+    path: "direct",
+    reason: "completion_handoff_pending",
+    disposition: "retryable",
+    terminal: true,
+  } as const;
   const missingRequesterFinal = {
     delivered: false,
     path: "direct",
@@ -4998,7 +5224,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       routes: requesterSettleRoutes,
       response: { status },
       requireVisibleReply: true,
-      expected: deliveredRequesterFinal,
+      expected: pendingRequesterHandoff,
     })),
     {
       name: "does not record a canceled partial answer as a visible final",

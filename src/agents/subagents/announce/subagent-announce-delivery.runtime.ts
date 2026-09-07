@@ -26,8 +26,10 @@ import { resolveActiveEmbeddedRunSessionId } from "../../embedded-agent-runner/a
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
+  isActiveEmbeddedRunId,
   isEmbeddedAgentRunActive,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  resolveActiveEmbeddedRunOwner,
   resolveEmbeddedRunAbandonment,
   type EmbeddedAgentQueueMessageOutcome,
 } from "../../embedded-agent-runner/runs.js";
@@ -38,6 +40,7 @@ export {
   createBoundDeliveryRouter,
   formatEmbeddedAgentQueueFailureSummary,
   getGlobalHookRunner,
+  isActiveEmbeddedRunId,
   isEmbeddedAgentRunActive,
   resolveConversationIdFromTargets,
   resolveExternalBestEffortDeliveryTarget,
@@ -53,6 +56,7 @@ export type SubagentAnnounceDeliveryDeps = {
     requesterAgentId?: string,
   ) => {
     sessionId?: string;
+    runId?: string;
     isActive: boolean;
   };
   resolveRequesterSessionAbandonment: (
@@ -155,8 +159,10 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
       ? resolveActiveEmbeddedRunSessionId(requesterSessionKey)
       : undefined;
     const sessionId = activeSessionId ?? storedSessionId;
+    const activeOwner = sessionId ? resolveActiveEmbeddedRunOwner(sessionId) : undefined;
     return {
       sessionId,
+      ...(activeOwner?.runId ? { runId: activeOwner.runId } : {}),
       isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
     };
   },

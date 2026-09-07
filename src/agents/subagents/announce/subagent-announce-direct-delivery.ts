@@ -1,7 +1,7 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Requester-agent handoff and direct delivery for subagent announcements.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
@@ -9,7 +9,6 @@ import { defaultRuntime } from "../../../runtime.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
-  shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../../sessions/input-provenance.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
@@ -47,6 +46,13 @@ import {
   isGatewayAgentRunPending,
 } from "./subagent-announce-completion-delivery.js";
 import {
+  normalizeCompletionHandoffKey,
+  releaseCompletionHandoffKey,
+  retainCompletionHandoffKey,
+  settleCompletionHandoffRetention,
+  shouldJoinOriginalCompletionHandoff,
+} from "./subagent-announce-completion-handoff-retention.js";
+import {
   hasAnnounceSendEvidence,
   isIncompleteAnnounceAgentResultError,
   isPermanentAnnounceDeliveryError,
@@ -57,71 +63,30 @@ import {
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
-  dispatchSubagentAnnounceAgent,
   getSubagentAnnounceRuntimeConfig,
   resolveSubagentRequesterSessionAbandonment,
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
 } from "./subagent-announce-delivery.runtime.js";
+import { runAnnounceAgentCall } from "./subagent-announce-direct-agent-call.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
-import type { SubagentCompletionToolHandoffRegistration } from "./subagent-announce-handoff.js";
 import {
   resolveCompletionDeliveryOrigins,
   type DeliveryContext,
 } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
-async function runAnnounceAgentCall(params: {
-  agentParams: Record<string, unknown>;
-  delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
-  expectFinal?: boolean;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  isExecutionAllowed: () => boolean;
-  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
-}): Promise<unknown> {
-  const deadline = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, deadline.signal])
-    : deadline.signal;
-  const timer =
-    params.timeoutMs === undefined
-      ? undefined
-      : setTimeout(
-          () => deadline.abort(new Error("gateway request timeout for agent")),
-          params.timeoutMs,
-        );
-  timer?.unref?.();
-  try {
-    return await dispatchSubagentAnnounceAgent(params.agentParams, {
-      cancelOnDeadline: true,
-      expectFinal: params.expectFinal,
-      forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
-        params.agentParams.inputProvenance,
-      ),
-      operatorRoleActor: { kind: "system" },
-      delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
-      signal,
-      // Accepted queue waits belong to session admission; execution belongs to
-      // the requester runtime budget, not the announcement handoff deadline.
-      onAccepted: () => clearTimeout(timer),
-      onExecutionStarted: () => {
-        signal.throwIfAborted();
-        if (!params.isExecutionAllowed()) {
-          throw new SourceOwnerChangedError();
-        }
-        // Execution can be observed before acceptance on an already-running replay.
-        clearTimeout(timer);
-      },
-      resolveGatewayContext: params.resolveGatewayContext,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
+export { clearRetainedCompletionHandoffKeysForTest } from "./subagent-announce-completion-handoff-retention.js";
+
+export async function sendSubagentAnnounceDirectly(
+  params: Parameters<typeof sendSubagentAnnounceDirectlyUnchecked>[0],
+): Promise<SubagentAnnounceDeliveryResult> {
+  const result = await sendSubagentAnnounceDirectlyUnchecked(params);
+  return settleCompletionHandoffRetention(params.directIdempotencyKey, result);
 }
 
-export async function sendSubagentAnnounceDirectly(params: {
+async function sendSubagentAnnounceDirectlyUnchecked(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   targetRequesterSessionKey: string;
@@ -301,10 +266,21 @@ export async function sendSubagentAnnounceDirectly(params: {
         directOrigin?.channel,
       sessionEntry: requesterEntry,
     });
+    // Prefer joining the original Gateway handoff (same idempotency key) over
+    // steering into whatever requester run is active. A prior in_flight retains
+    // ownership even after that handle settles and a successor run becomes
+    // active; first-attempt steering still applies when nothing is retained.
+    const pendingHandoffRunId = normalizeCompletionHandoffKey(params.directIdempotencyKey);
+    const joinOriginalHandoff = Boolean(
+      pendingHandoffRunId &&
+      (requesterActivity.runId === pendingHandoffRunId ||
+        shouldJoinOriginalCompletionHandoff(pendingHandoffRunId)),
+    );
     if (
       params.expectsCompletionMessage &&
       requesterActivity.sessionId &&
-      requesterActivity.isActive
+      requesterActivity.isActive &&
+      !joinOriginalHandoff
     ) {
       const wakeOptions: EmbeddedAgentQueueMessageOptions = {
         deliveryTimeoutMs: announceTimeoutMs,
@@ -481,11 +457,24 @@ export async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
+      // Idempotent replay can return in_flight / admissionPending while the
+      // original handoff is still running. Do not credit delivery yet; keep
+      // custody retryable and suppress same-attempt media fallback. Retain the
+      // key so a later retry rejoins this handoff instead of steering into a
+      // successor requester run after settlement.
+      retainCompletionHandoffKey(params.directIdempotencyKey);
       return {
-        delivered: true,
+        delivered: false,
         path: "direct",
+        reason: "completion_handoff_pending",
+        disposition: "retryable",
+        terminal: true,
       };
     }
+
+    // Gateway produced a terminal (non-pending) result for this key — release
+    // retained ownership so later unrelated turns can steer normally.
+    releaseCompletionHandoffKey(params.directIdempotencyKey);
 
     const directAnnounceResult = getGatewayAgentResult(directAnnounceResponse);
     const hasFinalMessagingToolDelivery = Boolean(

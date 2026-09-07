@@ -10,6 +10,8 @@ import {
 import { defaultRuntime } from "../../../runtime.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { releaseAnnounceCompletionHandoffForRequesterSettleBatch } from "../announce/subagent-announce-completion-handoff-retention.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
 import { ensureDeliveryState } from "./subagent-delivery-state.js";
@@ -104,6 +106,18 @@ const completeRequesterSettleWakeBatch = (
     )
   ) {
     return;
+  }
+  // Batch retirement can skip another delivery attempt (missing requester,
+  // exhausted attempts, deferral limit). Drop any retained settle-wake keys.
+  const settleAnchor = entries.find((entry) => entry.requesterSettleWake) ?? entries[0];
+  if (settleAnchor?.requesterSettleWake) {
+    const wake = settleAnchor.requesterSettleWake;
+    releaseAnnounceCompletionHandoffForRequesterSettleBatch({
+      requesterAgentId: resolveSubagentRequesterAgentId(params.getRuntimeConfig(), settleAnchor),
+      requesterSessionKey: settleAnchor.requesterSessionKey,
+      batchRunIds: wake.batchRunIds ?? entries.map((entry) => entry.runId).toSorted(),
+      rearmGeneration: wake.rearmGeneration,
+    });
   }
   const requesterSessionKeys = new Set(entries.map((entry) => entry.requesterSessionKey));
   const previousStates = entries.map((entry) => ({

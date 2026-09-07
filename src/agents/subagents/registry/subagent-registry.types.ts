@@ -186,6 +186,8 @@ export type RequesterSettleWakeState = {
   replayCount?: number;
   /** Persisted retry deadline; restore waits until this instant. */
   nextAttemptAt?: number;
+  /** Absolute lifecycle expiry for pending settle observations (announce hard clock). */
+  deadlineAt?: number;
   /** Frozen wave membership after delivery admission or requester-yield re-admission. */
   batchRunIds?: string[];
   /** Batch frozen while its spawning requester turn was yielding. */

@@ -18,8 +18,12 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
-import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import {
+  buildAnnounceIdempotencyKey,
+  buildRequesterSettleAnnounceId,
+} from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "../registry/subagent-registry-helpers.js";
 import {
   countActiveDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
@@ -66,6 +70,35 @@ const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
 const ROUTE_NOTICE_TRUNCATION = "\n[model-route changes truncated]";
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
+
+function resolveRequesterSettleObservationDeadline(
+  batch: readonly SubagentRunRecord[],
+  state: RequesterSettleWakeBatchState,
+  now: number,
+): number {
+  if (typeof state.deadlineAt === "number") {
+    return state.deadlineAt;
+  }
+  // Prefer the existing announce delivery deadline when the batch still owns one.
+  const inherited = batch
+    .map((entry) =>
+      entry.expectsCompletionMessage === true && typeof entry.delivery?.deadlineAt === "number"
+        ? entry.delivery.deadlineAt
+        : undefined,
+    )
+    .filter((value): value is number => typeof value === "number");
+  if (inherited.length > 0) {
+    return Math.min(...inherited);
+  }
+  // Same hard expiry clock as completion announce cleanup.
+  return now + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
+}
+
+function withWakeDeadline(
+  deadlineAt: number | undefined,
+): Pick<RequesterSettleWakeBatchState, "deadlineAt"> {
+  return typeof deadlineAt === "number" ? { deadlineAt } : {};
+}
 
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
@@ -164,6 +197,7 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
     attemptCount: Math.max(0, ...states.map((state) => state.attemptCount)),
     ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
     ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
+    ...(source?.deadlineAt !== undefined ? { deadlineAt: source.deadlineAt } : {}),
     ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
     ...(states.some((state) => state.requesterYieldBatch === true)
       ? { requesterYieldBatch: true }
@@ -309,6 +343,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         state.nextAttemptAt ?? 0,
         now + REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0],
       ),
+      ...withWakeDeadline(state.deadlineAt),
       batchRunIds: [...batchRunIds],
       ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
       ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
@@ -397,14 +432,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     modelRouteChange,
     preserveModelRouteNotice: !completionChannel || !isDeliverableMessageChannel(completionChannel),
   });
-  const wakeKeyBase = [
-    `requester-settle:${requesterAgentId ?? "unknown"}:${requesterSessionKey}:${batchRunIds.join(",")}`,
-    selectedState.rearmGeneration === undefined
-      ? undefined
-      : `yield-${selectedState.rearmGeneration}`,
-  ]
-    .filter(Boolean)
-    .join(":");
+  const wakeKeyBase = buildRequesterSettleAnnounceId({
+    requesterAgentId,
+    requesterSessionKey,
+    batchRunIds,
+    rearmGeneration: selectedState.rearmGeneration,
+  });
   const activeBatchIsClosed = activeRequesterSettleWakeBatches.get(wakeKeyBase);
   if (activeBatchIsClosed && !activeBatchIsClosed()) {
     return false;
@@ -433,12 +466,63 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       // Returning here keeps restart/suspend drains free during backoff.
       return false;
     }
+    if (typeof state.deadlineAt === "number" && Date.now() >= state.deadlineAt) {
+      // Pending observations share the announce hard-expiry clock; retire with a
+      // terminal blocked outcome so the batch/handoff identity cannot stick forever.
+      completeBatch(settledBatch, state.rearmGeneration, {
+        delivered: false,
+        path: "none",
+        error: "requester settle wake expired",
+      });
+      return false;
+    }
     // A requester may spawn more work while this durable batch is waiting
     // or replaying. Keep the frozen batch pending until the new work drains.
     if (requesterHasUnsettledDescendants()) {
       deferBatch(state);
       return false;
     }
+
+    const scheduleSameKeyReplay = (
+      lastError: string,
+      exhaustedOutcome?: SubagentAnnounceDeliveryResult,
+    ): boolean => {
+      const replayCount = (state.replayCount ?? 0) + 1;
+      const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[replayCount - 1];
+      if (
+        replayCount >= REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS ||
+        retryDelayMs === undefined
+      ) {
+        completeBatch(
+          settledBatch,
+          state.rearmGeneration,
+          exhaustedOutcome ?? {
+            delivered: false,
+            path: "none",
+            error: lastError,
+          },
+        );
+        return false;
+      }
+      const nextAttemptAt = Date.now() + retryDelayMs;
+      state = {
+        status: "dispatching",
+        attemptCount: state.attemptCount,
+        replayCount,
+        nextAttemptAt,
+        ...withWakeDeadline(state.deadlineAt),
+        batchRunIds,
+        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+        ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+        ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
+        lastError,
+      };
+      params.transitionBatch(settledBatch, state);
+      logWarn(
+        `requester settle wake same-key replay ${replayCount} scheduled in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
+      );
+      return false;
+    };
 
     let attemptIndex: number;
     if (state.status === "dispatching") {
@@ -459,6 +543,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         status: "dispatching",
         attemptCount: state.attemptCount + 1,
         batchRunIds,
+        ...withWakeDeadline(state.deadlineAt),
         ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
         ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
         ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
@@ -485,7 +570,13 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         requireDirectDelivery: true,
         ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
         directIdempotencyKey: buildAnnounceIdempotencyKey(
-          attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
+          buildRequesterSettleAnnounceId({
+            requesterAgentId,
+            requesterSessionKey,
+            batchRunIds,
+            rearmGeneration: selectedState.rearmGeneration,
+            attemptIndex,
+          }),
         ),
         signal: params.signal,
         resolveGatewayContext,
@@ -494,36 +585,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       // A transport exception can arrive after gateway admission. Replay the
       // same persisted idempotency key; only a known no-turn result may rotate it.
       const lastError = error instanceof Error ? error.message : String(error);
-      const replayCount = (state.replayCount ?? 0) + 1;
-      const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[replayCount - 1];
-      if (
-        replayCount >= REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS ||
-        retryDelayMs === undefined
-      ) {
-        completeBatch(settledBatch, state.rearmGeneration, {
-          delivered: false,
-          path: "none",
-          error: lastError,
-        });
-        return false;
-      }
-      const nextAttemptAt = Date.now() + retryDelayMs;
-      state = {
-        status: "dispatching",
-        attemptCount: state.attemptCount,
-        replayCount,
-        nextAttemptAt,
-        batchRunIds,
-        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
-        ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
-        ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
-        lastError,
-      };
-      params.transitionBatch(settledBatch, state);
-      logWarn(
-        `requester settle wake transport replay ${replayCount} scheduled in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
-      );
-      return false;
+      return scheduleSameKeyReplay(lastError);
     }
     if (delivery.delivered) {
       completeBatch(settledBatch, state.rearmGeneration, delivery);
@@ -536,6 +598,48 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       delivery.reason === "requester_abandoned"
     ) {
       completeBatch(settledBatch, state.rearmGeneration, delivery);
+      return false;
+    }
+    // In-flight / admission-pending handoffs are healthy Gateway work, not
+    // ambiguous failures. Keep the same attempt key and schedule observation
+    // backoffs without spending the failure replay budget; retire only on
+    // terminal evidence or the owning lifecycle deadline.
+    if (delivery.reason === "completion_handoff_pending") {
+      const now = Date.now();
+      const lastError = delivery.error ?? delivery.reason ?? "completion_handoff_pending";
+      const deadlineAt = resolveRequesterSettleObservationDeadline(settledBatch, state, now);
+      if (now >= deadlineAt) {
+        completeBatch(settledBatch, state.rearmGeneration, {
+          delivered: false,
+          path: "none",
+          error: "requester settle wake expired",
+        });
+        return false;
+      }
+      const alreadyPending =
+        state.lastError === "completion_handoff_pending" || state.lastError === lastError;
+      // Index with literals so noUncheckedIndexedAccess stays definite (const tuple).
+      const retryDelayMs = alreadyPending
+        ? REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[1]
+        : REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0];
+      const nextAttemptAt = Math.min(now + retryDelayMs, deadlineAt);
+      state = {
+        status: "dispatching",
+        attemptCount: state.attemptCount,
+        // Preserve any prior transport-failure replayCount; do not increment it.
+        ...(state.replayCount !== undefined ? { replayCount: state.replayCount } : {}),
+        nextAttemptAt,
+        deadlineAt,
+        batchRunIds,
+        ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+        ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+        ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
+        lastError,
+      };
+      params.transitionBatch(settledBatch, state);
+      logWarn(
+        `requester settle wake pending handoff observation scheduled in ${Math.round((nextAttemptAt - now) / 1000)}s: ${lastError}`,
+      );
       return false;
     }
 
@@ -551,6 +655,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       status: "pending",
       attemptCount,
       nextAttemptAt,
+      ...withWakeDeadline(state.deadlineAt),
       batchRunIds,
       ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
       ...(state.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
