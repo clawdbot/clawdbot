@@ -23,6 +23,7 @@ import {
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import {
+  hashToolResultProjectionSnapshot,
   recordToolResultPromptProjection,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
@@ -916,6 +917,7 @@ export function restoreCacheTtlToolResultProjections(
   projectionState: ToolResultPromptProjectionState,
   entries: readonly { type?: unknown; customType?: unknown; data?: unknown }[],
 ): void {
+  projectionState.lastWrittenSnapshotHash = undefined;
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
     if (entry?.type === "reset") {
@@ -928,6 +930,11 @@ export function restoreCacheTtlToolResultProjections(
     if (!parsed.success) {
       continue;
     }
+    projectionState.lastWrittenSnapshotHash = hashToolResultProjectionSnapshot({
+      prunedToolResults: parsed.data.prunedToolResults,
+      ambiguousToolResultBaseKeys: parsed.data.ambiguousToolResultBaseKeys ?? [],
+      frozenToolResults: parsed.data.frozenToolResults ?? [],
+    });
     for (const key of parsed.data.ambiguousToolResultBaseKeys ?? []) {
       projectionState.ambiguousBaseKeys.add(key);
     }

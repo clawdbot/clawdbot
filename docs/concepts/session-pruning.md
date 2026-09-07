@@ -79,8 +79,10 @@ on both a time check and a context-size check:
 The TTL gates new pruning rounds, not replay of previous projections. Projections
 survive Gateway restarts and eviction from the in-memory session cache through
 the transcript marker. Ordinary tool-result trims and the already-sent boundary
-are also saved before each model request, even with TTL pruning off, so old
-results retain their projected bytes through tool loops and restarts. Original
+are also saved before model requests when the projection changes, even with TTL
+pruning off. Unchanged projections add no new marker; restart restores the latest
+marker on the active branch. Old results retain their projected bytes through
+tool loops and restarts. Original
 text and non-text content stay in the transcript. Compaction drops projections
 for results no longer in the active history; `/new` and session reset
 start without the old session's projections. Cache-TTL marker timestamps still

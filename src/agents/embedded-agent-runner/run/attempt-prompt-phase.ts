@@ -18,7 +18,7 @@ import {
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
-import { serializeCacheTtlToolResultProjections } from "../session-prompt-state.js";
+import { persistToolResultProjections } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { isOpenClawAbortableWrapper } from "./abortable.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
@@ -420,9 +420,8 @@ export async function runEmbeddedAttemptPromptPhase(
         persistToolResultProjections: async () => {
           if (!isRawModelRun && toolResultPromptProjectionState.frozen.size > 0) {
             await withOwnedTranscriptWrite(() => {
-              sessionManager.appendCustomEntry(
-                "openclaw.cache-ttl",
-                serializeCacheTtlToolResultProjections(toolResultPromptProjectionState),
+              persistToolResultProjections(toolResultPromptProjectionState, (customType, data) =>
+                sessionManager.appendCustomEntry(customType, data),
               );
             });
           }
