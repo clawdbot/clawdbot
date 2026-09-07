@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 
@@ -55,4 +58,17 @@ describe("createEmbeddedAttemptTranscriptLifecycle", () => {
       );
     });
   });
+
+  it("releases its per-attempt AsyncLocalStorage after dispose (retention child)", async () => {
+    const entrypoint = new URL(
+      "./attempt-transcript-lifecycle.retention.test-support.ts",
+      import.meta.url,
+    );
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ["--expose-gc", "--import", "tsx", fileURLToPath(entrypoint)],
+      { timeout: 20_000 },
+    );
+    expect(stdout).toContain("retention ok");
+  }, 25_000);
 });

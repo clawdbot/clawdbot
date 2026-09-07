@@ -5,7 +5,8 @@ import { log } from "../logger.js";
 
 const TRANSCRIPT_TEARDOWN_BUDGET_MS = 30_000;
 
-type LifecycleOwner = {
+/** Per-attempt transcript write state carried by the owned AsyncLocalStorage. */
+export type LifecycleOwner = {
   active: boolean;
   nestedPending: number;
   nestedTail: Promise<void>;
@@ -18,10 +19,16 @@ export type EmbeddedAttemptTranscriptLifecycle = {
   dispose(): Promise<void>;
 };
 
-export function createEmbeddedAttemptTranscriptLifecycle(params: {
-  runId?: string;
-  sessionId?: string;
-}): EmbeddedAttemptTranscriptLifecycle {
+export function createEmbeddedAttemptTranscriptLifecycle(
+  params: {
+    runId?: string;
+    sessionId?: string;
+  },
+  deps: {
+    /** Override how the lifecycle owner store is constructed, so tests can hold a reference to the per-attempt AsyncLocalStorage. Defaults to an owned instance. */
+    createLifecycleStore?: () => AsyncLocalStorage<LifecycleOwner>;
+  } = {},
+): EmbeddedAttemptTranscriptLifecycle {
   let cleanupRequested = false;
   let disposed = false;
   let lifecycle = Promise.resolve();
@@ -29,7 +36,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
   let disposePromise: Promise<void> | undefined;
   let pendingWrites = 0;
   let teardownBudgetLogged = false;
-  const lifecycleOwner = new AsyncLocalStorage<LifecycleOwner>();
+  const lifecycleOwner = deps.createLifecycleStore?.() ?? new AsyncLocalStorage<LifecycleOwner>();
 
   const createLifecycleOwner = (): LifecycleOwner => ({
     active: true,
@@ -203,6 +210,11 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
       disposePromise ??= (async () => {
         await beginCleanup();
         disposed = true;
+        // This lifecycle owns a per-attempt AsyncLocalStorage. Without an explicit
+        // .disable() it stays strongly referenced by Node's global storageList for
+        // the life of the process, stamping a store symbol onto every later async
+        // resource and growing the cost of each await without bound (see #141122).
+        lifecycleOwner.disable();
       })();
       await disposePromise;
     },
