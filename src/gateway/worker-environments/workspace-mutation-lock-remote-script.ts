@@ -113,7 +113,16 @@ function readLock() {
   if (directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) {
     throw new Error("unsafe workspace mutation lock");
   }
-  if (names.length !== 1) throw new Error("invalid workspace mutation lock");
+  if (names.length !== 1) {
+    try {
+      const verifyStats = fs.lstatSync(lockRoot);
+      if (verifyStats.dev !== directoryStats.dev || verifyStats.ino !== directoryStats.ino) return null;
+    } catch (error) {
+      if (error && error.code === "ENOENT") return null;
+      throw error;
+    }
+    throw new Error("invalid workspace mutation lock");
+  }
   const entry = parseLockEntry(names[0]);
   if (!entry) throw new Error("invalid workspace mutation lock owner");
   const entryPath = path.join(lockRoot, names[0]);
