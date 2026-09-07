@@ -4,9 +4,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
+import {
+  getCompactionSafeguardRuntime,
+  setCompactionSafeguardRuntime,
+} from "../agent-hooks/compaction-safeguard-runtime.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
+import { getEmbeddedSessionPromptState } from "./session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
@@ -15,7 +20,7 @@ import {
 import { mapThinkingLevelForProvider } from "./utils.js";
 
 export async function prepareCompactionSessionAgent(params: {
-  session: { agent: { streamFn?: unknown } };
+  session: { sessionManager: unknown; agent: { streamFn?: unknown } };
   llmRuntime: LlmRuntime;
   providerStreamFn: unknown;
   sessionId: string;
@@ -44,6 +49,10 @@ export async function prepareCompactionSessionAgent(params: {
   senderUsername?: string | null;
   senderE164?: string | null;
 }) {
+  setCompactionSafeguardRuntime(params.session.sessionManager, {
+    ...getCompactionSafeguardRuntime(params.session.sessionManager),
+    foregroundPrefix: getEmbeddedSessionPromptState(params.sessionId).compactionPrefix,
+  });
   const authStorage =
     params.authStorage &&
     typeof params.authStorage === "object" &&

@@ -12,6 +12,7 @@ import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionOnDemand } from "./embedded-agent-runner/compact.runtime.js";
 import type { beginPromptCacheObservation } from "./embedded-agent-runner/prompt-cache-observability.js";
+import { attachCompactionAccountingRecorder } from "./embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import {
   buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
@@ -24,6 +25,7 @@ import {
   withLiveCacheHeartbeat,
 } from "./live-cache-test-support.js";
 import { buildUsageWithNoCost } from "./stream-message-shared.js";
+import type { NormalizedUsage } from "./usage.js";
 
 const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
 
@@ -286,7 +288,16 @@ function buildEmbeddedRunnerConfig(
             },
           },
         },
-        ...(params.compactionModel ? { compaction: { model: params.compactionModel } } : {}),
+        ...(params.compactionModel
+          ? {
+              compaction: {
+                model: params.compactionModel,
+                // Keep a complete latest turn and send the older turn to the summarizer.
+                keepRecentTokens: 1_000,
+                recentTurnsPreserve: 0,
+              },
+            }
+          : {}),
       },
     },
   };
@@ -387,9 +398,17 @@ async function compactLiveCacheSession(params: {
 }) {
   const sessionPaths = buildRunnerSessionPaths(params.sessionId);
   await fs.mkdir(sessionPaths.workspaceDir, { recursive: true });
-  return await withLiveCacheHeartbeat(
+  const compactionUsage: NormalizedUsage[] = [];
+  const contextEngineRuntimeContext = {};
+  attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
+    recordUsage: (usage) => compactionUsage.push(usage),
+  });
+  const result = await withLiveCacheHeartbeat(
     compactEmbeddedAgentSessionOnDemand({
       sessionId: params.sessionId,
+      contextEngineRuntimeContext,
+      disableTools: true,
+      extraSystemPrompt: params.providerTag === "anthropic" ? ANTHROPIC_PREFIX : OPENAI_PREFIX,
       sessionTarget: sessionPaths.sessionTarget,
       workspaceDir: sessionPaths.workspaceDir,
       agentDir: sessionPaths.agentDir,
@@ -410,6 +429,7 @@ async function compactLiveCacheSession(params: {
     }),
     `${params.providerTag} embedded compaction ${params.sessionId}`,
   );
+  return { ...result, compactionUsage };
 }
 
 function extractFirstToolCall(message: AssistantMessage) {
@@ -1373,6 +1393,9 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         );
         expect(compacted.ok).toBe(true);
         expect(compacted.compacted).toBe(true);
+        // The summary request itself must reuse the primed foreground prefix.
+        expect(compacted.compactionUsage.length).toBeGreaterThan(0);
+        expect(compacted.compactionUsage[0]?.cacheRead ?? 0).toBeGreaterThan(0);
 
         const followup = await runEmbeddedCacheProbe({
           ...fixture,

@@ -1168,6 +1168,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         thinkingLevel,
         streamFn,
         usageSink,
+        foregroundPrefix: preparation.isSplitTurn ? undefined : runtime?.foregroundPrefix,
       };
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
 
@@ -1217,6 +1218,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 );
                 droppedSummary = await summarizeViaLLM({
                   ...llmSummaryParams,
+                  foregroundPrefix: undefined,
                   messages: pruned.droppedMessagesList,
                   maxChunkTokens: droppedMaxChunkTokens,
                   summaryPrompt: { kind: "custom", instructions: structuredInstructions },
@@ -1293,6 +1295,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ? await summarizeViaLLM({
                   ...llmSummaryParams,
                   messages: messagesToSummarize,
+                  foregroundPrefix: droppedSummary ? undefined : llmSummaryParams.foregroundPrefix,
                   maxChunkTokens,
                   summaryPrompt: { kind: "custom", instructions: structuredInstructions },
                   customInstructions: correctiveInstructions,

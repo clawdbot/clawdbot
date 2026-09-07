@@ -1,3 +1,4 @@
+import type { CompactionForegroundContext } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 /**
  * Session compaction compatibility bridge over the shared agent-core implementation.
  *
@@ -78,6 +79,7 @@ export async function generateSummary(
   streamFn?: StreamFn,
   usageSink?: SessionModelUsageSink,
   summaryPrompt?: CompactionSummaryPrompt,
+  foreground?: CompactionForegroundContext,
 ): Promise<string> {
   return unwrapCompactionResult(
     await generateSummaryCore(
@@ -93,6 +95,7 @@ export async function generateSummary(
       streamFn,
       createCompactionRuntime(usageSink),
       summaryPrompt,
+      foreground,
     ),
   );
 }
