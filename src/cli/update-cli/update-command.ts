@@ -64,6 +64,7 @@ import {
   failUpdateCommandRun,
   prepareUpdateCommand,
   readDevUpdateTarget,
+  withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
@@ -113,10 +114,8 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
   recoveryState.triageTarget.root = prepared.discoveredRoot;
   const presentation = createUpdateProgress(!opts.json, run);
   try {
-    await withUpdateFailureTriage(
-      { ...opts, invocationCwd },
-      recoveryState.triageTarget,
-      async () => {
+    const execute = () =>
+      withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, async () => {
         await withUpdateInProgressEnv(invocationCwd, async () => {
           let failure: { error: unknown } | undefined;
           try {
@@ -151,8 +150,8 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
             throw failure.error;
           }
         });
-      },
-    );
+      });
+    await withUpdatePreviewSignals(opts, execute);
   } finally {
     presentation.dispose();
   }
