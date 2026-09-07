@@ -8,6 +8,14 @@ import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.
 
 let codeBlockRegionSequence = 0;
 const initializedCodeBlocks = new WeakSet<HTMLElement>();
+
+function updateListMarkerWidth(probe: HTMLElement): void {
+  probe.parentElement?.style.setProperty(
+    "--chat-markdown-marker-width",
+    `${Math.ceil(probe.getBoundingClientRect().width)}px`,
+  );
+}
+
 class MarkdownBlocksDirective extends AsyncDirective {
   private root: HTMLElement | undefined;
   private scanPending = false;
@@ -16,6 +24,14 @@ class MarkdownBlocksDirective extends AsyncDirective {
     typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver((entries) => {
+          for (const { target } of entries) {
+            if (
+              target instanceof HTMLElement &&
+              target.classList.contains("markdown-list-marker-measure")
+            ) {
+              updateListMarkerWidth(target);
+            }
+          }
           const wrappers = new Set(
             entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
           );
@@ -66,6 +82,41 @@ class MarkdownBlocksDirective extends AsyncDirective {
 
   private scan(root: HTMLElement): void {
     enhanceMarkdownTables(root);
+    for (const prose of [
+      root,
+      ...root.querySelectorAll<HTMLElement>(".chat-text, .chat-thinking"),
+    ]) {
+      if (!prose.matches(".chat-text, .chat-thinking")) {
+        continue;
+      }
+      let probe = prose.querySelector<HTMLElement>(":scope > .markdown-list-marker-measure");
+      const lists = prose.querySelectorAll<HTMLOListElement>("ol");
+      if (lists.length === 0) {
+        probe?.remove();
+        prose.style.removeProperty("--chat-markdown-marker-width");
+        continue;
+      }
+      if (!probe) {
+        probe = document.createElement("span");
+        probe.className = "markdown-list-marker-measure";
+        probe.setAttribute("aria-hidden", "true");
+        prose.append(probe);
+      }
+      // Intrinsic width measures every counter in the actual font. Font and scale
+      // changes resize the probe without replacing native list markers.
+      const markers: string[] = [];
+      for (const list of lists) {
+        for (let index = 0; index < list.children.length; index++) {
+          markers.push(`${list.start + index}. `);
+        }
+      }
+      probe.textContent = markers.join("\n");
+      updateListMarkerWidth(probe);
+      if (!this.observedNodes.has(probe)) {
+        this.observedNodes.add(probe);
+        this.resizeObserver?.observe(probe);
+      }
+    }
     if (root.querySelector(".markdown-mermaid pre code")) {
       void import("./markdown-mermaid.ts").then(
         ({ mountMermaidBlocks }) => {

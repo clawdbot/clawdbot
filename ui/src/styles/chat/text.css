@@ -375,8 +375,18 @@
 }
 
 :is(.chat-text, .chat-thinking) {
-  --chat-markdown-indent: var(--space-6);
+  --chat-markdown-indent: max(var(--space-6), var(--chat-markdown-marker-width, 0px));
   --chat-markdown-marker-gap: var(--space-2);
+}
+
+.markdown-list-marker-measure {
+  position: absolute;
+  inline-size: max-content;
+  block-size: 0;
+  overflow: hidden;
+  visibility: hidden;
+  white-space: pre;
+  font-variant-numeric: tabular-nums;
 }
 
 :is(.chat-text, .chat-thinking) :where(ul, ol) {
@@ -399,8 +409,6 @@
 
 :is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {
   list-style: none;
-  margin-inline-start: calc(-1 * var(--chat-markdown-indent));
-  padding-inline-start: calc(var(--space-4) + var(--chat-markdown-marker-gap));
 }
 
 :is(.chat-text, .chat-thinking) :where(ol > li)::marker {
@@ -470,7 +478,7 @@
   appearance: none;
   position: absolute;
   inset-block-start: calc((1lh - var(--space-4)) / 2);
-  inset-inline-start: 0;
+  inset-inline-end: calc(100% + var(--chat-markdown-marker-gap));
   inline-size: var(--space-4);
   block-size: var(--space-4);
   margin: 0;
