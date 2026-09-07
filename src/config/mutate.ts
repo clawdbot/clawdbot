@@ -219,7 +219,8 @@ function assertExpectedConfigPathMatches(
   }
 }
 
-async function withConfigMutationLock<T>(
+/** Serialize config writers without requiring a schema-valid snapshot. */
+export async function withConfigMutationLock<T>(
   params: { io?: ConfigMutationIO; lockPath?: string },
   fn: () => Promise<T>,
 ): Promise<T> {

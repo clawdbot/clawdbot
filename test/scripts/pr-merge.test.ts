@@ -279,6 +279,7 @@ describePosix("native squash attribution", () => {
   it.each([
     { name: "Codex", email: "codex@openai.com" },
     { name: "roboclaw-bot", email: "309084314+roboclaw-bot@users.noreply.github.com" },
+    { name: "clawsweeper", email: "274271284+clawsweeper[bot]@users.noreply.github.com" },
   ])(
     "omits machine author preview credit from a reviewed body while retaining human authors: %j",
     (machine) => {
@@ -405,6 +406,9 @@ describePosix("native squash attribution", () => {
     "Co-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
     "co-authored-by: RoboClaw <309084314+ROBOCLAW-BOT@USERS.NOREPLY.GITHUB.COM>",
     "Co-Authored-By: RoboClaw\n <309084314+roboclaw-bot@users.noreply.github.com>",
+    "Co-authored-by: clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>",
+    "co-authored-by: ClawSweeper <274271284+CLAWSWEEPER[BOT]@USERS.NOREPLY.GITHUB.COM>",
+    "Co-Authored-By: clawsweeper\n <274271284+clawsweeper[bot]@users.noreply.github.com>",
   ])("omits imported machine credit while preserving human credit: %j", (machineCredit) => {
     const humanCredit = [
       "Co-authored-by: Claude <claude@example.com>",
@@ -427,6 +431,11 @@ describePosix("native squash attribution", () => {
       "Co-authored-by: Other <309084314+roboclaw-bot@users.noreply.github.com.example.org>",
       "Co-authored-by: Other <1309084314+roboclaw-bot@users.noreply.github.com>",
       "Co-authored-by: Other <309084314+roboclaw-bot-human@users.noreply.github.com>",
+      "Co-authored-by: clawsweeper <human@example.com>",
+      "Co-authored-by: Human <274271284+human@users.noreply.github.com>",
+      "Co-authored-by: Other <1274271284+clawsweeper[bot]@users.noreply.github.com>",
+      "Co-authored-by: Other <274271284+clawsweeper[bot]@users.noreply.github.com.example.org>",
+      "Co-authored-by: Other <274271284+clawsweeperbot@users.noreply.github.com>",
     ].join("\n");
     const server = "Co-authored-by: Server <server@example.com>";
     const result = prepareBody({
@@ -451,6 +460,7 @@ describePosix("native squash attribution", () => {
     "Reviewed correction.\n\nCo-authored-by: Codex <codex@openai.com>\n",
     "Reviewed correction.\n\nCo-authored-by: Trae Solo <solo-agent@trae.ai>\n",
     "Reviewed correction.\n\nCo-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>\n",
+    "Reviewed correction.\n\nCo-authored-by: clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>\n",
   ])(
     "requires a reviewed body when the chosen message contains machine credit: %j",
     (overrideBody) => {
@@ -473,6 +483,7 @@ describePosix("native squash attribution", () => {
     "Codex <codex@openai.com>",
     "Trae Solo <solo-agent@trae.ai>",
     "roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
+    "clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>",
   ])("rejects machine credit present only in the default server preview: %s", (identity) => {
     const result = prepareBody({
       sourceMessages: ["Repair"],

@@ -594,7 +594,8 @@ async function waitForConnectionEvidence(
 async function waitForVisibleFailure(page: Page, expectedText: string): Promise<string> {
   const failure = page.locator(".login-gate__failure");
   await failure.waitFor();
-  expect(await failure.getAttribute("role")).toBe("alert");
+  expect(await failure.getAttribute("role")).toBe("status");
+  expect(await failure.getAttribute("aria-live")).toBe("polite");
   const raw = (await failure.locator(".login-gate__failure-raw").textContent()) ?? "";
   expect(raw.toLowerCase()).toContain(expectedText.toLowerCase());
   expect(await failure.locator(".login-gate__failure-steps").isVisible()).toBe(true);

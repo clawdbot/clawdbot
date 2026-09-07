@@ -350,7 +350,7 @@ Gateway or use an intentionally credential-free endpoint. Normal Codex turns
 are supported, but `/btw` side questions are not yet placement-bound and fail
 visibly. Completed changes return through the same placement workspace
 reconciliation as worker turns. See
-[Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device)
+[Run Codex on a paired device](/plugins/codex-harness/placement#run-codex-on-a-paired-device)
 for the exact allowlist configuration and lifecycle.
 
 ### Codex or OpenClaw on a cloud profile

@@ -16,13 +16,17 @@ afterEach(async () => {
 });
 
 describe("post-install doctor result IPC", () => {
-  it("round-trips typed advisory results and consumes the file", async () => {
+  it.each([
+    { status: "ok" as const, configHash: "unchanged" },
+    { status: "error" as const, configHash: "a".repeat(64), configInputHash: "b".repeat(64) },
+    {
+      ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
+      configHash: "b".repeat(64),
+    },
+    createDeferredConfiguredPluginRepairDoctorResult(["legacy child advisory"]),
+  ])("round-trips $status results and consumes the file", async (result) => {
     const resultPath = createUpdatePostInstallDoctorResultPath();
     resultPaths.push(resultPath);
-    const result = createDeferredConfiguredPluginRepairDoctorResult([
-      "deferred configured plugin repair",
-    ]);
-
     await writeUpdatePostInstallDoctorResult({ resultPath, result });
 
     await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual(result);

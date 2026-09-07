@@ -306,7 +306,7 @@ suite.define(() => {
       await sidebar.getByRole("link", { name: "Home" }).click();
       await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
       await assertActiveTurnVisible(page, streamText);
-      expect(await readWorkingStartedAts(page)).toContain(startedAt);
+      await expect.poll(() => readWorkingStartedAts(page)).toContain(startedAt);
       await expect(
         page.locator(".chat-working-indicator openclaw-elapsed-time").filter({ hasText: "10m" }),
       ).not.toHaveCount(0);

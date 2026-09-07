@@ -2277,6 +2277,68 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it.each([false, true])(
+    "keeps duplicate-path image positions after admission wait=%s",
+    async (wait) => {
+      const sharedPath = "/tmp/shared-media-index.png";
+      const sessionId = "prepared-media-index-session";
+      const queueSettings = await import("./queue/settings-runtime.js");
+      vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+      const previousRun = wait
+        ? createReplyOperation({ sessionId, sessionKey: "session-key", resetTriggered: false })
+        : undefined;
+      previousRun?.setPhase("running");
+      resolveCurrentTurnImagesMock.mockResolvedValueOnce({
+        images: [{ type: "image", data: "c3ludGhldGlj", mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        imageSourceIndexes: [1],
+        unresolvedSourceIndexes: [2],
+      });
+      const running = runPrepared({
+        isNewSession: false,
+        sessionId,
+        ctx: {
+          ...createInboundTurn("inspect both images", "webchat", "direct"),
+          media: [
+            { path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true },
+            { path: sharedPath, contentType: "image/png" },
+            { path: sharedPath, contentType: "image/png" },
+          ],
+        },
+        sessionCtx: createSessionTurn("inspect both images", "webchat", "direct"),
+      });
+      try {
+        if (previousRun) {
+          await vi.waitFor(() => expect(previousRun.abortSignal.aborted).toBe(true));
+          previousRun.complete();
+        }
+        await expect(running).resolves.toEqual({ text: "ok" });
+      } finally {
+        previousRun?.complete();
+        await running.catch(() => undefined);
+      }
+
+      const { followupRun } = requireRunReplyAgentCall();
+      expect(followupRun.media).toHaveLength(2);
+      expect(followupRun.media?.[0]).not.toHaveProperty("hydrationSuppressed");
+      expect(followupRun).toMatchObject({
+        media: [{ path: sharedPath }, { path: sharedPath, hydrationSuppressed: true }],
+        mediaImageLayout: {
+          slots: [{ kind: "inline", factIndex: 0 }],
+          suppressedFactIndexes: [1],
+        },
+      });
+      expect(followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+        __openclaw: {
+          mediaImageLayout: {
+            slots: [{ kind: "inline", factIndex: 1 }],
+            suppressedFactIndexes: [2],
+          },
+        },
+      });
+    },
+  );
+
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
     await runPrepared({
       ctx: {

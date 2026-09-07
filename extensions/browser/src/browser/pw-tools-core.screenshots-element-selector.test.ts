@@ -196,8 +196,7 @@ describe("pw-tools-core", () => {
       await waitAt(method);
       return method === "Page.getLayoutMetrics"
         ? {
-            visualViewport: { pageX: 0, pageY: 0, scale: 1 },
-            cssLayoutViewport: { pageX: 0, pageY: 0 },
+            cssVisualViewport: { pageX: 0, pageY: 0, scale: 1 },
             cssContentSize: { x: 0, y: 0, width: 390, height: 664 },
           }
         : { data: Buffer.from("capture").toString("base64") };

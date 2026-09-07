@@ -45,7 +45,10 @@ export function resolveUpdateResultNextAction(params: {
         ? `The gateway is running${runningVersion ? ` ${runningVersion}` : ""} but did not pass verification (${failure}). `
         : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}). ${params.serviceRunning === false ? "Keep the gateway stopped until the update succeeds. " : ""}`
       : "";
-    return `${state}${resolveUnsafeUpdateRecoveryGuidance(reason, env)}`;
+    const configRefusal = result.steps.findLast(
+      (step) => step.name === "config rollback",
+    )?.stderrTail;
+    return `${configRefusal ? `${configRefusal} ` : ""}${state}${resolveUnsafeUpdateRecoveryGuidance(reason, env)}`;
   }
   const command = (value: string) => replaceCliName(formatCliCommand(value, env), resolveCliName());
   if (result.reason === "dirty") {

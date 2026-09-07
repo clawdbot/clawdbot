@@ -6,8 +6,10 @@ import {
   getPreparedModelRuntimeTestApi,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -15,6 +17,11 @@ import {
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  activateStandalonePreparedModelRuntime,
+  getPreparedModelRuntimeSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime,
+  prepareModelRuntimeSnapshot,
+  registerPreparedModelRuntimePublicationListener,
   acquireReadOnlyPreparedModelRuntime,
   refreshPreparedModelRuntimeSnapshots,
   type PreparedModelRuntimeInput,
@@ -24,6 +31,13 @@ import {
 const mocks = getPreparedModelRuntimeMocks();
 const testApi = getPreparedModelRuntimeTestApi();
 let state: OpenClawTestState;
+const configuredInput = () => ({
+  config: {},
+  agentId: "default",
+  agentDir: state.agentDir("default"),
+  inheritedAuthDir: state.agentDir("default"),
+});
+
 let buildBatchSpy: Mock<typeof runtimeBuild.startSerializedSnapshotBuildBatch>;
 let pendingBuildReleases: Array<{ resolve: () => void }>;
 
@@ -72,7 +86,7 @@ const coldAdmissionCases: Array<{
 describe("prepared model runtime cancelled admission ownership", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-runtime-cancelled-admission" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
     pendingBuildReleases = [];
     buildBatchSpy = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
   });
@@ -248,6 +262,122 @@ describe("prepared model runtime cancelled admission ownership", () => {
       catalogMode: "static",
     });
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+  });
+  it.each(["close", "restart"] as const)(
+    "retires model publication before auth snapshots are cleared during %s",
+    async (event) => {
+      mocks.configuredAgentIds = ["default"];
+      await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+      const prepared = getPreparedModelRuntimeSnapshot(configuredInput());
+      expect(prepared).toBeDefined();
+      await drainGlobalSingletonLifecycleState(event);
+      const builds = mocks.ensureOpenClawModelsJson.mock.calls.length;
+      mocks.mutationListener?.({ affectsInheritedStores: true, profileSetChanged: true });
+      await nextTurn();
+      expect(getPreparedModelRuntimeSnapshot(configuredInput())).toBeUndefined();
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(builds);
+      expect(prepared?.isCurrent()).toBe(false);
+      await expect(
+        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+      ).resolves.toBeUndefined();
+    },
+  );
+
+  it.each(["auth", "config"] as const)(
+    "joins the raw %s publication before completing process close",
+    async (source) => {
+      mocks.configuredAgentIds = ["default"];
+      await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+      const entered = createDeferred();
+      const release = createDeferred();
+      const published = vi.fn();
+      const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+        if (event.phase === "published") {
+          published();
+        }
+      });
+      mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+        entered.resolve();
+        await release.promise;
+        return { agentDir: String(agentDir), wrote: false };
+      });
+      let refresh: Promise<void> | undefined;
+      if (source === "auth") {
+        mocks.mutationListener?.({ affectsInheritedStores: true });
+      } else {
+        refresh = refreshPreparedModelRuntimeSnapshots({});
+        void refresh.catch(() => {});
+      }
+      await entered.promise;
+      const reader = prepareModelRuntimeSnapshot(configuredInput());
+      void reader.catch(() => {});
+      let closed = false;
+      const closing = drainGlobalSingletonLifecycleState("close").then(() => {
+        closed = true;
+      });
+      try {
+        await nextTurn();
+        expect(closed).toBe(false);
+        release.resolve();
+        await closing;
+        await expect(reader).rejects.toThrow(/closed|superseded/);
+        expect(getPreparedModelRuntimeSnapshot(configuredInput())).toBeUndefined();
+        expect(published).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([refresh, reader, closing]);
+        unregister();
+      }
+    },
+  );
+
+  it("preserves immutable leased data and allows a fresh standalone activation after close", async () => {
+    const input = { config: {}, agentDir: state.agentDir("direct") };
+    const previous = await acquireAgentRunPreparedModelRuntime(input, { retainIdleRunOwner: true });
+    try {
+      await drainGlobalSingletonLifecycleState("close");
+      expect(previous.snapshot.isCurrent()).toBe(false);
+      expect(previous.snapshot.createStores()).toBeDefined();
+      const next = await acquireAgentRunPreparedModelRuntime(input, { retainIdleRunOwner: true });
+      try {
+        expect(next.snapshot).not.toBe(previous.snapshot);
+        previous.release();
+        expect(getPreparedModelRuntimeSnapshot(input)).toBe(next.snapshot);
+        expect(next.snapshot.isCurrent()).toBe(true);
+      } finally {
+        next.release();
+      }
+    } finally {
+      previous.release();
+    }
+  });
+
+  it("does not revive a queued standalone activation after its process lifetime closes", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const input = { config: {}, agentDir: state.agentDir("queued") };
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+      entered.resolve();
+      await release.promise;
+      return { agentDir: String(agentDir), wrote: false };
+    });
+    const first = activateStandalonePreparedModelRuntime(input);
+    void first.catch(() => {});
+    await entered.promise;
+    const second = activateStandalonePreparedModelRuntime(input);
+    void second.catch(() => {});
+    const closing = drainGlobalSingletonLifecycleState("close");
+    try {
+      release.resolve();
+      await closing;
+      await expect(first).rejects.toThrow(/closed|superseded/);
+      await expect(second).rejects.toThrow(/closed|superseded/);
+      expect(getPreparedModelRuntimeSnapshot(input)).toBeUndefined();
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, second, closing]);
+    }
   });
 });
 

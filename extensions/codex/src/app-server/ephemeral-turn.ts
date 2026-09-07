@@ -54,10 +54,7 @@ export class CodexEphemeralTurn {
             if (firstDelta) {
               await options.onAssistantMessageStart?.();
             }
-          } else if (
-            notification.method === "rawResponse/completed" &&
-            options.textMode === "all"
-          ) {
+          } else if (notification.method === "rawResponse/completed") {
             this.usage.record(params);
           } else if (notification.method === "turn/completed") {
             this.turn = readCodexTurnCompletedNotification(params)?.turn ?? this.turn;

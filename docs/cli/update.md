@@ -94,6 +94,12 @@ are labeled explicitly. The final report includes the outcome, recorded phase du
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
 print progress steps.
 
+When switching from a dev checkout to a package, the updater replaces npm's
+install link and leaves the external checkout untouched. If activation fails,
+restoring that link and its launchers does not verify the mutable checkout's
+runtime. Recovery stays unverified and does not authorize an automatic restart;
+inspect the checkout and recovery report before restarting it.
+
 `--yes` also skips the optional shell-completion setup prompt. Existing
 completion profiles and caches are still repaired when needed; installing
 completion in a new shell profile remains an interactive choice.
@@ -155,7 +161,8 @@ an agent. Add `--update-result <path>` to include a saved update-failure artifac
 
 Validation failures leave the serving Gateway untouched. After activation, a
 failed verification can [restore the previous package](/cli/update#validation-and-activation)
-when configuration content and database schema versions are unchanged. Preserve migrated state and
+when database schemas are unchanged and the config file still matches the
+candidate’s activation Doctor output. Preserve migrated state and
 history; replacing the code alone cannot undo a migration. The original
 failed update still exits nonzero after the agent finishes, even if the repair
 succeeds.
@@ -239,10 +246,23 @@ verified running. Staging, candidate validation, and pre-activation repair are e
 records include service PID/port, version/build identity, settled health,
 plugin activation errors, channel readiness, and `/readyz`.
 
-After a live database migration, a fresh process from the candidate completes
-verification and writes the final outcome to the same run. It carries forward
-the activation steps; a schema upgrade does not create a separate report or let
-the old updater reopen the newer database.
+With transactional updaters from 2026.9.3 onward, a fresh process from the
+candidate completes verification after a live database migration and writes the
+final outcome to the same run. It carries forward the activation steps; a schema
+upgrade does not create a separate report or let the old updater reopen the
+newer database.
+
+The 2026.9.2 updater keeps its own completion path. For shared-state migrations,
+the candidate applies schema content but delays version publication until every
+affected terminal run is at least five minutes old, or each still-running row
+has been unchanged for more than 30 minutes. Doctor reports the deferral; the
+new Gateway already uses the migrated content and publishes the version after
+the deadline. Pending agent-database migrations, missing state metadata, and
+failed content migrations still produce `update-schema-bump-unfenced` with
+[manual update commands](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+See [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters)
+for exact publication rules and the remaining risk to a stalled old CLI's final
+report.
 
 ## `update repair`
 
@@ -519,7 +539,7 @@ is verified. If activation fails before a working package is confirmed and rollb
 cannot be verified, finalization retains the backup and reports its location. Keep
 that backup and repair the installation before restarting, including for older
 targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
-configuration content, and unchanged pre-existing shared and affected per-agent
+config content since the activation Doctor pass, and unchanged pre-existing shared and affected per-agent
 SQLite `user_version` values. A database first created during activation or
 verification is schema-neutral only at the candidate's supported version for its
 database kind; a missing pre-existing database or a new database at a foreign
@@ -528,10 +548,20 @@ previous package; unknown or incompatible support refuses rollback with
 `rollback-state-unverified`. The updater restores the previous generation and verifies
 it running before finishing `rolled-back`, preserving the failing check as its
 reason. See [Automatic rollback](/install/updating#automatic-schema-neutral-rollback)
-for the restoration and package-manager guards. A failure alone does not
+for the restoration and package-manager guards. The candidate’s own Doctor
+migrations in the main config file do not block rollback, including on a fresh
+install’s first update. Separate `$include` files must retain their pre-activation
+configuration content. Doctor must have consumed the captured pre-update config,
+and the current file must match its reported output. Restoration holds the normal config writer lock and
+rechecks the captured hash before writing.
+When needed, rollback replaces the main config with the exact bytes captured before
+Doctor and owner-only permissions (`0600`), including the previous writer stamp.
+Operator edits made after activation block
+restoration, including edits before Doctor reads the config or after its last write; the next action names the changed config file. A failure alone does not
 authorize restarting the candidate.
 
-If configuration content changed or the databases are not schema-neutral, automatic rollback is refused with
+If the config file changed after the activation Doctor pass or the databases are
+not schema-neutral, automatic rollback is refused with
 `state-migrated-no-rollback`. The updater enters `repairing` on the installed
 candidate, also used if rollback itself fails. If the previous package was
 already restored, repair targets that version. Between repair attempts, the

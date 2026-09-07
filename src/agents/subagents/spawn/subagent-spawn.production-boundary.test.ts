@@ -106,7 +106,7 @@ async function writeTestConfig() {
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "spawn-production-boundary" });
-  resetPreparedModelRuntimeHarness(state);
+  await resetPreparedModelRuntimeHarness(state);
   runEmbeddedAgent.mockReset();
   stateDir = state.stateDir;
   runtimeConfig = await writeTestConfig();

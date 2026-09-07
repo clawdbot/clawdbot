@@ -78,7 +78,6 @@ function filterLogsByRange(
 
 function renderUsageRefreshStatus(
   status: PanelRefreshStatus,
-  onRetry: () => void,
   detailKey: string,
   kind: "timeline" | "conversation" | "context",
 ) {
@@ -90,7 +89,6 @@ function renderUsageRefreshStatus(
           error: status.error,
         })
       : undefined,
-    onRetry,
     className: `usage-callout usage-detail-error--${kind}`,
   });
 }
@@ -120,10 +118,10 @@ function renderSessionSummary(
   let toolCounts: Map<string, number> | undefined;
   if (filteredLogs) {
     toolCounts = new Map();
-    for (const log of filteredLogs) {
-      const { tools } = parseToolSummary(log.content);
-      for (const [name] of tools) {
-        toolCounts.set(name, (toolCounts.get(name) || 0) + 1);
+    // Result rows carry tool names for filtering, but only assistant rows record calls.
+    for (const log of filteredLogs.filter(({ role }) => role === "assistant")) {
+      for (const [name, count] of parseToolSummary(log.content).tools) {
+        toolCounts.set(name, (toolCounts.get(name) ?? 0) + count);
       }
     }
   }
@@ -250,7 +248,6 @@ function renderSessionDetailPanel(
   timeSeries: { points: TimeSeriesPoint[] } | null,
   timeSeriesLoading: boolean,
   timeSeriesStatus: PanelRefreshStatus,
-  onRetryTimeSeries: () => void,
   timeSeriesMode: "cumulative" | "per-turn",
   onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void,
   timeSeriesBreakdownMode: "total" | "by-type",
@@ -265,7 +262,6 @@ function renderSessionDetailPanel(
   sessionLogs: SessionLogEntry[] | null,
   sessionLogsLoading: boolean,
   sessionLogsStatus: PanelRefreshStatus,
-  onRetrySessionLogs: () => void,
   sessionLogsExpanded: boolean,
   onToggleSessionLogsExpanded: () => void,
   logFilters: {
@@ -280,7 +276,6 @@ function renderSessionDetailPanel(
   onLogFilterQueryChange: (next: string) => void,
   onLogFilterClear: () => void,
   context: UsageContextDetail,
-  onRetryContextWeight: () => void,
   contextExpanded: boolean,
   onToggleContextExpanded: () => void,
   onClose: () => void,
@@ -364,7 +359,6 @@ function renderSessionDetailPanel(
             timeSeries,
             timeSeriesLoading,
             timeSeriesStatus,
-            onRetryTimeSeries,
             timeSeriesMode,
             onTimeSeriesModeChange,
             timeSeriesBreakdownMode,
@@ -383,7 +377,6 @@ function renderSessionDetailPanel(
             sessionLogs,
             sessionLogsLoading,
             sessionLogsStatus,
-            onRetrySessionLogs,
             sessionLogsExpanded,
             onToggleSessionLogsExpanded,
             logFilters,
@@ -395,13 +388,7 @@ function renderSessionDetailPanel(
             hasRange ? timeSeriesCursorStart : null,
             hasRange ? timeSeriesCursorEnd : null,
           )}
-          ${renderContextPanel(
-            context,
-            onRetryContextWeight,
-            usage,
-            contextExpanded,
-            onToggleContextExpanded,
-          )}
+          ${renderContextPanel(context, usage, contextExpanded, onToggleContextExpanded)}
         </div>
       </div>
     </div>
@@ -412,7 +399,6 @@ function renderTimeSeriesCompact(
   timeSeries: { points: TimeSeriesPoint[] } | null,
   loading: boolean,
   status: PanelRefreshStatus,
-  onRetry: () => void,
   mode: "cumulative" | "per-turn",
   onModeChange: (mode: "cumulative" | "per-turn") => void,
   breakdownMode: "total" | "by-type",
@@ -425,19 +411,14 @@ function renderTimeSeriesCompact(
   cursorEnd?: number | null,
   onCursorRangeChange?: (start: number | null, end: number | null) => void,
 ) {
-  if (loading && !status.hasLoaded) {
+  if ((loading || status.awaitingGateway) && !status.hasLoaded) {
     return html`
       <div class="session-timeseries-compact">
         <div class="usage-empty-block">${t("usage.loading.badge")}</div>
       </div>
     `;
   }
-  const refreshStatus = renderUsageRefreshStatus(
-    status,
-    onRetry,
-    "usage.details.usageOverTime",
-    "timeline",
-  );
+  const refreshStatus = renderUsageRefreshStatus(status, "usage.details.usageOverTime", "timeline");
   if (status.error && !status.hasLoaded) {
     return html`
       <div class="session-timeseries-compact">
@@ -822,14 +803,12 @@ function renderTimeSeriesCompact(
 
 function renderContextPanel(
   { weight: contextWeight, loading, status }: UsageContextDetail,
-  onRetry: () => void,
   usage: UsageSessionEntry["usage"],
   expanded: boolean,
   onToggleExpanded: () => void,
 ) {
   const refreshStatus = renderUsageRefreshStatus(
     status,
-    onRetry,
     "usage.details.systemPromptBreakdown",
     "context",
   );
@@ -841,7 +820,7 @@ function renderContextPanel(
           status.error
             ? nothing
             : html`<div class="usage-empty-block">
-                ${t(loading ? "usage.loading.badge" : "usage.details.noContextData")}
+                ${t(loading || status.awaitingGateway ? "usage.loading.badge" : "usage.details.noContextData")}
               </div>`
         }
       </div>
@@ -997,7 +976,6 @@ function renderSessionLogsCompact(
   logs: SessionLogEntry[] | null,
   loading: boolean,
   status: PanelRefreshStatus,
-  onRetry: () => void,
   expandedAll: boolean,
   onToggleExpandedAll: () => void,
   filters: {
@@ -1014,7 +992,7 @@ function renderSessionLogsCompact(
   cursorStart?: number | null,
   cursorEnd?: number | null,
 ) {
-  if (loading && !status.hasLoaded) {
+  if ((loading || status.awaitingGateway) && !status.hasLoaded) {
     return html`
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
@@ -1024,7 +1002,6 @@ function renderSessionLogsCompact(
   }
   const refreshStatus = renderUsageRefreshStatus(
     status,
-    onRetry,
     "usage.details.conversation",
     "conversation",
   );
