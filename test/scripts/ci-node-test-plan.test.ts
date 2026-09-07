@@ -3158,9 +3158,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           if (group.timing_key === undefined) {
             continue;
           }
-          const key = expectDefined(parseCompactSplitTimingKey(group.timing_key));
-          const name = expectDefined(/^(.+)-hosted-([1-9]\d*)$/u.exec(group.shard_name));
-          const parent = expectDefined(name[1]);
+          const key = expectDefined(
+            parseCompactSplitTimingKey(group.timing_key),
+            "parsed compact split timing key",
+          );
+          const name = expectDefined(
+            /^(.+)-hosted-([1-9]\d*)$/u.exec(group.shard_name),
+            "numbered hosted group name",
+          );
+          const parent = expectDefined(name[1], "hosted group parent");
           const part = Number(name[2]);
           expect(
             key.selectorKey.split("#selector-")[0],
@@ -3180,7 +3186,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         parent: string,
         family: Array<{ group: Group; part: number }>,
       ) => {
-        const first = expectDefined(family[0]).group;
+        const first = expectDefined(family[0], "first timing family entry").group;
         return createCompactSplitTimingGeneration({
           parentShardName: parent,
           configs: first.configs,
@@ -3188,7 +3194,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           stripes: family.map(({ group }) => {
             expect(group.configs).toEqual(first.configs);
             expect(group.env).toEqual(first.env);
-            const files = expectDefined(group.includePatterns);
+            const files = expectDefined(group.includePatterns, "timing family group membership");
             expect(files.length).toBeGreaterThan(0);
             return files;
           }),
@@ -3217,16 +3223,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           tooling: nonPlugin
             .filter(isRepartitionableTooling)
             .flatMap((group) =>
-              expectDefined(group.includePatterns).map((file) => ({
-                parent: toolingParent(group),
-                file,
-                configs: group.configs,
-                env: group.env,
-                pretestBuildMode: group.pretestBuildMode,
-                requiresDist: group.requiresDist,
-                runner: group.runner,
-                exclusive: isExclusiveCompactShardName(group.shard_name),
-              })),
+              expectDefined(group.includePatterns, "repartitionable tooling membership").map(
+                (file) => ({
+                  parent: toolingParent(group),
+                  file,
+                  configs: group.configs,
+                  env: group.env,
+                  pretestBuildMode: group.pretestBuildMode,
+                  requiresDist: group.requiresDist,
+                  runner: group.runner,
+                  exclusive: isExclusiveCompactShardName(group.shard_name),
+                }),
+              ),
             )
             .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
         };
@@ -3239,7 +3247,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           for (const [parent, family] of timingFamilies(plan)) {
             const keys = expectedTimingKeys(parent, family);
             family.forEach(({ group }, index) => {
-              group.timing_key = expectDefined(keys[index]);
+              group.timing_key = expectDefined(keys[index], "regenerated family timing key");
             });
           }
         };
@@ -3247,19 +3255,30 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           const mutated = structuredClone(after);
           const tooling = mutated.flatMap((shard) => shard.groups).filter(isRepartitionableTooling);
           const target = expectDefined(
-            tooling.find((group) => expectDefined(group.includePatterns).length > 1),
+            tooling.find(
+              (group) =>
+                expectDefined(group.includePatterns, "tooling mutation membership").length > 1,
+            ),
+            "multi-file tooling mutation target",
           );
-          const files = expectDefined(target.includePatterns);
+          const files = expectDefined(target.includePatterns, "tooling mutation target membership");
           if (mutation === "missing") {
             files.pop();
           } else if (mutation === "duplicated") {
             const otherFamily = expectDefined(
               tooling.find((group) => toolingParent(group) !== toolingParent(target)),
+              "tooling group from another family",
             );
-            files.push(expectDefined(expectDefined(otherFamily.includePatterns)[0]));
+            files.push(
+              expectDefined(
+                expectDefined(otherFamily.includePatterns, "other tooling family membership")[0],
+                "file from another tooling family",
+              ),
+            );
           } else if (mutation === "env") {
             for (const { group } of expectDefined(
               timingFamilies(mutated).get(toolingParent(target)),
+              "timing family for environment mutation",
             )) {
               group.env = { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: "3" };
             }
@@ -3281,13 +3300,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           const families = timingFamilies(forged);
           const [parent, family] = expectDefined(
             [...families].find(([, entries]) => entries.length >= 2),
+            "multi-part timing family for identity control",
           );
           const wrongParent = `${parent}-forged`;
           expect(families.has(wrongParent)).toBe(false);
           const ordered = identity === "part" ? family.toReversed() : family;
           const keys = expectedTimingKeys(identity === "parent" ? wrongParent : parent, ordered);
           ordered.forEach(({ group }, index) => {
-            group.timing_key = expectDefined(keys[index]);
+            group.timing_key = expectDefined(keys[index], "forged family timing key");
           });
           expect(() => expectTimingFamilies(forged)).toThrow(
             identity === "parent"
@@ -3301,11 +3321,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             .flatMap((shard) => shard.groups)
             .find(
               (group) =>
-                isRepartitionableTooling(group) && expectDefined(group.includePatterns).length > 1,
+                isRepartitionableTooling(group) &&
+                expectDefined(group.includePatterns, "stale-key control membership").length > 1,
             ),
+          "multi-file tooling group for stale-key control",
         );
-        const savedKey = expectDefined(staleGroup.timing_key);
-        expectDefined(staleGroup.includePatterns).pop();
+        const savedKey = expectDefined(staleGroup.timing_key, "original stale-control timing key");
+        expectDefined(staleGroup.includePatterns, "stale-control group membership").pop();
         regenerateTimingKeys(stale);
         expectTimingFamilies(stale);
         staleGroup.timing_key = savedKey;
