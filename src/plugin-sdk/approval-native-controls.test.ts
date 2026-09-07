@@ -17,7 +17,7 @@ describe("native approval controls", () => {
       vi.useFakeTimers();
       vi.setSystemTime(1_000);
       const controls = createNativeApprovalControlRegistry({ releaseClaimOnLookupExpiry });
-      const finish = createDeferred<void>();
+      const finish = createDeferred();
       controls.register({ token: "rebound", expiresAtMs: 2_000 });
       const pending = controls.settle("rebound", () => finish.promise);
       try {
