@@ -6,7 +6,7 @@ import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { parseActivityEvent, updateToolActivity, type ActivityEntry } from "./tool-activity.ts";
 
-export type LiveActivitySnapshot = {
+type LiveActivitySnapshot = {
   readonly entries: readonly ActivityEntry[];
   /** Retires page-local expansion and follow state without resetting it on each event. */
   readonly revision: number;
