@@ -317,7 +317,7 @@ export function shouldSplitExtensionTestProcesses(config: string, vitestArgs: st
     if (!value || value.startsWith("-")) {
       return false;
     }
-    if (option[1] === "--retry" ? !/^\d+$/u.test(value) : /[*!?[\]{}]/u.test(value)) {
+    if (option[1] === "--retry" ? !/^\d+$/u.test(value) : /[*!?[\]{}()]/u.test(value)) {
       return false;
     }
   }

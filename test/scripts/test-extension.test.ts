@@ -263,6 +263,8 @@ describe("scripts/test-extension.mts", () => {
     ["bail", ["--bail=2"]],
     ["changed", ["--changed=origin/main"]],
     ["exclude", ["--exclude=extensions/matrix/src/**"]],
+    ["one-or-more extglob exclude", ["--exclude=extensions/matrix/src/+(a).test.ts"]],
+    ["exactly-one extglob exclude", ["--exclude=extensions/matrix/src/@(a).test.ts"]],
   ])("keeps Matrix %s runs in one process", (_name, vitestArgs) => {
     const root = bundledPluginRoot("matrix");
 
