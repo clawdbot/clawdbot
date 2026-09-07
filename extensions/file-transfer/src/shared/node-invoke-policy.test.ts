@@ -1,7 +1,6 @@
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 // File Transfer tests cover node invoke policy plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { appendFileTransferAudit } from "./audit.js";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 import {
   EXISTING_BINDING,
@@ -25,8 +24,6 @@ vi.mock("./policy.js", async (importOriginal) => {
     persistLiteralGrant: vi.fn(async () => undefined),
   };
 });
-
-const testUnlessWindows = process.platform === "win32" ? it.skip : it;
 
 afterEach(() => {
   vi.mocked(persistLiteralGrant).mockReset();
