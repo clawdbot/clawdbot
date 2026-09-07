@@ -11,6 +11,7 @@ import {
 } from "./current-plugin-metadata-snapshot.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
@@ -578,6 +579,10 @@ function loadPluginMetadataSnapshotImpl(
   // index so every manifest and scope follows the same immutable graph.
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
     index,
+    registryPath: resolveInstalledPluginIndexStorePath({
+      env: params.env,
+      stateDir: params.stateDir,
+    }),
     ...(registryResult.manifestRegistry
       ? { manifestRegistry: registryResult.manifestRegistry }
       : {}),

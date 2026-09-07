@@ -11,7 +11,7 @@ import {
 } from "../agents/auth-profiles/path-resolve.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import type { ModelAuthStatusResult } from "./server-methods/models-auth-status.types.js";
 import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { prepareGatewayReplyRuntimeForTest, rpcReq } from "./test-helpers.js";

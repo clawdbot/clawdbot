@@ -1,100 +1,25 @@
-// Empty-state renderers for the Workshop board: filtered-queue detail pane
-// and the whole-page no-proposals panel with the self-learning pitch.
 import { html } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import type { SkillWorkshopStatusFilter } from "../../lib/skill-workshop/index.ts";
 import { renderSelfLearningPitch, type SkillWorkshopSelfLearning } from "./self-learning.ts";
 
-type SkillWorkshopEmptyIcon = "search" | "clock" | "check" | "x" | "shield" | "refresh";
-
-export function renderBoardEmptyDetail(query: string, statusFilter: SkillWorkshopStatusFilter) {
-  const empty = resolveBoardEmptyState(query, statusFilter);
+export function renderSkillWorkshopEmptyDetail({ query }: { query: string }) {
+  const searching = query.trim().length > 0;
   return html`
     <div class="sw-detail sw-detail--empty">
       <div class="sw-filter-empty">
         <div class="sw-filter-empty__icon" aria-hidden="true">
-          ${renderEmptyStateIcon(empty.icon)}
+          ${searching ? icons.search : icons.clock}
         </div>
-        <p class="sw-empty__title">${empty.title}</p>
-        <p class="sw-empty__sub">${empty.body}</p>
+        <p class="sw-empty__title">
+          ${t(searching ? "skillWorkshop.empty.searchTitle" : "skillWorkshop.empty.pendingTitle")}
+        </p>
+        <p class="sw-empty__sub">
+          ${t(searching ? "skillWorkshop.empty.searchBody" : "skillWorkshop.empty.pendingBody")}
+        </p>
       </div>
     </div>
   `;
-}
-
-function resolveBoardEmptyState(
-  query: string,
-  statusFilter: SkillWorkshopStatusFilter,
-): {
-  icon: SkillWorkshopEmptyIcon;
-  title: string;
-  body: string;
-} {
-  if (query.trim()) {
-    return {
-      icon: "search",
-      title: t("skillWorkshop.empty.searchTitle"),
-      body: t("skillWorkshop.empty.searchBody"),
-    };
-  }
-
-  switch (statusFilter) {
-    case "pending":
-      return {
-        icon: "clock",
-        title: t("skillWorkshop.empty.pendingTitle"),
-        body: t("skillWorkshop.empty.pendingBody"),
-      };
-    case "applied":
-      return {
-        icon: "check",
-        title: t("skillWorkshop.empty.appliedTitle"),
-        body: t("skillWorkshop.empty.appliedBody"),
-      };
-    case "rejected":
-      return {
-        icon: "x",
-        title: t("skillWorkshop.empty.rejectedTitle"),
-        body: t("skillWorkshop.empty.rejectedBody"),
-      };
-    case "quarantined":
-      return {
-        icon: "shield",
-        title: t("skillWorkshop.empty.quarantinedTitle"),
-        body: t("skillWorkshop.empty.quarantinedBody"),
-      };
-    case "stale":
-      return {
-        icon: "refresh",
-        title: t("skillWorkshop.empty.staleTitle"),
-        body: t("skillWorkshop.empty.staleBody"),
-      };
-    case "all":
-      return {
-        icon: "search",
-        title: t("skillWorkshop.empty.allTitle"),
-        body: t("skillWorkshop.empty.allBody"),
-      };
-  }
-  return {
-    icon: "search",
-    title: t("skillWorkshop.empty.allTitle"),
-    body: t("skillWorkshop.empty.allBody"),
-  };
-}
-
-const emptyStateIcons: Record<SkillWorkshopEmptyIcon, (typeof icons)[keyof typeof icons]> = {
-  search: icons.search,
-  clock: icons.clock,
-  check: icons.check,
-  x: icons.x,
-  shield: icons.shieldCheck,
-  refresh: icons.refresh,
-};
-
-function renderEmptyStateIcon(icon: SkillWorkshopEmptyIcon) {
-  return emptyStateIcons[icon];
 }
 
 export function renderWorkshopEmptyState(params: {

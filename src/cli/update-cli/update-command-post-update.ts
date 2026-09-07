@@ -1,80 +1,66 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { resolveStateDir } from "../../config/paths.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
-import { compareSemverStrings } from "../../infra/update-check.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   readControlPlaneUpdateSentinelMeta,
   resolveManagedServiceUpdateFailureExitCode,
 } from "../../infra/update-control-plane-sentinel.js";
+import {
+  getUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
-import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
-import { VERSION } from "../../version.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { printResult } from "./progress.js";
-import { prepareRestartScript } from "./restart-helper.js";
-import {
-  readPackageVersion,
-  tryWriteCompletionCache,
-  type UpdateCommandOptions,
-} from "./shared.js";
-import {
-  persistRequestedUpdateChannel,
-  restoreDroppedPreUpdateChannels,
-} from "./update-command-config.js";
-import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js";
+import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
-import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
+import { repairUpdateService } from "./update-command-repair-service.js";
 import {
-  continuePostCoreUpdateInFreshProcess,
-  didCoreUpdateChangeInstall,
-  shouldResumePostCoreUpdateInFreshProcess,
-} from "./update-command-post-core.js";
+  prepareUpdateRestart,
+  type UpdateRestartParams,
+} from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   UpdateCommandFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
-import {
-  resolveServiceRefreshEnv,
-  stripGatewayServiceMarkerEnv,
-} from "./update-command-service-env.js";
+import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
+import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
   GatewayServiceUpdateOwnershipError,
-  isGatewayServiceManagementAllowedForUpdate,
-  resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 import {
+  recordFailedUpdateGatewayState,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
+  maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
-  resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
-  shouldPrepareUpdatedInstallRestart,
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
-import { resolveUnsafeUpdateRecoveryGuidance } from "./update-recovery-guidance.js";
+import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const CLI_NAME = resolveCliName();
 
-export async function finishUpdate(params: {
-  result: UpdateRunResult;
+export type FinishUpdateParams = UpdateRestartParams & {
   failure?: { cause: unknown; detail: string };
-  root: string;
   previousInstallRoot?: string;
   installKindChanged: boolean;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -82,44 +68,172 @@ export async function finishUpdate(params: {
   storedChannel: UpdateChannel | null;
   channel: UpdateChannel;
   downgradeRisk: boolean;
-  shouldRestart: boolean;
   opts: UpdateCommandOptions;
-  showProgress: boolean;
-  preManagedServiceStop?: PreManagedServiceStop;
-  ownedManagedUpdateEnv?: NodeJS.ProcessEnv;
   controlPlaneUpdateSentinelMeta: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
   preUpdatePluginInstallRecords: Awaited<ReturnType<typeof loadInstalledPluginIndexInstallRecords>>;
   startedAt: number;
   packageUpdateNodeRunner?: string;
-  updateStepTimeoutMs: number;
-  invocationCwd?: string;
-}): Promise<void> {
+  packageTransaction?: PackageUpdateTransaction;
+  schemaVersions?: UpdateStateSchemaVersion[];
+  previousVerified?: boolean;
+  rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
+};
+
+export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRunResult> {
+  let rollbackAttempted = false;
+  let postVerificationRepairAttempted = false;
+  let rollbackStopState: PreManagedServiceStop | undefined;
+  // Rollback and later plugin maintenance can replace the suspension owner.
+  const currentServiceStop = () => rollbackStopState ?? params.preManagedServiceStop;
+  let rolledBack = false;
+  let completedDowntimeMs: number | undefined;
+  let pendingRestartAtMs =
+    params.preManagedServiceStop?.stoppedAtMs ??
+    params.controlPlaneUpdateSentinelMeta?.serviceStoppedAtMs;
+  // Health resets replace ledger verification. Keep completed outages here so
+  // recovery never counts the online plugin work between service stops.
+  const recordVerifiedDowntime = (verifiedAtMs: number) => {
+    if (pendingRestartAtMs !== undefined) {
+      completedDowntimeMs =
+        (completedDowntimeMs ?? 0) + Math.max(0, verifiedAtMs - pendingRestartAtMs);
+      pendingRestartAtMs = undefined;
+    }
+  };
   // Finalization owns the complete outcome, including recovery, restart, and completion work.
   const completedResult = (result: UpdateRunResult): UpdateRunResult => ({
     ...result,
+    ...(result.status === "error" && params.rollbackBlockedReason
+      ? { reason: params.rollbackBlockedReason }
+      : {}),
     durationMs: Math.max(0, Date.now() - params.startedAt),
   });
-  const printFinalResult = (result: UpdateRunResult) => {
-    printResult(result, { ...params.opts, hideSteps: params.showProgress });
-    if (result.status === "error" && !params.opts.json) {
-      const reason =
-        result.recovery?.serviceRestartSafe === false ? result.recovery.reason : undefined;
-      defaultRuntime.log(theme.muted(resolveUnsafeUpdateRecoveryGuidance(reason)));
+  const recordNextAction = (result: UpdateRunResult) => {
+    const run = params.opts.run;
+    const nextAction = resolveUpdateResultNextAction({
+      result,
+      managedGatewayStopped: params.preManagedServiceStop?.stopped === true,
+      env: run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
+    });
+    const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
+    if (run && active?.status === "running" && active.origin.nextAction !== nextAction) {
+      recordUpdateRunPhase(run.runId, active.phase, { origin: { nextAction } }, { env: run.env });
     }
+    return nextAction;
+  };
+  // Restart can let the new Gateway finish the row before CLI finalization resumes.
+  // Store the next action before that handoff, and refresh it if recovery changes the outcome.
+  recordNextAction(params.result);
+  const printFinalResult = (input: UpdateRunResult) => {
+    const nextAction = recordNextAction(input);
+    const run = params.opts.run;
+    const downtimeMs = pendingRestartAtMs === undefined ? completedDowntimeMs : undefined;
+    if (run && rolledBack) {
+      finishUpdateRun(
+        run.runId,
+        { status: "rolled-back", reason: input.reason, after: input.after, downtimeMs },
+        { env: run.env },
+      );
+    }
+    const result = completeUpdateCommandRun(input, run, downtimeMs);
+    printResult(result, params.opts, { nextAction });
     return result;
   };
-  const reportResult = async (
-    result: UpdateRunResult,
-    recoverService = false,
-    initialRestoreFailure?: { cause: unknown },
+  const recoverFailedResult = async (
+    initialResult: UpdateRunResult,
+    initialRecoverService: boolean,
+    repair?: (result: UpdateRunResult) => Promise<UpdateRunResult>,
   ) => {
+    let result = initialResult;
+    let recoverService = initialRecoverService;
+    if (
+      result.status === "error" &&
+      (params.packageTransaction || params.rollbackBlockedReason) &&
+      !rollbackAttempted
+    ) {
+      rollbackAttempted = true;
+      const rollback = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
+        rollbackFailedUpdate({
+          result,
+          previousRoot: params.root,
+          packageTransaction: params.packageTransaction,
+          rollbackBlockedReason: params.rollbackBlockedReason,
+          schemaVersions: params.schemaVersions,
+          previousVerified: params.previousVerified,
+          config:
+            params.configSnapshot.sourceConfigBeforeMigrations ??
+            params.configSnapshot.sourceConfig,
+          opts: params.opts,
+          preManagedServiceStop: params.preManagedServiceStop,
+          timeoutMs: params.updateStepTimeoutMs,
+          nodeRunner: params.packageUpdateNodeRunner,
+          invocationCwd: params.invocationCwd,
+        }),
+      );
+      result = rollback.result;
+      rollbackStopState = rollback.stoppedForRollback;
+      rolledBack = rollback.rolledBack;
+      pendingRestartAtMs ??= rollbackStopState?.stoppedAtMs;
+      if (rollback.verifiedAtMs !== undefined) {
+        recordVerifiedDowntime(rollback.verifiedAtMs);
+      }
+      recoverService = false;
+    }
+    if (
+      result.status === "error" &&
+      params.rollbackBlockedReason &&
+      !postVerificationRepairAttempted
+    ) {
+      result = { ...result, reason: params.rollbackBlockedReason };
+      recoverService = false;
+    } else if (
+      result.status === "error" &&
+      params.result.status === "ok" &&
+      !params.packageTransaction &&
+      params.opts.run
+    ) {
+      recordUpdateRunStep(
+        params.opts.run.runId,
+        {
+          step: "package rollback",
+          status: "skipped",
+          endedAtMs: Date.now(),
+          detail:
+            "No retained previous package transaction is available; automatic package restoration was not attempted.",
+        },
+        { env: params.opts.run.env },
+      );
+    }
+    if (result.status === "error" && !rolledBack && repair) {
+      postVerificationRepairAttempted = true;
+      const previousRestored = result.recovery?.packageRollbackVerified === true;
+      result = await repair(result);
+      if (previousRestored && result.status === "ok") {
+        // Repair verified the restored release; the requested update still failed.
+        rolledBack = true;
+        result = { ...result, status: "error", reason: initialResult.reason };
+      }
+      recoverService = false;
+    }
+    return { result, recoverService };
+  };
+  const reportResult = async (
+    initialResult: UpdateRunResult,
+    initialRecoverService = false,
+    initialRestoreFailure?: { cause: unknown },
+    notify = true,
+  ): Promise<UpdateRunResult> => {
+    const { result, recoverService } = await recoverFailedResult(
+      initialResult,
+      initialRecoverService,
+    );
     let restoreFailure = initialRestoreFailure;
     const finalResult = completedResult({
       ...result,
-      ...(result.status === "error" && !recoverService
+      ...(result.status === "error" && !recoverService && !rolledBack
         ? {
             recovery:
-              result.recovery?.serviceRestartSafe === false
+              result.recovery?.serviceRestartSafe === false ||
+              result.recovery?.packageRollbackVerified
                 ? result.recovery
                 : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
           }
@@ -127,12 +241,24 @@ export async function finishUpdate(params: {
     });
     if (!restoreFailure) {
       try {
-        if (finalResult.status !== "ok" && finalResult.recovery?.serviceRestartSafe !== true) {
-          params.preManagedServiceStop?.windowsTaskAutoStartRecovery?.complete(false);
+        if (
+          !rolledBack &&
+          finalResult.status !== "ok" &&
+          finalResult.recovery?.serviceRestartSafe !== true
+        ) {
+          await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
         } else {
+          const stopped = currentServiceStop();
           await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-            params.preManagedServiceStop,
+            stopped,
             true,
+            stopped
+              ? createWindowsTaskAutoStartGuard({
+                  root: finalResult.root ?? params.root,
+                  before: stopped,
+                  timeoutMs: params.updateStepTimeoutMs,
+                })
+              : undefined,
           );
         }
       } catch (cause) {
@@ -140,19 +266,58 @@ export async function finishUpdate(params: {
       }
     }
     if (restoreFailure) {
+      rolledBack = false;
+      try {
+        await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
+      } catch (cause) {
+        restoreFailure = {
+          cause: new AggregateError(
+            [restoreFailure.cause, cause],
+            `Windows task restoration and compensation failed: ${formatErrorMessage(restoreFailure.cause)}; ${formatErrorMessage(cause)}`,
+          ),
+        };
+      }
       defaultRuntime.error(
         `Failed to restore Windows Scheduled Task autostart: ${String(restoreFailure.cause)}`,
       );
       finalResult.status = "error";
-      finalResult.reason = "windows-task-autostart-restore-failed";
+      finalResult.reason =
+        result.status === "error" ? result.reason : "windows-task-autostart-restore-failed";
       finalResult.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
-      params.preManagedServiceStop?.windowsTaskAutoStartRecovery?.complete(false);
+      finalResult.steps = [
+        ...finalResult.steps,
+        {
+          name: "Windows task autostart recovery",
+          command: "openclaw update",
+          cwd: finalResult.root ?? params.root,
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: formatErrorMessage(restoreFailure.cause),
+        },
+      ];
     }
-    await writeControlPlaneUpdateRestartSentinelBestEffort({
-      meta: params.controlPlaneUpdateSentinelMeta,
-      result: finalResult,
-      jsonMode: Boolean(params.opts.json),
-    });
+    const retireBackup =
+      finalResult.status === "ok" || finalResult.recovery?.packageRollbackVerified === true;
+    if (params.packageTransaction && !retireBackup) {
+      const retained = await params.packageTransaction.complete({ activationVerified: false });
+      if (retained) {
+        finalResult.steps = [...finalResult.steps, retained];
+      }
+    }
+    recordNextAction(finalResult);
+    if (notify) {
+      await writeControlPlaneUpdateRestartSentinelBestEffort({
+        meta: params.controlPlaneUpdateSentinelMeta,
+        result: finalResult,
+        jsonMode: Boolean(params.opts.json),
+      });
+    }
+    if (finalResult.status === "error" && !rolledBack && params.preManagedServiceStop?.stopped) {
+      await recordFailedUpdateGatewayState(
+        params.opts.run,
+        params.preManagedServiceStop.serviceEnv ?? process.env,
+      );
+    }
     // The recovering Gateway reads this notification at startup. Persist once
     // before restarting; rewriting a consumed sentinel could deliver it twice.
     if (recoverService && finalResult.recovery?.serviceRestartSafe === true) {
@@ -168,12 +333,31 @@ export async function finishUpdate(params: {
         finalResult.recovery = { ...finalResult.recovery, service };
         if (service === "failed") {
           finalResult.status = "error";
+          try {
+            await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
+          } catch (cause) {
+            return await reportResult(finalResult, false, { cause }, false);
+          }
         }
       }
     }
+    await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(
+      rolledBack ||
+        finalResult.status === "ok" ||
+        (finalResult.recovery?.serviceRestartSafe === true &&
+          finalResult.recovery.service === "healthy"),
+    );
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
-    const reportedResult = recoverService ? completedResult(finalResult) : finalResult;
-    printFinalResult(reportedResult);
+    const reportedResult = printFinalResult(
+      recoverService ? completedResult(finalResult) : finalResult,
+    );
+    if (retireBackup) {
+      await params.packageTransaction
+        ?.complete({ activationVerified: finalResult.status === "ok" })
+        .catch((error: unknown) => {
+          defaultRuntime.error(`Update backup cleanup failed: ${formatErrorMessage(error)}`);
+        });
+    }
     if (restoreFailure) {
       // Persist the unsafe outcome before unwinding. Keep both failures for
       // recovery diagnostics, with the failed compensation as the primary cause.
@@ -196,8 +380,19 @@ export async function finishUpdate(params: {
     return reportedResult;
   };
   const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
+    const stopped = currentServiceStop();
     try {
-      await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(params.preManagedServiceStop, true);
+      await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
+        stopped,
+        true,
+        stopped
+          ? createWindowsTaskAutoStartGuard({
+              root: result.root ?? params.root,
+              before: stopped,
+              timeoutMs: params.updateStepTimeoutMs,
+            })
+          : undefined,
+      );
     } catch (cause) {
       // The attempted restore already failed; reporting must not attempt it again.
       await reportResult(result, false, { cause });
@@ -210,22 +405,6 @@ export async function finishUpdate(params: {
         { ...params.result, status: "error" },
         params.result.recovery?.serviceRestartSafe === true,
       );
-      if (params.result.recovery?.serviceRestartSafe !== true) {
-        const recoveryReason = params.result.recovery?.reason ?? "runtime-verification-failed";
-        if (!params.opts.json) {
-          const managedGatewayStopped = params.preManagedServiceStop?.stopped === true;
-          defaultRuntime.log(
-            theme.warn(
-              managedGatewayStopped
-                ? `Managed gateway remains stopped because update recovery could not prove a runnable installation (${recoveryReason}).`
-                : `Update recovery could not prove a runnable installation (${recoveryReason}).`,
-            ),
-          );
-          if (managedGatewayStopped) {
-            defaultRuntime.log(theme.muted("Keep the gateway stopped until the update succeeds."));
-          }
-        }
-      }
       throw new UpdateCommandFailure(
         reported,
         resolveManagedServiceUpdateFailureExitCode(reported),
@@ -239,31 +418,6 @@ export async function finishUpdate(params: {
         params.result,
         params.result.recovery?.serviceRestartSafe === true,
       );
-      if (params.result.reason === "dirty") {
-        defaultRuntime.error(
-          theme.error("Update blocked: local files are edited in this checkout."),
-        );
-        defaultRuntime.log(
-          theme.warn(
-            "Git-based updates need a clean working tree before they can switch commits, fetch, or rebase.",
-          ),
-        );
-        defaultRuntime.log(
-          theme.muted("Commit, stash, or discard the local changes, then rerun `openclaw update`."),
-        );
-      }
-      if (params.result.reason === "not-git-install") {
-        defaultRuntime.log(
-          theme.warn(
-            `Skipped: this OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\` and \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`.`,
-          ),
-        );
-        defaultRuntime.log(
-          theme.muted(
-            `Examples: \`${replaceCliName("npm i -g openclaw@latest", CLI_NAME)}\` or \`${replaceCliName("pnpm add -g openclaw@latest", CLI_NAME)}\``,
-          ),
-        );
-      }
       throw new UpdateCommandFailure(
         reported,
         classifyUpdateOutcome(reported) === "failed"
@@ -272,308 +426,70 @@ export async function finishUpdate(params: {
       );
     }
 
-    const shouldResumePostCoreInFreshProcess = shouldResumePostCoreUpdateInFreshProcess({
-      result: params.result,
-      downgradeRisk: params.downgradeRisk,
-      installKindChanged: params.installKindChanged,
-    });
-
-    let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
-    if (
-      params.requestedChannel &&
-      params.configSnapshot.valid &&
-      params.requestedChannel !== params.storedChannel &&
-      !shouldResumePostCoreInFreshProcess &&
-      !params.opts.json
-    ) {
-      defaultRuntime.log(theme.muted(`Update channel set to ${params.requestedChannel}.`));
-    } else if (
-      params.requestedChannel &&
-      params.configSnapshot.valid &&
-      params.requestedChannel !== params.storedChannel &&
-      shouldResumePostCoreInFreshProcess &&
-      !params.opts.json
-    ) {
-      defaultRuntime.log(theme.muted(`Update channel will be set to ${params.requestedChannel}.`));
-    }
-
     const postUpdateRoot = params.result.root ?? params.root;
-
-    let postCorePluginUpdate;
-    let pluginsUpdatedInFreshProcess = false;
-    if (shouldResumePostCoreInFreshProcess) {
-      const freshProcessResult = await withOwnedManagedUpdateEnv(
-        params.ownedManagedUpdateEnv,
-        async () =>
-          await continuePostCoreUpdateInFreshProcess({
-            root: postUpdateRoot,
-            channel: params.channel,
-            requestedChannel: params.requestedChannel,
-            opts: params.opts,
-            pluginInstallRecords: params.preUpdatePluginInstallRecords,
-            updateStartedAtMs: params.startedAt,
-            timeoutMs: params.updateStepTimeoutMs,
-            nodeRunner: params.packageUpdateNodeRunner,
-            preUpdateConfig: params.configSnapshot.valid
-              ? {
-                  sourceConfig: params.configSnapshot.sourceConfig,
-                  authoredConfig: isRecord(params.configSnapshot.parsed)
-                    ? (params.configSnapshot.parsed as OpenClawConfig)
-                    : params.configSnapshot.sourceConfig,
-                }
-              : undefined,
-          }),
-      );
-      if (freshProcessResult.exitCode !== undefined) {
-        const reported = await reportResult({
-          ...params.result,
-          status: "error",
-          reason: "post-core-update-failed",
-        });
-        // A nested child status cannot authorize recovery. Only the final
-        // owner may emit the unsafe recovery code.
+    const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
+      const convergence = await convergeUpdatePlugins({ ...params, beforeDoctor });
+      if (convergence.resultWithPostUpdate.status === "error") {
+        const reported = await reportResult(convergence.resultWithPostUpdate);
         throw new UpdateCommandFailure(
           reported,
           resolveManagedServiceUpdateFailureExitCode(reported),
-          freshProcessResult.error,
+          convergence.detail,
         );
       }
-      pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
-      postCorePluginUpdate = freshProcessResult.pluginUpdate;
+      return convergence;
+    };
+    // Plugin install/sync changes shared payloads, config, and the installed index.
+    // Start the rehearsed core first; a changed plugin snapshot gets one later restart.
+    const deferPluginConvergence =
+      params.shouldRestart && params.preManagedServiceStop?.stopped === true;
+    let resultWithPostUpdate = params.result;
+    let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
+    if (!deferPluginConvergence) {
+      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
     }
-
-    if (!pluginsUpdatedInFreshProcess) {
-      await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
-        const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-        let compatibilityDowngradeTarget: string | null = null;
-        try {
-          const initialPluginUpdate = await withPluginLifecycleLease({}, async () => {
-            postUpdateConfigSnapshot = await readConfigFileSnapshot({
-              skipPluginValidation: true,
-              suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
-            });
-            postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
-              configSnapshot: postUpdateConfigSnapshot,
-              requestedChannel: params.requestedChannel,
-            });
-            const restoredConfig = restoreDroppedPreUpdateChannels(
-              postUpdateConfigSnapshot,
-              params.configSnapshot.valid
-                ? {
-                    sourceConfig: params.configSnapshot.sourceConfig,
-                    authoredConfig: isRecord(params.configSnapshot.parsed)
-                      ? (params.configSnapshot.parsed as OpenClawConfig)
-                      : params.configSnapshot.sourceConfig,
-                  }
-                : undefined,
-            );
-            postUpdateConfigSnapshot = restoredConfig.snapshot;
-            // Current-process post-core convergence still reports the pre-update
-            // VERSION. During downgrades, pin compatibility checks to the installed
-            // target so incompatible newer plugins are disabled before restart.
-            const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
-            const versionComparison =
-              postUpdateInstalledVersion && VERSION
-                ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
-                : null;
-            compatibilityDowngradeTarget =
-              versionComparison != null && versionComparison > 0
-                ? postUpdateInstalledVersion
-                : null;
-            if (compatibilityDowngradeTarget) {
-              process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
-            }
-            const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-            return await updatePluginsAfterCoreUpdate({
-              root: postUpdateRoot,
-              channel: params.channel,
-              configSnapshot: postUpdateConfigSnapshot,
-              configChanged: restoredConfig.changed,
-              restoredAuthoredChannels: restoredConfig.authoredChannels,
-              json: params.opts.json,
-              acceptCapabilities: params.opts.acceptCapabilities,
-              timeoutMs: params.updateStepTimeoutMs,
-              pluginInstallRecords,
-            });
-          });
-          // Fresh doctor acquires this same cross-process lease; completion must run after release.
-          const completedPluginUpdate = await completePostCorePluginUpdate({
-            root: postUpdateRoot,
-            pluginUpdate: initialPluginUpdate,
-            // Aggregate plugin changes and core install changes independently require fresh doctor.
-            freshDoctorRequired:
-              didCoreUpdateChangeInstall(params.result) || initialPluginUpdate.changed,
-            yes: params.opts.yes === true,
-            json: params.opts.json === true,
-            timeoutMs: params.updateStepTimeoutMs,
-            ...(params.packageUpdateNodeRunner
-              ? { nodeRunner: params.packageUpdateNodeRunner }
-              : {}),
-          });
-          postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
-          postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
-        } finally {
-          if (compatibilityDowngradeTarget) {
-            if (previousCompatibilityHostVersion === undefined) {
-              delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-            } else {
-              process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
-            }
-          }
-        }
-      });
-    }
-
-    const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
-      ? {
-          ...params.result,
-          status: postCorePluginUpdate.status === "error" ? "error" : params.result.status,
-          ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
-          postUpdate: {
-            ...params.result.postUpdate,
-            plugins: postCorePluginUpdate,
-          },
-        }
-      : params.result;
-
-    if (postCorePluginUpdate?.status === "error") {
-      // Post-core validation can mutate config and state. Only its complete success
-      // permits activation; a healthy-looking config cannot override Doctor failure.
-      const reported = await reportResult(resultWithPostUpdate);
-      throw new UpdateCommandFailure(
-        reported,
-        resolveManagedServiceUpdateFailureExitCode(reported),
-      );
-    }
-
     const restartConfigSnapshot =
       postUpdateConfigSnapshot ??
       (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
         readConfigFileSnapshot({
           skipPluginValidation: true,
-          suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
+          suppressFutureVersionWarning: true,
         }),
       ));
-    let restartScriptPath: string | null = null;
-    let refreshGatewayServiceEnv = false;
-    let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
-    let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
-    let serviceUpdateVerdict = params.preManagedServiceStop?.serviceUpdateVerdict;
-    let skipLegacyServiceRestart = serviceUpdateVerdict?.kind === "absent";
-    const serviceStateReadEnv = resolveServiceRefreshEnv(
-      resolvePostUpdateServiceStateReadEnv({
-        updateMode: resultWithPostUpdate.mode,
-        processEnv: process.env,
-        preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
-      }),
-      params.invocationCwd,
-    );
-    let serviceMutationAllowed =
-      params.preManagedServiceStop?.serviceMutationAllowed !== false &&
-      isGatewayServiceManagementAllowedForUpdate(process.env) &&
-      isGatewayServiceManagementAllowedForUpdate(serviceStateReadEnv);
-    let serviceMutationSkipMessage = !serviceMutationAllowed
-      ? (params.preManagedServiceStop?.serviceMutationSkipMessage ??
-        resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
-        resolveGatewayServiceManagementBlockMessageForUpdate(serviceStateReadEnv))
-      : undefined;
-    let gatewayPort = await resolveUpdatedGatewayRestartPort({
-      config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
-      processEnv: process.env,
-      serviceEnv: params.ownedManagedUpdateEnv,
-    });
-    if (params.shouldRestart && serviceMutationAllowed && !skipLegacyServiceRestart) {
-      try {
-        const serviceState = await readGatewayServiceState(resolveGatewayService(), {
-          env: serviceStateReadEnv,
-          requireEffective: true,
-          validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-          timeoutMs: params.updateStepTimeoutMs,
-        });
-        serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
-          state: serviceState,
-          root: postUpdateRoot,
-          preManagedServiceStop: params.preManagedServiceStop,
-          allowInstallRootChange: true,
-        });
-        gatewayServiceEnv = serviceState.env;
-        skipLegacyServiceRestart =
-          serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "absent";
-        if (serviceUpdateVerdict.kind === "unavailable") {
-          serviceMutationAllowed = false;
-          serviceMutationSkipMessage = serviceUpdateVerdict.message;
-        } else if (serviceUpdateVerdict.kind === "foreign") {
-          serviceMutationAllowed = false;
-          serviceMutationSkipMessage =
-            "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched.";
-        } else if (
-          !skipLegacyServiceRestart &&
-          shouldPrepareUpdatedInstallRestart({
-            updateMode: resultWithPostUpdate.mode,
-            serviceInstalled: serviceState.installed,
-            serviceLoaded: serviceState.loadState.status === "loaded",
-            serviceStoppedForUpdate: params.preManagedServiceStop?.stopped,
-            serviceMatchesUpdateRoot: serviceUpdateVerdict.kind === "owned",
-            requiresInstallRootRefresh:
-              serviceUpdateVerdict.kind === "owned" &&
-              serviceUpdateVerdict.requiresInstallRootRefresh,
-          })
-        ) {
-          gatewayServiceInstallEnv = resolveManagedGatewayServiceProcessEnv(
-            serviceState.command,
-            params.ownedManagedUpdateEnv ?? process.env,
-          );
-          if (gatewayServiceInstallEnv) {
-            gatewayServiceInstallEnv = stripGatewayServiceMarkerEnv(gatewayServiceInstallEnv);
-          }
-          refreshGatewayServiceEnv =
-            serviceUpdateVerdict.kind === "owned" && serviceUpdateVerdict.refreshDefinition;
-          if (serviceUpdateVerdict.kind === "owned" && gatewayServiceInstallEnv === null) {
-            refreshGatewayServiceEnv = false;
-            serviceUpdateVerdict = { ...serviceUpdateVerdict, refreshDefinition: false };
-          }
-        }
-        gatewayPort = await resolveUpdatedGatewayRestartPort({
-          config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
-          serviceEnv: gatewayServiceEnv,
-          serviceCommand:
-            serviceUpdateVerdict.kind === "unresolved" ||
-            (serviceUpdateVerdict.kind === "owned" && !serviceUpdateVerdict.refreshDefinition)
-              ? serviceState.command
-              : undefined,
-        });
-        if (refreshGatewayServiceEnv) {
-          restartScriptPath = await prepareRestartScript(
-            serviceState.env,
-            gatewayPort,
-            serviceState.command?.programArguments,
-          );
-        }
-      } catch (err) {
-        if (params.preManagedServiceStop?.stopped) {
-          const message =
-            err instanceof GatewayServiceUpdateOwnershipError
-              ? formatErrorMessage(err)
-              : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
-          defaultRuntime.error(message);
-          const reported = await reportResult({
-            ...resultWithPostUpdate,
-            status: "error",
-            reason: "service-revalidation-failed",
-          });
-          throw new UpdateCommandFailure(
-            reported,
-            resolveManagedServiceUpdateFailureExitCode(reported),
-            message,
-            { cause: err },
-          );
-        }
-        serviceMutationAllowed = false;
-        serviceMutationSkipMessage =
-          "Code update completed; gateway service management skipped because its current ownership could not be inspected. " +
-          "Run `openclaw gateway status --deep` before restarting it manually.";
-      }
+    let restartContext;
+    try {
+      restartContext = await prepareUpdateRestart(
+        { ...params, result: resultWithPostUpdate },
+        restartConfigSnapshot,
+      );
+    } catch (error) {
+      const message =
+        error instanceof GatewayServiceUpdateOwnershipError
+          ? error.message
+          : formatErrorMessage(error);
+      defaultRuntime.error(message);
+      const reported = await reportResult({
+        ...resultWithPostUpdate,
+        status: "error",
+        reason: "service-revalidation-failed",
+      });
+      throw new UpdateCommandFailure(
+        reported,
+        resolveManagedServiceUpdateFailureExitCode(reported),
+        message,
+        { cause: error },
+      );
     }
+    let { restartScriptPath, refreshGatewayServiceEnv, gatewayServiceEnv, serviceUpdateVerdict } =
+      restartContext;
+    const {
+      gatewayServiceInstallEnv,
+      skipLegacyServiceRestart,
+      serviceStateReadEnv,
+      serviceMutationAllowed,
+      serviceMutationSkipMessage,
+    } = restartContext;
+    let { gatewayPort } = restartContext;
 
     await writeControlPlaneUpdateRestartSentinelBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
@@ -582,48 +498,141 @@ export async function finishUpdate(params: {
     });
 
     await restoreWindowsAutoStart(resultWithPostUpdate);
-    const restartOk = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
-      maybeRestartService({
-        shouldRestart: params.shouldRestart && serviceMutationAllowed,
-        result: resultWithPostUpdate,
-        channel: params.channel,
-        opts: params.opts,
-        refreshServiceEnv: refreshGatewayServiceEnv,
-        serviceUpdateVerdict,
-        serviceEnv: gatewayServiceEnv,
-        serviceInstallEnv: gatewayServiceInstallEnv,
-        gatewayPort,
-        restartScriptPath,
-        invocationCwd: params.invocationCwd,
-        nodeRunner: params.packageUpdateNodeRunner,
-        skipLegacyServiceRestart,
-        requireRunningServiceAfterRestart: params.preManagedServiceStop?.stopped === true,
-        serviceMutationSkipMessage,
-        timeoutMs: params.updateStepTimeoutMs,
-      }),
-    );
-    if (!restartOk) {
-      // The Gateway may already have consumed the notification. Mark only an
-      // existing sentinel; recreating it would deliver the update twice.
-      await markControlPlaneUpdateRestartSentinelFailureBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
-        reason: "restart-unhealthy",
-        jsonMode: Boolean(params.opts.json),
-      });
-      const reported = printFinalResult(
-        completedResult({
-          ...resultWithPostUpdate,
-          status: "error",
-          reason: "restart-unhealthy",
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    let verificationFailure = "restart-unhealthy";
+    const restart = async () => {
+      const restarted = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
+        maybeRestartService({
+          shouldRestart: params.shouldRestart && serviceMutationAllowed,
+          result: resultWithPostUpdate,
+          opts: params.opts,
+          refreshServiceEnv: refreshGatewayServiceEnv,
+          serviceUpdateVerdict,
+          serviceEnv: gatewayServiceEnv,
+          serviceInstallEnv: gatewayServiceInstallEnv,
+          gatewayPort,
+          restartScriptPath,
+          invocationCwd: params.invocationCwd,
+          nodeRunner: params.packageUpdateNodeRunner,
+          skipLegacyServiceRestart,
+          requireRunningServiceAfterRestart: params.preManagedServiceStop?.stopped === true,
+          serviceMutationSkipMessage,
+          timeoutMs: params.updateStepTimeoutMs,
+          onVerificationFailure: (reason) => {
+            verificationFailure = reason;
+          },
+          onVerified: recordVerifiedDowntime,
         }),
       );
-      throw new UpdateCommandFailure(
-        reported,
-        resolveManagedServiceUpdateFailureExitCode(reported),
+      if (restarted === "ok") {
+        return;
+      }
+      const failure: UpdateRunResult = {
+        ...resultWithPostUpdate,
+        status: "error",
+        reason: verificationFailure,
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      };
+      const recovered = await recoverFailedResult(
+        failure,
+        false,
+        serviceMutationAllowed && !skipLegacyServiceRestart && !postVerificationRepairAttempted
+          ? (result) =>
+              repairUpdateService({
+                result,
+                root: postUpdateRoot,
+                env:
+                  params.ownedManagedUpdateEnv ??
+                  params.opts.run?.env ??
+                  gatewayServiceEnv ??
+                  serviceStateReadEnv,
+                opts: params.opts,
+                gatewayPort,
+                nodeRunner: params.packageUpdateNodeRunner,
+                timeoutMs: params.updateStepTimeoutMs,
+                invocationCwd: params.invocationCwd,
+                expectedService: rollbackStopState ?? {
+                  serviceEnv: gatewayServiceEnv ?? serviceStateReadEnv,
+                  serviceUpdateVerdict,
+                },
+                recoveryStop: currentServiceStop(),
+                onVerified: recordVerifiedDowntime,
+              })
+          : undefined,
       );
+      if (recovered.result.status === "ok") {
+        resultWithPostUpdate = recovered.result;
+      } else {
+        // The Gateway may have consumed its sentinel. Update only the existing
+        // receipt so a failed repair cannot deliver a duplicate notification.
+        await markControlPlaneUpdateRestartSentinelFailureBestEffort({
+          meta: params.controlPlaneUpdateSentinelMeta,
+          reason: recovered.result.reason ?? verificationFailure,
+          jsonMode: Boolean(params.opts.json),
+        });
+        const reported = await reportResult(recovered.result, false, undefined, false);
+        throw new UpdateCommandFailure(
+          reported,
+          resolveManagedServiceUpdateFailureExitCode(reported),
+        );
+      }
+    };
+    await restart();
+    if (deferPluginConvergence) {
+      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
+        const before = currentServiceStop();
+        if (!before) {
+          throw new Error("Plugin maintenance lost its update service owner.");
+        }
+        await before.windowsTaskAutoStartRecovery?.complete(true);
+        // Package work finished online. Full Doctor owns state migrations, so
+        // park only now and retain this suspension through verified activation.
+        const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
+          updateRun: params.opts.run,
+          updateInstallKind: resultWithPostUpdate.mode === "git" ? "git" : "package",
+          root: postUpdateRoot,
+          shouldRestart: true,
+          jsonMode: Boolean(params.opts.json),
+          expectedService: { serviceEnv: gatewayServiceEnv, serviceUpdateVerdict },
+          timeoutMs: params.updateStepTimeoutMs,
+        });
+        before.windowsTaskAutoStartRecovery = stopped.windowsTaskAutoStartRecovery;
+        if (stopped.blockMessage || !stopped.stopped) {
+          throw new Error(
+            stopped.blockMessage ?? "Gateway could not be parked for plugin maintenance.",
+          );
+        }
+        stopped.windowsTaskAutoStartRecovery?.beginMutation();
+        pendingRestartAtMs ??= stopped.stoppedAtMs;
+      }));
+      if (resultWithPostUpdate.postUpdate?.plugins?.changed) {
+        // Convergence awaited package managers and plugin hooks. Revalidate the
+        // exact native owner again before a changed plugin snapshot is activated.
+        const state = await readGatewayServiceState(resolveGatewayService(), {
+          env: gatewayServiceEnv ?? serviceStateReadEnv,
+          requireEffective: true,
+          validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+          timeoutMs: params.updateStepTimeoutMs,
+        });
+        serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
+          state,
+          root: postUpdateRoot,
+          preManagedServiceStop: {
+            serviceEnv: gatewayServiceEnv ?? serviceStateReadEnv,
+            serviceUpdateVerdict,
+          },
+        });
+        gatewayServiceEnv = state.env;
+        gatewayPort = await resolveUpdatedGatewayRestartPort({
+          serviceEnv: state.env,
+          serviceCommand: state.command,
+        });
+        pendingRestartAtMs ??= Date.now();
+        restartScriptPath = null;
+        refreshGatewayServiceEnv = false;
+        await restoreWindowsAutoStart(resultWithPostUpdate);
+        await restart();
+      }
     }
-
     // Restart and health verification own recovery of the service stopped for this update.
     // Optional completion refresh must run only after that lifecycle boundary settles.
     try {
@@ -668,15 +677,7 @@ export async function finishUpdate(params: {
       }
     }
 
-    await reportResult(resultWithPostUpdate);
-    if (!params.opts.json) {
-      const recoveryEnv = params.ownedManagedUpdateEnv ?? process.env;
-      defaultRuntime.log(
-        theme.muted(
-          `After verifying your history, preview recovery rollback retirement with ${formatCliCommand("openclaw update cleanup --dry-run", recoveryEnv)} for state ${resolveStateDir(recoveryEnv)}. Keep the same state/config overrides.`,
-        ),
-      );
-    }
+    return await reportResult(resultWithPostUpdate);
   } catch (error) {
     if (error instanceof UpdateCommandFailure) {
       throw error;

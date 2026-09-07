@@ -177,6 +177,81 @@ describe("mobile release cutter", () => {
     ).toEqual([]);
   });
 
+  it("filters already aligned outputs without shrinking the five-path contract", () => {
+    const rootDir = fixture({
+      androidVersion: "2026.8.2",
+      androidVersionCode: 2026080201,
+    });
+    const before = snapshot(rootDir);
+    const prepare = planMobileRelease({
+      gatewayVersion: "2026.8.2",
+      phase: "prepare",
+      rootDir,
+    });
+
+    expect(prepare.releasePaths).toEqual(MOBILE_RELEASE_PATHS);
+    expect(prepare.changes.map((change) => path.relative(rootDir, change.path)).toSorted()).toEqual(
+      [
+        "apps/android/Config/Version.properties",
+        "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+        "apps/mobile/version.json",
+      ],
+    );
+    applyMobileReleasePlan(prepare);
+    applyMobileReleasePlan(
+      planMobileRelease({
+        gatewayVersion: "2026.8.2",
+        iosPlan: iosPlan(),
+        phase: "finalize",
+        rootDir,
+      }),
+    );
+
+    expect(changedPaths(before, snapshot(rootDir))).toEqual(
+      MOBILE_RELEASE_PATHS.filter(
+        (releasePath) => releasePath !== "apps/android/version.json",
+      ).toSorted(),
+    );
+  });
+
+  it.each(["prepare", "finalize"] as const)(
+    "bounds %s notes by uploaded Unicode characters before writing",
+    (phase) => {
+      const rootDir = fixture();
+      if (phase === "finalize") {
+        applyMobileReleasePlan(
+          planMobileRelease({ gatewayVersion: "2026.8.2", phase: "prepare", rootDir }),
+        );
+      }
+      for (const characterCount of [500, 501]) {
+        const notes = `${"🦞".repeat(characterCount - 1)}\n`;
+        writeFile(rootDir, "apps/ios/CHANGELOG.md", `# iOS Changelog\n\n## Unreleased\n\n${notes}`);
+        const before = snapshot(rootDir);
+        const apply = () =>
+          applyMobileReleasePlan(
+            planMobileRelease({
+              gatewayVersion: "2026.8.2",
+              iosPlan: phase === "finalize" ? iosPlan() : null,
+              phase,
+              rootDir,
+            }),
+          );
+        if (characterCount === 501) {
+          expect(apply).toThrow("500 Unicode character limit");
+          expect(snapshot(rootDir)).toEqual(before);
+        } else {
+          apply();
+          expect(
+            fs.readFileSync(
+              path.join(rootDir, "apps/android/fastlane/metadata/android/en-US/release_notes.txt"),
+              "utf8",
+            ),
+          ).toBe(notes);
+        }
+      }
+    },
+  );
+
   it("keeps forbidden release surfaces byte-identical", () => {
     const rootDir = fixture();
     const forbiddenPaths = [

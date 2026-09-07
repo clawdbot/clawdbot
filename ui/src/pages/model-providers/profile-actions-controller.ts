@@ -1,3 +1,4 @@
+import type { ModelAuthOrderSetResult } from "../../../../src/gateway/server-methods/models-auth-status.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
@@ -22,7 +23,6 @@ type ProfileActionsControllerOptions = {
   setBusy: (key: string, value: boolean) => void;
   clearProbe: (cardId: string) => void;
   clearMessage: (cardId: string) => void;
-  clearPendingLogout: (cardId: string) => void;
   setError: (cardId: string, error: unknown) => void;
   setLogoutSuccess: (cardId: string) => void;
   cancelRefresh: () => void;
@@ -62,7 +62,7 @@ export class ModelProviderProfileActionsController {
     }
   }
 
-  async logout(cardId: string, targets: ModelProviderLogoutTarget[]): Promise<void> {
+  async logout(cardId: string, target: ModelProviderLogoutTarget): Promise<void> {
     const client = this.options.getClient();
     const key = `logout:${cardId}`;
     if (!client || !this.options.canMutate() || this.options.isBusy(key)) {
@@ -76,19 +76,14 @@ export class ModelProviderProfileActionsController {
     this.options.setBusy(key, true);
     this.options.clearMessage(cardId);
     try {
-      let firstError: unknown;
-      for (const target of targets) {
-        // OAuth profiles are agent-owned; stop undispatched targets after any
-        // scope change, including a switch away from and back to this agent.
-        if (!isCurrentScope()) {
-          return;
-        }
-        try {
-          await client.request("models.authLogout", { ...target, agentId });
-        } catch (error) {
-          firstError ??= error;
-        }
+      let logoutError: unknown;
+      try {
+        await client.request("models.authLogout", { ...target, agentId });
+      } catch (error) {
+        logoutError = error;
       }
+      // A logout can change credentials before reporting failure. Refresh either
+      // outcome, but never update a different agent or a newer visit to this agent.
       if (!isCurrentScope()) {
         return;
       }
@@ -96,11 +91,10 @@ export class ModelProviderProfileActionsController {
       if (!isCurrentScope()) {
         return;
       }
-      if (firstError) {
-        this.options.setError(cardId, firstError);
+      if (logoutError) {
+        this.options.setError(cardId, logoutError);
         return;
       }
-      this.options.clearPendingLogout(cardId);
       this.options.setLogoutSuccess(cardId);
     } catch (error) {
       if (isCurrentScope()) {
@@ -133,7 +127,7 @@ export class ModelProviderProfileActionsController {
         const agentEpoch = this.options.getAgentEpoch();
         const agentId = this.options.getAgentId();
         try {
-          await client.request("models.authOrderSet", {
+          const result = await client.request<ModelAuthOrderSetResult>("models.authOrderSet", {
             provider,
             ...(pending.profileIds ? { profileIds: pending.profileIds } : {}),
             agentId,
@@ -141,7 +135,7 @@ export class ModelProviderProfileActionsController {
           if (!this.isCurrentScope(client, clientEpoch, agentEpoch, agentId)) {
             return;
           }
-          if (pending.profileIds) {
+          if (pending.profileIds && !result.warning) {
             this.options.cancelRefresh();
             this.applyOrder(provider, pending.profileIds);
             void this.options.refresh();
@@ -151,7 +145,9 @@ export class ModelProviderProfileActionsController {
               return;
             }
           }
-          this.clearOptimisticOrder(provider, pending.optimisticOrder);
+          if (this.clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
+            this.options.setError(pending.cardId, result.warning);
+          }
         } catch (error) {
           if (!this.isCurrentScope(client, clientEpoch, agentEpoch, agentId)) {
             return;

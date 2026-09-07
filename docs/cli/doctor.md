@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw doctor` (health checks + guided repairs)"
 read_when:
   - You have connectivity/auth issues and want guided fixes
   - You updated and want a sanity check
-title: "Doctor"
+title: "Doctor CLI"
 ---
 
 # `openclaw doctor`
@@ -326,7 +326,8 @@ the container normally.
 
 `openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
 
-For legacy workspace setup files, an existing canonical SQLite setup record wins,
+Doctor imports recognized legacy workspace setup files during preflight, before
+Workshop migration accesses workspace state. An existing canonical SQLite setup record wins,
 including milestones that are absent in SQLite. Doctor does not replay stale
 milestones over it. Before removing a validated setup file or interrupted claim,
 Doctor preserves its exact bytes beside the original as
@@ -542,10 +543,12 @@ openclaw doctor --session-sqlite recover --github-issue
 ```
 
 Recovery selects the latest failed migration manifest, restores only the
-manifest's archived artifacts, validates the affected targets, refreshes the
-sanitized `.failure.md` and `.failure.json` reports, and prepares a GitHub issue
-body that avoids transcript contents, raw environment, secrets, and unbounded
-config. When no failed migration manifest exists, recovery inspects selected
+manifest's archived artifacts, validates the affected targets, and prepares
+sanitized `.failure.md` and `.failure.json` reports. The GitHub issue body avoids
+transcript contents, raw environment, secrets, and unbounded config. Once an
+issue or browser handoff may have published a report, doctor preserves that
+private report artifact and its marker receipt. When no failed migration
+manifest exists, recovery inspects selected
 SQLite databases using temporary copies of their complete file sets. SQLite
 can roll back a valid hot journal in that disposable copy
 before `quick_check`, `integrity_check`, and `foreign_key_check` run, while the
@@ -560,8 +563,15 @@ failure rolls already-moved files back before reporting failure, so a
 recoverable file set is not silently split. Stop the Gateway before recovery;
 copying or renaming an actively changing SQLite file set is unsafe and behaves
 differently across operating systems. With `--github-issue --yes`, doctor uses
-the GitHub CLI to create the issue in `openclaw/openclaw`; without confirmation
-it writes the local support report and prints a prefilled issue URL.
+the GitHub CLI to create the issue in `openclaw/openclaw`. If the CLI is
+unavailable or GitHub definitively rejects the request, doctor can open the
+exact sanitized report in a browser when its encoded URL stays within the safe
+request-size bound. Without confirmation, doctor writes the local support
+report and skips issue creation without printing or opening a prefilled URL.
+Ambiguous submissions fail closed. A later doctor run reconciles the preserved
+marker without sending another create request, so it cannot publish a duplicate
+issue. Machine-readable output includes the resulting support-issue status but
+not the private receipt or prefilled URL.
 
 `restore` remains the lower-level undo operation. It uses manifest
 `sourcePath -> archivePath` records, moves archived artifacts back only when the
@@ -620,7 +630,7 @@ compare restored legacy artifacts with the SQLite rows before importing.
 
 - In Nix mode (`OPENCLAW_NIX_MODE=1`), read-only doctor checks still work, but `doctor --fix`, `doctor --repair`, `doctor --yes`, and `doctor --generate-gateway-token` are disabled because `openclaw.json` is immutable. Edit the Nix source for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 - Interactive prompts (keychain/OAuth fixes, etc.) only run when stdin is a TTY and `--non-interactive` is **not** set. Headless runs (cron, Telegram, no terminal) skip prompts.
-- Non-interactive mode skips prompts, not full provider-catalog or runtime-tool validation. Built checkout runs reuse available compiled plugin entries for these checks; intentional source overrides still execute source. See [Development debugging](/help/debugging#dev-profile--dev-gateway---dev).
+- Non-interactive mode skips prompts, not full provider-catalog or runtime-tool validation. Built checkout runs reuse available compiled plugin entries for these checks; intentional source overrides still execute source. See [Development debugging](</help/debugging#dev-profile-%2B-dev-gateway-(--dev)>).
 - `--lint` is stricter than `--non-interactive`: always read-only, never prompts, never applies safe migrations. Use `doctor --fix` or `doctor --repair` when you want doctor to make changes.
 - Doctor does not execute `exec` SecretRefs while checking secrets by default. Use `--allow-exec` (with or without `--lint`) only when you intentionally want doctor to run those configured secret resolvers.
 - Any config write (including a `--fix` repair) rotates a backup to `~/.openclaw/openclaw.json.bak` (with a numbered `.bak.1`..`.bak.4` ring). `--fix` also drops unknown config keys reported by schema validation, listing each removal; it skips this while an update is in progress so partially written upgrade state is not stripped before its migration finishes.
@@ -635,11 +645,11 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - Doctor reports cron jobs still marked in-flight (`state.runningAtMs`), which can make `openclaw cron list` show them as `running`. This check is read-only: if no Gateway is currently executing a marked job, the next cron service startup records the interrupted run and clears the marker.
 - Doctor reports legacy image-inspection policy entries named `image`. `openclaw doctor --fix` rewrites supported config allow/deny surfaces and persisted automation `toolsAllow` entries to `view_image`; old-only wildcard patterns such as `image*` are preserved and gain an explicit `view_image`, while patterns that already cover both names remain unchanged. Runtime exposes only the canonical name.
 - On Linux, doctor warns when the user's crontab still runs the unmaintained legacy `~/.openclaw/bin/ensure-whatsapp.sh`, which can misreport `Gateway inactive` when cron lacks the systemd user-bus environment.
-- When WhatsApp is enabled, doctor checks for a degraded Gateway event loop with local `openclaw-tui` clients still running. `doctor --fix` stops only verified local TUI clients so WhatsApp replies are not queued behind stale TUI refresh loops.
+- When WhatsApp is enabled, doctor can report Gateway pressure and detected local TUI clients. These observations do not identify the cause or connect a client to that Gateway. Inspect [Gateway diagnostics](/gateway/diagnostics) before deciding whether to close clients; Doctor does not stop them.
 - When HTTP(S) proxy environment variables are present but `tools.web.fetch.useTrustedEnvProxy` is disabled, doctor explains that `web_fetch` still uses direct routing, runs a short direct TLS connectivity probe, and names the explicit opt-in. It never enables proxy trust automatically.
 - Doctor rewrites legacy `codex/*` and `openai-codex/*` model refs to canonical `openai/*` refs across primary models, fallbacks, model allowlists, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, cron payloads, and stale session/transcript route pins. `--fix` also merges legacy `models.providers.codex` and `models.providers.openai-codex` config when safe, migrates legacy `openai-codex:*` auth profiles and `auth.order.openai-codex` entries to `openai:*`, moves Codex intent onto provider/model-scoped `agentRuntime.id: "codex"` entries, removes stale whole-agent/session runtime pins, and keeps repaired OpenAI agent refs on Codex auth routing instead of direct OpenAI API-key auth.
 - Doctor reports nonempty `auth.order.<provider>` lists whose referenced profiles are all gone while compatible stored credentials exist. `doctor --fix` deletes only those stale overrides, restoring automatic per-agent credential selection; explicit empty orders, partially live lists, and orders without a compatible stored credential stay unchanged. If an active SQLite auth store is unreadable or malformed, doctor explains why it skipped this repair. Restart a running Gateway before rechecking auth status if its config reload mode does not apply the write automatically.
-- Doctor cleans legacy plugin dependency staging state from older OpenClaw versions and relinks the host `openclaw` package for managed npm plugins that declare it as a peer dependency. It also repairs missing downloadable plugins referenced by config (`plugins.entries`, configured channels, configured provider/search settings, configured agent runtimes). During package updates, doctor skips package-manager plugin repair until the package swap completes; rerun `openclaw doctor --fix` afterward if a configured plugin still needs recovery. If a download fails, doctor reports the install error and preserves the configured plugin entry for the next repair attempt.
+- Doctor preserves legacy shared plugin-runtime caches that another installation or profile may still use and removes only genuinely dangling plugin-runtime symlinks. It relinks the host `openclaw` package for managed npm plugins that declare it as a peer dependency. It also repairs missing downloadable plugins referenced by config (`plugins.entries`, configured channels, configured provider/search settings, configured agent runtimes). During package updates, doctor skips package-manager plugin repair until the package swap completes; rerun `openclaw doctor --fix` afterward if a configured plugin still needs recovery. If a download fails, doctor reports the install error and preserves the configured plugin entry for the next repair attempt.
 - Doctor repairs stale plugin config by removing missing plugin ids from `plugins.allow`/`plugins.deny`/`plugins.entries`, plus matching dangling channel config, heartbeat targets, and channel model overrides, when plugin discovery is healthy.
 - Doctor quarantines invalid plugin config by disabling the affected `plugins.entries.<id>` entry and removing its invalid `config` payload. Gateway startup already skips only that bad plugin so other plugins and channels keep running.
 - Doctor removes the retired `plugins.entries.codex.config.codexDynamicToolsProfile`; the Codex app-server always keeps Codex-native workspace tools native.
@@ -656,9 +666,18 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - After state-directory migrations, doctor warns when enabled default Telegram or Discord accounts depend on env fallback and `TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN` is unavailable to the doctor process.
 - Telegram `allowFrom` username auto-resolution (`doctor --fix`) requires a resolvable Telegram token in the current command path. If token inspection is unavailable, doctor reports a warning and skips auto-resolution for that pass.
 
+## Invalid Gateway tokens
+
+Doctor flags active Gateway tokens that are blank or contain the literal string
+`undefined` or `null`. The Gateway rejects these values at startup. To replace an
+inline token, run `openclaw doctor --fix --generate-gateway-token`, then restart
+the Gateway. For a SecretRef, rotate the external secret source instead; doctor
+preserves its reference and leaves password, `none`, and trusted-proxy auth modes
+unchanged. An absent token still uses the normal startup token generation flow.
+
 ## macOS: `launchctl` env overrides
 
-If you previously ran `launchctl setenv OPENCLAW_GATEWAY_TOKEN ...` (or `...PASSWORD`), that value overrides your config file and can cause persistent "unauthorized" errors.
+If you previously ran `launchctl setenv OPENCLAW_GATEWAY_TOKEN ...` (or `...PASSWORD`), that value supplies fallback credentials when local configuration does not supply one. A configured inline credential or active SecretRef takes precedence over its matching environment fallback. A stale fallback can cause persistent "unauthorized" errors when it is selected.
 
 ```bash
 launchctl getenv OPENCLAW_GATEWAY_TOKEN

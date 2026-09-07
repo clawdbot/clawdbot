@@ -16,7 +16,7 @@ import { testing as runtimeSnapshotsTesting } from "../agents/auth-profiles/runt
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   createConfigResolutionFacts,
@@ -410,8 +410,10 @@ describe("secrets runtime state", () => {
     );
   });
 
-  it("preserves live auth bookkeeping when prepared credentials activate", () => {
+  it.each(["save", "clear"])("preserves live auth bookkeeping after order %s", (action) => {
     const agentDir = "/tmp/openclaw-auth-bookkeeping-merge";
+    const order = { openai: ["openai:default"] };
+    const saved = action === "save";
     const credential = {
       type: "api_key" as const,
       provider: "openai",
@@ -421,7 +423,8 @@ describe("secrets runtime state", () => {
       {
         version: 1,
         profiles: { "openai:default": credential },
-        order: { openai: ["openai:default"] },
+        order: saved ? undefined : order,
+        runtimeLocalOrderProviderIds: saved ? [] : ["openai"],
         usageStats: { "openai:default": { lastUsed: 1 } },
       },
       agentDir,
@@ -434,7 +437,8 @@ describe("secrets runtime state", () => {
           store: {
             version: 1,
             profiles: { "openai:default": credential },
-            order: { openai: [] },
+            order: saved ? undefined : order,
+            runtimeLocalOrderProviderIds: saved ? [] : ["openai"],
             usageStats: { "openai:default": { lastUsed: 1 } },
           },
         },
@@ -444,7 +448,8 @@ describe("secrets runtime state", () => {
       {
         version: 1,
         profiles: { "openai:default": credential },
-        order: { openai: ["openai:default"] },
+        order: saved ? order : undefined,
+        runtimeLocalOrderProviderIds: saved ? ["openai"] : [],
         lastGood: { openai: "openai:default" },
         usageStats: {
           "openai:default": { lastUsed: 2, cooldownUntil: Date.now() + 60_000 },
@@ -458,9 +463,12 @@ describe("secrets runtime state", () => {
     expect(
       getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats?.["openai:default"],
     ).toMatchObject({ lastUsed: 2, cooldownUntil: expect.any(Number) });
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.order?.openai).toEqual([
-      "openai:default",
-    ]);
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.order).toEqual(
+      saved ? order : undefined,
+    );
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.runtimeLocalOrderProviderIds).toEqual(
+      saved ? ["openai"] : [],
+    );
     expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.lastGood?.openai).toBe(
       "openai:default",
     );

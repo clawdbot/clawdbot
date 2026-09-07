@@ -19,7 +19,14 @@
   ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "codex-app-server-sidecars-to-plugin-state" },
+      {
+        "id": "codex-app-server-orphaned-session-bindings",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      }
+    ]
   },
   "doctorHealthChecks": true,
   "sessionRouteStateOwners": [
@@ -81,6 +88,20 @@
       "cliCommand": "plugins"
     }
   ],
+  "setup": {
+    "nativeSessionCatalog": {
+      "label": "Codex",
+      "legacyDefaultEnabled": true,
+      "description": "Existing native Codex conversations on this Gateway and eligible paired nodes.",
+      "nodeCommands": [
+        "codex.appServer.threads.list.v1",
+        "codex.appServer.thread.turns.list.v1",
+        "codex.sessionCatalog.transcript.read.v1",
+        "codex.terminal.resume.v1",
+        "codex.cli.sessions.list"
+      ]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

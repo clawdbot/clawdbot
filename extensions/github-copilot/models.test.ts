@@ -150,7 +150,11 @@ describe("resolveCopilotForwardCompatModel", () => {
   it("creates synthetic Gemini models with Chat Completions compatibility", () => {
     const result = requireResolvedModel(createMockCtx("gemini-3.1-pro-preview"));
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-completions");
+    // The manifest row now declares its conservative code-mode tier explicitly
+    // (shared-upstream-model contract), and the static override passes the full
+    // manifest compat through to the resolved model.
     expect((result as unknown as Record<string, unknown>).compat).toEqual({
+      codeMode: "capable",
       supportsStore: false,
       supportsDeveloperRole: false,
       supportsUsageInStreaming: false,

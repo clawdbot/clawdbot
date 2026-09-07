@@ -171,11 +171,19 @@ That is the opposite argument order from the declarative
 Reading `params` from the first argument of a factory tool returns the tool
 call ID string instead.
 
+Concrete tools can provide `prepareArguments(args)` to normalize input before
+schema validation. The native agent loop also honors
+`executionMode: "sequential"` when tool calls must run one at a time. These
+runtime properties, schemas, and display metadata come from the current factory
+context whenever tools are assembled. Argument preparation and execution use the
+same instance. Retained tools stop working when their owning plugin registry is
+retired.
+
 Set `hideFromChannelProgress: true` on the concrete factory tool to keep its
 transient activity out of channel progress drafts. Lifecycle events and the
-final tool result still flow normally. OpenClaw preserves this flag when
-reusing a cached tool or normalizing its schema; omitted or `false` leaves
-normal progress behavior in place. See [Progress drafts](/concepts/progress-drafts).
+final tool result still flow normally. OpenClaw preserves the current factory's
+flag when normalizing its schema; omitted or `false` leaves normal progress
+behavior in place. See [Progress drafts](/concepts/progress-drafts).
 
 Factories still declare a fixed tool name up front. Use `definePluginEntry`
 directly when the plugin computes tool names dynamically or combines tools
@@ -263,6 +271,14 @@ quick-index contracts.
 Factory tools declare `outputSchema` on the concrete `AnyAgentTool` they
 return. The static `tool({ factory })` declaration does not accept a separate
 output schema because it could drift from the runtime tool.
+
+OpenClaw also grades the call outcome from `details`, so `status`, `ok`,
+`success`, `error`, `timedOut`, and `exitCode` are reserved names. A `status`
+of `blocked`, `denied`, `invalid`, `cancelled`, or any other failure value
+marks the call failed unless `ok` or `success` is explicitly `true`, even when
+`execute` returned normally. Domain data that
+uses one of those names belongs under a wrapper key, such as `{ card }`,
+instead of at the top level of `details`.
 
 ## Configuration
 

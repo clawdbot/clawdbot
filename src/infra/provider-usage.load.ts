@@ -7,6 +7,7 @@ import {
   resolveProviderUsageSnapshotWithPlugin,
   type ProviderUsagePluginDescriptor,
 } from "../plugins/provider-runtime.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
@@ -228,19 +229,22 @@ export async function loadProviderUsageSummary(
       const started = new Promise<void>((resolve) => {
         markStarted = resolve;
       });
-      workPromise = profileUsageRefreshLimit(async () => {
-        if (!queued) {
-          return undefined;
-        }
-        markStarted?.();
-        try {
-          return await work();
-        } finally {
-          if (providerWorkStarted) {
-            profileUsageRefreshProgress += 1;
+      // Keep queued and timed-out work owned until its actual producer settles.
+      workPromise = trackAsyncWork(() =>
+        profileUsageRefreshLimit(async () => {
+          if (!queued) {
+            return undefined;
           }
-        }
-      });
+          markStarted?.();
+          try {
+            return await work();
+          } finally {
+            if (providerWorkStarted) {
+              profileUsageRefreshProgress += 1;
+            }
+          }
+        }),
+      );
       const acquired = started.then(() => true);
       let observedProgress = profileUsageRefreshProgress;
       // Healthy batches may span several queue deadlines. Only settled provider
@@ -253,7 +257,7 @@ export async function loadProviderUsageSummary(
         observedProgress = profileUsageRefreshProgress;
       }
     } else {
-      workPromise = work();
+      workPromise = trackAsyncWork(work);
     }
     return raceUsageTimeout(workPromise, timeoutMs, failureSnapshot(provider, "Timeout")).catch(
       (error: unknown) => {

@@ -4,11 +4,29 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
-import type { SkillCommandSpec } from "../types.js";
+import type { ExplicitSkillSelection, SkillCommandSpec } from "../types.js";
 
 const MAX_EXPLICIT_SKILL_REFERENCES = 8;
 const MAX_EXPLICIT_SKILL_REFERENCE_CHARS = 512;
 const MAX_EXPLICIT_SKILL_INSTRUCTION_CHARS = 1_000;
+
+export function skillCommandsToExplicitSelections(
+  skills: readonly SkillCommandSpec[],
+): ExplicitSkillSelection[] {
+  return skills.flatMap((skill) =>
+    skill.skillFile ? [{ name: skill.name, path: skill.skillFile }] : [],
+  );
+}
+
+export function mergeExplicitSkillSelections(
+  ...groups: ReadonlyArray<readonly ExplicitSkillSelection[] | undefined>
+): ExplicitSkillSelection[] | undefined {
+  const merged = new Map<string, ExplicitSkillSelection>();
+  for (const selection of groups.flatMap((group) => group ?? [])) {
+    merged.set(`${selection.name}\0${selection.path}`, selection);
+  }
+  return merged.size > 0 ? [...merged.values()] : undefined;
+}
 
 /** Lists slash command names reserved by built-in chat commands and callers. */
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {

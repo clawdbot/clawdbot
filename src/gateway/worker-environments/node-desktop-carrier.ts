@@ -46,9 +46,7 @@ type ActiveNodeDesktopStream = {
 type ActiveNodeDesktopLaunch = {
   binding: NodeDesktopBinding;
   app: WorkerDesktopApp;
-  token: object;
   controller: AbortController;
-  invocation?: ReturnType<NodeWorkerSupervisorTransport["invoke"]>;
   operation: Promise<void>;
 };
 
@@ -361,7 +359,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
       });
       active.unclaimedTimer = setTimeout(
         () => {
-          if (options.desktopRegistry.hasPendingStream(attachment)) {
+          if (options.desktopRegistry.hasPendingStream(binding.environmentId, attachment)) {
             void stopStream(active);
           }
         },
@@ -394,19 +392,15 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
     }
     const app = structuredClone(advertisedApp);
     const key = launchKey(binding, app);
-    const current = activeLaunches.get(key);
-    if (current?.binding.ownerEpoch === binding.ownerEpoch && isDeepStrictEqual(current.app, app)) {
-      return current.operation;
+    const previous = activeLaunches.get(key);
+    if (
+      previous?.binding.ownerEpoch === binding.ownerEpoch &&
+      isDeepStrictEqual(previous.app, app)
+    ) {
+      return previous.operation;
     }
-    const previous = current;
-    const token = {};
     const controller = new AbortController();
-    let start!: () => void;
-    const startGate = new Promise<void>((resolve) => {
-      start = resolve;
-    });
-    const operation = (async () => {
-      await startGate;
+    const operation = Promise.resolve().then(async () => {
       await claimOwner(binding);
       if (previous) {
         previous.controller.abort(
@@ -420,11 +414,10 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         throw new Error("Worker environment node desktop runtime is unavailable");
       }
       const node = await findCurrentNode(binding, capturedRuntime, controller.signal);
-      const active = activeLaunches.get(key);
-      if (active?.token !== token) {
+      if (activeLaunches.get(key) !== entry) {
         throw new Error("Worker environment node desktop launch owner was replaced");
       }
-      active.invocation = capturedRuntime.transport.invoke({
+      const result = await capturedRuntime.transport.invoke({
         node,
         command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
         params: app,
@@ -432,22 +425,19 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         signal: controller.signal,
         isDispatchAuthorized: () => bindingIsCurrent(binding, capturedRuntime, node),
       });
-      const result = await active.invocation;
       requireLaunchReady(result);
       if (!bindingIsCurrent(binding, capturedRuntime, node)) {
         throw new Error("Worker environment node desktop launch owner changed");
       }
-    })();
+    });
     const entry: ActiveNodeDesktopLaunch = {
       binding,
       app,
-      token,
       controller,
       operation,
     };
     // Stateful launch is visible to teardown before node discovery or dispatch begins.
     activeLaunches.set(key, entry);
-    start();
     void operation
       .finally(() => {
         if (activeLaunches.get(key) === entry) {

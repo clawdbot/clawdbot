@@ -595,9 +595,19 @@ PY
       );
     });
 
-    it("renders basic markdown", () => {
-      const html = toSanitizedMarkdownHtml("**bold** and *italic*");
-      expect(html).toBe("<p><strong>bold</strong> and <em>italic</em></p>\n");
+    it.each([
+      {
+        name: "basic markdown",
+        markdown: "**bold** and *italic*",
+        expected: "<p><strong>bold</strong> and <em>italic</em></p>\n",
+      },
+      {
+        name: "three-space inline code",
+        markdown: "`   `",
+        expected: "<p><code>   </code></p>\n",
+      },
+    ])("renders $name", ({ markdown, expected }) => {
+      expect(toSanitizedMarkdownHtml(markdown)).toBe(expected);
     });
 
     it("renders headings", () => {

@@ -26,6 +26,7 @@ import {
   type QaMaturityTaxonomyLevel,
   type QaMaturityTaxonomySurface,
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
+import { collectMirroredDocsRoutes } from "../lib/docs-published-routes.mts";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
 const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
@@ -233,8 +234,12 @@ function collectDocsRouteIndex(docsRoot: string): DocsRouteIndex {
   const docsJsonPath = path.join(docsRoot, "docs.json");
   if (fs.existsSync(docsJsonPath)) {
     const docsJson = JSON.parse(fs.readFileSync(docsJsonPath, "utf8")) as {
+      navigation?: unknown;
       redirects?: Array<{ source?: string; destination?: string }>;
     };
+    for (const route of collectMirroredDocsRoutes(docsJson.navigation)) {
+      routes.add(normalizeRoutePath(route));
+    }
     for (const redirect of docsJson.redirects ?? []) {
       if (!redirect.source || !redirect.destination || redirect.destination.startsWith("http")) {
         continue;
@@ -1023,8 +1028,6 @@ function renderMaturityScorecard({
   lines.push(
     "## Surface explorer",
     "",
-    '<a id="surface-explorer" />',
-    "",
     "Surfaces are ordered by maturity level, completeness, and quality. LTS support is shown alongside each row so release-ready options are easy to compare.",
     "",
     ...renderSurfaceTabs({ coverage, levels, scoreSurfaces, surfaces }),
@@ -1078,8 +1081,6 @@ function renderTaxonomy({
     "</div>",
     "",
     "## Product areas",
-    "",
-    '<a id="product-areas" />',
     "",
   ];
 

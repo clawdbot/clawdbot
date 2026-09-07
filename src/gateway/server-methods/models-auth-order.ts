@@ -11,7 +11,7 @@ import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
-import { refreshPreparedModelRuntimeSnapshots } from "../../agents/prepared-model-runtime.js";
+import { prepareModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readPreparedCatalog } from "../server-model-catalog-auth.js";
@@ -118,15 +118,21 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
       }
       clearProviderUsageRuntimeSnapshot();
       clearCurrentProviderAuthState();
-      // Status reads the prepared owner, so publish the committed order before acknowledging it.
-      // Otherwise an immediate refresh can replace the saved order with the previous generation.
-      await refreshPreparedModelRuntimeSnapshots(cfg, {
-        catalogMode: "static",
-        allowGatewaySubagentBinding: true,
-        agentIds: new Set([scope.agentId]),
-        pluginMetadataSnapshot: preparedSnapshot.metadataSnapshot,
-      });
       const result: ModelAuthOrderSetResult = { provider, profileIds };
+      // The store already started auth publication. Await that owner so immediate status
+      // is current, but do not report a committed write as failed if publication rejects.
+      try {
+        await prepareModelRuntimeSnapshot({
+          agentId: scope.agentId,
+          agentDir: preparedSnapshot.agentDir,
+          workspaceDir: preparedSnapshot.workspaceDir,
+          config: preparedSnapshot.config,
+        });
+      } catch (err) {
+        log.warn(`auth profile order saved but runtime publication failed: ${formatForLog(err)}`);
+        result.warning =
+          "Profile priority saved. Live status is unavailable; refresh Models or restart the Gateway.";
+      }
       respond(true, result, undefined);
       // Order publication already refreshed the auth stores. Refreshing secrets
       // here would replace config identity and discard unchanged account usage.

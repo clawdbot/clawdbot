@@ -1,6 +1,5 @@
 // Owns process-local agent run context, ownership, and projection state.
 import { randomUUID } from "node:crypto";
-import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { registerListener } from "../shared/listeners.js";
@@ -9,68 +8,17 @@ import {
   type AgentRunApprovalClosureReason,
 } from "./agent-run-approval-leases.js";
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
+import type {
+  AgentRunContext,
+  AgentRunContextOwnership,
+  AgentRunRegistryState,
+  ProjectedAgentRunIndex,
+  ProjectedAgentRunState,
+} from "./agent-run-registry.types.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
-
-/** Per-run metadata used to stamp events and gate Control UI visibility. */
-type AgentRunContext = {
-  sessionKey?: string;
-  /** Resolved agent owner, including for unscoped session keys. */
-  agentId?: string;
-  /** Owning run's sessionId; stamped onto lifecycle events. */
-  sessionId?: string;
-  /** Gateway lifecycle generation captured when the run was registered. */
-  lifecycleGeneration?: string;
-  /** Producer-owned start captured from this run's accepted lifecycle event. */
-  lifecycleStartedAt?: number;
-  verboseLevel?: VerboseLevel;
-  isHeartbeat?: boolean;
-  /** Whether control UI clients should receive chat/agent updates for this run. */
-  isControlUiVisible?: boolean;
-  projectSessionActive?: boolean;
-  /** Exact scheduler wait leases; absent during ordinary runtime preparation. */
-  capacityWaits?: Set<symbol>;
-  /** Whether hidden events may reach exact sessions.messages subscribers.
-   * Internal maintenance sharing a foreground key disables this to prevent selected-chat leaks. */
-  projectSessionMessages?: boolean;
-  /** Whether lifecycle events may update the shared session row. */
-  projectSessionLifecycle?: boolean;
-  /** Sticky diagnostic provenance only; never authorization for recovery work. */
-  mainSessionRestartRecovery?: true;
-  /** Active cadence state by job; admission permits one invocation per job. */
-  cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
-  /** Timestamp when this context was first registered (for TTL-based cleanup). */
-  registeredAt?: number;
-  /** Timestamp of last activity (updated on every emitAgentEvent). */
-  lastActiveAt?: number;
-  /** Exact approval authority owned by this operational execution. */
-  delegatedAuthority?: AgentRunDelegatedAuthority;
-  approvalLeases?: AgentRunApprovalLeases;
-};
-
-type AgentRunContextOwnership = {
-  lifecycleGeneration: string;
-  claimIds: Set<string>;
-  /** Live execution claims are lifecycle-owned and must not be expired by the projection sweeper. */
-  sweepProtectedClaimIds: Set<string>;
-  preserveAfterRelease: boolean;
-  clearRequested: boolean;
-  exclusiveClaimId?: string;
-  clearListeners?: Map<string, (claimId: string) => void>;
-};
-
-type AgentRunRegistryState = {
-  contexts: Map<string, AgentRunContext>;
-  owners: Map<string, AgentRunContextOwnership>;
-  queuedRunContextLeases?: WeakMap<AgentRunContext, number>;
-  lifecycleGeneration: string;
-  sequenceResetHandler?: (runId: string) => void;
-  delegatedAuthorityClosedHandlers?: Set<
-    (authority: AgentRunDelegatedAuthority, approvalReason?: AgentRunApprovalClosureReason) => void
-  >;
-  version: number;
-};
+export type { ProjectedAgentRunIndex } from "./agent-run-registry.types.js";
 
 const AGENT_RUN_REGISTRY_STATE_KEY = Symbol.for("openclaw.agentRunRegistry.state");
 
@@ -102,6 +50,7 @@ export function rotateAgentRunRegistryLifecycleGeneration(): string {
     const authority = context.delegatedAuthority;
     if (authority) {
       delete context.delegatedAuthority;
+      delete context.assertSourceCurrent;
       notifyDelegatedAuthorityClosed(state, authority);
     }
   }
@@ -427,6 +376,7 @@ export function getAgentRunContextOwnerStatus(
 /** Claims approval authority for the exact admitted operational execution. */
 export function claimAgentRunDelegatedAuthority(
   operationalRunInstance: Readonly<{ instanceId: string; runId: string }>,
+  assertSourceCurrent?: () => void,
 ): AgentRunDelegatedAuthority {
   const instanceId = operationalRunInstance.instanceId.trim();
   const runId = operationalRunInstance.runId.trim();
@@ -434,11 +384,20 @@ export function claimAgentRunDelegatedAuthority(
     throw new Error("agent run delegated authority requires an operational run instance");
   }
   const state = getAgentRunRegistryState();
-  const lifecycleGeneration = state.lifecycleGeneration;
   const currentInstance =
     operationalRunInstance.instanceId === instanceId && operationalRunInstance.runId === runId
       ? operationalRunInstance
       : Object.freeze({ instanceId, runId });
+  const bound = state.contexts.get(runId);
+  // Check the binding before callbacks or liveness validation can retire it.
+  if (
+    bound?.delegatedAuthority?.operationalRunInstance.instanceId === instanceId &&
+    bound.assertSourceCurrent !== assertSourceCurrent
+  ) {
+    throw new Error("agent run source authority is already bound");
+  }
+  assertSourceCurrent?.();
+  const lifecycleGeneration = state.lifecycleGeneration;
   const active = getActiveAgentRunDelegatedAuthority(currentInstance);
   if (active) {
     return active;
@@ -474,6 +433,7 @@ export function claimAgentRunDelegatedAuthority(
     throw new Error("agent run delegated authority lost its lifecycle during admission");
   }
   context.delegatedAuthority = authority;
+  context.assertSourceCurrent = assertSourceCurrent;
   return authority;
 }
 
@@ -483,17 +443,36 @@ export function getActiveAgentRunDelegatedAuthority(
 ): AgentRunDelegatedAuthority | undefined {
   const context = getAgentRunRegistryState().contexts.get(operationalRunInstance.runId);
   const authority = context?.delegatedAuthority;
-  return authority &&
-    authority.operationalRunInstance.instanceId === operationalRunInstance.instanceId &&
-    authority.operationalRunInstance.runId === operationalRunInstance.runId &&
+  if (
+    !context ||
+    !authority ||
+    authority.operationalRunInstance.instanceId !== operationalRunInstance.instanceId ||
+    authority.operationalRunInstance.runId !== operationalRunInstance.runId ||
     // A clear request is projection state; the exact live claim still owns authority.
     getAgentRunContextOwnerStatus(
       operationalRunInstance.runId,
       authority.claimId,
       authority.lifecycleGeneration,
-    ) !== undefined
-    ? authority
-    : undefined;
+    ) === undefined
+  ) {
+    return undefined;
+  }
+  try {
+    context.assertSourceCurrent?.();
+    return getAgentRunContext(operationalRunInstance.runId) === context &&
+      context.delegatedAuthority === authority &&
+      getAgentRunContextOwnerStatus(
+        operationalRunInstance.runId,
+        authority.claimId,
+        authority.lifecycleGeneration,
+      ) !== undefined
+      ? authority
+      : undefined;
+  } catch {
+    // A copied approval cannot outlive its source; retire the exact owner at detection.
+    releaseAgentRunContext(operationalRunInstance.runId, authority.claimId);
+    return undefined;
+  }
 }
 
 export function validateAgentRunDelegatedAuthority(authority: AgentRunDelegatedAuthority): boolean {
@@ -525,13 +504,23 @@ export function claimAgentRunApprovalAuthority(
 
 /** Compare-releases only the exact authority owned by one admitted execution. */
 export function releaseAgentRunDelegatedAuthority(authority: AgentRunDelegatedAuthority): boolean {
-  if (!validateAgentRunDelegatedAuthority(authority)) {
+  const { runId, instanceId } = authority.operationalRunInstance;
+  const context = getAgentRunContext(runId);
+  const active = context?.delegatedAuthority;
+  // Cleanup compares ownership without asking a revoked source for permission to retire.
+  if (
+    !context ||
+    !active ||
+    active.operationalRunInstance.instanceId !== instanceId ||
+    active.lifecycleGeneration !== authority.lifecycleGeneration ||
+    getAgentRunContextOwnerStatus(runId, active.claimId, active.lifecycleGeneration) === undefined
+  ) {
     return false;
   }
-  const leases = getAgentRunContext(authority.operationalRunInstance.runId)?.approvalLeases;
-  if (!leases?.release(authority.claimId)) {
-    releaseAgentRunContext(authority.operationalRunInstance.runId, authority.claimId);
+  if (active.claimId !== authority.claimId) {
+    return context.approvalLeases?.release(authority.claimId) === true;
   }
+  releaseAgentRunContext(runId, authority.claimId);
   return true;
 }
 
@@ -552,15 +541,6 @@ export function listAgentRunsForSession(params: {
   }
   return runs.toSorted((a, b) => a.runId.localeCompare(b.runId));
 }
-
-type ProjectedAgentRunState = "queued" | "running" | "capacity-wait";
-
-export type ProjectedAgentRunIndex = {
-  sessionKeys: ReadonlyMap<string, ProjectedAgentRunState>;
-  sessionIds: ReadonlyMap<string, ProjectedAgentRunState>;
-  ownerlessSessionKeys: ReadonlyMap<string, ProjectedAgentRunState>;
-  ownerlessSessionIds: ReadonlyMap<string, ProjectedAgentRunState>;
-};
 
 function projectedRunIdentity(agentId: string, value: string): string {
   return `${normalizeAgentId(agentId)}\0${value}`;
@@ -714,6 +694,7 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
   const authority = context?.delegatedAuthority;
   if (context && authority?.claimId === claimId) {
     delete context.delegatedAuthority;
+    delete context.assertSourceCurrent;
     notifyDelegatedAuthorityClosed(state, authority);
   }
   owners.sweepProtectedClaimIds.delete(claimId);

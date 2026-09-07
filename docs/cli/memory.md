@@ -44,6 +44,14 @@ default agent's heartbeat firing to trigger reconciliation. See
 [Dreaming](/concepts/dreaming) for scheduling details.
 
 Status also lists any extra search paths from `memory.search.extraPaths`.
+Storage diagnostics show the shared agent database file, WAL, reusable free pages,
+and retained embedding-cache payload bytes and entry count, including when the cache
+is disabled. Per-source text-plus-embedding totals describe indexed chunks only.
+These figures overlap: do not add payload or reusable bytes to the file sizes.
+The database also holds sessions and other agent state; the WAL can contain newer
+pages not yet checkpointed into the main file. JSON exposes these facts under
+`status.storage`. Byte inspection runs only for explicit diagnostics, not normal
+memory searches.
 For providers that discover their default model at initialization, plain status
 defers model identity checks until that model is known. Use `--deep` to initialize
 the provider and verify the model and provider settings against the existing index.
@@ -120,7 +128,8 @@ openclaw memory index --agent main
 ```
 
 Reset does not shrink the database file or restore data already lost by deleting
-it. It is not a privacy purge: use [`memory forget`](/cli/memory#memory-forget) to remove
+it. To reclaim disk space, follow [disk-space recovery](/concepts/memory-builtin#reclaim-disk-space)
+before rebuilding. It is not a privacy purge: use [`memory forget`](/cli/memory#memory-forget) to remove
 tracked memory derived from selected sessions and prevent re-ingestion.
 
 ## `memory search`

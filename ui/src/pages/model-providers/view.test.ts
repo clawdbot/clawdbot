@@ -3,10 +3,108 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { button, card, mount, props, text } from "./view.test-support.ts";
+import type { ModelProviderCard } from "./data.ts";
 import { renderModelProviders } from "./view.ts";
 
+type ModelProvidersViewProps = Parameters<typeof renderModelProviders>[0];
 type SegmentedGroup = HTMLElement & { disabled: boolean; value: string };
+
+function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
+  return {
+    id: "openai",
+    displayName: "OpenAI",
+    profiles: [],
+    profileProviderIds: {},
+    profileOrders: {},
+    profileOrderStoredProviders: [],
+    profileOrderExplicitProviders: [],
+    profileOrderLocks: {},
+    credentialProviderIds: ["openai"],
+    logoutTargets: [],
+    hasConfigApiKey: false,
+    modelCount: 1,
+    availableModelCount: 1,
+    apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
+    ...overrides,
+  };
+}
+
+function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProvidersViewProps {
+  return {
+    connected: true,
+    loading: false,
+    refreshing: false,
+    error: null,
+    providerUsageFailed: false,
+    supplementalLoading: false,
+    updatedAt: 1,
+    costDays: 30,
+    credentialAgentLabel: "Writer",
+    cards: [card()],
+    configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
+    defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
+    thinkingLevel: "off",
+    thinkingOverridden: true,
+    fastMode: false,
+    fastModeOverridden: true,
+    configBusy: false,
+    quickAddSupported: true,
+    unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
+    canViewProfiles: true,
+    canMutate: true,
+    mutationBlockedReason: null,
+    providerUsageStalled: false,
+    probeAvailable: true,
+    busy: {},
+    messages: {},
+    probeResults: {},
+    keyEditorProvider: null,
+    keyDraft: "",
+    profileOrders: {},
+    addProviderOpen: false,
+    addProviderId: "",
+    addProviderKey: "",
+    onRefresh: () => undefined,
+    onOpenKeyEditor: () => undefined,
+    onCloseKeyEditor: () => undefined,
+    onKeyDraftChange: () => undefined,
+    onSaveKey: () => undefined,
+    onRemoveKey: () => undefined,
+    onProbe: () => undefined,
+    onRequestLogout: () => undefined,
+    onProfileOrderChange: () => undefined,
+    onAddProviderToggle: () => undefined,
+    onAddProviderIdChange: () => undefined,
+    onAddProviderKeyChange: () => undefined,
+    onAddProvider: () => undefined,
+    onPrimaryChange: () => undefined,
+    onFallbackChange: () => undefined,
+    onUtilityChange: () => undefined,
+    onThinkingChange: () => undefined,
+    onThinkingReset: () => undefined,
+    onFastModeChange: () => undefined,
+    onFastModeReset: () => undefined,
+    onOpenModelSetup: () => undefined,
+    ...overrides,
+  };
+}
+
+function mount(viewProps: ModelProvidersViewProps): HTMLDivElement {
+  const container = document.createElement("div");
+  document.body.append(container);
+  render(renderModelProviders(viewProps), container);
+  return container;
+}
+
+function text(element: Element | null): string {
+  return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+}
+
+function button(container: Element, label: string): HTMLButtonElement | undefined {
+  return [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) =>
+    text(entry).includes(label),
+  );
+}
 
 function settingsRow(container: Element, label: string): HTMLElement {
   const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
@@ -302,7 +400,10 @@ describe("renderModelProviders", () => {
           card({
             hasConfigApiKey: true,
             apiKey: { source: "config" },
-            logoutTargets: [{ provider: "openai", profileIds: ["openai:oauth"] }],
+            profiles: [
+              { profileId: "openai:one", type: "oauth", status: "ok", logoutSupported: true },
+            ],
+            logoutTargets: [{ provider: "openai", profileIds: ["openai:one"] }],
           }),
         ],
         keyEditorProvider: "openai",
@@ -332,7 +433,9 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     expect(button(provider!, "Replace key")?.disabled).toBe(true);
     expect(button(provider!, "Remove key")?.disabled).toBe(true);
-    expect(button(provider!, "Log out")?.disabled).toBe(true);
+    expect(
+      provider?.querySelector<HTMLButtonElement>(".model-providers__profile-logout")?.disabled,
+    ).toBe(true);
 
     const addForm = container.querySelector(".model-providers__add-form");
     expect(
@@ -857,88 +960,6 @@ describe("renderModelProviders", () => {
     );
     button(container, "Test connection")?.click();
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
-  });
-
-  it("confirms one profile logout from its quiet icon action", () => {
-    const profileCard = card({
-      credentialProviderIds: ["openai", "agent-openai-alias"],
-      logoutTargets: [{ provider: "agent-openai-alias", profileIds: ["openai:oauth"] }],
-      profileProviderIds: { "openai:oauth": "openai" },
-      profileOrders: { openai: ["openai:oauth"] },
-      profiles: [
-        {
-          profileId: "openai:oauth",
-          type: "oauth",
-          status: "ok",
-          logoutSupported: true,
-          email: "owner@example.com",
-        },
-      ],
-    });
-    const onRequestLogout = vi.fn();
-    const container = mount(props({ cards: [profileCard], onRequestLogout }));
-    expect(container.querySelector(".model-providers__confirm")).toBeNull();
-    container.querySelector<HTMLButtonElement>('[aria-label="Log out owner@example.com"]')?.click();
-    const pendingLogout = {
-      cardId: "openai",
-      label: "owner@example.com",
-      targets: [{ provider: "agent-openai-alias", profileIds: ["openai:oauth"] }],
-    };
-    expect(onRequestLogout).toHaveBeenCalledWith(pendingLogout);
-
-    const onLogout = vi.fn();
-    const confirmation = mount(props({ cards: [profileCard], pendingLogout, onLogout }));
-    button(confirmation, "Log out")?.click();
-    expect(onLogout).toHaveBeenCalledWith("openai", pendingLogout.targets);
-  });
-
-  it("retains keyboard focus across repeated profile moves while data refreshes", async () => {
-    let viewProps = props({
-      refreshing: true,
-      cards: [
-        card({
-          profiles: [
-            { profileId: "openai:one", type: "oauth", status: "ok", email: "one@example.com" },
-            { profileId: "openai:two", type: "oauth", status: "ok", email: "two@example.com" },
-            { profileId: "openai:three", type: "oauth", status: "ok", email: "three@example.com" },
-          ],
-          profileProviderIds: {
-            "openai:one": "openai",
-            "openai:two": "openai",
-            "openai:three": "openai",
-          },
-          profileOrders: { openai: ["openai:one", "openai:two", "openai:three"] },
-        }),
-      ],
-      onProfileOrderChange: (_cardId, provider, order) => {
-        if (!order) {
-          throw new Error("Expected a profile move");
-        }
-        viewProps = { ...viewProps, profileOrders: { [provider]: order } };
-        queueMicrotask(() => render(renderModelProviders(viewProps), container));
-      },
-    });
-    const container = mount(viewProps);
-    const firstGrip = container.querySelector<HTMLButtonElement>(".model-providers__profile-grip")!;
-    firstGrip.focus();
-    expect(firstGrip.disabled).toBe(false);
-
-    for (const expected of [
-      ["openai:two", "openai:one", "openai:three"],
-      ["openai:two", "openai:three", "openai:one"],
-    ]) {
-      document.activeElement?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
-      );
-      await vi.waitFor(() => {
-        expect(
-          [...container.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
-            (row) => row.dataset.profileId,
-          ),
-        ).toEqual(expected);
-        expect(document.activeElement === firstGrip).toBe(true);
-      });
-    }
   });
 
   it("uses the original config key for credential mutations", () => {

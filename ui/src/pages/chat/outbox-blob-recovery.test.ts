@@ -89,9 +89,20 @@ function seed(items: ChatQueueItem[], sessionKey = "global", version = 3) {
 async function expectBytes(host: ReturnType<typeof hostFor>, item: ChatQueueItem) {
   const result = await prepareOutboxPayload(host, item, "handoff");
   expect(result.status).toBe("ready");
-  expect(
-    result.status === "ready" ? result.update.attachments?.map(getChatAttachmentDataUrl) : [],
-  ).toEqual([dataUrl]);
+  const attachments = result.status === "ready" ? result.update.attachments : [];
+  expect(attachments).toHaveLength(1);
+  const restoredUrl = expectDefined(
+    getChatAttachmentDataUrl(expectDefined(attachments?.[0], "restored attachment")),
+    "restored attachment data URL",
+  );
+  const comma = restoredUrl.indexOf(",");
+  expect(comma).toBeGreaterThan(0);
+  const metadata = restoredUrl.slice(0, comma).split(";");
+  expect(metadata[0]).toBe("data:text/plain");
+  expect(metadata.at(-1)).toBe("base64");
+  expect(Buffer.from(restoredUrl.slice(comma + 1), "base64")).toEqual(
+    Buffer.from("complete source bytes"),
+  );
 }
 
 beforeEach(() => {
@@ -104,6 +115,24 @@ afterEach(() => {
 });
 
 describe("Blob-preserving metadata migration", () => {
+  it("stores attachment payloads without secure-context-only browser APIs", async () => {
+    vi.stubGlobal("crypto", {
+      getRandomValues: <T extends Exclude<BufferSource, ArrayBuffer>>(array: T): T => {
+        new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(7);
+        return array;
+      },
+    });
+    Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+
+    const host = hostFor();
+    const item = await prepare(host, "insecure-http");
+
+    await expectBytes(host, item);
+    expect(sessionStorage.getItem("openclaw.control.outboxTab.v1")).toBe(
+      "07070707-0707-4707-8707-070707070707",
+    );
+  });
+
   it("does not settle payload preparation under a pending connected recovery owner", async () => {
     const host = hostFor();
     const original = await prepare(host, "pending-owner");

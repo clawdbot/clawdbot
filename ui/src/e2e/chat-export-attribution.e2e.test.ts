@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -86,11 +87,23 @@ suite.define(() => {
             await row.hover();
             await row.getByRole("button", { name: "Open session menu: Release planning" }).click();
             await openSessionMenuSubmenu(page, "Copy");
-            await captureUiProof(suite, page, "copy-menu.png");
             const copy = page.locator("openclaw-session-menu").getByRole("menuitem", {
               name: "Conversation as Markdown",
               exact: true,
             });
+            if (captureUiProofEnabled) {
+              await waitForControlUiProofSurface(
+                page.locator('openclaw-session-menu > wa-dropdown [part="menu"]'),
+                [page.getByRole("menuitem", { name: "Copy", exact: true })],
+              );
+            }
+            await captureUiProof(
+              suite,
+              page,
+              "copy-menu.png",
+              page.getByRole("menuitem", { name: "Copy", exact: true }).locator('[part="submenu"]'),
+              [copy],
+            );
             await copy.click({ trial: true });
             await activateSelfRemovingControl(copy);
             await expect.poll(() => page.locator(".app-toast").textContent()).toContain("Copied");
@@ -101,7 +114,13 @@ suite.define(() => {
             await writeFile(path.join(suite.artifactDir, `${action}.md`), markdown);
             const preview = await context.newPage();
             await preview.goto(`data:text/plain;charset=utf-8,${encodeURIComponent(markdown)}`);
-            await captureUiProof(suite, preview, `${action}-markdown.png`);
+            await captureUiProof(
+              suite,
+              preview,
+              `${action}-markdown.png`,
+              preview.locator("body"),
+              [preview.locator("pre")],
+            );
             await preview.close();
           }
           expect(markdown.match(/^## .+$/gm)).toEqual(["## Alex", "## Sam", "## Review assistant"]);

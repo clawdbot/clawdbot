@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as childAdapter from "./adapters/child.js";
 import { createStubChild, firstMockArg } from "./adapters/child.test-support.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorPayload,
@@ -35,8 +36,11 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function createRelay(platform: "linux" | "win32") {
+async function createRelay(platform: "linux" | "darwin" | "win32") {
   platformMock = mockProcessPlatform(platform);
+  const groupProbe = vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
+  });
   const stub = createStubChild();
   stub.child.unref = vi.fn();
   const cancellations: Array<(error: Error) => void> = [];
@@ -75,7 +79,7 @@ async function createRelay(platform: "linux" | "win32") {
     if (platform === "win32") {
       stub.child.emit("message", message);
     } else {
-      control.emit("data", encodeServiceChildMessage(message));
+      control.push(Buffer.from(encodeServiceChildMessage(message)));
     }
   };
   emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
@@ -92,8 +96,7 @@ async function createRelay(platform: "linux" | "win32") {
       return true;
     });
   }
-  const completeRoot = () => {
-    emit({ type: "root-result", code: 0, signal: null });
+  const endOutput = () => {
     if (platform === "win32") {
       emit({ type: "output-end", stream: "stdout" });
       emit({ type: "output-end", stream: "stderr" });
@@ -102,16 +105,42 @@ async function createRelay(platform: "linux" | "win32") {
       stub.child.stderr?.emit("end");
     }
   };
-  const close = () => {
-    control.destroy();
+  const completeRoot = () => {
+    emit({ type: "root-result", code: 0, signal: null });
+    endOutput();
+  };
+  const closeControl = () => control.destroy();
+  const exitRelay = () => {
     stub.disconnectMock();
     stub.emitExit(0);
   };
+  const close = () => {
+    closeControl();
+    exitRelay();
+  };
+  const floodControl = (chunk: string | Buffer) => {
+    control.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  };
+  const controlEncoding = () => control.readableEncoding;
+  const killSpy = vi.spyOn(stub.child, "kill");
   cleanups.push(close);
-  return { adapter, cancellations, emit, completeRoot, close };
+  return {
+    adapter,
+    cancellations,
+    emit,
+    completeRoot,
+    endOutput,
+    close,
+    closeControl,
+    exitRelay,
+    floodControl,
+    controlEncoding,
+    killSpy,
+    groupProbe,
+  };
 }
 
-it("kills the spawned relay when abortSignal fires before ready", async () => {
+it("reports cleanup uncertainty when construction aborts before ready", async () => {
   platformMock = mockProcessPlatform("linux");
   const stub = createStubChild();
   stub.child.unref = vi.fn();
@@ -140,13 +169,13 @@ it("kills the spawned relay when abortSignal fires before ready", async () => {
   expect(stub.killMock).not.toHaveBeenCalled();
 
   abort.abort();
-  await expect(starting).rejects.toThrow(/construction aborted|cleanup identity lost/);
+  await expect(starting).rejects.toThrow("service child cleanup identity lost");
   expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
   control.destroy();
   stub.emitExit(null, "SIGKILL");
 });
 
-it("settles when construction aborts before deferred start delivery fails", async () => {
+it("reports cleanup loss when deferred start delivery fails after abort", async () => {
   platformMock = mockProcessPlatform("linux");
   const stub = createStubChild();
   stub.child.unref = vi.fn();
@@ -185,14 +214,62 @@ it("settles when construction aborts before deferred start delivery fails", asyn
   await nextTurn();
   expect(startCallbacks).toHaveLength(1);
   abort.abort();
-  await expect(starting).rejects.toThrow(/construction aborted|cleanup identity lost/);
-  expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
-
+  const rejected = expect(starting).rejects.toThrow("service child cleanup identity lost");
   startCallbacks[0]!(new Error("synthetic start delivery failed"));
+  await rejected;
+  expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
   await nextTurn();
   control.destroy();
   stub.emitExit(null, "SIGKILL");
 });
+
+it.each(["linux", "win32"] as const)(
+  "keeps rejected construction ownership failures visible to supervisor joins (%s)",
+  async (platform) => {
+    platformMock = mockProcessPlatform(platform);
+    const stub = createStubChild();
+    const control = new Duplex({
+      autoDestroy: false,
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    Object.defineProperty(stub.child, "stdio", {
+      value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control],
+      configurable: true,
+    });
+    mocks.spawn.mockReturnValue(stub.child);
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:rejected-construction";
+    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
+    const pending = supervisor.spawn({
+      runId: "rejected-construction",
+      mode: "anchored-shell",
+      command: "synthetic-command",
+      scopeKey,
+    });
+    await nextTurn();
+    supervisor.cancel("rejected-construction");
+    const run = await pending;
+    await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    const outcomes = Promise.allSettled([cleanupScope(), supervisor.shutdown()]);
+    control.destroy();
+    stub.disconnectMock();
+    stub.emitExit(null, "SIGKILL");
+
+    for (const outcome of await outcomes) {
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({
+          message: expect.stringContaining("service child cleanup identity lost"),
+        }),
+      });
+    }
+    await expect(cleanupScope()).rejects.toThrow("cleanup identity lost");
+    await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+  },
+);
 
 it("refreshes the supervisor deadline from text-only Windows Job output", async () => {
   const { adapter, emit, completeRoot, close } = await createRelay("win32");
@@ -202,8 +279,6 @@ it("refreshes the supervisor deadline from text-only Windows Job output", async 
   const run = await supervisor.spawn({
     mode: "anchored-shell",
     command: "synthetic-command",
-    sessionId: "windows-job-output",
-    backendId: "windows-job-output",
     noOutputTimeoutMs: 1_000,
   });
   try {
@@ -226,7 +301,103 @@ it("refreshes the supervisor deadline from text-only Windows Job output", async 
   }
 });
 
+it.each([
+  { label: "ASCII", chunk: "x".repeat(64 * 1024), overflow: "x" },
+  { label: "multibyte UTF-8", chunk: "é".repeat(32 * 1024), overflow: "é" },
+])("caps an accumulated $label control line by wire bytes", async ({ chunk, overflow }) => {
+  const { adapter, floodControl, killSpy, close } = await createRelay("linux");
+  const rejectedWait = expect(adapter.wait()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  const rejectedExtinction = expect(adapter.waitForExtinction()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  for (let index = 0; index < 4; index += 1) {
+    floodControl(chunk);
+  }
+  expect(killSpy).not.toHaveBeenCalled();
+  floodControl(overflow);
+  await rejectedWait;
+  await rejectedExtinction;
+  expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+  close();
+});
+
+it.each([
+  { label: "ASCII", chunk: "x".repeat(64 * 1024), overflow: "x" },
+  { label: "multibyte UTF-8", chunk: "é".repeat(32 * 1024), overflow: "é" },
+])("caps a completed $label control line before decoding", async ({ chunk, overflow }) => {
+  const { adapter, floodControl, controlEncoding, killSpy, close } = await createRelay("linux");
+  const parseSpy = vi.spyOn(JSON, "parse");
+  expect(controlEncoding()).toBeNull();
+  floodControl(`${chunk.repeat(4)}${overflow}\n`);
+  await expect(adapter.wait()).rejects.toThrow("control pipe pending line exceeded cap");
+  await expect(adapter.waitForExtinction()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  expect(parseSpy).not.toHaveBeenCalled();
+  expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+  close();
+});
+
+it("bounds the newline search before inspecting an oversized control frame", async () => {
+  const { adapter, floodControl, killSpy, close } = await createRelay("linux");
+  const frame = Buffer.alloc(256 * 1024 + 2, 0x78);
+  frame[frame.length - 1] = 0x0a;
+  const fullFrameSearch = vi.spyOn(frame, "indexOf");
+
+  floodControl(frame);
+
+  await expect(adapter.wait()).rejects.toThrow("control pipe pending line exceeded cap");
+  await expect(adapter.waitForExtinction()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  expect(fullFrameSearch).not.toHaveBeenCalled();
+  expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+  close();
+});
+
 describe.each(["linux", "win32"] as const)("service closing authority (%s)", (platform) => {
+  it.each([false, true])(
+    "keeps root knowledge independent of failed extinction (root observed=%s)",
+    async (rootObserved) => {
+      const { adapter, completeRoot, close } = await createRelay(platform);
+      adapter.kill("SIGTERM");
+      if (rootObserved) {
+        completeRoot();
+      }
+      await nextTurn();
+      close();
+      await expect(adapter.waitForExtinction()).rejects.toThrow("cleanup identity lost");
+      if (rootObserved) {
+        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+      } else {
+        await expect(adapter.wait()).rejects.toThrow("cleanup identity lost");
+      }
+    },
+  );
+
+  it("publishes root exit before output drain and replays it to late observers", async () => {
+    const { adapter, emit, completeRoot, close } = await createRelay(platform);
+    const onExit = vi.fn();
+    adapter.onExit(onExit);
+    emit({ type: "root-result", code: 0, signal: null });
+    // POSIX stream delivery is asynchronous; the observer itself runs within
+    // the root-result handler, independently of output completion.
+    if (platform === "linux") {
+      await nextTurn();
+    }
+    expect(onExit).toHaveBeenCalledExactlyOnceWith(0, null);
+    const lateExit = vi.fn();
+    adapter.onExit(lateExit);
+    expect(lateExit).toHaveBeenCalledExactlyOnceWith(0, null);
+    completeRoot();
+    await adapter.wait();
+    emit({ type: "closing", reason: "lineage-closed" });
+    close();
+    await adapter.waitForExtinction();
+  });
+
   it.each(["after receipt", "before receipt"])(
     "preserves confirmed extinction when cancellation starts %s",
     async (order) => {
@@ -258,6 +429,8 @@ describe.each(["linux", "win32"] as const)("service closing authority (%s)", (pl
     "rejects %s without an authoritative closing receipt",
     async (fault) => {
       const { adapter, cancellations, completeRoot, close } = await createRelay(platform);
+      const onError = vi.fn();
+      adapter.onError(onError);
       completeRoot();
       const rejected = expect(adapter.waitForExtinction()).rejects.toThrow(
         "service child cleanup identity lost",
@@ -269,6 +442,151 @@ describe.each(["linux", "win32"] as const)("service closing authority (%s)", (pl
         close();
       }
       await rejected;
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining("cleanup identity lost") }),
+        "process",
+      );
     },
   );
+});
+
+it("drains output after losing cleanup authority without erasing the observed root", async () => {
+  const { adapter, emit, endOutput, close } = await createRelay("linux");
+  adapter.kill("SIGTERM");
+  emit({ type: "root-result", code: 23, signal: null });
+  await nextTurn();
+  const root = adapter.wait();
+  const settled = vi.fn();
+  void root.then(settled, settled);
+  close();
+  await expect(adapter.waitForExtinction()).rejects.toThrow("cleanup identity lost");
+  expect(settled).not.toHaveBeenCalled();
+  endOutput();
+  await expect(root).resolves.toEqual({ code: 23, signal: null });
+});
+
+it("waits for relay reaping before observing POSIX group extinction", async () => {
+  const { adapter, completeRoot, emit, closeControl, exitRelay, groupProbe } =
+    await createRelay("darwin");
+  groupProbe.mockImplementation(() => {
+    throw Object.assign(new Error("synthetic unreaped anchor group"), { code: "EPERM" });
+  });
+  completeRoot();
+  await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  const settled = vi.fn();
+  const extinction = adapter.waitForExtinction();
+  void extinction.then(settled, settled);
+
+  closeControl();
+  await nextTurn();
+  expect(settled).not.toHaveBeenCalled();
+  expect(groupProbe).not.toHaveBeenCalled();
+
+  groupProbe.mockImplementation(() => {
+    throw Object.assign(new Error("synthetic reaped anchor group"), { code: "ESRCH" });
+  });
+  exitRelay();
+  await expect(extinction).resolves.toBeUndefined();
+  expect(groupProbe).toHaveBeenCalledExactlyOnceWith(-1235, 0);
+});
+
+it("does not renew the group disappearance deadline after joining the relay", async () => {
+  const { adapter, completeRoot, emit, closeControl, exitRelay, groupProbe } =
+    await createRelay("darwin");
+  const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+  groupProbe.mockReturnValue(true);
+  completeRoot();
+  await adapter.wait();
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  const settled = vi.fn();
+  void adapter.waitForExtinction().then(settled, settled);
+
+  closeControl();
+  await nextTurn();
+  expect(groupProbe).not.toHaveBeenCalled();
+  now.mockReturnValue(10_000 + GRACEFUL_CANCEL_TIMEOUT_MS);
+  exitRelay();
+  await nextTurn();
+
+  expect(settled).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      message: expect.stringContaining("owned process group remained after its anchor closed"),
+    }),
+  );
+  expect(groupProbe).toHaveBeenCalledExactlyOnceWith(-1235, 0);
+});
+
+it("bounds relay reaping by the original graceful cleanup deadline", async () => {
+  const { adapter, completeRoot, emit, closeControl, groupProbe } = await createRelay("darwin");
+  completeRoot();
+  await adapter.wait();
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const rejected = expect(adapter.waitForExtinction()).rejects.toThrow(
+      "service child relay did not exit before cleanup deadline",
+    );
+    closeControl();
+    await nextTurn();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_CANCEL_TIMEOUT_MS);
+    await rejected;
+    expect(groupProbe).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(["EPERM", "EIO", "still present"])(
+  "keeps graceful cleanup uncertain when the kernel group is %s",
+  async (failure) => {
+    const { adapter, completeRoot, emit, close, groupProbe } = await createRelay("linux");
+    const cause =
+      failure === "still present"
+        ? undefined
+        : Object.assign(new Error(`synthetic ${failure}`), { code: failure });
+    groupProbe.mockImplementation(() => {
+      if (cause) {
+        throw cause;
+      }
+      return true;
+    });
+    completeRoot();
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    emit({ type: "closing", reason: "lineage-closed" });
+    await nextTurn();
+    // Exhaust the bounded observation window without waiting on real process time.
+    vi.spyOn(Date, "now").mockReturnValueOnce(10_000).mockReturnValue(15_000);
+    close();
+    await expect(adapter.waitForExtinction()).rejects.toThrow("owned process group");
+    await expect(adapter.waitForExtinction()).rejects.toSatisfy(
+      (error: unknown) => error instanceof Error && error.cause === cause,
+    );
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    expect(groupProbe).toHaveBeenCalledWith(-1235, 0);
+    expect(groupProbe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
+  },
+);
+
+it("retains extinction ownership until the kernel group disappears", async () => {
+  const { adapter, completeRoot, emit, close, groupProbe } = await createRelay("linux");
+  groupProbe.mockReturnValueOnce(true);
+  completeRoot();
+  await adapter.wait();
+  const settled = vi.fn();
+  const extinction = adapter.waitForExtinction().then(settled);
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  expect(groupProbe).not.toHaveBeenCalled();
+  close();
+  await nextTurn();
+  expect(settled).not.toHaveBeenCalled();
+  await extinction;
+  expect(groupProbe.mock.calls).toEqual([
+    [-1235, 0],
+    [-1235, 0],
+  ]);
 });

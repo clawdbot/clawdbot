@@ -166,8 +166,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         deferredTtsTextPending = "";
       }
       if (finalReply.dedupedAgainstBlock) {
-        // The delivering block already settled into the turn ledger.
-        await suppressPendingFinalDelivery(reply);
+        // Pending block coverage already retired this final's prepared duplicate.
+        if (!finalReply.pendingBlock) {
+          await suppressPendingFinalDelivery(reply);
+        }
         continue;
       }
       attemptedFinalDelivery = true;
@@ -175,6 +177,24 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       routedFinalCount += finalReply.routedFinalCount;
       if (finalReply.queuedFinal) {
         finalDeliveries.push(finalReply.dispatcherOutcome);
+      }
+      if (finalReply.pendingBlock) {
+        // New audio can settle independently while the original text remains unconfirmed.
+        continue;
+      }
+      // Queue admission can still be cancelled or fail. Keep the owner's receipt
+      // until this exact final payload settles as delivered.
+      const onFinalDeliverySuccess = getReplyPayloadMetadata(reply)?.onFinalDeliverySuccess;
+      if (onFinalDeliverySuccess) {
+        if (finalReply.dispatcherOutcome) {
+          registerReplyDispatcherSettledTask(dispatcher, async () => {
+            if ((await finalReply.dispatcherOutcome) === "delivered") {
+              onFinalDeliverySuccess();
+            }
+          });
+        } else if (finalReply.routedFinalCount > 0) {
+          onFinalDeliverySuccess();
+        }
       }
       // Metadata survives usage, threading, and transcript decoration; object identity does not.
       if (pendingContinuationSettlement && getReplyPayloadMetadata(reply)?.continuationStatus) {
@@ -326,6 +346,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
+    !turnLedger.hasPendingDelivery() &&
     !turnLedger.hasVisibleDelivery();
   let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
   if (noVisibleReplyFallbackAllowed()) {
@@ -411,21 +432,29 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const agentRunTerminalOutcome = state.getAgentRunTerminalOutcome();
   state.commitInboundDedupeIfClaimed();
   const messageInjectionAborted = state.replyOperationRunState.messageInjectionAborted === true;
+  const questionFailure =
+    replyAdmission?.status === "skipped" &&
+    (replyAdmission.reason === "question-response-indeterminate" ||
+      replyAdmission.reason === "question-response-refused")
+      ? replyAdmission.reason
+      : undefined;
   const dispatchOutcome =
-    agentRunTerminalOutcome === "failed"
+    agentRunTerminalOutcome === "failed" || questionFailure
       ? "error"
       : queueCapRejected || messageInjectionAborted
         ? "skipped"
         : "completed";
-  const dispatchReason = queueCapRejected
-    ? "queue-cap"
-    : messageInjectionAborted
-      ? "reply_operation_aborted"
-      : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
-        ? "active_run_injected"
-        : channelTransformSuppressed
-          ? "channel_transform"
-          : state.bindingState.pluginFallbackReason;
+  const dispatchReason =
+    questionFailure ??
+    (queueCapRejected
+      ? "queue-cap"
+      : messageInjectionAborted
+        ? "reply_operation_aborted"
+        : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
+          ? "active_run_injected"
+          : channelTransformSuppressed
+            ? "channel_transform"
+            : state.bindingState.pluginFallbackReason);
   state.recordAgentDispatchCompleted(
     dispatchOutcome,
     dispatchReason ? { reason: dispatchReason } : undefined,
@@ -455,6 +484,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ...(noVisibleReplyFallbackDirected &&
     queuedSettleResult === "settled" &&
     !turnLedger.hasVisibleDelivery() &&
+    !turnLedger.hasPendingDelivery() &&
     !noVisibleReplyFallbackDelivered &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&

@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { installBrowserHistoryIsolation } from "./browser-history.ts";
 
-describe.sequential("browser history isolation", () => {
+describe("browser history isolation", { concurrent: false }, () => {
   installBrowserHistoryIsolation();
 
   it("allows a test to replace both its route and history state", () => {

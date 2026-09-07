@@ -9,6 +9,7 @@ import type {
   UsageSummary,
 } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { formatForLog } from "../ws-log.js";
 import {
   clearProviderUsageRuntimeSnapshot,
@@ -189,39 +190,42 @@ function scheduleProviderUsageRefresh(params: {
       config: params.configRef,
       timeoutMs: PROVIDER_USAGE_TIMEOUT_MS,
     });
-  const promise = load()
-    .then((freshUsage) => {
-      const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
-      if (
-        publishGeneration === cacheGeneration &&
-        usageRefreshByAgentId.get(params.cacheOwnerKey)?.ownerToken === ownerToken
-      ) {
-        usageCacheByAgentId.set(params.cacheOwnerKey, {
-          agentDir: params.agentDir,
-          configRef: params.configRef,
-          credentialKey: params.credentialKey,
-          providerKey: params.providerKey,
-          refreshedAt: Date.now(),
-          summary: usage,
-          usageByProvider: mapProviderUsage(usage),
-        });
-      }
-      return usage;
-    })
-    .catch((err: unknown) => {
-      // Usage is auxiliary and stale data remains valid. A failed refresh
-      // publishes nothing, so a capable client keeps seeing the incomplete
-      // marker and reports it once its retry budget is spent.
-      log.debug(
-        `usage refresh failed: providers=${params.providerIds.join(",")} error=${formatForLog(err)}`,
-      );
-      throw err;
-    })
-    .finally(() => {
-      if (usageRefreshByAgentId.get(params.cacheOwnerKey)?.ownerToken === ownerToken) {
-        usageRefreshByAgentId.delete(params.cacheOwnerKey);
-      }
-    });
+  // Track publication and finalization after the stale-while-revalidate reply.
+  const promise = trackAsyncWork(() =>
+    load()
+      .then((freshUsage) => {
+        const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
+        if (
+          publishGeneration === cacheGeneration &&
+          usageRefreshByAgentId.get(params.cacheOwnerKey)?.ownerToken === ownerToken
+        ) {
+          usageCacheByAgentId.set(params.cacheOwnerKey, {
+            agentDir: params.agentDir,
+            configRef: params.configRef,
+            credentialKey: params.credentialKey,
+            providerKey: params.providerKey,
+            refreshedAt: Date.now(),
+            summary: usage,
+            usageByProvider: mapProviderUsage(usage),
+          });
+        }
+        return usage;
+      })
+      .catch((err: unknown) => {
+        // Usage is auxiliary and stale data remains valid. A failed refresh
+        // publishes nothing, so a capable client keeps seeing the incomplete
+        // marker and reports it once its retry budget is spent.
+        log.debug(
+          `usage refresh failed: providers=${params.providerIds.join(",")} error=${formatForLog(err)}`,
+        );
+        throw err;
+      })
+      .finally(() => {
+        if (usageRefreshByAgentId.get(params.cacheOwnerKey)?.ownerToken === ownerToken) {
+          usageRefreshByAgentId.delete(params.cacheOwnerKey);
+        }
+      }),
+  );
   const refresh: ProviderUsageRefresh = {
     ownerToken,
     agentDir: params.agentDir,

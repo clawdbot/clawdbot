@@ -15,6 +15,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
@@ -25,12 +26,13 @@ import type {
   ModelPickerEntry,
   ModelProviderCard,
   ModelProviderPendingLogout,
-  ModelProviderLogoutTarget,
   ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
 import { renderProviderProfiles } from "./profiles-view.ts";
 import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
+
+registerSettingsEnglish();
 
 export type ModelProviderRowMessage = {
   kind: "success" | "error";
@@ -69,7 +71,6 @@ type ModelProvidersViewProps = {
   probeResults: Record<string, ModelsProbeResult>;
   keyEditorProvider: string | null;
   keyDraft: string;
-  pendingLogout: ModelProviderPendingLogout | null;
   profileOrders: Record<string, string[]>;
   addProviderOpen: boolean;
   addProviderId: string;
@@ -82,8 +83,6 @@ type ModelProvidersViewProps = {
   onRemoveKey: (provider: string, configKey: string) => void;
   onProbe: (cardId: string, providers: string[]) => void;
   onRequestLogout: (pending: ModelProviderPendingLogout) => void;
-  onCancelLogout: () => void;
-  onLogout: (cardId: string, targets: ModelProviderLogoutTarget[]) => void;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onAddProviderToggle: () => void;
   onAddProviderIdChange: (provider: string) => void;
@@ -279,10 +278,8 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
     ? card.credentialProviderIds
     : [card.id];
   const isConfigured = card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
-  const canLogout = card.profiles.length === 0 && card.logoutTargets.length > 0;
   const probeBusy = Boolean(props.busy[`probe:${card.id}`]);
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
-  const logoutBusy = Boolean(props.busy[`logout:${card.id}`]);
   const blocked = props.mutationBlockedReason ?? "";
   const authModeBlocked = Boolean(card.configAuthMode && card.configAuthMode !== "api-key");
   const apiKeyUnsupported = card.apiKeySupported === false;
@@ -290,7 +287,6 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
   const keyBlocked = authModeBlocked
     ? t("modelProviders.apiKey.authModeBlocked", { mode: card.configAuthMode ?? "" })
     : blocked;
-  const pendingLogout = props.pendingLogout?.cardId === card.id ? props.pendingLogout : null;
   return html`
     <div class="model-providers__card-actions">
       ${
@@ -339,51 +335,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
             `
           : nothing
       }
-      ${
-        canLogout
-          ? html`
-              <button
-                class="btn btn--sm"
-                ?disabled=${logoutBusy || mutationDisabled}
-                title=${blocked}
-                @click=${() =>
-                  props.onRequestLogout({
-                    cardId: card.id,
-                    label: card.displayName,
-                    targets: card.logoutTargets,
-                  })}
-              >
-                ${t("modelProviders.logout.action")}
-              </button>
-            `
-          : nothing
-      }
     </div>
-    ${
-      pendingLogout
-        ? html`
-            <div class="model-providers__confirm" role="alert">
-              <span>${t("modelProviders.logout.confirm", { provider: pendingLogout.label })}</span>
-              <div class="model-providers__form-actions">
-                <button
-                  class="btn danger btn--sm"
-                  ?disabled=${logoutBusy || mutationDisabled}
-                  @click=${() => props.onLogout(card.id, pendingLogout.targets)}
-                >
-                  ${
-                    logoutBusy
-                      ? t("modelProviders.logout.loggingOut")
-                      : t("modelProviders.logout.action")
-                  }
-                </button>
-                <button class="btn btn--sm" ?disabled=${logoutBusy} @click=${props.onCancelLogout}>
-                  ${t("common.cancel")}
-                </button>
-              </div>
-            </div>
-          `
-        : nothing
-    }
   `;
 }
 

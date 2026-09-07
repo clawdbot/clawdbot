@@ -20,6 +20,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const replayModel: Model<"openai-responses"> = {
   id: "gpt-5.6-luna",
   name: "Mock OpenAI",
@@ -161,7 +162,9 @@ suite.define(() => {
       await suite.withPage(
         {
           locale: "en-US",
-          recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+          ...(captureUiProof
+            ? { recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } } }
+            : {}),
           serviceWorkers: "block",
           viewport: { width: 1280, height: 900 },
         },
@@ -187,7 +190,9 @@ suite.define(() => {
             .locator("a, button, img, audio, video")
             .count();
           expect(omittedInteractiveDescendantCount).toBe(0);
-          await page.screenshot({ path: path.join(suite.artifactDir, "01-omitted-image.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "01-omitted-image.png") });
+          }
 
           await navigateToControlUiSession(page, retainedSessionKey);
           const retainedPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
@@ -226,7 +231,9 @@ suite.define(() => {
               2,
             )}\n`,
           );
-          await page.screenshot({ path: path.join(suite.artifactDir, "02-retained-image.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "02-retained-image.png") });
+          }
         },
       );
     } finally {
@@ -258,7 +265,9 @@ suite.define(() => {
         await suite.withPage(
           {
             locale: "en-US",
-            recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } },
+            ...(captureUiProof
+              ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } }
+              : {}),
             serviceWorkers: "block",
             viewport: { width: 1280, height: 900 },
           },
@@ -282,7 +291,9 @@ suite.define(() => {
             });
             await card.waitFor();
             const firstCardText = (await card.textContent()) ?? "";
-            await page.screenshot({ path: path.join(proofDir, "01-pptx-result.png") });
+            if (captureUiProof) {
+              await page.screenshot({ path: path.join(proofDir, "01-pptx-result.png") });
+            }
             const firstHistory = await gateway.gateway.call("chat.history", {
               sessionKey: "agent:qa:main",
               limit: 20,
@@ -349,7 +360,9 @@ suite.define(() => {
             const rawDisplayContent = rawAssistantMessages.flatMap((message) =>
               Array.isArray(message.openclawDisplayContent) ? message.openclawDisplayContent : [],
             );
-            await page.screenshot({ path: path.join(proofDir, "02-next-turn-result.png") });
+            if (captureUiProof) {
+              await page.screenshot({ path: path.join(proofDir, "02-next-turn-result.png") });
+            }
             const verdict = {
               failureCardVisible,
               failurePathHealthy,

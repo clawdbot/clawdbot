@@ -1,6 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateSelfRemovingControl,
@@ -49,17 +51,16 @@ suite.define(() => {
         methodResponses: { "sessions.list": sessionsListResponse([original, survivor]) },
         sessionKey: original.key,
       });
-      const capture = async (stage: string) => {
+      const capture = async (stage: string, proofSurface: Locator, content: readonly Locator[]) => {
         if (captureUiProofEnabled) {
           await mkdir(path.join(suite.artifactDir, "group-identity-20260827"), { recursive: true });
-          await page.screenshot({
-            path: path.join(
+          await writeFile(
+            path.join(
               path.join(suite.artifactDir, "group-identity-20260827"),
               `${surface}-${stage}.png`,
             ),
-            animations: "disabled",
-            fullPage: true,
-          });
+            await takeControlUiViewportScreenshot(page, proofSurface, content),
+          );
         }
       };
       try {
@@ -93,7 +94,7 @@ suite.define(() => {
         await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
         const input = page.getByLabel("New group name");
         await input.fill(group);
-        await capture("editing");
+        await capture("editing", page.locator("openclaw-modal-dialog dialog"), [input]);
         await input.press("Enter");
         await gateway.waitForRequest("sessions.groups.put");
 
@@ -152,7 +153,13 @@ suite.define(() => {
         } else {
           await failure.waitFor({ state: "visible" });
         }
-        await capture(acceptedKeys.includes(original.key) ? "incorrectly-moved" : "rejected");
+        await capture(
+          acceptedKeys.includes(original.key) ? "incorrectly-moved" : "rejected",
+          !acceptedKeys.includes(original.key) && surface !== "header"
+            ? page.locator("openclaw-modal-dialog dialog")
+            : page.locator(".shell"),
+          [acceptedKeys.includes(original.key) ? row : failure],
+        );
 
         expect(acceptedKeys).not.toContain(original.key);
         expect(targets.find((target) => target.key === original.key)).toMatchObject({
@@ -178,7 +185,7 @@ suite.define(() => {
           await page.getByRole("button", { name: "Cancel", exact: true }).click();
         }
         await input.waitFor({ state: "detached" });
-        await capture("unchanged");
+        await capture("unchanged", page.locator(".shell"), [row]);
       } finally {
         await suite.closeBrowserContext(context);
         if (video) {

@@ -1,13 +1,10 @@
 import { html, nothing } from "lit";
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import { isSessionRouteId, workboardBoardIdFromPath } from "../app-route-paths.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
-import type {
-  SidebarWorkboardRenderers,
-  SidebarWorkboardSnapshot,
-} from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
+import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { renderNewSessionLink } from "../components/new-session-link.ts";
 import {
   renderLazySettingsSidebar,
@@ -21,10 +18,12 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { normalizeAgentId, resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { renderControlUiPluginRecovery } from "../plugins/control-ui-contributions.ts";
+import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { renderCommandPaletteLoading } from "./app-shell-command-palette-loading.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
@@ -85,8 +84,6 @@ export interface ShellViewHost {
   readonly settingsSidebarRenderer: SettingsSidebarModule["renderSettingsSidebar"] | null;
   readonly settingsSidebarLoadFailed: boolean;
   readonly settingsSearchQuery: string;
-  readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
-  readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
   readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
   readonly devicePairSetupLoadFailed: boolean;
   loadDevicePairSetupRenderer(): void;
@@ -106,7 +103,7 @@ export interface ShellViewHost {
   openApprovals(): void;
   openNewSession(agentId: string, target?: NewSessionTarget): void;
   openPalette(): void;
-  refreshControlUi(): void;
+  refreshControlUi: () => Promise<boolean>;
   replaceChatWithCurrentSession(): boolean;
   requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;
@@ -175,9 +172,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     return nothing;
   }
   if (host.routeState.routeId === undefined) {
-    return html`<main class="connect-splash" role="status" aria-label=${t("common.loading")}>
-      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
-    </main>`;
+    return renderConnectingSplash();
   }
   const gatewaySnapshot = context.gateway.snapshot;
   const config = context.config.current;
@@ -190,6 +185,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const storedOutboxes = host.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost);
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
+  const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
   // The install keeps running after `update.run` answers, so the reconciliation
   // — not the request — decides how long the update surfaces stay busy.
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
@@ -207,12 +203,13 @@ export function renderApplicationShell(host: ShellViewHost) {
   // Session routes have an offline outbox, New Session keeps a local draft, and
   // Appearance persists local preference intent for replay. Their server actions
   // are independently gated; other pages cannot submit useful disconnected work.
+  const reloadRequired = gatewaySnapshot.phase === "reload-required";
   const pageActionsBlocked =
-    gatewaySnapshot.phase === "reload-required" ||
-    (!gatewayConnected &&
-      !sessionRoute &&
-      activeRoute !== "new-session" &&
-      activeRoute !== "appearance");
+    !reloadRequired &&
+    !gatewayConnected &&
+    !sessionRoute &&
+    activeRoute !== "new-session" &&
+    activeRoute !== "appearance";
   // Plugin tabs share one route; the search picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
@@ -300,8 +297,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       activeRouteId: activeRoute,
       activePluginTabId,
       enabledRouteIds: host.enabledRouteIds(),
-      activeWorkboardBoardId:
-        workboardBoardIdFromPath(host.routeState.location?.pathname ?? "", context.basePath) ?? "",
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
@@ -316,9 +311,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
       preferencesBrowserOnly: gatewayConnected && context.runtimeConfig.canPatch === false,
       sidebarEntries: navigationSnapshot.sidebarEntries,
-      workboardBoards: host.sidebarWorkboardSnapshot.boards,
-      workboardBoardsReady: host.sidebarWorkboardSnapshot.ready,
-      workboardRenderers: host.sidebarWorkboardRenderers,
       sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
       pinnedAgentIds: navigationSnapshot.pinnedAgentIds,
       themeMode: context.theme.mode,
@@ -363,8 +355,8 @@ export function renderApplicationShell(host: ShellViewHost) {
         canUpdate,
         canHoldUpdate,
         onUpdate: () => void context.overlays.runUpdate(),
-        refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
-        onRefresh: () => host.refreshControlUi(),
+        refreshRequired: navigationSurfaceHidden ? false : controlUiRefreshRequired,
+        onRefresh: host.refreshControlUi,
         onHoldUpdate: () => context.overlays.holdUpdate(),
         onReviewUpdate: () => host.navigate("updates"),
         searchQuery: host.settingsSearchQuery,
@@ -376,15 +368,14 @@ export function renderApplicationShell(host: ShellViewHost) {
           identityAvailable: Boolean(gatewaySnapshot.selfUser),
           basePath: context.basePath,
           canAdmin: operatorAccess.canAdmin,
+          nativeDeviceSettings: context.nativeDeviceSettings,
         },
         onExit: () => host.exitSettings(),
         onRetryConnect: () => context.gateway.connect(),
         onNavigate: (routeId, options) => host.navigate(routeId, options),
         onOpenApprovals: () => host.openApprovals(),
         onPreload: (routeId) => context.preload(routeId),
-        onSearchQueryChange: (nextQuery) => {
-          void host.handleSettingsSearchQueryChange(nextQuery);
-        },
+        onSearchQueryChange: (nextQuery) => void host.handleSettingsSearchQueryChange(nextQuery),
         preloadTimers: host.settingsPreloadTimers,
         saveIndicator: {
           status: runtimeConfig.configAutoSaveStatus,
@@ -397,16 +388,18 @@ export function renderApplicationShell(host: ShellViewHost) {
             runtimeConfig.configSaving ||
             (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
             updateBusy,
-          onRetry: () => void context.runtimeConfig.save(),
+          onRetry: () => void context.runtimeConfig.retry(),
+          onSave: () => void context.runtimeConfig.save(),
           onReload: () => void context.runtimeConfig.discardDraft(),
           onApply: () => void context.runtimeConfig.apply(),
         },
         canAdmin: operatorAccess.canAdmin,
+        nativeDeviceSettings: context.nativeDeviceSettings,
       })
     : host.navigationSidebar;
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
   // and the upgraded panels catch the first toggle instead of dropping the event.
-  return html`
+  const workspace = html`
     ${
       lazyElementState?.status === "loading" &&
       lazyElementState.element === host.commandPaletteElement
@@ -518,14 +511,10 @@ export function renderApplicationShell(host: ShellViewHost) {
                     ${icons.search}
                   </button>
                 </openclaw-tooltip>
-                ${
-                  navCollapsed
-                    ? renderCollapsedAssistantToggles({
-                        homeAvailable: homePanelAvailable,
-                        custodianAvailable: custodianPanelAvailable,
-                      })
-                    : nothing
-                }
+                ${renderCollapsedAssistantToggles({
+                  homeAvailable: homePanelAvailable,
+                  custodianAvailable: custodianPanelAvailable,
+                })}
               </div>
             `
           : nothing
@@ -575,7 +564,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ?inert=${pageActionsBlocked || (mobileNavLayout && navDrawerOpen)}
       >
         ${
-          pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
+          pageActionsBlocked
             ? html`<div class="connection-action-block" role="status" aria-live="polite">
                 <span class="connection-action-block__icon" aria-hidden="true"
                   >${icons.globeOff}</span
@@ -594,26 +583,31 @@ export function renderApplicationShell(host: ShellViewHost) {
           navigationSurfaceHidden,
           mobileNavLayout,
           onboarding,
-          compact: mergedChatChrome,
+          compact: mergedChatChrome && !controlUiRefreshRequired,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,
           heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
           updateBusy,
           statusBanner: overlaySnapshot.updateStatusBanner,
+          updateRun: overlaySnapshot.updateRun,
+          updateRunAcknowledged: overlaySnapshot.updateRunAcknowledged,
+          connected: gatewayConnected,
+          onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),
+          onCheckStatus: () => context.overlays.refreshUpdateStatus(),
           watchUpdateProgress,
           canUpdate,
           canHoldUpdate,
           onUpdate: () => void context.overlays.runUpdate(),
-          refreshRequired: overlaySnapshot.controlUiRefreshRequired,
-          onRefresh: () => host.refreshControlUi(),
+          refreshRequired: controlUiRefreshRequired,
+          onRefresh: host.refreshControlUi,
           onHoldUpdate: () => context.overlays.holdUpdate(),
           onReviewUpdate: () => host.navigate("updates"),
           onNavigate: (routeId) => host.navigate(routeId),
           onOpenApprovals: () => host.openApprovals(),
         })}
         <openclaw-router-outlet
-          ?inert=${pageActionsBlocked}
-          aria-disabled=${pageActionsBlocked ? "true" : nothing}
+          ?inert=${pageActionsBlocked || reloadRequired}
+          aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
           .onNotFound=${() => host.replaceChatWithCurrentSession()}
@@ -665,6 +659,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .pageSessionKey=${host.activeSessionKey}
         .pageAgentId=${selectedAgentId}
         .pageRouteId=${activeRoute}
+        .pageRouteFailed=${host.routeState.routeFailed === true}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
       ></openclaw-assistant-panel>
       ${
@@ -711,4 +706,21 @@ export function renderApplicationShell(host: ShellViewHost) {
       <openclaw-toast-host></openclaw-toast-host>
     </div>
   `;
+  return html`${renderPluginSurface(
+    "workspace",
+    {
+      sessionKey: host.activeSessionKey,
+      agentId: resolveUiSelectedSessionAgentId(
+        {
+          assistantAgentId:
+            context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId,
+          agentsList: context.agents.state.agentsList,
+          hello: gatewaySnapshot.hello,
+        },
+        host.activeSessionKey,
+      ),
+      routeId: activeRoute,
+    },
+    workspace,
+  )}${renderControlUiPluginRecovery(context.plugins, activeRoute)}`;
 }

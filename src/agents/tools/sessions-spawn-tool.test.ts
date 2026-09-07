@@ -12,11 +12,13 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { readParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "../subagents/swarm/swarm-code-mode.js";
+import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const hoisted = vi.hoisted(() => {
@@ -385,7 +387,10 @@ describe("sessions_spawn tool", () => {
   });
 
   it("hides and rejects swarm parameters while tools.swarm is disabled", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { swarm: false } },
+    });
     const schema = tool.parameters as { properties?: Record<string, unknown> };
 
     expect(schema.properties?.collect).toBeUndefined();
@@ -405,6 +410,7 @@ describe("sessions_spawn tool", () => {
       config: { tools: { swarm: true } },
     });
 
+    finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
     await expect(tool.execute("normal-child", { task: "ask for approval" })).rejects.toThrow(
       "requires collect=true",
     );
@@ -478,12 +484,12 @@ describe("sessions_spawn tool", () => {
     },
   );
 
-  it("forwards collector parameters and requesting run identity when enabled", async () => {
+  it("forwards collector parameters and requesting identity when native waiting is available", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       requesterRunId: "parent-run",
-      config: { tools: { swarm: true } },
     });
+    finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
     const schema = tool.parameters as {
       properties?: Record<string, { description?: string } | undefined>;
     };
@@ -521,6 +527,7 @@ describe("sessions_spawn tool", () => {
       requesterRunId: "parent-run",
       config: { tools: { swarm: true } },
     });
+    finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
     const input: Record<PropertyKey, unknown> = { task: "collect", collect: true };
     Object.defineProperty(input, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {
       value: "cm-restart:bridge:1",

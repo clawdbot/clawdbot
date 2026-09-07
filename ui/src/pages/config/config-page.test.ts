@@ -4,19 +4,13 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import {
   changedServerUiPrefs,
   refreshProfileAppearancePrefs,
   resetServerUiPrefsSync,
 } from "../../app/server-prefs.ts";
 import { loadSettings } from "../../app/settings.ts";
-import * as modelCatalogStore from "../../lib/model-catalog-store.ts";
 import {
   installDialogPolyfill,
   nextFrame,
@@ -361,7 +355,7 @@ describe("ConfigPage header", () => {
     render(page.render(), container);
 
     expect(container.querySelector(".page-subtitle")?.textContent?.trim()).toBe(
-      "Messages and text-to-speech settings.",
+      "Messages, text-to-speech, and meeting capture settings.",
     );
   });
 });
@@ -372,7 +366,14 @@ describe("ConfigPage moved section routes", () => {
     ["communications", "broadcast", "advanced", "?section=broadcast"],
     ["communications", "talk", "talk", "?section=talk"],
     ["appearance", "wizard", "advanced", "?section=wizard"],
-  ])("redirects the former %s %s section", (pageId, section, routeId, search) => {
+    [
+      "advanced",
+      "transcripts",
+      "communications",
+      "?section=transcripts&advanced=1",
+      "#config-section-transcripts",
+    ],
+  ])("redirects the former %s %s section", (pageId, section, routeId, search, hash = "") => {
     const navigate = vi.fn();
     const page = new ConfigPage();
     const state = page as unknown as {
@@ -394,7 +395,7 @@ describe("ConfigPage moved section routes", () => {
     state.routeData = {
       pathname: `/settings/${pageId}`,
       search: `?section=${section}`,
-      hash: "",
+      hash,
       section,
       advanced: false,
       tab: null,
@@ -403,7 +404,7 @@ describe("ConfigPage moved section routes", () => {
 
     state.syncRouteData();
 
-    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash: "" });
+    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash });
   });
 
   it("redirects the former Agent Defaults models section", () => {
@@ -638,145 +639,6 @@ describe("ConfigPage camera selection", () => {
     expect(state.applySettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ realtimeTalkVideoDeviceId: undefined }),
     );
-  });
-});
-
-describe("ConfigPage session observer models", () => {
-  it("lets a replacement Gateway load while the stale client is still pending", async () => {
-    const first = deferred<ModelCatalogResult>();
-    const second = deferred<ModelCatalogResult>();
-    vi.spyOn(modelCatalogStore, "loadModelCatalog")
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    const firstClient = {} as GatewayBrowserClient;
-    const secondClient = {} as GatewayBrowserClient;
-    const gateway = {
-      snapshot: { client: firstClient, phase: "connected" },
-    } as unknown as ApplicationGateway;
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      systemInfoGatewaySource: ApplicationGateway;
-      sessionObserverModels: ModelCatalogEntry[];
-      sessionObserverModelsUnavailable: boolean;
-      sessionObserverModelsClient: GatewayBrowserClient | null;
-      ensureSessionObserverModels: (
-        client: GatewayBrowserClient,
-        agentId: string | null,
-      ) => Promise<void>;
-    };
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = {
-      gateway,
-      agentSelection: { state: { selectedId: "main" } },
-    } as ApplicationContext;
-    state.systemInfoGatewaySource = gateway;
-
-    const firstLoad = state.ensureSessionObserverModels(firstClient, "main");
-    (gateway as { snapshot: ApplicationGatewaySnapshot }).snapshot = {
-      client: secondClient,
-      phase: "connected",
-    } as ApplicationGatewaySnapshot;
-    const secondLoad = state.ensureSessionObserverModels(secondClient, "main");
-    const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
-    second.resolve({ models: currentModels });
-    await secondLoad;
-    expect(state.sessionObserverModels).toEqual(currentModels);
-    expect(state.sessionObserverModelsClient).toBe(secondClient);
-
-    first.resolve({ models: [{ id: "stale", name: "Stale", provider: "old" }] });
-    await firstLoad;
-    expect(state.sessionObserverModels).toEqual(currentModels);
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, firstClient, {
-      agentId: "main",
-      preparedOnly: true,
-      rejectOnFailure: true,
-    });
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(2, secondClient, {
-      agentId: "main",
-      preparedOnly: true,
-      rejectOnFailure: true,
-    });
-  });
-
-  it("keeps same-client agent switches from restoring stale observer models", async () => {
-    const firstMain = deferred<ModelCatalogResult>();
-    const writer = deferred<ModelCatalogResult>();
-    const secondMain = deferred<ModelCatalogResult>();
-    let mainRequests = 0;
-    const request = vi.fn((_method: string, params: unknown) => {
-      const agentId = (params as { agentId?: string }).agentId;
-      if (agentId === "writer") {
-        return writer.promise;
-      }
-      mainRequests += 1;
-      return mainRequests === 1 ? firstMain.promise : secondMain.promise;
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = {
-      snapshot: { client, phase: "connected" },
-    } as unknown as ApplicationGateway;
-    const selectionState = { selectedId: "main" as string | null };
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      systemInfoGatewaySource: ApplicationGateway;
-      sessionObserverModels: ModelCatalogEntry[];
-      sessionObserverModelsUnavailable: boolean;
-      ensureSessionObserverModels: (
-        client: GatewayBrowserClient,
-        agentId: string | null,
-      ) => Promise<void>;
-    };
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = {
-      gateway,
-      agentSelection: { state: selectionState },
-    } as ApplicationContext;
-    state.systemInfoGatewaySource = gateway;
-
-    const mainLoad = state.ensureSessionObserverModels(client, "main");
-    selectionState.selectedId = "writer";
-    const writerLoad = state.ensureSessionObserverModels(client, "writer");
-    const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
-    writer.resolve({ models: writerModels });
-    await writerLoad;
-    expect(state.sessionObserverModels).toEqual(writerModels);
-
-    modelCatalogStore.invalidateModelCatalogCache(client);
-    selectionState.selectedId = "main";
-    const secondMainLoad = state.ensureSessionObserverModels(client, "main");
-    const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
-    secondMain.resolve({ models: currentMainModels });
-    await secondMainLoad;
-    firstMain.resolve({
-      models: [{ id: "stale-main", name: "Stale Main", provider: "openai" }],
-    });
-    await mainLoad;
-
-    expect(state.sessionObserverModels).toEqual(currentMainModels);
-    expect(request).toHaveBeenNthCalledWith(1, "models.list", {
-      agentId: "main",
-      preparedOnly: true,
-      view: "configured",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
-      agentId: "writer",
-      preparedOnly: true,
-      view: "configured",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "models.list", {
-      agentId: "main",
-      preparedOnly: true,
-      view: "configured",
-    });
-
-    selectionState.selectedId = null;
-    await state.ensureSessionObserverModels(client, null);
-    expect(state.sessionObserverModels).toEqual([]);
-    expect(state.sessionObserverModelsUnavailable).toBe(true);
-    expect(request).toHaveBeenCalledTimes(3);
   });
 });
 

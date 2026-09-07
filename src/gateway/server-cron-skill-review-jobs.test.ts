@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
+import { saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
 
 const logger = {
@@ -26,9 +28,9 @@ function monitorJob(agentId: string, id = `job-${agentId}`): CronJob {
     updatedAtMs: 1,
     agentId,
     schedule: { kind: "every", everyMs: 7 * 24 * 60 * 60_000 },
-    sessionTarget: "main",
+    sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
-    payload: { kind: "skillCollectionReview" },
+    payload: { kind: "agentTurn", message: "Review the Workshop collection." },
     state: {},
   } as CronJob;
 }
@@ -49,6 +51,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       {
         ...monitorJob("collider"),
         id: "user-job",
+        declarationKey: "user:collider",
         payload: { kind: "systemEvent", text: "user job" },
       } as CronJob,
     ]);
@@ -68,16 +71,22 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       logger,
     });
 
-    expect(add).toHaveBeenCalledOnce();
+    expect(add).toHaveBeenCalledTimes(2);
     expect(add.mock.calls[0]?.[0]).toMatchObject({
       declarationKey: "skill-collection-review:main",
       enabled: false,
-      payload: { kind: "skillCollectionReview" },
+      payload: {
+        kind: "agentTurn",
+      },
     });
     expect(add.mock.calls[0]?.[1]).toMatchObject({
       enabledExplicit: true,
       systemOwned: true,
     });
+    expect(add.mock.calls.map(([input]) => input.declarationKey)).toEqual([
+      "skill-collection-review:main",
+      "skill-collection-review:ops",
+    ]);
     expect(remove).toHaveBeenNthCalledWith(1, "stale-older", { systemOwned: true });
     expect(remove).toHaveBeenNthCalledWith(2, "stale-newer", { systemOwned: true });
     expect(remove).toHaveBeenCalledTimes(2);
@@ -120,38 +129,91 @@ describe("reconcileSkillCollectionReviewJobs", () => {
     expect(add).toHaveBeenCalledOnce();
   });
 
-  it("revokes an active review through gateway reconciliation before its final write", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-review-revoke-"));
-    const workspaceDir = path.join(rootDir, "workspace");
-    const finalWritePath = path.join(workspaceDir, "skills", "candidate", "SKILL.md");
-    const started = createDeferred<AbortSignal>();
-    const release = createDeferred();
-    const settled = createDeferred();
-    const runSkillCollectionReview = vi.fn(
-      async ({ abortSignal }: { agentId: string; abortSignal?: AbortSignal }) => {
-        if (!abortSignal) {
-          throw new Error("skill review cancellation signal missing");
-        }
-        started.resolve(abortSignal);
-        try {
-          await release.promise;
-          abortSignal.throwIfAborted();
-          await fs.mkdir(path.dirname(finalWritePath), { recursive: true });
-          await fs.writeFile(finalWritePath, "review output", "utf8");
-          return { status: "ok" as const, summary: "reviewed main" };
-        } finally {
-          settled.resolve();
-        }
-      },
-    );
-    const cron = new CronService({
-      storePath: path.join(rootDir, "cron", "jobs.json"),
-      cronEnabled: true,
+  it("replaces retired jobs on the current database and converges once per agent after restart", async () => {
+    const testState = await createOpenClawTestState({ label: "skill-review-convergence" });
+    const storePath = testState.statePath("cron", "jobs.json");
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", list: [{ id: "main", default: true }, { id: "ops" }] },
+    };
+    const deps = {
+      storePath,
+      cronEnabled: false,
       log: logger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      runSkillCollectionReview,
+    };
+    let cron = new CronService(deps);
+    try {
+      const old = {
+        ...monitorJob("main"),
+        sessionTarget: "main",
+        payload: { kind: "skillCollectionReview" },
+      };
+      await saveCronJobsStore(storePath, { version: 1, jobs: [monitorJob("main")] });
+      const db = openOpenClawStateDatabase().db;
+      const version = db.prepare("PRAGMA user_version").get();
+      db.prepare("UPDATE cron_jobs SET payload_kind = ?, job_json = ? WHERE job_id = ?").run(
+        "skillCollectionReview",
+        JSON.stringify(old),
+        old.id,
+      );
+      await expect(reconcileSkillCollectionReviewJobs({ cron, cfg, logger })).resolves.toEqual({
+        ok: true,
+      });
+      const first = await cron.list({ includeDisabled: true });
+      expect(first).toHaveLength(2);
+      expect(first.map((job) => job.agentId)).toEqual(expect.arrayContaining(["main", "ops"]));
+      for (const job of first) {
+        expect(job).toMatchObject({
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn" },
+          delivery: { mode: "none" },
+        });
+      }
+      expect(first.some((job) => job.id === old.id)).toBe(false);
+      cron.stop();
+      cron = new CronService(deps);
+      await expect(reconcileSkillCollectionReviewJobs({ cron, cfg, logger })).resolves.toEqual({
+        ok: true,
+      });
+      expect(await cron.list({ includeDisabled: true })).toEqual(first);
+      expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
+    } finally {
+      cron.stop();
+      await testState.cleanup();
+    }
+  });
+
+  it("revokes an active review through gateway reconciliation before its final write", async () => {
+    const testState = await createOpenClawTestState({ label: "skill-review-revoke" });
+    const workspaceDir = testState.workspaceDir;
+    const finalWritePath = path.join(workspaceDir, "skills", "candidate", "SKILL.md");
+    const started = createDeferred<AbortSignal>();
+    const release = createDeferred();
+    const settled = createDeferred();
+    const runIsolatedAgentJob = vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+      if (!abortSignal) {
+        throw new Error("skill review cancellation signal missing");
+      }
+      started.resolve(abortSignal);
+      try {
+        await release.promise;
+        abortSignal.throwIfAborted();
+        await fs.mkdir(path.dirname(finalWritePath), { recursive: true });
+        await fs.writeFile(finalWritePath, "review output", "utf8");
+        return { status: "ok" as const, summary: "reviewed main" };
+      } finally {
+        settled.resolve();
+      }
+    });
+    const cron = new CronService({
+      storePath: testState.statePath("cron", "jobs.json"),
+      cronEnabled: true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
     });
     const config = (mode: "auto" | "off") =>
       ({
@@ -194,7 +256,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       release.resolve();
       await activeRun?.catch(() => undefined);
       cron.stop();
-      await fs.rm(rootDir, { recursive: true, force: true });
+      await testState.cleanup();
     }
   });
 });

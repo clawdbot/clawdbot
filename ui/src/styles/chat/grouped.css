@@ -151,7 +151,6 @@
 
 .chat-group.tool.chat-group--with-footer > .chat-group-messages {
   max-width: var(--chat-message-column-max);
-  margin-inline-start: 1px;
 }
 
 .chat-group.user .chat-group-footer {

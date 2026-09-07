@@ -26,24 +26,22 @@ describe("worker computer observation persistence", () => {
       } satisfies ComputerActResult;
       const original = structuredClone(providerResult);
       const target = { nodeId: "desktop-node", screenIndex: 0 };
-      const result =
+      const { result } =
         kind === "screen"
-          ? (
-              await projectScreenshotResult({
-                capture: {
-                  base64,
-                  displayFrameId: "display-frame",
-                  mimeType: "image/png",
-                  width: 512,
-                  height: 512,
-                },
-                noteLines: [],
-                target,
-                action: "screenshot",
-                referenceWidth: 1280,
-                modelHasVision: true,
-              })
-            ).result
+          ? await projectScreenshotResult({
+              capture: {
+                base64,
+                displayFrameId: "display-frame",
+                mimeType: "image/png",
+                width: 512,
+                height: 512,
+              },
+              noteLines: [],
+              target,
+              action: "screenshot",
+              referenceWidth: 1280,
+              modelHasVision: true,
+            })
           : await projectComputerActResult({
               result: providerResult,
               target,
