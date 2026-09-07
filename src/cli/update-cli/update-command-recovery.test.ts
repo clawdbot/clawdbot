@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import { createPackageRecoveryTransaction } from "../../infra/package-update-recovery.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { legacyRecord } from "../../infra/update-run-recovery-legacy.test-support.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
 import {
   beginUpdateRecovery,
@@ -16,7 +17,10 @@ import {
   recordUpdateRecoveryFailure,
   loadUpdateRecovery,
 } from "../../infra/update-run-recovery.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import {
@@ -27,6 +31,7 @@ import {
   finalizeUpdateCommandRecovery,
   persistUpdateCommandServingReceipt,
 } from "./update-command-recovery.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -341,5 +346,95 @@ describe("durable terminal finalizer consumer", () => {
     expect(f.reload()).toEqual(before);
     expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
     expect(await fs.stat(f.live)).toBeDefined();
+  });
+});
+
+describe("historical terminal completion diagnostics", () => {
+  async function historical(rollback: boolean, terminal = true) {
+    const f = await fixture(rollback);
+    if (terminal) {
+      await finalizeUpdateCommandRecovery(f.opts, rollback ? "rolled-back" : "succeeded");
+    }
+    const saved = JSON.stringify(legacyRecord(f.record), null, 2);
+    const source = openOpenClawStateDatabase(f.options);
+    source.db
+      .prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
+      .run(saved, "update.recovery." + f.run.runId);
+    closeOpenClawStateDatabaseForTest();
+    const family = async () =>
+      Promise.all(
+        (await fs.readdir(path.dirname(source.path)))
+          .filter(
+            (name) =>
+              name === path.basename(source.path) ||
+              name.startsWith(path.basename(source.path) + "-"),
+          )
+          .toSorted()
+          .map(async (name) => {
+            const file = path.join(path.dirname(source.path), name);
+            const stat = await fs.stat(file);
+            return {
+              name,
+              bytes: await fs.readFile(file),
+              ino: stat.ino,
+              size: stat.size,
+              mtime: stat.mtimeMs,
+              ctime: stat.ctimeMs,
+            };
+          }),
+      );
+    return { ...f, family, saved };
+  }
+
+  it.each([false, true])(
+    "reports historical terminal outcome without rewriting legacy artifacts (rollback=%s)",
+    async (rollback) => {
+      const f = await historical(rollback);
+      const before = await f.family();
+      const result = completeUpdateCommandRun(
+        {
+          status: rollback ? "ok" : "error",
+          reason: "stale-process-result",
+          mode: "npm",
+          root: f.live,
+          steps: [],
+          durationMs: 1,
+        },
+        f.opts.run,
+      );
+      expect(result).toMatchObject({
+        status: rollback ? "error" : "ok",
+        reason: rollback ? "candidate-failed" : undefined,
+        runId: f.run.runId,
+      });
+      expect(await f.family()).toEqual(before);
+    },
+  );
+
+  it("keeps unfinished legacy evidence pending without completing history", async () => {
+    const f = await historical(false, false);
+    const before = await f.family();
+    const result = completeUpdateCommandRun(
+      { status: "ok", mode: "npm", root: f.live, steps: [], durationMs: 1 },
+      f.opts.run,
+    );
+    expect(result).toMatchObject({ status: "error", reason: "update-recovery-pending" });
+    expect(await f.family()).toEqual(before);
+    expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
+  });
+
+  it("does not turn unrelated legacy inspection into permission for the writing fallback", async () => {
+    const f = await historical(false);
+    const other = createUpdateRun({ trigger: "cli" }, f.options);
+    closeOpenClawStateDatabaseForTest();
+    const before = await f.family();
+    expect(() =>
+      completeUpdateCommandRun(
+        { status: "ok", mode: "npm", steps: [], durationMs: 1 },
+        { runId: other.runId, env: f.opts.run!.env },
+      ),
+    ).toThrow();
+    expect(await f.family()).toEqual(before);
+    expect(getUpdateRun(other.runId, f.options)?.status).toBe("running");
   });
 });

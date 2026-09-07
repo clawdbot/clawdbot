@@ -45,7 +45,7 @@ import {
 } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { readRecoveries } from "../../infra/update-run-recovery-store.js";
-import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -299,7 +299,16 @@ export function completeUpdateCommandRun(
   }
   // A process-local result cannot complete an operationally pending update or
   // authorize package retirement. Only the durable finalizer may close it.
-  const recovery = loadUpdateRecovery(run.runId, { env: run.env });
+  const inspected = inspectUpdateRecoveries({ env: run.env }).find(
+    (entry) => entry.record.runId === run.runId,
+  );
+  // A matching historical record can only project its saved outcome or remain
+  // pending below. The mutable fallback still uses strict execution admission;
+  // unrelated legacy evidence must not become an absent/clean recovery state.
+  const recovery =
+    inspected?.format === "legacy-serving"
+      ? inspected.record
+      : loadUpdateRecovery(run.runId, { env: run.env });
   if (
     recovery?.terminal &&
     getUpdateRun(run.runId, { env: run.env })?.status === recovery.terminal.status
