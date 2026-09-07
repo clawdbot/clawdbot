@@ -134,6 +134,7 @@ const repositoryScriptEntries = [
   "scripts/print-live-docker-plugin-selection.mjs!",
   // Maintainer proof harnesses are invoked manually from PR evidence.
   "scripts/proof-137834-reply-to-guid-echo.mjs!",
+  "scripts/proof-137834-limiter-boundary.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
