@@ -440,15 +440,11 @@ async function mountLoginGate(page: Page, lastError: string | null): Promise<voi
       hasToken: false,
       hasPassword: false,
       gatewayUrl: "ws://127.0.0.1:18789",
-      token: "",
-      password: "",
-      showGatewayToken: false,
-      showGatewayPassword: false,
+      secret: "",
+      showGatewaySecret: false,
       onGatewayUrlChange: () => {},
-      onTokenChange: () => {},
-      onPasswordChange: () => {},
-      onToggleGatewayToken: () => {},
-      onToggleGatewayPassword: () => {},
+      onSecretChange: () => {},
+      onToggleGatewaySecret: () => {},
       onConnect: () => {
         const current = Number.parseInt(document.body.dataset.connectCount ?? "0", 10);
         document.body.dataset.connectCount = String(current + 1);

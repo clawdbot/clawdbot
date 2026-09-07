@@ -61,7 +61,6 @@ import {
   loadGatewaySessionSelection,
   loadSettings,
   patchSettings,
-  persistSessionToken,
   resolveGatewayCredentialsForUrlEdit,
   resolvePageGatewaySettings,
   saveSettings,
@@ -173,12 +172,8 @@ export function bootstrapApplication(): ApplicationRuntime {
     // Remove URL credentials before deferred routing or Gateway authentication can expose them.
     history.replace(startup.location);
   }
-  if (startup.changed) {
-    if (documentMode) {
-      persistSessionToken(settings.gatewayUrl, settings.token);
-    } else {
-      saveSettings(settings);
-    }
+  if (startup.changed && !documentMode) {
+    saveSettings(settings);
   }
   let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
   const startupSearchParams = new URLSearchParams(applicationLocation.search);

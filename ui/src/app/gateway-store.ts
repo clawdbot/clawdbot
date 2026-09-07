@@ -284,12 +284,8 @@ export function createApplicationGateway(
     bumpCanvasWidgetFrameConnectionGeneration();
   };
   const updateSettings = (patch: Partial<typeof settings>, selectGateway = false) => {
-    const next = { ...settings, ...patch };
     if (!persistConnectionSettings && !selectGateway) {
-      settings = next;
-      if (patch.gatewayUrl !== undefined || patch.token !== undefined) {
-        persistSessionToken(next.gatewayUrl, next.token);
-      }
+      settings = { ...settings, ...patch };
       return;
     }
     persistConnectionSettings = true;
@@ -454,6 +450,12 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        // The submitted secret is unclassified until this Gateway reports its mode.
+        // Clear an old token too when the origin now uses password or proxy auth.
+        persistSessionToken(
+          nextConnection.gatewayUrl,
+          asOptionalRecord(hello.snapshot)?.authMode === "token" ? nextConnection.token : "",
+        );
         setUnavailableDeadline("suspensionPhase");
         // A successful hello retires bootstrap; the client has processed any issued device grant.
         connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };

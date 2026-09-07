@@ -606,55 +606,9 @@ openclaw-session-owner-chip {
   font-weight: 500;
 }
 
-.login-gate__field-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.login-gate__field-hint {
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .login-gate__form .field input[aria-invalid="true"] {
   border-color: var(--login-gate-tone, var(--danger));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--login-gate-tone, var(--danger)) 14%, transparent);
-}
-
-.login-gate__segmented {
-  display: inline-flex;
-  padding: 2px;
-  gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--bg-accent);
-}
-
-.login-gate__segmented button {
-  border: 0;
-  padding: 2px 10px;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.5;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
-}
-
-.login-gate__segmented button[aria-checked="true"] {
-  background: var(--card);
-  color: var(--text-strong);
-  box-shadow: var(--shadow-sm);
-}
-
-.login-gate__segmented button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .login-gate__connect {
