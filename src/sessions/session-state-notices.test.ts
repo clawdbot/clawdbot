@@ -1,6 +1,7 @@
 // Session-state notice context key decoding: strict UTF-8 after hex validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   decodeSessionStateNoticeContextKey,
   enqueueSessionStateNotice,
@@ -16,6 +17,7 @@ vi.mock("../infra/system-events.js", () => ({
 
 beforeEach(() => {
   vi.mocked(requestHeartbeat).mockClear();
+  vi.mocked(enqueueSystemEvent).mockClear();
 });
 
 function encodeTarget(sessionKey: string): string {
@@ -48,6 +50,21 @@ describe("decodeSessionStateNoticeContextKey", () => {
 });
 
 describe("enqueueSessionStateNotice", () => {
+  it("includes a Control UI session link in stale-state notices", () => {
+    enqueueSessionStateNotice({
+      watcherSessionKey: "agent:main:main",
+      targetSessionKey: "agent:main:dashboard:7ac7cf4b-77b2-409f-8b80-214ca1d9851d",
+      lastSeenSequence: 4,
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      'Session "agent:main:dashboard:7ac7cf4b-77b2-409f-8b80-214ca1d9851d" changed (other actor). Open: [session](/chat/main/dashboard/7ac7cf4b-77b2-409f-8b80-214ca1d9851d). Reconcile before acting: session_status sessionKey "agent:main:dashboard:7ac7cf4b-77b2-409f-8b80-214ca1d9851d" changesSince 4.',
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
   it("coalesces active wakes for 20 seconds and leaves queue-only notices asleep", () => {
     const notice = {
       watcherSessionKey: "agent:main:main",

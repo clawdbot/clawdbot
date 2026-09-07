@@ -60,7 +60,7 @@ If an adopted session's upstream source is deleted externally, three consecutive
 When a notify-eligible event lands and a watcher's cursor is behind, the watcher receives one system notice on its next turn:
 
 ```
-Session "agent:main:subagent:child" changed (other actor). Reconcile before acting: session_status sessionKey "agent:main:subagent:child" changesSince 12.
+Session "agent:main:subagent:child" changed (other actor). Open: [session](/chat/main/subagent/child). Reconcile before acting: session_status sessionKey "agent:main:subagent:child" changesSince 12.
 ```
 
 Main-session watchers are also woken immediately via a heartbeat wake; nested sub-agent watchers get the notice on their next turn.

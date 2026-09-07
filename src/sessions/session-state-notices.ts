@@ -1,4 +1,5 @@
 /** Stale-state notice text, coalescing keys, and watcher eligibility. */
+import { buildControlUiSessionPath } from "../../packages/session-url-contract/src/index.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
@@ -30,11 +31,20 @@ export function decodeSessionStateNoticeContextKey(contextKey: string): string |
   }
 }
 
+function sessionStateNoticeLink(targetSessionKey: string): string {
+  const path = buildControlUiSessionPath({
+    namespace: "chat",
+    sessionKey: targetSessionKey,
+    exactKey: true,
+  });
+  return path ? ` Open: [session](${path}).` : "";
+}
+
 // Terse on purpose: this line lands in model prompts, possibly repeatedly across
 // turns. Text must stay byte-stable per frozen watermark so queue dedupe holds,
 // and the reconciliation call must be self-contained (explicit target sessionKey).
 function sessionStateNoticeText(targetSessionKey: string, lastSeenSequence: number): string {
-  return `Session "${targetSessionKey}" changed (other actor). Reconcile before acting: session_status sessionKey "${targetSessionKey}" changesSince ${lastSeenSequence}.`;
+  return `Session "${targetSessionKey}" changed (other actor).${sessionStateNoticeLink(targetSessionKey)} Reconcile before acting: session_status sessionKey "${targetSessionKey}" changesSince ${lastSeenSequence}.`;
 }
 
 function shouldWakeWatcher(watcherSessionKey: string): boolean {
