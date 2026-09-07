@@ -48,7 +48,19 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
   const { sessionId, sessionKey, sessionFile, agentId, runId } = attempt;
   const route = { provider: attempt.provider, model: attempt.modelId };
   // Maintenance borrows an operation for cancellation, not its injection snapshot.
-  const operation = attempt.toolAuthorityFingerprint ? internal.replyOperation : undefined;
+  // A turn can also outlive its captured reply operation (a message sent while
+  // an earlier reply run was active retires that operation before this attempt
+  // binds its route, #139847): binding a route on a retired operation throws
+  // "no active tool authority snapshot" and kills the whole attempt, so fall
+  // back to the direct prepared authority when the operation is no longer the
+  // active run for its session.
+  const operation =
+    attempt.toolAuthorityFingerprint &&
+    internal.replyOperation &&
+    resolveActiveReplyOperationForSessionId(internal.replyOperation.sessionId) ===
+      internal.replyOperation
+      ? internal.replyOperation
+      : undefined;
   const assertHostActive = attempt.hostCapabilities?.assertActive;
   const input: ReplyToolAuthorityInput = {
     originatingChannel: attempt.messageChannel,
