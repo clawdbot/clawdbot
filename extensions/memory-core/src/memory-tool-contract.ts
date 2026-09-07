@@ -90,7 +90,7 @@ export const MEMORY_SEARCH_TOOL_CONTRACT = {
   name: "memory_search",
   parameters: MemorySearchSchema,
   describe: ({ search }: MemorySourceContract) =>
-    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` restricts hits to the session corpus under the same visibility rules as session history tools. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
+    `Semantically search ${search} when an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn. Do not repeat memory retrieval when supplied context already answers the question. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` restricts hits to the session corpus under the same visibility rules as session history tools. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
 } as const;
 
 export const MEMORY_GET_TOOL_CONTRACT = {
@@ -117,12 +117,12 @@ export function buildMemoryPromptSection({
   }
 
   const guidance = hasMemorySearch
-    ? `Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on ${sources.search}${
+    ? `When an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn, run memory_search on ${sources.search}${
         hasMemoryGet ? "; then use memory_get to pull only the needed lines" : ""
-      }. ${SEARCH_CORPUS_OUTCOME_GUIDANCE}${
+      }. Do not repeat memory retrieval when supplied context already answers the question. ${SEARCH_CORPUS_OUTCOME_GUIDANCE}${
         hasMemoryGet ? ` For memory_get, ${GET_READ_OUTCOME_GUIDANCE}` : ""
       } If low confidence after search, say you checked.`
-    : `Before answering anything about prior work, decisions, dates, people, preferences, or todos that point to a specific source in ${sources.files}: run memory_get to pull only the needed lines. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If low confidence after reading, say you checked.`;
+    : `When an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn and points to a specific source in ${sources.files}, run memory_get to pull only the needed lines. Do not repeat memory retrieval when supplied context already answers the question. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If low confidence after reading, say you checked.`;
   const citationGuidance =
     citationsMode === "off"
       ? "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks."

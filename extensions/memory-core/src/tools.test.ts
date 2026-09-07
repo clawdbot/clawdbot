@@ -65,6 +65,14 @@ describe("memory tool schemas", () => {
       enum: ["memory", "wiki", "all"],
     });
   });
+
+  it("describes search as evidence-driven without repeating supplied recall", () => {
+    const description = createMemorySearchToolOrThrow().description;
+
+    expect(description).toContain("not already present in the current turn");
+    expect(description).toContain("Do not repeat memory retrieval");
+    expect(description).not.toContain("Mandatory recall step");
+  });
 });
 
 describe("memory_search unavailable payloads", () => {
