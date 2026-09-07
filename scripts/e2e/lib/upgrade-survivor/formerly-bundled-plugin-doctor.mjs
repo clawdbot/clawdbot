@@ -46,7 +46,7 @@ function writeJson(name, value) {
   });
 }
 
-function cli(name, args, { failure = false, json = true, binary = "openclaw" } = {}) {
+function cli(name, args, { json = true, binary = "openclaw" } = {}) {
   console.log(`Formerly bundled Doctor proof: ${name}`);
   const result = spawnSync(binary, args, {
     cwd: workspace,
@@ -68,10 +68,7 @@ function cli(name, args, { failure = false, json = true, binary = "openclaw" } =
     !result.error && result.status !== null,
     `${name} did not complete; see ${proofArtifacts}`,
   );
-  assert(
-    failure ? result.status !== 0 : result.status === 0,
-    `${name}: unexpected exit ${result.status}; see ${proofArtifacts}`,
-  );
+  assert(result.status === 0, `${name}: unexpected exit ${result.status}; see ${proofArtifacts}`);
   if (!json) {
     return result.stdout;
   }
@@ -210,7 +207,7 @@ try {
     tools: { web: { search: { provider: "duckduckgo", enabled: true } } },
     plugins: { allow: ["duckduckgo"], entries: { duckduckgo: { enabled: true } } },
   };
-  // Deliberately broken historical state cannot be authored through validating config set.
+  // Seed retained historical configuration without installing the missing payload.
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   assert(
     !readPluginInstallRecords({ stateDir, configPath }).duckduckgo,
@@ -220,10 +217,10 @@ try {
     !fs.existsSync(path.join(stateDir, "extensions", "duckduckgo")),
     "fixture already has plugin payload",
   );
-  const before = cli("before-validate", ["config", "validate", "--json"], { failure: true });
-  assert.equal(before.valid, false, "fixture config should require plugin repair");
+  const before = cli("before-validate", ["config", "validate", "--json"]);
+  assert.equal(before.valid, true, "missing optional plugins should remain repairable");
   assert(
-    before.issues?.some((issue) => issue.message.includes("plugin not installed: duckduckgo")),
+    before.warnings?.some((issue) => issue.message.includes("plugin not installed: duckduckgo")),
     "fixture did not report missing DuckDuckGo",
   );
   const missing = cli("before-plugins", ["plugins", "list", "--json"]);
