@@ -9,11 +9,16 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -222,6 +227,103 @@ describe("prepared reply dispatch runtime", () => {
     expect(published.pluginGeneration.pluginRegistry?.agentHarnesses).toEqual([]);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(4);
   });
+
+  it.each(["loaded", "disabled", "error", "absent", "not-imported"] as const)(
+    "preserves a selected provider's %s outcome when borrowing its parent lease",
+    async (outcome) => {
+      mocks.configuredAgentIds = ["default"];
+      const config = {
+        agents: { defaults: { model: "custom/model" } },
+        plugins: {
+          slots: { memory: "none" },
+          entries: { qwen: { enabled: outcome !== "disabled" } },
+        },
+      };
+      const registry = createEmptyPluginRegistry();
+      if (outcome !== "absent") {
+        registry.plugins.push(
+          createPluginRecord({
+            id: "qwen",
+            origin: "bundled",
+            status: outcome === "not-imported" ? "loaded" : outcome,
+            enabled: outcome !== "disabled",
+            imported: outcome === "loaded",
+            error: outcome === "error" ? "provider fixture failed to load" : undefined,
+          }),
+        );
+      }
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
+        params.selections?.some(
+          (selection: { provider: string }) => selection.provider === "bailian-token-plan",
+        )
+          ? registry
+          : createEmptyPluginRegistry(),
+      );
+      const metadata = createPluginMetadataSnapshot({
+        config,
+        manifestRegistry: makeRegistry([
+          { id: "qwen", origin: "bundled", channels: [], providers: ["bailian-token-plan"] },
+        ]),
+      });
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+        pluginMetadataSnapshot: {
+          ...metadata,
+          owners: {
+            ...metadata.owners,
+            providers: new Map([["bailian-token-plan", ["qwen"]]]),
+          },
+        },
+      });
+      const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+      const input = {
+        config,
+        agentId: "default",
+        agentDir: published.agentDir,
+        workspaceDir: published.workspaceDir,
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: [
+          { provider: "bailian-token-plan", modelId: "qwen3.7-max", runtime: "openclaw" },
+        ],
+      };
+      const parent = await acquireAgentRunPreparedModelRuntime(input, {
+        catalogMode: "static",
+        pluginGeneration: published.pluginGeneration,
+      });
+      expect(parent.pluginGeneration).not.toBe(published.pluginGeneration);
+      let active = true;
+      try {
+        await withPreparedModelRuntimePluginGenerationScope(
+          parent.pluginGeneration,
+          async () => {
+            const borrowing = acquireAgentRunPreparedModelRuntime(input, {
+              catalogMode: "static",
+              pluginGeneration: parent.pluginGeneration,
+            });
+            if (outcome === "absent" || outcome === "not-imported") {
+              await expect(borrowing).rejects.toThrow("plugin generation was superseded");
+              return;
+            }
+            const nested = await borrowing;
+            expect(nested.snapshot).toBe(parent.snapshot);
+            expect(registryContainsRuntimePluginIds(registry, ["qwen"])).toBe(outcome === "loaded");
+            if (outcome === "error") {
+              expect(nested.snapshot.pluginRegistry?.plugins[0]?.error).toBe(
+                "provider fixture failed to load",
+              );
+            }
+            nested.release();
+          },
+          () => (active ? parent.snapshot : undefined),
+        );
+      } finally {
+        active = false;
+        parent.release();
+      }
+    },
+  );
 
   it("atomically replaces one complete prepared dispatch runtime across a Gateway refresh", async () => {
     mocks.configuredAgentIds = ["default"];
