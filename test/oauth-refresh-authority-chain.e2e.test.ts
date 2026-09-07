@@ -29,8 +29,10 @@ import {
 const TEST_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 const PROVIDER_ID = "authority-proof";
-const MODEL_ID = "authority-model";
-const MODEL_REF = `${PROVIDER_ID}/${MODEL_ID}`;
+const OWNER_MODEL_ID = "authority-owner";
+const PEER_MODEL_ID = "authority-peer";
+const OWNER_MODEL_REF = `${PROVIDER_ID}/${OWNER_MODEL_ID}`;
+const PEER_MODEL_REF = `${PROVIDER_ID}/${PEER_MODEL_ID}`;
 const PROFILE_ID = `${PROVIDER_ID}:default`;
 const ACCOUNT_A = "account-a";
 const ACCOUNT_B = "account-b";
@@ -58,15 +60,16 @@ const REQUEST_MARKERS = [
 ] as const;
 
 type TokenClass = "A" | "B" | "other";
-type ModelAuthClass = "A" | "B" | "missing" | "other";
+type ModelAuthClass = "A" | "A-stale" | "B" | "missing" | "other";
 type ProviderRequest = {
   marker: string;
   auth: ModelAuthClass;
+  model: string | undefined;
 };
 type AgentResult = {
   runId?: string;
   status?: string;
-  error?: unknown;
+  error?: string;
 };
 type TurnHandle = {
   runId: string;
@@ -144,6 +147,9 @@ function classifyAuthorization(value: string | undefined): ModelAuthClass {
   if (value === `Bearer ${ACCESS_A_ROTATED}`) {
     return "A";
   }
+  if (value === `Bearer ${ACCESS_A_OLD}`) {
+    return "A-stale";
+  }
   if (value === `Bearer ${ACCESS_B}`) {
     return "B";
   }
@@ -203,7 +209,14 @@ async function startControlledProvider(): Promise<ControlledProvider> {
       }
       if (request.method === "GET" && request.url === "/v1/models") {
         response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: MODEL_ID, object: "model" }] }));
+        response.end(
+          JSON.stringify({
+            data: [
+              { id: OWNER_MODEL_ID, object: "model" },
+              { id: PEER_MODEL_ID, object: "model" },
+            ],
+          }),
+        );
         return;
       }
       if (request.method === "POST" && request.url === "/v1/responses") {
@@ -211,6 +224,7 @@ async function startControlledProvider(): Promise<ControlledProvider> {
         modelRequests.push({
           marker: requestMarker(body),
           auth: classifyAuthorization(request.headers.authorization),
+          model: typeof body.model === "string" ? body.model : undefined,
         });
         modelResponseIndex += 1;
         writeOpenAiResponsesText(response, {
@@ -315,15 +329,21 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
     },
     agents: {
       defaults: {
-        model: { primary: MODEL_REF, fallbacks: [] },
-        models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
+        model: { primary: OWNER_MODEL_REF, fallbacks: [] },
+        models: {
+          [OWNER_MODEL_REF]: { agentRuntime: { id: "openclaw" } },
+          [PEER_MODEL_REF]: { agentRuntime: { id: "openclaw" } },
+        },
         workspace: "~/workspace",
         skills: [],
         skipBootstrap: true,
         sandbox: { mode: "off" },
         timeoutSeconds: 60,
       },
-      list: [{ id: "owner", default: true }, { id: "peer" }],
+      list: [
+        { id: "owner", default: true, model: OWNER_MODEL_REF },
+        { id: "peer", model: PEER_MODEL_REF },
+      ],
     },
     tools: { profile: "minimal" },
     models: {
@@ -332,11 +352,22 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
         [PROVIDER_ID]: {
           baseUrl: `${providerBaseUrl}/v1`,
           api: "openai-responses",
+          auth: "oauth",
           request: { allowPrivateNetwork: true },
           models: [
             {
-              id: MODEL_ID,
-              name: MODEL_ID,
+              id: OWNER_MODEL_ID,
+              name: OWNER_MODEL_ID,
+              api: "openai-responses",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 16_000,
+              maxTokens: 2_048,
+            },
+            {
+              id: PEER_MODEL_ID,
+              name: PEER_MODEL_ID,
               api: "openai-responses",
               reasoning: false,
               input: ["text"],
@@ -414,22 +445,25 @@ function readSharedCredential(instance: OpenClawTestInstance): OAuthCredential |
   return credential?.type === "oauth" ? credential : undefined;
 }
 
-async function waitForPendingFence(
-  instance: OpenClawTestInstance,
-  agentId: "owner" | "peer",
-): Promise<void> {
-  await vi.waitFor(
-    () => {
-      const credential = readLocalCredential(instance, agentId);
-      expect(credential && isPendingOAuthRefreshFence(credential)).toBe(true);
-    },
-    { interval: 20, timeout: REQUEST_TIMEOUT_MS },
-  );
-}
-
 function expectTerminalFence(credential: OAuthCredential | undefined): void {
   expect(credential && isOAuthRefreshFence(credential)).toBe(true);
   expect(credential && isPendingOAuthRefreshFence(credential)).toBe(false);
+}
+
+function expiredAccountA(): OAuthCredential {
+  return oauthCredential({
+    accountId: ACCOUNT_A,
+    access: ACCESS_A_OLD,
+    refresh: REFRESH_A,
+    expires: Date.now() - 60_000,
+  });
+}
+
+function expectAuthError(result: AgentResult, message: string): void {
+  expect(result).toMatchObject({
+    status: "error",
+    error: expect.stringContaining(message),
+  });
 }
 
 async function connect(instance: OpenClawTestInstance) {
@@ -484,34 +518,38 @@ async function executionPhaseBaseline(
 async function waitForExecutionPhaseSince(params: {
   client: Awaited<ReturnType<typeof connectGatewayClient>>;
   sinceSeq: number;
+  model: string;
   phase: string;
 }): Promise<void> {
   await vi.waitFor(
     async () => {
       const snapshot = await params.client.request<{
-        events?: Array<{ phase?: string }>;
+        events?: Array<{ model?: string; phase?: string }>;
       }>("diagnostics.stability", {
         type: "run.execution_phase",
         sinceSeq: params.sinceSeq,
         limit: 200,
       });
       expect(snapshot.events).toEqual(
-        expect.arrayContaining([expect.objectContaining({ phase: params.phase })]),
+        expect.arrayContaining([
+          expect.objectContaining({ model: params.model, phase: params.phase }),
+        ]),
       );
     },
     { interval: 20, timeout: REQUEST_TIMEOUT_MS },
   );
 }
 
-async function observeTurnState(
-  turn: TurnHandle,
-): Promise<{ state: "pending" } | { state: "terminal"; status?: string }> {
-  return await Promise.race([
-    turn.terminal.then((result) => ({ state: "terminal" as const, status: result.status })),
-    new Promise<{ state: "pending" }>((resolve) => {
-      setTimeout(() => resolve({ state: "pending" }), 100);
-    }),
-  ]);
+async function expectTurnPending(params: {
+  client: Awaited<ReturnType<typeof connectGatewayClient>>;
+  turn: TurnHandle;
+}): Promise<void> {
+  const result = await params.client.request<AgentResult>(
+    "agent.wait",
+    { runId: params.turn.runId, timeoutMs: 0 },
+    { timeoutMs: REQUEST_TIMEOUT_MS },
+  );
+  expect(result).toEqual({ runId: params.turn.runId, status: "timeout" });
 }
 
 function emitEvidence(scenario: string, evidence: Record<string, unknown>): void {
@@ -524,12 +562,7 @@ describe("OAuth refresh authority chain", () => {
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const scenario = await createScenario("oauth-authority-same-account");
-      const expiredA = oauthCredential({
-        accountId: ACCOUNT_A,
-        access: ACCESS_A_OLD,
-        refresh: REFRESH_A,
-        expires: Date.now() - 60_000,
-      });
+      const expiredA = expiredAccountA();
       await seedScenario({
         instance: scenario.instance,
         shared: expiredA,
@@ -546,8 +579,6 @@ describe("OAuth refresh authority chain", () => {
         runId: "authority-same-owner",
       });
       await scenario.provider.refreshStarted;
-      await waitForPendingFence(scenario.instance, "owner");
-      await waitForPendingFence(scenario.instance, "peer");
 
       const peerPhaseBaseline = await executionPhaseBaseline(client);
       const peer = await startTurn({
@@ -559,22 +590,11 @@ describe("OAuth refresh authority chain", () => {
       await waitForExecutionPhaseSince({
         client,
         sinceSeq: peerPhaseBaseline,
+        model: PEER_MODEL_ID,
         phase: "model_resolution",
       });
-      const peerBeforeRelease = await observeTurnState(peer);
-      emitEvidence("same-account-pending-rendezvous", {
-        refreshRequests: scenario.provider.tokenRequests,
-        modelRequests: scenario.provider.modelRequests,
-        peerExecutionObserved: true,
-        peerState: peerBeforeRelease.state,
-        peerStatus: peerBeforeRelease.state === "terminal" ? peerBeforeRelease.status : undefined,
-      });
-      expect(peerBeforeRelease.state).toBe("pending");
-      await waitForPendingFence(scenario.instance, "peer");
-      await vi.waitFor(() => expect(scenario.provider.tokenRequests).toEqual(["A"]), {
-        interval: 20,
-        timeout: 5_000,
-      });
+      await expectTurnPending({ client, turn: peer });
+      expect(scenario.provider.tokenRequests).toEqual(["A"]);
       expect(scenario.provider.modelRequests).toHaveLength(0);
 
       scenario.provider.releaseRefresh();
@@ -584,12 +604,14 @@ describe("OAuth refresh authority chain", () => {
         interval: 20,
         timeout: REQUEST_TIMEOUT_MS,
       });
-      expect(scenario.provider.modelRequests).toEqual(
-        expect.arrayContaining([
-          { marker: SAME_OWNER_MARKER, auth: "A" },
-          { marker: SAME_PEER_MARKER, auth: "A" },
-        ]),
-      );
+      expect(
+        scenario.provider.modelRequests.toSorted((left, right) =>
+          left.marker.localeCompare(right.marker),
+        ),
+      ).toEqual([
+        { marker: SAME_OWNER_MARKER, auth: "A", model: OWNER_MODEL_ID },
+        { marker: SAME_PEER_MARKER, auth: "A", model: PEER_MODEL_ID },
+      ]);
       expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
       expect(readSharedCredential(scenario.instance)).toMatchObject({
         accountId: ACCOUNT_A,
@@ -605,6 +627,7 @@ describe("OAuth refresh authority chain", () => {
       await scenario.instance.stopGateway();
       await scenario.instance.startGateway();
       client = await connect(scenario.instance);
+      const restartRequestOffset = scenario.provider.modelRequests.length;
       const restarted = await startTurn({
         client,
         agentId: "peer",
@@ -612,14 +635,13 @@ describe("OAuth refresh authority chain", () => {
         runId: "authority-same-restart",
       });
       await expect(restarted.terminal).resolves.toMatchObject({ status: "ok" });
-      await vi.waitFor(() => expect(scenario.provider.modelRequests).toHaveLength(3), {
-        interval: 20,
-        timeout: REQUEST_TIMEOUT_MS,
-      });
-      expect(scenario.provider.modelRequests.at(-1)).toEqual({
-        marker: SAME_RESTART_MARKER,
-        auth: "A",
-      });
+      expect(scenario.provider.modelRequests.slice(restartRequestOffset)).toEqual([
+        {
+          marker: SAME_RESTART_MARKER,
+          auth: "A",
+          model: PEER_MODEL_ID,
+        },
+      ]);
       expect(scenario.provider.tokenRequests).toEqual(["A"]);
 
       emitEvidence("same-account", {
@@ -638,12 +660,7 @@ describe("OAuth refresh authority chain", () => {
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const scenario = await createScenario("oauth-authority-account-mismatch");
-      const expiredA = oauthCredential({
-        accountId: ACCOUNT_A,
-        access: ACCESS_A_OLD,
-        refresh: REFRESH_A,
-        expires: Date.now() - 60_000,
-      });
+      const expiredA = expiredAccountA();
       const usableB = oauthCredential({
         accountId: ACCOUNT_B,
         access: ACCESS_B,
@@ -666,8 +683,6 @@ describe("OAuth refresh authority chain", () => {
         runId: "authority-mismatch-owner",
       });
       await scenario.provider.refreshStarted;
-      await waitForPendingFence(scenario.instance, "owner");
-      await waitForPendingFence(scenario.instance, "peer");
       const peerPhaseBaseline = await executionPhaseBaseline(client);
       const peer = await startTurn({
         client,
@@ -678,31 +693,23 @@ describe("OAuth refresh authority chain", () => {
       await waitForExecutionPhaseSince({
         client,
         sinceSeq: peerPhaseBaseline,
+        model: PEER_MODEL_ID,
         phase: "model_resolution",
       });
-      const peerBeforeRelease = await observeTurnState(peer);
-      emitEvidence("account-mismatch-pending-rendezvous", {
-        refreshRequests: scenario.provider.tokenRequests,
-        modelRequests: scenario.provider.modelRequests,
-        peerExecutionObserved: true,
-        peerState: peerBeforeRelease.state,
-        peerStatus: peerBeforeRelease.state === "terminal" ? peerBeforeRelease.status : undefined,
-      });
-      expect(peerBeforeRelease.state).toBe("pending");
-      await waitForPendingFence(scenario.instance, "peer");
+      await expectTurnPending({ client, turn: peer });
       expect(scenario.provider.tokenRequests).toEqual(["A"]);
       expect(scenario.provider.modelRequests).toHaveLength(0);
 
       scenario.provider.releaseRefresh();
       await expect(owner.terminal).resolves.toMatchObject({ status: "ok" });
       const peerTerminal = await peer.terminal;
-      expect(peerTerminal.status).toBeTruthy();
+      expectAuthError(peerTerminal, `No API key found for provider "${PROVIDER_ID}".`);
       await vi.waitFor(() => expect(scenario.provider.modelRequests).toHaveLength(1), {
         interval: 20,
         timeout: REQUEST_TIMEOUT_MS,
       });
       expect(scenario.provider.modelRequests).toEqual([
-        { marker: MISMATCH_OWNER_MARKER, auth: "A" },
+        { marker: MISMATCH_OWNER_MARKER, auth: "A", model: OWNER_MODEL_ID },
       ]);
       expect(readLocalCredential(scenario.instance, "owner")).toMatchObject({
         accountId: ACCOUNT_A,
@@ -734,12 +741,7 @@ describe("OAuth refresh authority chain", () => {
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const scenario = await createScenario("oauth-authority-logout");
-      const expiredA = oauthCredential({
-        accountId: ACCOUNT_A,
-        access: ACCESS_A_OLD,
-        refresh: REFRESH_A,
-        expires: Date.now() - 60_000,
-      });
+      const expiredA = expiredAccountA();
       await seedScenario({
         instance: scenario.instance,
         owner: expiredA,
@@ -755,8 +757,6 @@ describe("OAuth refresh authority chain", () => {
         runId: "authority-logout-owner",
       });
       await scenario.provider.refreshStarted;
-      await waitForPendingFence(scenario.instance, "owner");
-      await waitForPendingFence(scenario.instance, "peer");
 
       const logout = await scenario.instance.cli(
         ["models", "auth", "logout", PROFILE_ID, "--agent", "owner", "--yes"],
@@ -769,19 +769,10 @@ describe("OAuth refresh authority chain", () => {
 
       scenario.provider.releaseRefresh();
       const staleTerminal = await owner.terminal;
-      expect(staleTerminal.status).toBeTruthy();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      emitEvidence("logout-during-refresh-settlement", {
-        refreshRequests: scenario.provider.tokenRequests,
-        modelRequests: scenario.provider.modelRequests,
-        logoutCode: logout.code,
-        staleTurnStatus: staleTerminal.status,
-        ownerProfilePresent: readLocalCredential(scenario.instance, "owner") !== undefined,
-        peerProfilePresent: readLocalCredential(scenario.instance, "peer") !== undefined,
-        sharedProfilePresent: readSharedCredential(scenario.instance) !== undefined,
-      });
+      expectAuthError(
+        staleTerminal,
+        `OAuth token refresh failed for ${PROVIDER_ID}: Failed to persist refreshed OAuth credential.`,
+      );
       expect(scenario.provider.modelRequests).toHaveLength(0);
       expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
       expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
@@ -794,7 +785,7 @@ describe("OAuth refresh authority chain", () => {
         runId: "authority-logout-followup",
       });
       const followupTerminal = await followup.terminal;
-      expect(followupTerminal.status).toBeTruthy();
+      expectAuthError(followupTerminal, `No API key found for provider "${PROVIDER_ID}".`);
       expect(scenario.provider.modelRequests).toHaveLength(0);
       expect(scenario.provider.tokenRequests).toEqual(["A"]);
       expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
