@@ -419,10 +419,6 @@
     "./plugin-sdk/sandbox": {
       "default": "./dist/plugin-sdk/sandbox.js"
     },
-    "./plugin-sdk/tool-policy": {
-      "types": "./dist/plugin-sdk/tool-policy.d.ts",
-      "default": "./dist/plugin-sdk/tool-policy.js"
-    },
     "./plugin-sdk/routing": {
       "types": "./dist/plugin-sdk/routing.d.ts",
       "default": "./dist/plugin-sdk/routing.js"

@@ -24,7 +24,7 @@ plugin supports.
 
 ## Tool policy vocabulary
 
-`openclaw/plugin-sdk/tool-policy` exposes core's synchronous policy primitives:
+`openclaw/plugin-sdk/agent-harness-runtime` exposes core's synchronous policy primitives:
 
 - `expandToolGroups(list?)` normalizes tool aliases, drops blank entries, expands
   core groups, and returns unique tool ids in catalog order.
@@ -38,6 +38,10 @@ For conformance coverage, negate a matcher built with `{ deny: entries }`;
 this keeps an empty coverage list false and avoids allow-side compatibility.
 Prepare matchers for one synchronous operation; do not retain an authorization
 decision across awaited work.
+
+The deprecated `infra-runtime` exports `resolveExecModeFromPolicy` and
+`resolveExecPolicyForMode` are retired. Use `resolveExecModePolicy` from
+`openclaw/plugin-sdk/exec-approvals-runtime` for mode/policy projection.
 
 ## Package entries
 

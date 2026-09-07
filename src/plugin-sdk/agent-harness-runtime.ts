@@ -644,3 +644,6 @@ export function classifyAgentHarnessTerminalOutcome(
 function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
   return assistantTexts.some((text) => text.trim().length > 0);
 }
+
+export { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
+export { expandToolGroups } from "../agents/tool-policy-shared.js";
