@@ -2735,7 +2735,12 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it.each(["late.sqlite", "late.sqlite-wal"])(
+  // SQLite sidecars (-shm/-wal/-journal) are now treated as transient and
+  // shielded by the volatile stat-cache (a vanished sidecar must not abort
+  // the archive), so a late-appearing .sqlite-wal no longer triggers the
+  // post-snapshot SQLite-state guard. Only a late main .sqlite database
+  // (which must be snapshotted) still aborts the run.
+  it.each(["late.sqlite"])(
     "fails when SQLite-looking state appears after snapshot discovery: %s",
     async (lateName) => {
       await withOpenClawTestState(

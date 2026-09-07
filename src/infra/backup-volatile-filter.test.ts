@@ -1,6 +1,6 @@
 // Tests volatile path filtering for backup operations.
 import { describe, expect, it } from "vitest";
-import { isTransientSqliteBackupPath, isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { isTransientSqliteBackupPath, isTransientSqliteSidecar, isVolatileBackupPath } from "./backup-volatile-filter.js";
 
 const stateDir = "/opt/openclaw/state";
 const plan = { stateDirs: [stateDir] };
@@ -59,6 +59,15 @@ describe("isVolatileBackupPath", () => {
     ["/home/user/project/config.jsonl.doctor-scrub-restore", false],
     // non-volatile: log-like name outside scope
     ["/home/user/notes/daily.log", false],
+    // volatile: SQLite sidecars are transient globally (a vanished sidecar
+    // aborts the archive); third-party databases inside agent roots are
+    // shielded even without a stateDir anchor.
+    [`${stateDir}/agents/coding/agent/codex-home/goals_1.sqlite-shm`, true],
+    [`${stateDir}/agents/coding/agent/codex-home/goals_1.sqlite-wal`, true],
+    [`${stateDir}/agents/coding/agent/codex-home/goals_1.sqlite-journal`, true],
+    ["/tmp/openclaw-502/gateway.12345678.lock.sqlite-wal", true],
+    ["/home/user/.codex/cache/cache.sqlite-shm", true],
+    ["C:\\openclaw\\state\\agents\\main\\agent\\codex-home\\goals_1.sqlite-wal", true],
   ])("classifies %s as volatile=%s", (p, expected) => {
     expect(isVolatileBackupPath(p, plan)).toBe(expected);
   });
@@ -169,5 +178,35 @@ describe("isTransientSqliteBackupPath", () => {
     "plugins/dedicated/lock.sqlite",
   ])("preserves durable SQLite state: %s", (filePath) => {
     expect(isTransientSqliteBackupPath(filePath)).toBe(false);
+  });
+});
+
+describe("isTransientSqliteSidecar", () => {
+  it.each([
+    "goals_1.sqlite-shm",
+    "goals_1.sqlite-wal",
+    "goals_1.sqlite-journal",
+    "/home/user/.openclaw/agents/coding/agent/codex-home/goals_1.sqlite-shm",
+    "/tmp/openclaw-502/gateway.12345678.lock.sqlite-wal",
+    "C:\\Users\\cobble\\.openclaw\\agents\\coding\\agent\\codex-home\\goals_1.sqlite-journal",
+  ])("classifies SQLite sidecar as transient: %s", (filePath) => {
+    expect(isTransientSqliteSidecar(filePath)).toBe(true);
+  });
+
+  it.each([
+    "goals_1.sqlite",
+    "openclaw-agent.sqlite",
+    "gateway.lock.sqlite",
+    "/tmp/openclaw-502/retained.sqlite",
+    "memory/main.sqlite.reindex-lock.sqlite",
+    "memory/main.sqlite.tmp-11111111-2222-3333-4444-555555555555",
+    "config.json",
+    "README.md",
+    "daemon.sock",
+    "goals_1.sqlite-shm.bak",
+    "goals_1.db-wal",
+    "goals_1.sqlitebackup",
+  ])("preserves non-sidecar state: %s", (filePath) => {
+    expect(isTransientSqliteSidecar(filePath)).toBe(false);
   });
 });

@@ -48,6 +48,21 @@ export function isTransientSqliteBackupPath(filePath: string): boolean {
   return SQLITE_MEMORY_TRANSIENT_PATH_PATTERN.test(normalizedPath);
 }
 
+/**
+ * SQLite sidecar extensions that are transient by nature. SQLite creates and
+ * removes `-shm`/`-wal`/`-journal` files as databases open and close. If a
+ * sidecar vanishes between tar's directory enumeration and its `lstat`, the
+ * whole archive aborts with ENOENT. These files are documented as
+ * not-to-be-copied live (docs/cli/backup.md) and are never needed for a
+ * consistent restore.
+ */
+const SQLITE_SIDECAR_EXTENSIONS = new Set([".sqlite-shm", ".sqlite-wal", ".sqlite-journal"]);
+
+export function isTransientSqliteSidecar(filePath: string): boolean {
+  const normalizedPath = normalizePosix(filePath);
+  return SQLITE_SIDECAR_EXTENSIONS.has(path.posix.extname(normalizedPath).toLowerCase());
+}
+
 function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string): boolean {
   const agentsRoot = path.posix.join(stateDirPosix, "agents");
   if (!isUnder(filePosix, agentsRoot)) {
@@ -103,6 +118,16 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
     return false;
   }
   const candidates = filePathCandidates(absolutePath);
+
+  // SQLite sidecars (-shm/-wal/-journal) are always transient regardless of
+  // location: a vanished sidecar between tar enumeration and lstat aborts the
+  // whole archive. This check is global (not scoped to stateDirs) so that
+  // third-party SQLite databases inside an agent root are also shielded.
+  for (const filePosix of candidates) {
+    if (isTransientSqliteSidecar(filePosix)) {
+      return true;
+    }
+  }
 
   for (const stateDir of plan.stateDirs) {
     if (!stateDir) {

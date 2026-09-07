@@ -2,7 +2,7 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
+import { isTransientSqliteSidecar, isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { ResolvedPluginBackupResource } from "../plugins/manifest-backup-resources.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -249,6 +249,14 @@ export async function createBackupResourceInventory(params: {
   const volatilePlan = { stateDirs: [stateDir] };
   const isVolatile = (sourcePath: string): boolean => {
     const candidate = path.resolve(sourcePath);
+    // SQLite sidecars (-shm/-wal/-journal) are always transient, even under a
+    // protected agent root. A vanished sidecar between tar's directory
+    // enumeration and its lstat aborts the whole archive with ENOENT; shielding
+    // them before the ownership check lets third-party SQLite databases (e.g.
+    // Codex CLI's goals_1.sqlite) survive a live backup.
+    if (isTransientSqliteSidecar(candidate)) {
+      return true;
+    }
     // Explicit owners survive volatile filters; excluded ancestors stay pruned
     // and the planner archives a selected link through its own asset instead.
     const ownedPath = protectedPaths.some((protectedPath) =>
