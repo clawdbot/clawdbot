@@ -1142,6 +1142,32 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     ]);
   });
 
+  it("plans legacy operator state with tracked and formerly bundled plugins and serial admission", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.6.33 2026.6.34 2026.9.1",
+      upgradeSurvivorScenarios: "legacy-operator-state",
+    });
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.6.34-legacy-operator-state",
+      "published-upgrade-survivor-2026.9.1-legacy-operator-state",
+    ]);
+    expect(plan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/discord",
+      "@openclaw/duckduckgo-plugin",
+    ]);
+    expect(plan.lanes.every((lane) => lane.weight === 3)).toBe(true);
+    for (const alias of ["reported-issues", "far-reaching"]) {
+      expect(
+        planFor({
+          selectedLaneNames: ["published-upgrade-survivor"],
+          upgradeSurvivorBaselines: "2026.6.34",
+          upgradeSurvivorScenarios: alias,
+        }).lanes.map((lane) => lane.name),
+      ).toContain("published-upgrade-survivor-2026.6.34-legacy-operator-state");
+    }
+  });
+
   it("keeps platform survivors out of release aliases", () => {
     const scenariosFor = (
       upgradeSurvivorScenarios: string,
@@ -1415,7 +1441,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     });
 
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["plugin-binding-command-escape"]);
-    expect(plan.omittedUnsupportedLanes).toHaveLength(12);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(13);
     expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
     expect(plan.omittedUnsupportedLanes).toContain(
       "published-upgrade-survivor-versioned-runtime-deps",

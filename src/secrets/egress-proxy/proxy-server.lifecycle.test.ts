@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import { request as httpRequest, type IncomingMessage } from "node:http";
@@ -138,6 +140,86 @@ afterEach(async () => {
 });
 
 describe("secret egress registration lifecycle", () => {
+  it("keeps the process CA trusted beyond the first day", () => {
+    const cert = new X509Certificate(fs.readFileSync(proxy.caCertPath));
+    const afterOneDay = Math.floor(cert.validFromDate.getTime() / 1000) + 25 * 60 * 60;
+    expect(() =>
+      execFileSync(
+        "openssl",
+        ["verify", "-CAfile", proxy.caCertPath, "-attime", String(afterOneDay), proxy.caCertPath],
+        { stdio: "pipe" },
+      ),
+    ).not.toThrow();
+  });
+
+  it("renews cached leaves without replacing client trust or established connections", async () => {
+    const issued: X509Certificate[] = [];
+    const issueLeaf = proxyCa.generateLocalProxyLeaf;
+    vi.spyOn(proxyCa, "generateLocalProxyLeaf").mockImplementation(async (params) => {
+      const leaf = await issueLeaf(params);
+      issued.push(new X509Certificate(leaf.cert));
+      return leaf;
+    });
+    const existing = await openTlsTunnel();
+    const previous = issued[0]!;
+    const trustedCa = fs.readFileSync(proxy.caCertPath);
+    // OpenSSL uses the native clock. Advance the cache's clock into the leaf's
+    // renewal window while real TLS verifies both certificates and the same CA.
+    vi.spyOn(Date, "now").mockReturnValue(previous.validToDate.getTime() - 30 * 60_000);
+    const renewed = await Promise.all([openTlsTunnel(), openTlsTunnel()]);
+    for (const socket of renewed) {
+      await sendCredential(socket);
+    }
+    expect(fs.readFileSync(proxy.caCertPath)).toEqual(trustedCa);
+    await sendCredential(existing);
+    expect(observed).toHaveLength(3);
+    expect(issued.length).toBe(2);
+    expect(issued[1]!.fingerprint256).not.toBe(previous.fingerprint256);
+    expect(issued[1]!.checkIssued(new X509Certificate(trustedCa))).toBe(true);
+  });
+  it.each([false, true])(
+    "recovers certificate failures on the next request (renewal: %s)",
+    async (renewing) => {
+      const existing = renewing ? await openTlsTunnel() : undefined;
+      if (renewing) {
+        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 23.5 * 60 * 60_000);
+      }
+      vi.spyOn(proxyCa, "generateLocalProxyLeaf").mockRejectedValueOnce(
+        new Error("synthetic-private-openssl-output"),
+      );
+      expect((await connectTunnel()).status).toBe(502);
+      const failed = proxy.getCertificateStatus();
+      expect(failed.state).toBe("degraded");
+      expect(failed.failedCertificates).toBe(1);
+      expect(failed.message).toContain("retry the request");
+      expect(JSON.stringify(failed)).not.toContain("synthetic-private-openssl-output");
+      if (existing) {
+        await sendCredential(existing);
+      }
+      await sendCredential(await openTlsTunnel());
+      expect(proxy.getCertificateStatus().state).toBe("ready");
+      expect(proxy.getCertificateStatus().failedCertificates).toBe(0);
+      expect(observed.length).toBe(renewing ? 2 : 1);
+    },
+  );
+
+  it("reports root expiry without minting leaves or replacing the trust bundle", async () => {
+    const trust = fs.readFileSync(proxyEnv.NODE_EXTRA_CA_CERTS!);
+    const validity = new X509Certificate(fs.readFileSync(proxy.caCertPath));
+    const clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(validity.validToDate.getTime() - 60_000);
+    expect(proxy.getCertificateStatus().message).toContain("expires within seven days");
+    clock.mockReturnValue(validity.validToDate.getTime());
+    const generateLeaf = vi.spyOn(proxyCa, "generateLocalProxyLeaf");
+    expect((await connectTunnel()).status).toBe(502);
+    expect(proxy.getCertificateStatus().message).toContain("restart the Gateway");
+    expect(generateLeaf).not.toHaveBeenCalled();
+    expect(fs.readFileSync(proxyEnv.NODE_EXTRA_CA_CERTS!)).toEqual(trust);
+    clock.mockRestore();
+    await sendCredential(await openTlsTunnel());
+    expect(proxy.getCertificateStatus().state).toBe("ready");
+  });
+
   it.each(["revoke", "replace", "stop"] as const)(
     "%s closes established TLS before its first credential request",
     async (action) => {
@@ -200,9 +282,21 @@ describe("secret egress registration lifecycle", () => {
     expect(observed.at(-1)?.authorization).toBe(`Bearer ${value}`);
   });
 
-  it.each(["revoke", "stop"] as const)(
-    "%s fences CONNECT while leaf preparation is pending",
-    async (action) => {
+  it.each([
+    { action: "revoke", renewing: false },
+    { action: "stop", renewing: false },
+    { action: "replace", renewing: false },
+    { action: "revoke", renewing: true },
+    { action: "stop", renewing: true },
+    { action: "replace", renewing: true },
+  ] as const)(
+    "$action fences CONNECT while certificate work is pending (renewal: $renewing)",
+    async ({ action, renewing }) => {
+      if (renewing) {
+        await sendCredential(await openTlsTunnel());
+        observed = [];
+        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 23.5 * 60 * 60_000);
+      }
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const settled = createDeferredCore();
@@ -223,8 +317,11 @@ describe("secret egress registration lifecycle", () => {
       try {
         await entered.promise;
         const stopping = action === "stop" ? proxy.stop() : undefined;
-        if (action === "revoke") {
+        if (action !== "stop") {
           proxy.revokeRun(run);
+          if (action === "replace") {
+            proxyEnv = register();
+          }
         }
         release.resolve();
         expect((await connecting).status).not.toBe(200);
@@ -233,7 +330,7 @@ describe("secret egress registration lifecycle", () => {
           expect(leafPrepared).toBe(true);
         }
         expect(observed).toEqual([]);
-        if (action === "revoke") {
+        if (action !== "stop") {
           await sendCredential(await openTlsTunnel(register()));
           expect(observed.at(-1)?.authorization).toBe(`Bearer ${value}`);
         }

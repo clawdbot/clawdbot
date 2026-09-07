@@ -398,21 +398,11 @@ export async function loadCodexBundleMcpThreadConfig(
   return load(params);
 }
 
-/** Load shared MCP request and subprocess ownership only when opening a connection. */
+/** Lazily load the strict MCP proxy client with core-owned framing, startup, and shutdown. */
 export const mcpStdioRuntime = Object.freeze({
   async load() {
-    const [{ createMcpStdioClient }, { OpenClawStdioClientTransport }, lifecycle] =
-      await Promise.all([
-        import("../agents/mcp-stdio-client.js"),
-        import("../agents/mcp-stdio-transport.js"),
-        import("../agents/mcp-client-lifecycle.js"),
-      ]);
-    return {
-      createMcpStdioClient,
-      OpenClawStdioClientTransport,
-      connectMcpClient: lifecycle.connectMcpClient,
-      disposeMcpClient: lifecycle.disposeMcpClient,
-    };
+    const { createMcpStdioClient } = await import("../agents/mcp-stdio-client.js");
+    return { createMcpStdioClient };
   },
 });
 

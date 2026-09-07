@@ -43,6 +43,14 @@ Use `openclaw doctor --json` when an operator or script wants the advisory Docto
 
 For read-only diagnosis, use `--lint` or bare `--json`. Ordinary `doctor`, including `doctor --non-interactive`, can copy legacy config and migrate state even without `--fix`. `--non-interactive` suppresses prompts, not writes.
 
+If the shared state database uses a newer schema, Doctor refuses before offering
+an interactive update because update admission also needs that database. Run
+Doctor from the OpenClaw install that wrote the state, or another compatible
+build. A readable shared database still permits an interactive source update
+when agent databases use newer schemas; if the update does not take over,
+Doctor checks all database schemas again before diagnostics or repair. See
+[Database schemas](/reference/database-schemas).
+
 After an exec-approval format upgrade, Doctor reports older generated approvals
 that are no longer active because they were not tied to a working directory.
 `openclaw doctor --fix` removes those inactive generated entries and leaves

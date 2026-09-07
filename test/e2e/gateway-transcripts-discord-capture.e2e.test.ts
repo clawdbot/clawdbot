@@ -437,7 +437,7 @@ describe("Gateway admitted Discord transcript capture", () => {
             await drainSessionStoreWriterQueuesForTest();
           } finally {
             clearSessionStoreCacheForTest();
-            resetPreparedModelRuntimeSnapshotsForTest();
+            await resetPreparedModelRuntimeSnapshotsForTest();
             closeOpenClawStateDatabaseByPath(path.join(stateDir, "state", "openclaw.sqlite"));
             resetConfigOverrides();
             clearRuntimeConfigSnapshot();

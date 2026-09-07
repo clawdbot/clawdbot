@@ -444,10 +444,10 @@ export function runCommand(command, args, options = {}) {
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
     let settled = false;
-    child.stdout?.on("data", (chunk) => {
+    child.stdout?.setEncoding("utf8").on("data", (chunk) => {
       stdout = appendBoundedTail(stdout, chunk, OUTPUT_CAPTURE_CHARS);
     });
-    child.stderr?.on("data", (chunk) => {
+    child.stderr?.setEncoding("utf8").on("data", (chunk) => {
       stderr = appendBoundedTail(stderr, chunk, OUTPUT_CAPTURE_CHARS);
     });
     const clearCommandTimer = timeoutMs

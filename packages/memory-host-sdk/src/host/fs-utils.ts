@@ -1,4 +1,3 @@
-// Memory Host SDK helper module supports fs utils behavior.
 import { configureFsSafeNative } from "@openclaw/fs-safe/config";
 // fs-safe facade with native acceleration disabled by default for this package's
 // host-side memory file operations.

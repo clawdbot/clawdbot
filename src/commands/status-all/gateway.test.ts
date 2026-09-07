@@ -14,6 +14,55 @@ afterEach(() => {
 });
 
 describe("summarizeLogTail", () => {
+  it.each([
+    {
+      name: "ordinary whitespace and adjacent duplicates",
+      input: ["  first \t", "", " \t", "  first", "second  ", "  first"],
+      expected: ["  first", "second", "  first"],
+    },
+    {
+      name: "orphan JSON fragments without dropping bracketed or comment lines",
+      input: ['  "field": "value",', "  } trailing", " {", "[gateway] {kept}", "# {kept}"],
+      expected: ["[gateway] {kept}", "# {kept}"],
+    },
+    {
+      name: "reordered request identifiers and error suffixes",
+      input: [
+        "[gws] errorCode=UNAVAILABLE OAuth token refresh failed runId=r1 conn=c1 id=i1 error=Error: first",
+        "[gws] errorCode=UNAVAILABLE OAuth token refresh failed id=i2 runId=r2 conn=c2 error=Error: second",
+      ],
+      expected: ["[gws] errorCode=UNAVAILABLE OAuth token refresh failed ×2"],
+    },
+    {
+      name: "case-sensitive identifier names",
+      input: ["[gws] errorCode=UNAVAILABLE OAuth token refresh failed RunId=r CONN=c ID=i"],
+      expected: ["[gws] errorCode=UNAVAILABLE OAuth token refresh failed RunId=r CONN=c ID=i"],
+    },
+    {
+      name: "field-like text without a whitespace boundary",
+      input: [
+        "[gws] errorCode=UNAVAILABLE OAuth token refresh failed/runId=keep note=conn=keep xid=keep id=drop",
+      ],
+      expected: [
+        "[gws] errorCode=UNAVAILABLE OAuth token refresh failed/runId=keep note=conn=keep xid=keep",
+      ],
+    },
+    {
+      name: "field-like text inside identifier values",
+      input: [
+        "[gws] errorCode=UNAVAILABLE OAuth token refresh failed runId=id=conn=value conn=runId=value id=conn=value",
+      ],
+      expected: ["[gws] errorCode=UNAVAILABLE OAuth token refresh failed"],
+    },
+    {
+      name: "nonqualifying gateway errors",
+      input: ["[gws] errorCode=OTHER OAuth token refresh failed id=keep"],
+      expected: ["[gws] errorCode=OTHER OAuth token refresh failed id=keep"],
+    },
+  ])("preserves $name", ({ input, expected }) => {
+    expect(summarizeLogTail(input)).toEqual(expected);
+  });
+
   it("marks permanent OAuth refresh failures as reauth-required", () => {
     const lines = summarizeLogTail([
       "[openai] Token refresh failed: 401 {",

@@ -50,6 +50,28 @@ wa-dropdown-item.sidebar-session-owner-submenu::part(submenu-icon) {
   color: var(--text);
 }
 
+/* Web Awesome's details part is fixed-size and end-justified, so a selection
+   rail wider than its column spills leftward across the row label. Give the
+   row label its own width (capped so it can still truncate), let the details
+   part absorb the remaining width, and let the rail shrink into it so the
+   selected owner's name truncates before the label does. */
+wa-dropdown-item.sidebar-session-owner-submenu::part(label) {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-width: 0;
+  max-width: 60%;
+}
+
+/* Web Awesome also forces a 2em start margin on the slotted rail, which the
+   light DOM cannot outrank. Pull the part back by that margin so the rail keeps
+   the row's 8px gutter instead of stacking a ~30px one. */
+wa-dropdown-item.sidebar-session-owner-submenu::part(details) {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-inline-start: -2em;
+}
+
 .session-menu__shortcut.sidebar-session-owner-count {
   min-width: 0;
   margin-inline-end: -2px;
@@ -58,6 +80,7 @@ wa-dropdown-item.sidebar-session-owner-submenu::part(submenu-icon) {
 
 .session-menu__shortcut.sidebar-session-owner-selection {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 4px;
   min-width: 0;

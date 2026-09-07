@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
+import { DIR_FETCH_MAX_ENTRIES } from "./dir-fetch-limits.js";
 import { type GrantedAuthorization, promptVerb } from "./node-invoke-policy-approval.js";
 import { readPathBinding, type PathBinding } from "./path-binding.js";
 import {
@@ -11,8 +12,6 @@ import {
   evaluateFilePolicyConstraints,
   type FilePolicyKind,
 } from "./policy.js";
-
-export const DIR_FETCH_MAX_ENTRIES = 5000;
 
 function readResultPayload(result: { payload?: unknown }): Record<string, unknown> | null {
   return asNullableRecord(result.payload);
@@ -46,6 +45,32 @@ function validateDirFetchPreflightEntry(
     return { ok: false, reason: "entry contains '..' traversal" };
   }
   return { ok: true };
+}
+
+type PolicyPathTree = Map<string, PolicyPathTree>;
+
+function* dirFetchPolicyPaths(entries: readonly string[]): Generator<string, void> {
+  const tree: PolicyPathTree = new Map();
+  yield ".";
+  // TARs can omit parent headers. Visit each implied path once, retaining only
+  // component edges; the caller closes this walk at the existing descendant cap.
+  for (const entry of entries) {
+    let branch = tree;
+    let relative = "";
+    for (const [component] of entry.replace(/\\/gu, "/").matchAll(/[^/]+/gu)) {
+      if (!component || component === ".") {
+        continue;
+      }
+      relative = relative ? `${relative}/${component}` : component;
+      let children = branch.get(component);
+      if (!children) {
+        children = new Map();
+        branch.set(component, children);
+        yield relative;
+      }
+      branch = children;
+    }
+  }
 }
 
 export async function validateDirFetchEntries(input: {
@@ -84,8 +109,8 @@ export async function validateDirFetchEntries(input: {
       details: { path: input.canonicalPath },
     });
   }
-  if (input.entries.length > DIR_FETCH_MAX_ENTRIES) {
-    const reason = `dir.fetch ${input.phase} contains ${input.entries.length} entries; limit ${DIR_FETCH_MAX_ENTRIES}`;
+  const rejectEntryLimit = async (count: number, label: "entries" | "descendant paths") => {
+    const reason = `dir.fetch ${input.phase} contains ${count} ${label}; limit ${DIR_FETCH_MAX_ENTRIES}`;
     await appendFileTransferAudit({
       op: input.op,
       nodeId: input.ctx.nodeId,
@@ -103,6 +128,9 @@ export async function validateDirFetchEntries(input: {
       message: `${reason}; refusing archive transfer`,
       details: { path: input.canonicalPath, reason },
     });
+  };
+  if (input.entries.length > DIR_FETCH_MAX_ENTRIES) {
+    return await rejectEntryLimit(input.entries.length, "entries");
   }
 
   const entries: string[] = [];
@@ -150,11 +178,15 @@ export async function validateDirFetchEntries(input: {
     entries.push(entry);
   }
 
-  const candidates = [
-    input.canonicalPath,
-    ...entries.map((entry) => joinRemotePolicyPath(input.canonicalPath, entry)),
-  ];
-  for (const candidate of candidates) {
+  let descendantCount = 0;
+  for (const relative of dirFetchPolicyPaths(entries)) {
+    if (relative !== ".") {
+      descendantCount += 1;
+      if (descendantCount > DIR_FETCH_MAX_ENTRIES) {
+        return await rejectEntryLimit(descendantCount, "descendant paths");
+      }
+    }
+    const candidate = joinRemotePolicyPath(input.canonicalPath, relative);
     const policyInput = {
       nodeId: input.ctx.nodeId,
       nodeDisplayName,

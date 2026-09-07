@@ -56,7 +56,7 @@ function renderMissingSession(data: Extract<ChatRouteData, { kind: "missing-sess
   });
 }
 
-export function renderChatRoute(data: unknown) {
+export function renderChatRoute(data: unknown, _loaderPending = false, presented = true) {
   // SAFETY: This renderer receives only this route's colocated ChatRouteData loader result.
   const routeData = data as ChatRouteData | undefined;
   if (!routeData) {
@@ -71,7 +71,7 @@ export function renderChatRoute(data: unknown) {
   if (routeData.kind === "missing-session") {
     return renderMissingSession(routeData);
   }
-  return html`<openclaw-chat-page .data=${routeData}></openclaw-chat-page>`;
+  return html`<openclaw-chat-page .data=${routeData} .presented=${presented}></openclaw-chat-page>`;
 }
 
 export function sessionRenderOwnerKey(

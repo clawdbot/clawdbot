@@ -25,12 +25,12 @@ import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparat
 
 let state: OpenClawTestState;
 beforeEach(async () => {
-  resetPreparedModelRuntimeSnapshotsForTest();
+  await resetPreparedModelRuntimeSnapshotsForTest();
   state = await createOpenClawTestState({ label: "compaction-provider-owner" });
   useNoBundledPlugins();
 });
 afterEach(async () => {
-  resetPreparedModelRuntimeSnapshotsForTest();
+  await resetPreparedModelRuntimeSnapshotsForTest();
   resetPluginLoaderTestStateForTest();
   await state.cleanup();
 });

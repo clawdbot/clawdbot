@@ -2,8 +2,16 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ArchiveLimitError } from "openclaw/plugin-sdk/archive";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { inspectDirFetchArchive } from "../shared/dir-fetch-archive.js";
+import {
+  DIR_FETCH_DEFAULT_MAX_BYTES,
+  DIR_FETCH_HARD_MAX_BYTES,
+  DIR_FETCH_MAX_ENTRIES,
+} from "../shared/dir-fetch-limits.js";
 import {
   matchesFileIdentity,
   type FileIdentity,
@@ -16,9 +24,6 @@ import {
   resolveBoundReadDirectory,
   statRequiredDirectory,
 } from "./path-errors.js";
-
-const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
-const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
 type DirFetchParams = {
   path?: unknown;
@@ -95,34 +100,6 @@ async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> 
   return match ? Number.parseInt(match[0], 10) <= heuristicKb : true;
 }
 
-async function listTarEntries(tarBuffer: Buffer): Promise<string[] | null> {
-  const result = await runCommandBuffered(["tar", "-tzf", "-"], {
-    discardOutput: { stderr: true },
-    input: tarBuffer,
-    maxOutputBytes: { stdout: 32 * 1024 * 1024, stderr: 64 * 1024 },
-    timeoutMs: 10_000,
-  }).catch(() => null);
-  if (!result || result.termination !== "exit" || result.code !== 0) {
-    return null;
-  }
-  const entries: string[] = [];
-  const output = result.stdout.toString("utf8");
-  let start = 0;
-  while (start <= output.length) {
-    const end = output.indexOf("\n", start);
-    const rawLine = output.slice(start, end === -1 ? output.length : end);
-    const line = rawLine.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, "");
-    if (line.length > 0) {
-      entries.push(line);
-    }
-    if (end === -1) {
-      break;
-    }
-    start = end + 1;
-  }
-  return entries.toSorted((left, right) => left.localeCompare(right));
-}
-
 async function listTreeEntries(
   root: string,
   maxEntries: number,
@@ -183,7 +160,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   if (preflightOnly) {
     let entries: string[] | "TOO_MANY";
     try {
-      entries = await listTreeEntries(canonical, 5000, identity);
+      entries = await listTreeEntries(canonical, DIR_FETCH_MAX_ENTRIES, identity);
     } catch (err) {
       const errorCode = err && typeof err === "object" && "code" in err ? err.code : undefined;
       const code =
@@ -281,12 +258,14 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   const sha256 = crypto.createHash("sha256").update(tarBuffer).digest("hex");
   const tarBase64 = tarBuffer.toString("base64");
   const tarBytes = tarBuffer.byteLength;
-  const entries = await listTarEntries(tarBuffer);
-  if (entries === null) {
+  let entries: string[];
+  try {
+    entries = await inspectDirFetchArchive(tarBuffer, 10_000);
+  } catch (error) {
     return {
       ok: false,
-      code: "READ_ERROR",
-      message: "tar entry listing failed",
+      code: error instanceof ArchiveLimitError ? "TREE_TOO_LARGE" : "READ_ERROR",
+      message: `archive inspection failed: ${formatErrorMessage(error)}`,
       canonicalPath: canonical,
     };
   }

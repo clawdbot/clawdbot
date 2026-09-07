@@ -7,6 +7,7 @@ import {
   renderPanelRefreshStatus,
   type PanelRefreshStatus,
 } from "../../components/panel-refresh-status.ts";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import {
@@ -24,7 +25,7 @@ import type {
   UsageContextDetail,
   UsageSessionEntry,
 } from "./types.ts";
-import { renderInsightList, renderUsageToggle, USAGE_TOKEN_CATEGORIES } from "./view-overview.ts";
+import { renderInsightList, USAGE_TOKEN_CATEGORIES } from "./view-overview.ts";
 
 // Chart constants
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
@@ -118,10 +119,10 @@ function renderSessionSummary(
   let toolCounts: Map<string, number> | undefined;
   if (filteredLogs) {
     toolCounts = new Map();
-    for (const log of filteredLogs) {
-      const { tools } = parseToolSummary(log.content);
-      for (const [name] of tools) {
-        toolCounts.set(name, (toolCounts.get(name) || 0) + 1);
+    // Result rows carry tool names for filtering, but only assistant rows record calls.
+    for (const log of filteredLogs.filter(({ role }) => role === "assistant")) {
+      for (const [name, count] of parseToolSummary(log.content).tools) {
+        toolCounts.set(name, (toolCounts.get(name) ?? 0) + count);
       }
     }
   }
@@ -534,9 +535,9 @@ function renderTimeSeriesCompact(
           ${
             hasSelection
               ? html`
-                  <div class="chart-toggle small">
+                  <div class="settings-segmented settings-segmented--accent small">
                     <button
-                      class="btn btn--sm toggle-btn active"
+                      class="btn btn--sm settings-segmented__btn settings-segmented__btn--active"
                       @click=${() => onCursorRangeChange?.(null, null)}
                     >
                       ${t("usage.details.reset")}
@@ -545,16 +546,34 @@ function renderTimeSeriesCompact(
                 `
               : nothing
           }
-          ${renderUsageToggle(mode, onModeChange, [
-            { value: "per-turn", labelKey: "usage.details.perTurn" },
-            { value: "cumulative", labelKey: "usage.details.cumulative" },
-          ])}
+          ${renderSettingsSegmented({
+            mode: "buttons",
+            variant: "accent",
+            ariaPressed: false,
+            className: "small",
+            value: mode,
+            onChange: onModeChange,
+            onReselect: onModeChange,
+            options: [
+              { value: "per-turn", label: t("usage.details.perTurn") },
+              { value: "cumulative", label: t("usage.details.cumulative") },
+            ],
+          })}
           ${
             !isCumulative
-              ? renderUsageToggle(breakdownMode, onBreakdownChange, [
-                  { value: "total", labelKey: "usage.daily.total" },
-                  { value: "by-type", labelKey: "usage.daily.byType" },
-                ])
+              ? renderSettingsSegmented({
+                  mode: "buttons",
+                  variant: "accent",
+                  ariaPressed: false,
+                  className: "small",
+                  value: breakdownMode,
+                  onChange: onBreakdownChange,
+                  onReselect: onBreakdownChange,
+                  options: [
+                    { value: "total", label: t("usage.daily.total") },
+                    { value: "by-type", label: t("usage.daily.byType") },
+                  ],
+                })
               : nothing
           }
         </div>

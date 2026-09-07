@@ -18,7 +18,7 @@ import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const EXPECTED_NODE_ENGINE_RANGE = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
+const EXPECTED_NODE_ENGINE_RANGE = ">=24.16.0 <25 || >=26.1.0";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("install runtime enforcement", () => {
@@ -33,19 +33,19 @@ describe("install runtime enforcement", () => {
   });
 
   it.each([
-    "24.15.0-rc.1",
+    "24.16.0-rc.1",
     "25.9.1-nightly.20260714",
     "24.15",
-    "24.15.0+",
-    "24.15.0+local..1",
-    "garbage24.15.0suffix",
-    "24.15.0suffix",
+    "24.16.0+",
+    "24.16.0+local..1",
+    "garbage24.16.0suffix",
+    "24.16.0suffix",
   ])("rejects non-release Node version %s", (version) => {
     expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(false);
   });
 
   it("accepts SemVer build metadata on a supported Node release", () => {
-    expect(nodeVersionSatisfiesPackageEngine("24.15.0+local.1", EXPECTED_NODE_ENGINE_RANGE)).toBe(
+    expect(nodeVersionSatisfiesPackageEngine("24.16.0+local.1", EXPECTED_NODE_ENGINE_RANGE)).toBe(
       true,
     );
   });
@@ -73,7 +73,7 @@ describe("install runtime enforcement", () => {
     expect(
       enforceSupportedNodeRuntime(
         {
-          version: "24.15.0",
+          version: "24.16.0",
           engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/node/bin/node",
         },
@@ -118,7 +118,7 @@ describe("install runtime enforcement", () => {
           engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/bun/bin/bun",
           probeNodeRuntime: () => ({
-            version: "24.15.0",
+            version: "24.16.0",
             bunVersion: null,
             execPath: "/opt/node/bin/node",
           }),
@@ -179,7 +179,7 @@ describe("install runtime enforcement", () => {
         return {
           status: 0,
           stdout: JSON.stringify({
-            version: "24.15.0",
+            version: "24.16.0",
             bunVersion: null,
             execPath: "/opt/node/bin/node",
           }),
@@ -189,7 +189,7 @@ describe("install runtime enforcement", () => {
 
     expect(candidates).toEqual(["/opt/node/bin/node"]);
     expect(runtime).toEqual({
-      version: "24.15.0",
+      version: "24.16.0",
       bunVersion: null,
       execPath: "/opt/node/bin/node",
     });
@@ -284,7 +284,7 @@ describe("install runtime enforcement", () => {
           return {
             status: 0,
             stdout: JSON.stringify({
-              version: "24.15.0",
+              version: "24.16.0",
               bunVersion: "1.3.14",
               execPath: "/opt/bun/bin/bun",
             }),
@@ -361,7 +361,7 @@ describe("install runtime enforcement", () => {
           return {
             status: 0,
             stdout: JSON.stringify({
-              version: "24.15.0",
+              version: "24.16.0",
               bunVersion: null,
               execPath: "C:\\node\\node.exe",
             }),
@@ -369,7 +369,7 @@ describe("install runtime enforcement", () => {
         },
       }),
     ).toEqual({
-      version: "24.15.0",
+      version: "24.16.0",
       bunVersion: null,
       execPath: "C:\\node\\node.exe",
     });

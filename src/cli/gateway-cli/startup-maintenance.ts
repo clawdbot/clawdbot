@@ -1,25 +1,13 @@
-import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isSqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
+import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
-import { findOpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
-import { findOpenClawStateDatabaseSchemaMigrationRequiredError } from "../../state/openclaw-state-db-schema-migration-required.js";
 import { formatCliCommand } from "../command-format.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
 export function resolveGatewayStartupMaintenanceReason(error: unknown) {
-  if (collectNestedErrorCandidates(error).some(isSqliteSchemaVersionError)) {
-    return "a newer OpenClaw build";
-  }
-  if (findOpenClawAgentDatabaseMediaMigrationRequiredError(error)) {
-    return "offline media migration";
-  }
-  if (findOpenClawStateDatabaseSchemaMigrationRequiredError(error)) {
-    return "state database schema migration";
-  }
-  return undefined;
+  return findStartupMaintenanceRequiredError(error)?.reason;
 }
 
 export async function handleGatewayStartupMaintenance(error: unknown): Promise<boolean> {
@@ -27,10 +15,11 @@ export async function handleGatewayStartupMaintenance(error: unknown): Promise<b
   if (!reason) {
     return false;
   }
+  const stop = `Stop the service with ${formatCliCommand("openclaw gateway stop")} (or its service owner), then`;
   const guidance =
     reason === "a newer OpenClaw build"
-      ? "Start the Gateway with a build that supports these database schemas. This install cannot repair a newer database."
-      : `Run ${formatCliCommand("openclaw doctor --fix")} to repair and restart it.`;
+      ? `${stop} restore your pre-update backup created with ${formatCliCommand("openclaw backup")}, then start it again with ${formatCliCommand("openclaw gateway start")}. See https://docs.openclaw.ai/install/updating#rollback.`
+      : `${stop} run ${formatCliCommand("openclaw doctor --fix")}, then start it again with ${formatCliCommand("openclaw gateway start")}.`;
   let parked = false;
   try {
     // launchd ignores exit 78 under KeepAlive. Park without opening the database,

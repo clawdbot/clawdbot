@@ -435,6 +435,9 @@ export async function handleTelegramAction(
     inboundEventKind?: string;
     gatewayClientScopes?: readonly string[];
     deliveryRetryOwner?: ChannelMessageActionContext["deliveryRetryOwner"];
+    onPlatformSendDispatch?: ChannelMessageActionContext["onPlatformSendDispatch"];
+    assertDirectAdapterHandoff?: ChannelMessageActionContext["assertDirectAdapterHandoff"];
+    skipQueue?: boolean;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     requesterAccountId?: string | null;
     reply?: ChannelMessageActionContext["reply"];
@@ -747,6 +750,9 @@ export async function handleTelegramAction(
       durability: "required",
       gatewayClientScopes: options?.gatewayClientScopes,
       deliveryRetryOwner: options?.deliveryRetryOwner,
+      onPlatformSendDispatch: options?.onPlatformSendDispatch,
+      assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff,
+      skipQueue: options?.skipQueue,
       ...(mediaAccess ? { mediaAccess } : {}),
       ...(outboundSession ? { session: outboundSession } : {}),
     });

@@ -25,7 +25,7 @@ type NodeWorkerContainerExpectedOwner = {
   launchId: string;
 };
 
-const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:22-slim";
+const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:24.19.0-slim";
 // Burst launches can delay a healthy daemon's identity response; keep revalidation
 // fail-closed without treating temporary daemon contention as an unavailable engine.
 const CONTAINER_REVALIDATION_TIMEOUT_MS = 30_000;

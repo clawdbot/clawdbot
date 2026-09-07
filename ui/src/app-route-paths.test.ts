@@ -26,6 +26,7 @@ import {
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import type { AgentsPanel } from "./lib/agents/panels.ts";
+import { createApplicationGateway } from "./test-helpers/application-context.ts";
 
 const AGENT_PANEL_CASES = [
   "overview",
@@ -126,6 +127,21 @@ const DYNAMIC_STARTUP_CASES = [
   basePath?: string;
   location: RouteLocation;
 }[];
+
+function createStartupContext(basePath = ""): ApplicationContext {
+  const { gateway } = createApplicationGateway({
+    phase: "stopped",
+    client: null,
+    offlineStable: false,
+    hello: null,
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: null,
+    sessionKey: "agent:main:main",
+    lastError: null,
+    lastErrorCode: null,
+  });
+  return { basePath, gateway } as unknown as ApplicationContext;
+}
 
 describe("Dynamic route startup bridge", () => {
   it("keeps share-route reservations aligned with every built-in path and alias", () => {
@@ -238,9 +254,7 @@ describe("Dynamic route startup bridge", () => {
         route.loader = loader;
         route.component = async () => ({ render: () => null });
 
-        await startApplicationRouter(router, history, basePath, {
-          basePath,
-        } as unknown as ApplicationContext);
+        await startApplicationRouter(router, history, basePath, createStartupContext(basePath));
 
         expect(loader).toHaveBeenCalledOnce();
         expect(router.getState().matches[0]?.location).toEqual(initialLocation);
@@ -297,9 +311,7 @@ describe("Dynamic route startup bridge", () => {
         route.loader = loader;
         route.component = async () => ({ render: () => null });
 
-        await startApplicationRouter(router, history, "", {
-          basePath: "",
-        } as unknown as ApplicationContext);
+        await startApplicationRouter(router, history, "", createStartupContext());
         expect(loader).toHaveBeenCalledOnce();
 
         location = {
@@ -343,9 +355,7 @@ describe("Dynamic route startup bridge", () => {
       route.component = async () => ({ render: () => null });
 
       await expect(
-        startApplicationRouter(router, history, "", {
-          basePath: "",
-        } as unknown as ApplicationContext),
+        startApplicationRouter(router, history, "", createStartupContext()),
       ).resolves.toBeUndefined();
 
       expect(location.pathname).toBe("/chat");
@@ -387,9 +397,7 @@ describe("Dynamic route startup bridge", () => {
       route.component = async () => ({ render: () => null });
 
       await expect(
-        startApplicationRouter(router, history, "", {
-          basePath: "",
-        } as unknown as ApplicationContext),
+        startApplicationRouter(router, history, "", createStartupContext()),
       ).resolves.toBeUndefined();
 
       expect(loader).toHaveBeenCalledTimes(2);
@@ -424,9 +432,7 @@ describe("Dynamic route startup bridge", () => {
       route.component = async () => ({ render: () => null });
 
       await expect(
-        startApplicationRouter(router, history, "", {
-          basePath: "",
-        } as unknown as ApplicationContext),
+        startApplicationRouter(router, history, "", createStartupContext()),
       ).rejects.toBe(failure);
     } finally {
       router.stop();
