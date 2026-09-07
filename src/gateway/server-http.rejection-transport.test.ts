@@ -1,8 +1,14 @@
 import { once } from "node:events";
-import { Agent, request, type ServerResponse } from "node:http";
+import {
+  Agent,
+  createServer,
+  request,
+  type Server as HttpServer,
+  type ServerResponse,
+} from "node:http";
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWebSocketStream, WebSocketServer, type WebSocket } from "ws";
 import { readWebhookBodyOrReject } from "../plugin-sdk/webhook-request-guards.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -429,4 +435,116 @@ describe("Gateway closing connection admission", () => {
       }
     },
   );
+});
+
+async function listen(server: HttpServer): Promise<number> {
+  return await new Promise<number>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      resolve(typeof address === "object" && address ? address.port : 0);
+    });
+  });
+}
+
+async function closeServer(server: HttpServer): Promise<void> {
+  server.closeAllConnections?.();
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+async function sendRawHttpRequest(port: number, rawRequest: string): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const socket = connect({ host: "127.0.0.1", port });
+    let response = "";
+    let settled = false;
+    const timeout = setTimeout(() => {
+      finish(
+        new Error(`timed out waiting for gateway response; received ${response.length} bytes`),
+      );
+    }, 1_000);
+
+    function finish(result: string | Error) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      socket.destroy();
+      if (result instanceof Error) {
+        reject(result);
+        return;
+      }
+      resolve(result);
+    }
+
+    socket.setEncoding("utf8");
+    socket.once("connect", () => {
+      socket.write(rawRequest);
+    });
+    socket.on("data", (chunk) => {
+      response += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      if (response.includes("\r\n\r\n")) {
+        finish(response);
+      }
+    });
+    socket.once("error", finish);
+    socket.once("end", () => {
+      if (response) {
+        finish(response);
+        return;
+      }
+      finish(new Error("server closed the socket without a response"));
+    });
+  });
+}
+
+describe("gateway HTTP upgrade transport", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("flushes HTTP 503 on a real TCP upgrade when handleUpgrade throws", async () => {
+    const server = createServer((_req, res) => {
+      res.statusCode = 404;
+      res.end("not found");
+    });
+    const wss = new WebSocketServer({ noServer: true });
+    // Budgeted upgrades require a live connection listener before handleUpgrade runs.
+    wss.on("connection", () => {});
+    vi.spyOn(wss, "handleUpgrade").mockImplementation(() => {
+      throw new Error("upgrade boom");
+    });
+
+    attachGatewayUpgradeHandler({
+      httpServer: server,
+      wss,
+      clients: new Set(),
+      resolvedAuth: { mode: "none", allowTailscale: false },
+      preauthConnectionBudget: createPreauthConnectionBudget(),
+      log: { warn: vi.fn() },
+    });
+
+    const port = await listen(server);
+    try {
+      const response = await sendRawHttpRequest(
+        port,
+        [
+          "GET /socket HTTP/1.1",
+          `Host: 127.0.0.1:${port}`,
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          "Sec-WebSocket-Key: dGVzdC1rZXktMDEyMzQ1Ng==",
+          "Sec-WebSocket-Version: 13",
+          "",
+          "",
+        ].join("\r\n"),
+      );
+
+      expect(response).toContain("HTTP/1.1 503");
+    } finally {
+      await closeServer(server);
+      wss.close();
+    }
+  });
 });
