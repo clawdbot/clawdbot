@@ -734,32 +734,30 @@ describe("feishu_doc image fetch hardening", () => {
     },
   );
 
-  it.each([undefined, Number.POSITIVE_INFINITY])(
-    "falls back from account mediaMaxMb %s to the agent cap for document uploads",
-    async (mediaMaxMb) => {
-      await withTempWorkspace(
-        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-doc-agent-cap-" },
-        async (workspace) => {
-          const filePath = await workspace.write("test-local.txt", Buffer.from("x"));
-          resolveFeishuToolAccountMock.mockReturnValue({
-            accountId: "main",
-            config: mediaMaxMb === undefined ? {} : { mediaMaxMb },
-          });
-          loadWebMediaMock.mockImplementationOnce(loadWebMedia);
+  it("keeps the Feishu default when only an agent media cap is configured", async () => {
+    await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-doc-agent-cap-" },
+      async (workspace) => {
+        const filePath = await workspace.write("test-local.txt", Buffer.from("x"));
+        resolveFeishuToolAccountMock.mockReturnValue({ accountId: "main", config: {} });
+        loadWebMediaMock.mockImplementationOnce(loadWebMedia);
+        blockChildrenCreateMock.mockResolvedValueOnce({
+          code: 0,
+          data: { children: [{ block_type: 23, block_id: "file_block_1" }] },
+        });
 
-          const result = await executeFeishuDocTool(resolveFeishuDocTool({}, 0.5 / (1024 * 1024)), {
-            action: "upload_file",
-            doc_token: "doc_1",
-            file_path: filePath,
-            filename: "test-local.txt",
-          });
+        const result = await executeFeishuDocTool(resolveFeishuDocTool({}, 0.5 / (1024 * 1024)), {
+          action: "upload_file",
+          doc_token: "doc_1",
+          file_path: filePath,
+          filename: "test-local.txt",
+        });
 
-          expect(result.details.error).toContain("exceeds");
-          expect(driveUploadAllMock).not.toHaveBeenCalled();
-        },
-      );
-    },
-  );
+        expect(result.details.error).toBeUndefined();
+        expect(driveUploadAllMock).toHaveBeenCalledOnce();
+      },
+    );
+  });
 
   it("passes workspace localRoots for upload_file when workspace-only policy is active", async () => {
     blockChildrenCreateMock.mockResolvedValueOnce({

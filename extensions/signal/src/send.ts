@@ -1,4 +1,3 @@
-import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 // Signal plugin module implements send behavior.
 import {
@@ -305,13 +304,19 @@ export async function sendMessageSignal(
   let outboundMedia: MediaPlaceholderTextFact | undefined;
   let textStyles: SignalTextStyleRange[] = [];
   const textMode = opts.textMode ?? "markdown";
-  const maxBytes =
-    resolveChannelMediaMaxBytes({
-      cfg,
-      accountId: accountInfo.accountId,
-      overrideMaxBytes: opts.maxBytes,
-      resolveChannelLimitMb: () => accountInfo.config.mediaMaxMb,
-    }) ?? 8 * 1024 * 1024;
+  const selectedMaxBytes =
+    typeof opts.maxBytes === "number" && Number.isFinite(opts.maxBytes) && opts.maxBytes >= 0
+      ? opts.maxBytes
+      : typeof accountInfo.config.mediaMaxMb === "number" &&
+          Number.isFinite(accountInfo.config.mediaMaxMb) &&
+          accountInfo.config.mediaMaxMb > 0
+        ? accountInfo.config.mediaMaxMb * 1024 * 1024
+        : typeof cfg.agents?.defaults?.mediaMaxMb === "number" &&
+            Number.isFinite(cfg.agents.defaults.mediaMaxMb) &&
+            cfg.agents.defaults.mediaMaxMb > 0
+          ? cfg.agents.defaults.mediaMaxMb * 1024 * 1024
+          : 8 * 1024 * 1024;
+  const maxBytes = Math.floor(selectedMaxBytes);
 
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {

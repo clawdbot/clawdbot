@@ -336,8 +336,6 @@ export function createTelegramBotCore(
     globalSetting: cfg.commands?.nativeSkills,
   });
   const mediaMaxBytes = resolveTelegramMediaMaxBytes({
-    cfg,
-    accountId: account.accountId,
     mediaMaxMb: opts.mediaMaxMb,
     fallbackMediaMaxMb: telegramCfg.mediaMaxMb,
   });

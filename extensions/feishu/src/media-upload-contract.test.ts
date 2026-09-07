@@ -298,15 +298,15 @@ describe("Feishu upload contracts", () => {
     { label: "next whole byte", mediaMaxMb: 0.001, size: 1049, accepted: false },
     { label: "positive sub-byte cap", mediaMaxMb: 0.5 / (1024 * 1024), size: 1, accepted: false },
     {
-      label: "invalid channel cap with an agent fallback",
-      mediaMaxMb: Number.POSITIVE_INFINITY,
+      label: "Feishu default with an agent cap",
+      mediaMaxMb: undefined,
       agentMediaMaxMb: 0.5 / (1024 * 1024),
       size: 1,
-      accepted: false,
+      accepted: true,
     },
   ] as Array<{
     label: string;
-    mediaMaxMb: number;
+    mediaMaxMb?: number;
     agentMediaMaxMb?: number;
     size: number;
     accepted: boolean;

@@ -179,8 +179,6 @@ function createDeliveryBaseOptions(turn: Turn) {
     bot: turn.bot,
     mediaLocalRoots: turn.mediaLocalRoots,
     mediaMaxBytes: resolveTelegramMediaMaxBytes({
-      cfg: turn.cfg,
-      accountId: context.route.accountId,
       mediaMaxMb: turn.opts.mediaMaxMb,
       fallbackMediaMaxMb: turn.telegramCfg.mediaMaxMb,
     }),

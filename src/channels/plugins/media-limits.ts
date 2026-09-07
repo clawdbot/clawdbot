@@ -15,23 +15,17 @@ export function resolveChannelMediaMaxBytes(params: {
   // so shared plugin helpers don't need channel-id branching.
   resolveChannelLimitMb: (params: { cfg: OpenClawConfig; accountId: string }) => number | undefined;
   accountId?: string | null;
-  overrideMaxBytes?: number;
 }): number | undefined {
-  const overrideMaxBytes = params.overrideMaxBytes;
-  if (
-    typeof overrideMaxBytes === "number" &&
-    Number.isFinite(overrideMaxBytes) &&
-    overrideMaxBytes >= 0
-  ) {
-    return Math.floor(overrideMaxBytes);
-  }
   const accountId = normalizeAccountId(params.accountId);
   const channelLimit = params.resolveChannelLimitMb({
     cfg: params.cfg,
     accountId,
   });
-  const limitBytes = [channelLimit, params.cfg.agents?.defaults?.mediaMaxMb]
-    .map((limitMb) => (limitMb ?? 0) * MB)
-    .find((value) => Number.isFinite(value) && value > 0);
-  return limitBytes === undefined ? undefined : Math.floor(limitBytes);
+  if (channelLimit) {
+    return Math.floor(channelLimit * MB);
+  }
+  if (params.cfg.agents?.defaults?.mediaMaxMb) {
+    return Math.floor(params.cfg.agents.defaults.mediaMaxMb * MB);
+  }
+  return undefined;
 }

@@ -1041,29 +1041,27 @@ describe("sendMessageMatrix media", () => {
     );
   });
 
-  it.each([
-    { mediaMaxMb: 0 },
-    { mediaMaxMb: -5 },
-    { mediaMaxMb: Number.NaN },
-    { mediaMaxMb: Number.POSITIVE_INFINITY },
-  ])("falls back to the agent media cap when mediaMaxMb is $mediaMaxMb", async ({ mediaMaxMb }) => {
-    const { client } = makeClient();
+  it.each([{ mediaMaxMb: undefined }, { mediaMaxMb: 0 }])(
+    "preserves the Matrix default when mediaMaxMb is $mediaMaxMb",
+    async ({ mediaMaxMb }) => {
+      const { client } = makeClient();
 
-    await sendMessageMatrix("room:!room:example", "caption", {
-      client,
-      cfg: {
-        agents: { defaults: { mediaMaxMb: 0.5 / (1024 * 1024) } },
-        channels: { matrix: { mediaMaxMb } },
-      },
-      mediaUrl: "file:///tmp/photo.png",
-    });
+      await sendMessageMatrix("room:!room:example", "caption", {
+        client,
+        cfg: {
+          agents: { defaults: { mediaMaxMb: 0.5 / (1024 * 1024) } },
+          channels: { matrix: { mediaMaxMb } },
+        },
+        mediaUrl: "file:///tmp/photo.png",
+      });
 
-    const mediaOptions = requireRecord(
-      mockCallArg(loadWebMediaMock, "loadWebMedia", 1),
-      "media options",
-    );
-    expect(mediaOptions.maxBytes).toBe(0);
-  });
+      const mediaOptions = requireRecord(
+        mockCallArg(loadWebMediaMock, "loadWebMedia", 1),
+        "media options",
+      );
+      expect(mediaOptions.maxBytes).toBeUndefined();
+    },
+  );
 
   it("passes caller mediaLocalRoots to media loading", async () => {
     const { client } = makeClient();

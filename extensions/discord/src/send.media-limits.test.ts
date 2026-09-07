@@ -29,9 +29,9 @@ const CASES: Array<{
     accepted: true,
   },
   {
-    label: "agent fallback cap",
+    label: "channel default ignoring the agent cap",
     cfg: { agents: { defaults: { mediaMaxMb: 0.1 / (1024 * 1024) } }, channels: { discord: {} } },
-    accepted: false,
+    accepted: true,
   },
   {
     label: "sub-byte cap",
@@ -54,7 +54,7 @@ describe("Discord configured limits on physical uploads", () => {
         const sending = sendMessageDiscord("channel:789", "document", {
           cfg: testCase.cfg,
           accountId: testCase.accountId,
-          token: "test-token",
+          token: "test-token-placeholder",
           rest: loopback.rest,
           mediaUrl: mediaPath,
           mediaLocalRoots: [mediaRoot],

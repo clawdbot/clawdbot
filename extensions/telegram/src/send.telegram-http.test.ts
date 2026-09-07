@@ -39,7 +39,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
   const requests: Array<{ method: string; fields: Record<string, unknown> }> = [];
   const events: string[] = [];
   const rejections: string[] = [];
-  const cfg = { channels: { telegram: { botToken: "123456:telegram-send-http-fixture" } } };
+  const cfg = { channels: { telegram: { botToken: "test-token-placeholder" } } };
   const buttons = [[{ text: "Continue", callback_data: "continue" }]];
 
   async function expectUploadedDocument(
@@ -438,13 +438,11 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
     { label: "explicit zero override", mediaMaxMb: 30.1, maxBytes: 0, size: 1048, accepted: false },
     {
-      label: "invalid byte override fallback",
-      mediaMaxMb: 0.001,
-      maxBytes: Number.POSITIVE_INFINITY,
-      size: 1049,
-      accepted: false,
+      label: "Telegram default ignoring the agent cap",
+      mediaMaxMb: undefined,
+      size: 1048,
+      accepted: true,
     },
-    { label: "agent fallback limit", mediaMaxMb: undefined, size: 1048, accepted: false },
   ])("enforces $label for a local document", async (testCase) => {
     const document = Buffer.alloc(testCase.size, 0x61);
     document.write("%PDF-1.4\n");

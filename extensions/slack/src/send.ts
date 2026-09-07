@@ -2,7 +2,6 @@
 import { createHash, createHmac } from "node:crypto";
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
-import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import {
   createMessageReceiptFromOutboundResults,
   type ChannelMessageUnknownSendContext,
@@ -1369,12 +1368,14 @@ async function sendMessageSlackQueuedInner(params: {
     ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
     ...(opts.textIsSlackPlainText ? { preservePlainText: true } : {}),
   });
-  const mediaMaxBytes = resolveChannelMediaMaxBytes({
-    cfg,
-    accountId: account.accountId,
-    overrideMaxBytes: opts.mediaMaxBytes,
-    resolveChannelLimitMb: () => account.config.mediaMaxMb,
-  });
+  const configuredMediaMaxBytes =
+    typeof account.config.mediaMaxMb === "number"
+      ? Math.floor(account.config.mediaMaxMb * 1024 * 1024)
+      : undefined;
+  const mediaMaxBytes =
+    typeof opts.mediaMaxBytes === "number"
+      ? Math.floor(opts.mediaMaxBytes)
+      : configuredMediaMaxBytes;
 
   let chunksToPost: string[];
   if (opts.mediaUrl) {

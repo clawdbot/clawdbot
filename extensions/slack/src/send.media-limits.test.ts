@@ -149,13 +149,11 @@ describe("Slack configured limits on real local files", () => {
     },
     { label: "explicit zero override", mediaMaxMb: 30.1, maxBytes: 0, size: 1048, accepted: false },
     {
-      label: "invalid byte override fallback",
-      mediaMaxMb: 0.001,
-      maxBytes: Number.POSITIVE_INFINITY,
-      size: 1049,
-      accepted: false,
+      label: "channel default ignoring the agent cap",
+      mediaMaxMb: undefined,
+      size: 1048,
+      accepted: true,
     },
-    { label: "agent fallback cap", mediaMaxMb: undefined, size: 1048, accepted: false },
   ])("preserves the sender's $label", async (testCase) => {
     const state = await createOpenClawTestState({ label: "slack-send-limit" });
     try {
@@ -201,13 +199,7 @@ describe("Slack configured limits on real local files", () => {
       mediaMaxMb: undefined,
       override: undefined,
       agentMediaMaxMb: 0.1 / (1024 * 1024),
-      accepted: false,
-    },
-    {
-      mediaMaxMb: undefined,
-      override: Number.POSITIVE_INFINITY,
-      agentMediaMaxMb: 0.1 / (1024 * 1024),
-      accepted: false,
+      accepted: true,
     },
     { mediaMaxMb: 30.1, override: 0, agentMediaMaxMb: undefined, accepted: false },
     { mediaMaxMb: undefined, override: undefined, agentMediaMaxMb: undefined, accepted: true },
@@ -277,8 +269,8 @@ describe("Slack configured limits on real local files", () => {
         };
         running = monitorSlackProvider({
           config: cfg,
-          botToken: "xoxb-test",
-          appToken: "xapp-test",
+          botToken: "test-token-placeholder",
+          appToken: "test-token-placeholder",
           abortSignal: abort.signal,
           mediaMaxMb: testCase.override,
           channelRuntime: {

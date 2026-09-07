@@ -1,7 +1,6 @@
 // Slack provider module implements model/runtime integration.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
-import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -399,17 +398,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     fallbackLimit: SLACK_TEXT_LIMIT,
   });
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
-  const mediaMaxBytes =
-    resolveChannelMediaMaxBytes({
-      cfg,
-      accountId: account.accountId,
-      resolveChannelLimitMb: () =>
-        typeof opts.mediaMaxMb === "number" &&
-        Number.isFinite(opts.mediaMaxMb) &&
-        opts.mediaMaxMb >= 0
-          ? opts.mediaMaxMb
-          : slackCfg.mediaMaxMb,
-    }) ?? 20 * 1024 * 1024;
+  const mediaMaxMb = opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20;
+  const mediaMaxBytes = Math.floor(mediaMaxMb * 1024 * 1024);
   const slackDispatcher = resolveSlackProxyDispatcher();
   const clientOptions = resolveSlackWebClientOptions({}, slackDispatcher);
   const durableIngress = createSlackDurableIngress({

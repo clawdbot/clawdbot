@@ -119,8 +119,6 @@ export async function sendMessageTelegram(
     };
     const mediaUrl = opts.mediaUrl?.trim();
     const mediaMaxBytes = resolveTelegramMediaMaxBytes({
-      cfg,
-      accountId: account.accountId,
       maxBytes: opts.maxBytes,
       mediaMaxMb: account.config.mediaMaxMb,
     });
