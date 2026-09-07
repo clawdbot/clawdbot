@@ -469,4 +469,68 @@ describe("fetchClaudeUsage", () => {
       expectMissingScopeError(result);
     },
   );
+
+  it("falls back to CLAUDE_WEB_SESSION_KEY when CLAUDE_AI_SESSION_KEY is blank/whitespace", async () => {
+    // Blank/whitespace AI session key must fall through to the WEB session key.
+    vi.stubEnv("CLAUDE_AI_SESSION_KEY", "   ");
+    vi.stubEnv("CLAUDE_WEB_SESSION_KEY", "sk-ant-web-fallback");
+
+    const mockFetch = createProviderUsageFetch(async (url, init) => {
+      if (url.includes("/api/oauth/usage")) {
+        return makeMissingScopeResponse();
+      }
+
+      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+      // The WEB session key should be used, not the blank AI key.
+      expect(headers.Cookie).toBe("sessionKey=sk-ant-web-fallback");
+
+      if (url.endsWith("/api/organizations")) {
+        return makeResponse(200, [{ uuid: "org-blank" }]);
+      }
+
+      if (url.endsWith("/api/organizations/org-blank/usage")) {
+        return makeResponse(200, {
+          five_hour: { utilization: 42 },
+        });
+      }
+
+      return makeResponse(404, "not found");
+    });
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.error).toBeUndefined();
+    expect(result.windows).toEqual([{ label: "5h", usedPercent: 42, resetAt: undefined }]);
+  });
+
+  it("falls back to CLAUDE_WEB_SESSION_KEY when CLAUDE_AI_SESSION_KEY is empty string", async () => {
+    vi.stubEnv("CLAUDE_AI_SESSION_KEY", "");
+    vi.stubEnv("CLAUDE_WEB_SESSION_KEY", "sk-ant-web-empty");
+
+    const mockFetch = createProviderUsageFetch(async (url, init) => {
+      if (url.includes("/api/oauth/usage")) {
+        return makeMissingScopeResponse();
+      }
+
+      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+      expect(headers.Cookie).toBe("sessionKey=sk-ant-web-empty");
+
+      if (url.endsWith("/api/organizations")) {
+        return makeResponse(200, [{ uuid: "org-empty" }]);
+      }
+
+      if (url.endsWith("/api/organizations/org-empty/usage")) {
+        return makeResponse(200, {
+          five_hour: { utilization: 99 },
+        });
+      }
+
+      return makeResponse(404, "not found");
+    });
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.error).toBeUndefined();
+    expect(result.windows).toEqual([{ label: "5h", usedPercent: 99, resetAt: undefined }]);
+  });
 });

@@ -127,7 +127,7 @@ function buildClaudeUsageWindows(
 
 function resolveClaudeWebSessionKey(): string | undefined {
   const direct =
-    process.env.CLAUDE_AI_SESSION_KEY?.trim() ?? process.env.CLAUDE_WEB_SESSION_KEY?.trim();
+    process.env.CLAUDE_AI_SESSION_KEY?.trim() || process.env.CLAUDE_WEB_SESSION_KEY?.trim();
   if (direct?.startsWith("sk-ant-")) {
     return direct;
   }
