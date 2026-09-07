@@ -7,10 +7,14 @@
 import { isHostRootEscapeError } from "./sandbox-paths.js";
 import { withToolOperatorHint } from "./tool-operator-hint.js";
 
-/** Which layer contained apply_patch, and therefore which remedy actually lifts it. */
-export type ApplyPatchContainmentSource = "config" | "session" | "worker";
+/** Which layer contained apply_patch, and therefore which operator explanation applies. */
+export type ApplyPatchContainmentSource = "config" | "session" | "worker" | "required-root";
 
 const HINTS: Record<ApplyPatchContainmentSource, string> = {
+  "required-root":
+    "apply_patch is contained by this run's required workspace root. Full session permission " +
+    "mode and workspaceOnly configuration settings do not lift this boundary. Keep patch paths " +
+    "within the required root.",
   config:
     "apply_patch is workspace-contained by configuration. Both tools.exec.applyPatch.workspaceOnly " +
     "(default true) and tools.fs.workspaceOnly impose this independently, so clearing one can leave " +
