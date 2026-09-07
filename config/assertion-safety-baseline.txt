@@ -3066,7 +3066,6 @@ src/infra/package-dist-inventory.ts	2
 src/infra/package-json.ts	1
 src/infra/pairing-files.ts	1
 src/infra/path-case.ts	3
-src/infra/ports-inspect.ts	1
 src/infra/ports.ts	2
 src/infra/private-mode.ts	2
 src/infra/provider-usage.auth.ts	2
