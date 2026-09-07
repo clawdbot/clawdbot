@@ -65,6 +65,8 @@ export class BrowserPanelStream {
   private objectUrl?: string;
   private decodingUrl?: string;
   private resizeTimer?: ReturnType<typeof setTimeout>;
+  private recoveryTimer?: ReturnType<typeof setTimeout>;
+  private recovery?: Pick<Attempt, "targetId" | "epoch" | "client">;
   private viewportSyncPending = false;
   private readonly retiringUrls = new Set<string>();
 
@@ -104,12 +106,10 @@ export class BrowserPanelStream {
       this.close();
       this.scope = { client: this.host.host.client, route };
       this.unsupported = false;
-      this.lastFailures.clear();
     }
     if (this.attempt && this.current(this.attempt) && this.attempt.targetId === targetId) {
       return this.attempt.live || (await this.attempt.firstFrame);
     }
-    this.close(false);
     // Only failed attempts back off; navigation and resize close streams on purpose and restart at once.
     if (
       this.unsupported ||
@@ -117,6 +117,7 @@ export class BrowserPanelStream {
     ) {
       return false;
     }
+    this.close(false);
     const dimensions = this.dimensions();
     let settle!: Attempt["settle"];
     const firstFrame = new Promise<boolean>((resolve) => {
@@ -176,9 +177,10 @@ export class BrowserPanelStream {
             return;
           }
           if (code !== 4003 && code !== 4004) {
-            this.lastFailures.set(attempt.targetId, Date.now());
+            this.recover(attempt);
+            return;
           }
-          this.close(code === 4003 || code === 4004);
+          this.close();
           if (code === 4003) {
             this.host.setState(
               "tabs",
@@ -197,12 +199,46 @@ export class BrowserPanelStream {
     } catch (error) {
       if (this.current(attempt)) {
         this.unsupported = isBrowserScreencastUnsupportedError(error);
-        if (!this.unsupported) {
-          this.lastFailures.set(attempt.targetId, Date.now());
+        if (this.unsupported) {
+          this.close(false);
+        } else {
+          this.recover(attempt);
         }
-        this.close(false);
       }
     }
+  }
+
+  private recover(attempt: Attempt): void {
+    this.lastFailures.set(attempt.targetId, Date.now());
+    this.close(false);
+    this.recovery = { targetId: attempt.targetId, epoch: attempt.epoch, client: attempt.client };
+    // A received frame invalidates older screenshots even if decoding has not finished.
+    this.scheduleRecovery(attempt.live ? 0 : RETRY_DELAY_MS);
+  }
+
+  private scheduleRecovery(delay: number): void {
+    const recovery = this.recovery;
+    if (!recovery) {
+      return;
+    }
+    clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = undefined;
+      if (
+        this.host.activeTargetId !== recovery.targetId ||
+        !this.host.operations.isLive(recovery.epoch, recovery.client)
+      ) {
+        this.recovery = undefined;
+        return;
+      }
+      // Capture modes pin their image; flushPendingFrame resumes recovery on exit.
+      if (this.host.mode !== "interact") {
+        return;
+      }
+      // A stalled screenshot must not hold the reconnect deadline.
+      this.scheduleRecovery(RETRY_DELAY_MS);
+      void this.host.refreshView(recovery.targetId);
+    }, delay);
   }
 
   private updateMetadata(attempt: Attempt, metadata: BrowserScreencastMeta): void {
@@ -224,6 +260,7 @@ export class BrowserPanelStream {
   }
 
   flushPendingFrame(): void {
+    this.scheduleRecovery(0);
     const attempt = this.attempt;
     if (attempt && this.current(attempt) && !attempt.decoding) {
       void this.decodeFrames(attempt);
@@ -309,7 +346,7 @@ export class BrowserPanelStream {
       }
     } catch {
       if (this.current(attempt)) {
-        this.close(false);
+        this.recover(attempt);
       }
     } finally {
       attempt.decoding = false;
@@ -360,6 +397,13 @@ export class BrowserPanelStream {
   }
 
   close(releaseView = true): void {
+    if (releaseView) {
+      // Intentional teardown starts a new owner; it must not inherit an orphaned backoff.
+      this.lastFailures.clear();
+    }
+    clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = undefined;
+    this.recovery = undefined;
     clearTimeout(this.resizeTimer);
     this.resizeTimer = undefined;
     // Invalidation cancels the pending sync timer; the next stream must be able to schedule one.

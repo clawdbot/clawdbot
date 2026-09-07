@@ -24,6 +24,7 @@ interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
     "ownsView" | "ensure" | "frameRevision" | "releaseReplacedView"
   >;
   readonly activeTargetId: string | null;
+  readonly mode: "interact" | "annotate" | "inspect";
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
     | "epoch"
@@ -56,7 +57,8 @@ export class BrowserPanelSnapshotController {
       this.controller.native.activeTab ||
       !client ||
       !this.controller.operations.isLive(epoch, client) ||
-      this.controller.activeTargetId !== targetId
+      this.controller.activeTargetId !== targetId ||
+      this.controller.mode !== "interact"
     ) {
       return;
     }
@@ -76,7 +78,10 @@ export class BrowserPanelSnapshotController {
     const stream = this.controller.stream;
     let captureRevision = stream.frameRevision;
     const captureCurrent = () =>
-      current() && captureRevision === stream.frameRevision && !stream.ownsView(targetId);
+      current() &&
+      this.controller.mode === "interact" &&
+      captureRevision === stream.frameRevision &&
+      !stream.ownsView(targetId);
     try {
       if (
         (await stream.ensure(targetId, client, epoch)) ||

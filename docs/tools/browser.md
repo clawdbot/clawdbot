@@ -165,6 +165,10 @@ screenshots for node-routed browsers, Chrome MCP existing-session profiles,
 missing Playwright, or stream connection failures. Navigation rules apply to
 the stream: navigating to a blocked address stops it and clears the view.
 
+After an established stream disconnects, the panel refreshes its screenshot
+and retries the stream automatically after a short delay. Annotation and
+inspection keep their captured image until you return to interaction mode.
+
 Preview cards are interactive only when OpenClaw can identify the browser's
 route. Sandbox browser results remain available to the agent but do not open a
 host-browser preview.
