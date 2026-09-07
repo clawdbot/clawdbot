@@ -82,7 +82,11 @@ Add `bindings` to route inbound messages (the wizard offers to do this for you),
 openclaw agents list --bindings
 ```
 
-In the Control UI, **Settings → Agents** updates model choices when the Gateway
+In the Control UI, **Agents** at `/agents` shows the roster, current work status,
+and recent chat previews, with **Open chat** opening each agent's main session.
+Use **Manage agents** to configure the roster at `/settings/agents`.
+
+**Settings → Agents** updates model choices when the Gateway
 publishes a new catalog. Refreshing choices preserves your selected model,
 fallbacks, and identity draft. If the read fails, the editor shows an error and
 keeps the previous choices until a later update succeeds. Model and fallback

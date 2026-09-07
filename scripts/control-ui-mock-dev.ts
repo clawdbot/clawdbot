@@ -1403,6 +1403,45 @@ async function createChatPickerScenario(
   fixture?: CliOptions["fixture"],
 ): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const rosterTime = Date.now();
+  const rosterAgents = [
+    {
+      id: "main",
+      name: "Molty",
+      theme: "Your everyday coordinator",
+      emoji: "🦞",
+      avatar:
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=",
+      preview: "I am organizing the next steps for the sample project.",
+    },
+    {
+      id: "forge",
+      name: "Forge",
+      theme: "Builds and maintains your projects",
+      emoji: "🛠️",
+      avatar:
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGMInfMAK2IgIPH1xx80BiEJfEbBEXE6MBEAgkh9AfK4IAAAAAAASUVORK5CYII=",
+      preview: "The sample dashboard is ready for your review.",
+    },
+    {
+      id: "scout",
+      name: "Scout",
+      theme: "Finds answers and connects ideas",
+      emoji: "🔭",
+      avatar:
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4vc0NK2IgIPH1xx80BiEJfEbBEXE6MBEAqnKB0ZTY3IwAAAAASUVORK5CYII=",
+      preview: "I found three useful approaches for the research outline.",
+    },
+    {
+      id: "bloom",
+      name: "Bloom",
+      theme: "Turns rough drafts into clear stories",
+      emoji: "🌱",
+      avatar:
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGPI2NqGFTEQkPj64w8ag5AEPqPgiDgdmAgAoqhy8cqD9UUAAAAASUVORK5CYII=",
+      preview: "The welcome guide now has a shorter opening and clear examples.",
+    },
+  ] as const;
   const selfProfile: UserProfile = {
     id: "presence-riley",
     displayName: "Riley",
@@ -1768,6 +1807,13 @@ async function createChatPickerScenario(
     continuationTurns: 3,
   };
   const sessions = [
+    ...rosterAgents.slice(1).map((agent, index) =>
+      sessionRow(`agent:${agent.id}:main`, agent.name, rosterTime - (index + 1) * 720_000, {
+        agentId: agent.id,
+        isMain: true,
+        lastMessagePreview: agent.preview,
+      }),
+    ),
     ...activitySessions,
     ...dashboardGallerySessions,
     ...(fixture === "workboard"
@@ -1778,7 +1824,10 @@ async function createChatPickerScenario(
           }),
         ]
       : []),
-    sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
+    sessionRow("agent:main:main", "Molty", rosterTime - 1_000, {
+      agentId: "main",
+      isMain: true,
+      lastMessagePreview: rosterAgents[0].preview,
       activeRunIds: [PLAN_DEMO_RUN_ID],
       childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
       hasActiveRun: true,
@@ -2199,6 +2248,23 @@ async function createChatPickerScenario(
     methodResponses: {
       ...backgroundTasks.methodResponses,
       ...cronMocks,
+      "agents.list": {
+        agents: rosterAgents.map(({ id, name, theme, emoji, avatar }) => ({
+          id,
+          name,
+          identity: { name, theme, emoji, avatar },
+          model: { primary: "example/model-small" },
+        })),
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      "agent.identity.get": {
+        cases: rosterAgents.map(({ id, name, theme, emoji, avatar }) => ({
+          match: { agentId: id },
+          response: { agentId: id, name, theme, emoji, avatar, avatarStatus: "data" },
+        })),
+      },
       "progressCard.get": { card: null },
       "users.self": { profile: selfProfile },
       // Talk settings page pickers: realtime catalog with the model/voice

@@ -200,6 +200,13 @@ describe("Dynamic route startup bridge", () => {
     expect(routeIdFromPath("/portals")).toBe("portals");
   });
 
+  it("keeps the mounted Agents roster separate from agent settings", () => {
+    expect(routeIdFromPath("/ui/agents", "/ui")).toBe("agents-home");
+    expect(inferBasePathFromPathname("/ui/agents")).toBe("/ui");
+    expect(agentRouteFromPath("/ui/agents", "/ui")).toBeNull();
+    expect(routeIdFromPath("/ui/settings/agents", "/ui")).toBe("agents");
+  });
+
   it("matches mixed-case deep links exactly like the uirouter path key", () => {
     // uirouter lowercases static path keys; a case-sensitive pre-gate would
     // rewrite /Usage to /chat before the router ever saw it.

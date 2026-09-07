@@ -3708,7 +3708,7 @@ src/worker/worker-process.ts	2
 src/worker/worker-session-tools.ts	4
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/api/gateway.ts	1
-ui/src/app-navigation.ts	2
+ui/src/app-navigation.ts	1
 ui/src/app-route-paths.ts	1
 ui/src/app-routes.ts	1
 ui/src/app/app-host-route-state.ts	1
