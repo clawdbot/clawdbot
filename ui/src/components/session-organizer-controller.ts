@@ -1,9 +1,7 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSidebarEntry,
-  SIDEBAR_NAV_ROUTES,
   serializeSidebarEntry,
-  type SidebarNavRoute,
+  type PersistedSidebarRoute,
 } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -24,7 +22,9 @@ import {
   storeSidebarSessionStatusFilter,
   storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
+  storeSidebarSessionsHideEmptyGroups,
   storeSidebarSessionsShowCron,
+  storeSidebarSessionsShowPreview,
   storeSidebarSessionsShowSystem,
   type SidebarRecentSession,
   type SidebarSectionDropTarget,
@@ -43,7 +43,6 @@ type SessionOrganizerOperations = typeof import("./session-organizer-operations.
 type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
 type SessionGroupDefaultsDialogOpener =
   (typeof import("./session-group-defaults-dialog.ts"))["showSessionGroupDefaultsDialog"];
-
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
 export class SessionOrganizerController {
   collapsedSessionSections = loadStoredCollapsedSessionSections();
@@ -184,7 +183,7 @@ export class SessionOrganizerController {
     await operations?.deleteSession(this.host, session, scope, { offerSkip: true });
   }
 
-  startSidebarRouteDrag(event: DragEvent, route: SidebarNavRoute) {
+  startSidebarRouteDrag(event: DragEvent, route: PersistedSidebarRoute) {
     if (!event.dataTransfer) {
       return;
     }
@@ -193,11 +192,11 @@ export class SessionOrganizerController {
     this.host.requestUpdate();
   }
 
-  startSidebarWorkboardDrag(event: DragEvent, boardId: string) {
+  startSidebarPluginDrag(event: DragEvent, key: string) {
     if (!event.dataTransfer) {
       return;
     }
-    const entry = serializeSidebarEntry({ type: "workboard", boardId });
+    const entry = serializeSidebarEntry({ type: "plugin", key });
     writeSidebarRouteDragData(event.dataTransfer, entry);
     this.draggingSidebarEntry = entry;
     this.host.requestUpdate();
@@ -241,11 +240,12 @@ export class SessionOrganizerController {
 
   private draggedSidebarEntry(dataTransfer: DataTransfer | null): string | null {
     const route = readSidebarRouteDragData(dataTransfer);
-    if (route && SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)) {
-      return serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute });
+    const routeEntry = parseSidebarEntry(route ? `route:${route}` : null);
+    if (routeEntry?.type === "route") {
+      return serializeSidebarEntry(routeEntry);
     }
     const dynamicEntry = parseSidebarEntry(route);
-    if (dynamicEntry?.type === "workboard") {
+    if (dynamicEntry?.type === "plugin") {
       return serializeSidebarEntry(dynamicEntry);
     }
     const sessionKey = readSessionDragData(dataTransfer);
@@ -315,6 +315,10 @@ export class SessionOrganizerController {
     const position = this.sidebarZoneDropTarget?.position;
     const sessionKey = readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
+    if (session && !session.pinnable) {
+      this.finishSidebarEntryDrag();
+      return;
+    }
     if (session && !session.pinned) {
       // Persist the dropped slot only once the pin lands, and recompute
       // against the then-current order: a failed patch must not leave an
@@ -363,11 +367,12 @@ export class SessionOrganizerController {
 
   handleSessionListDrop(event: DragEvent) {
     const draggedNavigation = readSidebarRouteDragData(event.dataTransfer);
+    const routeEntry = parseSidebarEntry(draggedNavigation ? `route:${draggedNavigation}` : null);
     const dynamicEntry = parseSidebarEntry(draggedNavigation);
     const entry =
-      draggedNavigation && SIDEBAR_NAV_ROUTES.includes(draggedNavigation as SidebarNavRoute)
-        ? ({ type: "route", route: draggedNavigation as SidebarNavRoute } as const)
-        : dynamicEntry?.type === "workboard"
+      routeEntry?.type === "route"
+        ? routeEntry
+        : dynamicEntry?.type === "plugin"
           ? dynamicEntry
           : null;
     if (entry) {
@@ -400,24 +405,12 @@ export class SessionOrganizerController {
   }
 
   async renameSession(session: SidebarRecentSession): Promise<void> {
-    const showInputDialog = await this.loadInputDialog();
-    const nextLabel =
-      (await showInputDialog?.({
-        title: t("sessionsView.renameSessionPrompt"),
-        // The stored label, not the resolved display name: pre-filling the
-        // derived string persists it on submit and it then outranks every
-        // later derivation. Matches the Sessions page rename.
-        defaultValue: normalizeOptionalString(session.userLabel) ?? "",
-      })) ?? null;
-    if (nextLabel === null) {
-      return;
-    }
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
     const operations = await this.loadOperations(scope);
-    await operations?.renameSession(this.host, session, nextLabel, scope);
+    await operations?.renameSession(this.host, session, scope);
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
@@ -529,6 +522,7 @@ export class SessionOrganizerController {
         group,
         defaults,
         listDirectory: (path) => this.host.listSessionGroupFolders(path),
+        inspectRepository: (path) => this.host.inspectSessionGroupRepository(path),
         submit: async (nextDefaults) => {
           const scope = this.host.sessionData.beginSessionMutation();
           if (!scope || !this.host.sessionGroupDefaults(group)) {
@@ -699,7 +693,7 @@ export class SessionOrganizerController {
           : "before";
       void this.reorderSidebarSection(sourceSectionId, sectionId, position);
     } else if (session && sectionId === "pinned") {
-      if (!session.pinned) {
+      if (session.pinnable && !session.pinned) {
         void this.patchSession(session, { pinned: true });
       }
     } else if (session) {
@@ -740,6 +734,15 @@ export class SessionOrganizerController {
     }
   }
 
+  setSessionsShowPreview(show: boolean) {
+    this.host.sessionsShowPreview = show;
+    try {
+      storeSidebarSessionsShowPreview(show);
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
+    }
+  }
+
   setSessionsShowSystem(show: boolean) {
     this.host.sessionsShowSystem = show;
     try {
@@ -755,12 +758,21 @@ export class SessionOrganizerController {
     }
     this.host.sessionsStatusFilter = statusFilter;
     this.host.clearSessionSelection();
-    this.host.sessionData.resetForStatusFilter(statusFilter);
+    this.host.sessionData.resetSessionList();
     try {
       storeSidebarSessionStatusFilter(statusFilter);
     } catch {
       // Keep the in-memory preference when storage is unavailable.
     }
     void this.host.sessionData.refreshSidebarSessions();
+  }
+
+  setSessionsHideEmptyGroups(hide: boolean) {
+    this.host.sessionsHideEmptyGroups = hide;
+    try {
+      storeSidebarSessionsHideEmptyGroups(hide);
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
+    }
   }
 }

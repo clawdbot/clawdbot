@@ -1,12 +1,16 @@
 import { vi } from "vitest";
 import type { ModelCatalogEntry } from "../../api/types.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
   type GatewayRequestMock,
+  type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatComposerMemoryFallback } from "./chat-state-host.ts";
@@ -32,9 +36,73 @@ export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestM
 
 type RequestMock = ReturnType<typeof makeRequestMock>;
 
+export function createBrowserAnnotationAttachment(
+  id: string,
+  modelContext: string,
+): ChatAttachment {
+  return {
+    id,
+    dataUrl: "data:image/png;base64,aQ==",
+    mimeType: "image/png",
+    browserAnnotation: {
+      modelContext,
+      title: `Page ${id}`,
+      displayUrl: `https://example.com/${id}`,
+      markedRegionCount: 1,
+      inspectedElement: false,
+    },
+  };
+}
+
+export function findChatSendPayload(host: {
+  request: { mock: { calls: ReadonlyArray<Readonly<Parameters<GatewayRequestHandler>>> } };
+}): Record<string, unknown> {
+  const call = host.request.mock.calls.find(([method]) => method === "chat.send");
+  if (!call?.[1] || typeof call[1] !== "object") {
+    throw new Error("Expected chat.send payload");
+  }
+  return call[1] as Record<string, unknown>;
+}
+
+export function createImmediateCommandHost(
+  command: string,
+  attachment: ChatAttachment,
+  overrides: Partial<ChatHost> = {},
+): ChatHost {
+  const host = {
+    sessions: createTestSessionCapability({
+      snapshot: { client: null, phase: "reconnecting", hello: null },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    }),
+    client: null,
+    connected: true,
+    sessionKey: "agent:main",
+    chatLoading: false,
+    chatMessage: command,
+    chatMessages: [],
+    chatLocalInputHistoryBySession: {},
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
+    chatAttachments: [attachment],
+    chatQueue: [],
+    chatRunId: null,
+    chatSending: false,
+    chatStream: null,
+    chatModelCatalog: [],
+    hello: null,
+    refreshSessionsAfterChat: new Map(),
+    ...overrides,
+  } satisfies Partial<ChatHost>;
+  return host as ChatHost;
+}
+
 type TestChatHost = Omit<ChatHost, "settings"> & {
   applySettings: (patch: Partial<UiSettings>) => void;
   basePath: string;
+  resourceBasePath: string;
   chatAvatarUrl: string | null;
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -107,6 +175,7 @@ export function makeChatHost(
     },
   };
   const host = {
+    chatSubmissions: createChatSubmissions(),
     client: request ? createTestGatewayClient(request) : null,
     chatMessages: [],
     chatDisplayedLeafEntryId: undefined,
@@ -117,6 +186,7 @@ export function makeChatHost(
     connectionEpoch: 0,
     chatLoading: false,
     chatMessage: "",
+    canRestoreComposer: () => true,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatLocalInputHistoryBySession: {},
@@ -132,8 +202,10 @@ export function makeChatHost(
     chatStreamStartedAt: null,
     lastError: null,
     sessionKey: "agent:main",
+    sidebarLayout: { columns: [] },
     basePath: "",
-    hello: null,
+    resourceBasePath: "",
+    hello: sessionMutationGatewayHello(),
     chatAvatarUrl: null,
     chatAvatarSource: null,
     chatAvatarStatus: null,
@@ -144,7 +216,6 @@ export function makeChatHost(
     sessionsError: null,
     sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,
-    chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
     chatModelCatalogError: null,
     refreshSessionsAfterChat: new Map(),
@@ -153,18 +224,12 @@ export function makeChatHost(
     toolStreamSyncTimer: null,
     renderLifecycle,
     querySelector: () => null,
-    chatScrollCommitCleanup: null,
-    chatScrollFrame: null,
-    chatScrollGuardFrame: null,
-    chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
     chatNewMessagesBelow: false,
-    chatIsProgrammaticScroll: false,
-    chatProgrammaticScrollTarget: 0,
     applySettings: vi.fn((patch: Partial<UiSettings>) => {
       // Chat pages own display/layout settings; active-session persistence belongs to pane bindings.
       const next = { ...settings, ...patch };
@@ -180,7 +245,7 @@ export function makeChatHost(
   };
   const sessions =
     hostOverrides.sessions ??
-    createSessionCapability({
+    createTestSessionCapability({
       snapshot: {
         client: host.client,
         phase: host.connected ? "connected" : "reconnecting",

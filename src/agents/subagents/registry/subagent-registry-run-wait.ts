@@ -3,18 +3,23 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../../infra/agent-events.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
 import {
   buildAgentRunTerminalOutcomeFromWaitResult,
-  classifyAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
-import { isRecoverableAgentWaitError, waitForAgentRun } from "../../run-wait.js";
+import { waitForAgentRun } from "../../run-wait.js";
 import {
   type SubagentRunOutcome,
   withSubagentOutcomeTiming,
 } from "../announce/subagent-announce-output.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -71,6 +76,57 @@ function resolveWaitTimeoutMsForRun(
     return normalizedWaitTimeoutMs;
   }
   return Math.max(1, Math.min(normalizedWaitTimeoutMs, deadlineMs - now));
+}
+
+/** A restart ends execution, not the task; lifecycle and wait observations share this owner. */
+export function preserveSubagentRunForRestart(params: {
+  entry: SubagentRunRecord;
+  terminal: AgentRunTerminalOutcome;
+  persist: (...runIds: string[]) => void;
+}): boolean {
+  const { entry } = params;
+  // A failed wait has no terminal timestamp. It cannot replace a recorded
+  // interruption with an invented run failure or timeout.
+  if (
+    entry.execution.status === "interrupted" &&
+    entry.execution.interruptionReason === "gateway-restart" &&
+    params.terminal.endedAt === undefined &&
+    (params.terminal.reason === "failed" || params.terminal.reason === "timed_out")
+  ) {
+    return true;
+  }
+  if (params.terminal.reason !== "cancelled" || params.terminal.stopReason !== "restart") {
+    return false;
+  }
+  if (
+    entry.execution.status === "terminal" ||
+    typeof entry.execution.endedAt === "number" ||
+    shouldSuppressSubagentRecoverySessionEffects(entry)
+  ) {
+    return true;
+  }
+  if (
+    entry.killIntent ||
+    entry.killReconciliation ||
+    resolveCompletionAfterHardRunDeadline({
+      entry,
+      observedStartedAt: params.terminal.startedAt,
+      observedEndedAt: params.terminal.endedAt,
+      now: Date.now(),
+    }) !== undefined
+  ) {
+    return false;
+  }
+  if (entry.execution.status !== "interrupted") {
+    entry.execution = {
+      ...entry.execution,
+      status: "interrupted",
+      interruptedAt: params.terminal.endedAt ?? Date.now(),
+      interruptionReason: "gateway-restart",
+    };
+    params.persist(entry.runId);
+  }
+  return true;
 }
 
 export function markSubagentRunPausedAfterYield(params: {
@@ -247,6 +303,8 @@ export class SubagentWaitManager {
     expectedEntry?: SubagentRunRecord,
     capWaitToStoredDeadline = false,
   ): Promise<void> => {
+    // A current Gateway may observe historical execution; the wait itself owns this generation.
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
     let completionForRetry: Parameters<typeof this.options.completeSubagentRun>[0] | undefined;
     const scheduleWaitRetry = (entry: SubagentRunRecord, reason: string, error?: string) => {
       this.options.scheduleSweep({ delayMs: 1_000 });
@@ -254,6 +312,7 @@ export class SubagentWaitManager {
       setTimeout(() => {
         const current = this.options.runs.get(runId);
         if (
+          !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
           !current ||
           current !== scheduledEntry ||
           typeof current.execution.endedAt === "number"
@@ -282,6 +341,10 @@ export class SubagentWaitManager {
         timeoutMs,
         callGateway: this.options.callGateway,
       });
+      // In-process restart may retain the row object, but never the old wait owner's authority.
+      if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+        return;
+      }
       const entry = this.options.runs.get(runId);
       if (!entry || (expectedEntry && entry !== expectedEntry)) {
         return;
@@ -293,7 +356,7 @@ export class SubagentWaitManager {
       const waitBlocked = waitTerminalOutcome?.reason === "blocked";
       const waitAborted =
         waitTerminalOutcome !== undefined &&
-        classifyAgentRunTerminalOutcome(waitTerminalOutcome) === "cancellation";
+        classifySubagentTerminalOutcome(waitTerminalOutcome) === "cancellation";
       const waitStatus = waitTerminalOutcome?.status ?? wait.status;
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
         this.options.clearPendingLifecycleError(runId);
@@ -309,7 +372,19 @@ export class SubagentWaitManager {
         }
         return;
       }
-      if (waitStatus === "error" && !waitAborted && isRecoverableAgentWaitError(wait.error)) {
+      if (
+        waitTerminalOutcome &&
+        preserveSubagentRunForRestart({
+          entry,
+          terminal: waitTerminalOutcome,
+          persist: this.options.persist.bind(this.options),
+        })
+      ) {
+        this.options.clearPendingLifecycleError(runId);
+        this.options.clearPendingLifecycleTimeout(runId);
+        return;
+      }
+      if (waitStatus === "error" && !waitAborted && wait.retryableTransportError) {
         scheduleWaitRetry(entry, "subagent wait interrupted; scheduling recovery", wait.error);
         return;
       }
@@ -446,6 +521,9 @@ export class SubagentWaitManager {
       };
       await this.options.completeSubagentRun(completionForRetry);
     } catch (error) {
+      if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+        return;
+      }
       const current = this.options.runs.get(runId);
       log.warn("failed to complete subagent run; retrying completion", {
         runId,
@@ -466,6 +544,9 @@ export class SubagentWaitManager {
             error: retryError,
           });
         }
+      }
+      if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+        return;
       }
       if (
         typeof current.execution.endedAt === "number" &&

@@ -1,7 +1,12 @@
 // Matrix tests cover reply context plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
-import { createPollStartEvent } from "./test-events.js";
+import {
+  bundledReplacementContentCases,
+  createBundledReplacementEvent,
+  createPollStartEvent,
+  invalidBundledReplacementCases,
+} from "./test-events.js";
 import type { MatrixRawEvent } from "./types.js";
 
 async function resolveReplyBody(event: MatrixRawEvent): Promise<string | undefined> {
@@ -32,6 +37,32 @@ describe("matrix reply context", () => {
         },
       } as MatrixRawEvent),
     ).toBe("Some quoted message");
+  });
+
+  it.each(bundledReplacementContentCases)(
+    "uses the latest bundled $name when quoting an edited message",
+    async ({ options, expected }) => {
+      expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
+        expected,
+      );
+    },
+  );
+
+  it.each(invalidBundledReplacementCases)(
+    "does not quote a bundled replacement from $name",
+    async ({ options }) => {
+      expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
+        "original text",
+      );
+    },
+  );
+
+  it("does not revive a bundled replacement from a redacted original", async () => {
+    expect(
+      await resolveReplyBody(
+        createBundledReplacementEvent("$original", { content: {}, redacted: true }),
+      ),
+    ).toBeUndefined();
   });
 
   it("truncates long reply bodies", async () => {

@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -42,7 +43,7 @@ import {
 import { resolveChannelAuthorization } from "./authorization.js";
 import { createTlonCitationResolver } from "./cites.js";
 import { fetchAllChannels, fetchInitData } from "./discovery.js";
-import { cacheMessage, fetchThreadHistory, getChannelHistory } from "./history.js";
+import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
 import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
 import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
 import {
@@ -108,29 +109,34 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   // Helper to authenticate with retry logic
   async function authenticateWithRetry(maxAttempts = 10): Promise<string> {
-    for (const attempt of Array.from(
-      { length: Math.max(1, maxAttempts) },
-      (_, index) => index + 1,
-    )) {
-      if (opts.abortSignal?.aborted) {
-        throw new Error("Aborted while waiting to authenticate");
-      }
-      try {
-        runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
-        return await authenticate(accountUrl, accountCode, { ssrfPolicy });
-      } catch (error: unknown) {
-        runtime.error?.(
-          `[tlon] Failed to authenticate (attempt ${attempt}): ${formatErrorMessage(error)}`,
-        );
-        if (attempt >= maxAttempts) {
+    let authAttempt = 0;
+    return await retryAsync(
+      async () => {
+        authAttempt += 1;
+        if (opts.abortSignal?.aborted) {
+          throw new Error("Aborted while waiting to authenticate");
+        }
+        try {
+          runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
+          return await authenticate(accountUrl, accountCode, { ssrfPolicy });
+        } catch (error: unknown) {
+          runtime.error?.(
+            `[tlon] Failed to authenticate (attempt ${authAttempt}): ${formatErrorMessage(error)}`,
+          );
           throw error;
         }
-        const delay = Math.min(30000, 1000 * 2 ** (attempt - 1));
-        runtime.log?.(`[tlon] Retrying authentication in ${delay}ms...`);
-        await sleepWithAbort(delay, opts.abortSignal);
-      }
-    }
-    throw new Error("unreachable Tlon authentication retry loop exit");
+      },
+      {
+        attempts: Math.max(1, maxAttempts),
+        minDelayMs: 0,
+        shouldRetry: () => !opts.abortSignal?.aborted,
+        delayMs: ({ attempt }) => Math.min(30_000, 1_000 * 2 ** (attempt - 1)),
+        onRetry: ({ delayMs }) => {
+          runtime.log?.(`[tlon] Retrying authentication in ${delayMs}ms...`);
+        },
+        sleep: (delayMs) => sleepWithAbort(delayMs, opts.abortSignal),
+      },
+    );
   }
 
   let api: UrbitSSEClient | null = null;
@@ -175,6 +181,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   // Track recent threads we've participated in so replies can omit a mention.
   const participatedThreads = createParticipatedThreadTracker();
+  const channelHistory = createChannelHistoryCache();
 
   // Track DM senders per session to detect shared sessions (security warning)
   const dmSendersBySession = new Map<string, Set<string>>();
@@ -345,8 +352,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     let unavailableMediaCount = 0;
     if (messageContent) {
       try {
-        ({ attachments, unavailableCount: unavailableMediaCount } =
-          await downloadMessageImages(messageContent));
+        ({ attachments, unavailableCount: unavailableMediaCount } = await downloadMessageImages(
+          messageContent,
+          undefined,
+          account.mediaMaxBytes,
+        ));
         if (attachments.length > 0) {
           runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
         }
@@ -381,7 +391,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     if (isGroup && groupChannel && isSummarizationRequest(messageText)) {
       try {
-        const history = await getChannelHistory(api, groupChannel, 50, runtime);
+        const history = await channelHistory.getChannelHistory(api, groupChannel, 50, runtime);
         if (history.length === 0) {
           const noHistoryMsg =
             "I couldn't fetch any messages for this channel. It might be empty or there might be a permissions issue.";
@@ -583,10 +593,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     const dispatchStartTime = Date.now();
 
-    const responsePrefix = core.channel.reply.resolveEffectiveMessagesConfig(
-      cfg,
-      route.agentId,
-    ).responsePrefix;
     const humanDelay = resolveHumanDelayConfig(cfg, route.agentId);
     const deliveryTarget = isGroup ? groupChannel : senderShip;
 
@@ -631,6 +637,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       cfg,
       route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
       ctxPayload,
+      replyPipeline: {},
       delivery: {
         preparePayload: prepareReplyPayload,
         durable: deliveryTarget
@@ -681,7 +688,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         },
       },
       dispatcherOptions: {
-        responsePrefix,
         humanDelay,
       },
       ...(turnAdoptionLifecycle || promptMedia.media.length > 0 ? { replyOptions } : {}),
@@ -845,7 +851,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       const contentBody = content.content;
       const sentAt = asFiniteNumber(content?.sent) ?? Date.now();
 
-      cacheMessage(nest, {
+      channelHistory.cacheMessage(nest, {
         author: senderShip,
         content: rawText,
         timestamp: sentAt,
@@ -974,8 +980,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             continue;
           }
 
-          // Owner is always allowed
-          if (isOwner(ship)) {
+          const ownerInvite = isOwner(ship);
+          const allowed = ownerInvite || (await isDmAllowedWithIngress(ship, effectiveDmAllowlist));
+          if (ownerInvite || (effectiveAutoAcceptDmInvites && allowed)) {
             try {
               await api.poke({
                 app: "chat",
@@ -983,26 +990,18 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                 json: { ship, ok: true },
               });
               processedDmInvites.add(ship);
-              runtime.log?.(`[tlon] Auto-accepted DM invite from owner ${ship}`);
+              runtime.log?.(
+                ownerInvite
+                  ? `[tlon] Auto-accepted DM invite from owner ${ship}`
+                  : `[tlon] Auto-accepted DM invite from ${ship}`,
+              );
             } catch (err) {
-              runtime.error?.(`[tlon] Failed to auto-accept DM from owner: ${String(err)}`);
-            }
-            continue;
-          }
-
-          const allowed = await isDmAllowedWithIngress(ship, effectiveDmAllowlist);
-          // Auto-accept if on allowlist and auto-accept is enabled
-          if (effectiveAutoAcceptDmInvites && allowed) {
-            try {
-              await api.poke({
-                app: "chat",
-                mark: "chat-dm-rsvp",
-                json: { ship, ok: true },
-              });
-              processedDmInvites.add(ship);
-              runtime.log?.(`[tlon] Auto-accepted DM invite from ${ship}`);
-            } catch (err) {
-              runtime.error?.(`[tlon] Failed to auto-accept DM from ${ship}: ${String(err)}`);
+              runtime.error?.(
+                ownerInvite
+                  ? `[tlon] Failed to auto-accept DM from owner: ${String(err)}`
+                  : `[tlon] Failed to auto-accept DM from ${ship}: ${String(err)}`,
+              );
+              throw err;
             }
             continue;
           }
@@ -1298,113 +1297,58 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       await api.subscribe({
         app: "groups",
         path: "/groups/ui",
-        event: (event: unknown) => {
-          void (async () => {
-            try {
-              const eventRecord = asRecord(event);
-              // Handle group/channel join events
-              // Event structure: { group: { flag: "~host/group-name", ... }, channels: { ... } }
-              if (eventRecord) {
-                // Check for new channels being added to groups
-                const channels = asRecord(eventRecord.channels);
-                if (channels) {
-                  for (const [channelNest, _channelData] of Object.entries(channels)) {
-                    // Only monitor chat channels
-                    if (!channelNest.startsWith("chat/")) {
-                      continue;
-                    }
-
-                    // If this is a new channel we're not watching yet, add it
-                    if (!watchedChannels.has(channelNest)) {
-                      watchedChannels.add(channelNest);
-                      runtime.log?.(
-                        `[tlon] Auto-detected new channel (invite accepted): ${channelNest}`,
-                      );
-
-                      // Persist to settings store so it survives restarts
-                      if (effectiveAutoAcceptGroupInvites) {
-                        try {
-                          const currentChannels = currentSettings.groupChannels || [];
-                          if (!currentChannels.includes(channelNest)) {
-                            const updatedChannels = [...currentChannels, channelNest];
-                            // Poke settings store to persist
-                            await api.poke({
-                              app: "settings",
-                              mark: "settings-event",
-                              json: {
-                                "put-entry": {
-                                  "bucket-key": "tlon",
-                                  "entry-key": "groupChannels",
-                                  value: updatedChannels,
-                                  desk: "moltbot",
-                                },
-                              },
-                            });
-                            runtime.log?.(`[tlon] Persisted ${channelNest} to settings store`);
-                          }
-                        } catch (err) {
-                          runtime.error?.(
-                            `[tlon] Failed to persist channel to settings: ${String(err)}`,
-                          );
-                        }
-                      }
-                    }
-                  }
-                }
-
-                // Also check for the "join" event structure
-                const join = asRecord(eventRecord.join);
-                if (join) {
-                  const joinChannels = Array.isArray(join.channels) ? join.channels : [];
-                  if (joinChannels.length > 0) {
-                    for (const channelNest of joinChannels) {
-                      if (typeof channelNest !== "string") {
-                        continue;
-                      }
-                      if (!channelNest.startsWith("chat/")) {
-                        continue;
-                      }
-                      if (!watchedChannels.has(channelNest)) {
-                        watchedChannels.add(channelNest);
-                        runtime.log?.(`[tlon] Auto-detected joined channel: ${channelNest}`);
-
-                        // Persist to settings store
-                        if (effectiveAutoAcceptGroupInvites) {
-                          try {
-                            const currentChannels = currentSettings.groupChannels || [];
-                            if (!currentChannels.includes(channelNest)) {
-                              const updatedChannels = [...currentChannels, channelNest];
-                              await api.poke({
-                                app: "settings",
-                                mark: "settings-event",
-                                json: {
-                                  "put-entry": {
-                                    "bucket-key": "tlon",
-                                    "entry-key": "groupChannels",
-                                    value: updatedChannels,
-                                    desk: "moltbot",
-                                  },
-                                },
-                              });
-                              runtime.log?.(`[tlon] Persisted ${channelNest} to settings store`);
-                            }
-                          } catch (err) {
-                            runtime.error?.(
-                              `[tlon] Failed to persist channel to settings: ${String(err)}`,
-                            );
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            } catch (error: unknown) {
-              runtime.error?.(
-                `[tlon] Error handling groups-ui event: ${formatErrorMessage(error)}`,
-              );
+        event: async (event: unknown) => {
+          try {
+            const eventRecord = asRecord(event);
+            if (!eventRecord) {
+              return;
             }
-          })();
+
+            const join = asRecord(eventRecord.join);
+            const joinedChannels = Array.isArray(join?.channels) ? join.channels : [];
+            const discoveredChannels = mergeUniqueStrings(
+              Object.keys(asRecord(eventRecord.channels) ?? {}),
+              joinedChannels.filter((channel): channel is string => typeof channel === "string"),
+            ).filter((channel) => channel.startsWith("chat/"));
+
+            for (const channelNest of discoveredChannels) {
+              if (!watchedChannels.has(channelNest)) {
+                watchedChannels.add(channelNest);
+                runtime.log?.(`[tlon] Auto-detected new channel: ${channelNest}`);
+              }
+            }
+
+            if (!effectiveAutoAcceptGroupInvites) {
+              return;
+            }
+            const currentChannels = currentSettings.groupChannels ?? [];
+            const unpersistedChannels = discoveredChannels.filter(
+              (channel) => !currentChannels.includes(channel),
+            );
+            if (unpersistedChannels.length === 0) {
+              return;
+            }
+            const updatedChannels = mergeUniqueStrings(currentChannels, unpersistedChannels);
+            await api.poke({
+              app: "settings",
+              mark: "settings-event",
+              json: {
+                "put-entry": {
+                  "bucket-key": "tlon",
+                  "entry-key": "groupChannels",
+                  value: updatedChannels,
+                  desk: "moltbot",
+                },
+              },
+            });
+            // The subscription snapshot lags its poke, so keep back-to-back facts cumulative.
+            currentSettings = { ...currentSettings, groupChannels: updatedChannels };
+            runtime.log?.(`[tlon] Persisted ${unpersistedChannels.join(", ")} to settings store`);
+          } catch (error: unknown) {
+            runtime.error?.(`[tlon] Error handling groups-ui event: ${formatErrorMessage(error)}`);
+            // SSE advances its durable ack only after this callback resolves.
+            throw error;
+          }
         },
         err: (error) => {
           runtime.error?.(`[tlon] Groups-ui subscription error: ${String(error)}`);
@@ -1425,11 +1369,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       const processedGroupInvites = new Set<string>();
 
       // Helper to process pending invites
-      const processPendingInvites = async (foreigns: Foreigns) => {
+      const processPendingInvites = async (foreigns: Foreigns, propagateWriteFailures = false) => {
         if (!foreigns || typeof foreigns !== "object") {
           return;
         }
 
+        let firstWriteError: Error | undefined;
         for (const [groupFlag, foreign] of Object.entries(foreigns)) {
           if (processedGroupInvites.has(groupFlag)) {
             continue;
@@ -1444,8 +1389,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
 
           const inviterShip = validInvite.from;
-          // Owner invites are always accepted
-          if (isOwner(inviterShip)) {
+          const ownerInvite = isOwner(inviterShip);
+          const shouldAccept =
+            ownerInvite ||
+            (effectiveAutoAcceptGroupInvites &&
+              isGroupInviteAllowed(inviterShip, effectiveGroupInviteAllowlist));
+          if (shouldAccept) {
             try {
               await api.poke({
                 app: "groups",
@@ -1456,89 +1405,69 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                 },
               });
               processedGroupInvites.add(groupFlag);
-              runtime.log?.(`[tlon] Auto-accepted group invite from owner: ${groupFlag}`);
-            } catch (err) {
-              runtime.error?.(`[tlon] Failed to accept group invite from owner: ${String(err)}`);
-            }
-            continue;
-          }
-
-          // Skip if auto-accept is disabled
-          if (!effectiveAutoAcceptGroupInvites) {
-            // If owner is configured, queue approval
-            if (effectiveOwnerShip) {
-              const approval = createPendingApproval({
-                type: "group",
-                requestingShip: inviterShip,
-                groupFlag,
-              });
-              await queueApprovalRequest(approval);
-              processedGroupInvites.add(groupFlag);
-            }
-            continue;
-          }
-
-          // Check if inviter is on allowlist
-          const isAllowed = isGroupInviteAllowed(inviterShip, effectiveGroupInviteAllowlist);
-
-          if (!isAllowed) {
-            // If owner is configured, queue approval
-            if (effectiveOwnerShip) {
-              const approval = createPendingApproval({
-                type: "group",
-                requestingShip: inviterShip,
-                groupFlag,
-              });
-              await queueApprovalRequest(approval);
-              processedGroupInvites.add(groupFlag);
-            } else {
               runtime.log?.(
-                `[tlon] Rejected group invite from ${inviterShip} (not in groupInviteAllowlist): ${groupFlag}`,
+                ownerInvite
+                  ? `[tlon] Auto-accepted group invite from owner: ${groupFlag}`
+                  : `[tlon] Auto-accepted group invite: ${groupFlag} (from ${inviterShip})`,
               );
-              processedGroupInvites.add(groupFlag);
+            } catch (err) {
+              runtime.error?.(
+                ownerInvite
+                  ? `[tlon] Failed to accept group invite from owner: ${String(err)}`
+                  : `[tlon] Failed to auto-accept group ${groupFlag}: ${String(err)}`,
+              );
+              if (propagateWriteFailures && firstWriteError === undefined) {
+                firstWriteError = err instanceof Error ? err : new Error(formatErrorMessage(err));
+              }
             }
             continue;
           }
 
-          // Inviter is on allowlist - accept the invite
-          try {
-            await api.poke({
-              app: "groups",
-              mark: "group-join",
-              json: {
-                flag: groupFlag,
-                "join-all": true,
-              },
+          if (effectiveOwnerShip) {
+            const approval = createPendingApproval({
+              type: "group",
+              requestingShip: inviterShip,
+              groupFlag,
             });
+            await queueApprovalRequest(approval);
             processedGroupInvites.add(groupFlag);
-            runtime.log?.(
-              `[tlon] Auto-accepted group invite: ${groupFlag} (from ${validInvite.from})`,
-            );
-          } catch (err) {
-            runtime.error?.(`[tlon] Failed to auto-accept group ${groupFlag}: ${String(err)}`);
+            continue;
           }
+
+          if (effectiveAutoAcceptGroupInvites) {
+            runtime.log?.(
+              `[tlon] Rejected group invite from ${inviterShip} (not in groupInviteAllowlist): ${groupFlag}`,
+            );
+            processedGroupInvites.add(groupFlag);
+          }
+        }
+
+        if (firstWriteError !== undefined) {
+          throw firstWriteError;
         }
       };
 
       // Process existing pending invites from init data
       if (initForeigns) {
-        await processPendingInvites(initForeigns);
+        try {
+          await processPendingInvites(initForeigns);
+        } catch (error: unknown) {
+          runtime.error?.(`[tlon] Error handling initial foreigns: ${formatErrorMessage(error)}`);
+        }
       }
 
       try {
         await api.subscribe({
           app: "groups",
           path: "/v1/foreigns",
-          event: (data: unknown) => {
-            void (async () => {
-              try {
-                await processPendingInvites(data as Foreigns);
-              } catch (error: unknown) {
-                runtime.error?.(
-                  `[tlon] Error handling foreigns event: ${formatErrorMessage(error)}`,
-                );
-              }
-            })();
+          event: async (data: unknown) => {
+            try {
+              await processPendingInvites(data as Foreigns, true);
+            } catch (error: unknown) {
+              runtime.error?.(`[tlon] Error handling foreigns event: ${formatErrorMessage(error)}`);
+              // SSE advances its durable ack only after this callback resolves.
+              throw error;
+            }
           },
           err: (error) => {
             runtime.error?.(`[tlon] Foreigns subscription error: ${String(error)}`);

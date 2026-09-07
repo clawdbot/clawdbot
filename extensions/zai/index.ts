@@ -115,8 +115,9 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
   let streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
   const preserveThinking = shouldPreserveZaiThinking(ctx.extraParams);
   const reasoningEffort = resolveZaiReasoningEffort(ctx.modelId, ctx.thinkingLevel);
+  const disableThinking = isDisabledThinkingLevel(ctx.thinkingLevel) && !reasoningEffort;
 
-  if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking && !reasoningEffort) {
+  if (!disableThinking && !preserveThinking && !reasoningEffort) {
     return streamFn;
   }
 
@@ -125,7 +126,7 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
       return;
     }
 
-    if (isDisabledThinkingLevel(ctx.thinkingLevel)) {
+    if (disableThinking) {
       payload.thinking = { type: "disabled" };
       return;
     }
@@ -187,6 +188,7 @@ async function runZaiApiKeyAuth(
         ? (ctx.secretInputMode ?? "plaintext")
         : ctx.secretInputMode,
     config: ctx.config,
+    workspaceDir: ctx.workspaceDir,
     expectedProviders: [PROVIDER_ID, "z-ai"],
     provider: PROVIDER_ID,
     envLabel: "ZAI_API_KEY",
@@ -347,7 +349,7 @@ export default defineSingleProviderPluginEntry({
         endpoint: "cn",
       }),
     ],
-    catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true },
+    catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true, discoveryMode: "strict" },
     resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
     matchesContextOverflowError: ({ errorMessage }) =>
       /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(

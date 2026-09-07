@@ -91,23 +91,21 @@ export type ContentPart = z.infer<typeof ContentPartSchema>;
 const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
 
 const AssistantPhaseSchema = z.enum(["commentary", "final_answer"]);
+const ItemStatusSchema = z.enum(["in_progress", "completed", "incomplete"]);
 
 const MessageItemSchema = z
   .object({
     type: z.literal("message"),
+    id: z.string().optional(),
     role: MessageItemRoleSchema,
     content: z.union([z.string(), z.array(ContentPartSchema)]),
     phase: AssistantPhaseSchema.optional(),
+    status: ItemStatusSchema.optional(),
   })
   .strict()
-  .superRefine((value, ctx) => {
-    if (value.phase !== undefined && value.role !== "assistant") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["phase"],
-        message: "`phase` is only valid on assistant messages.",
-      });
-    }
+  .refine((value) => value.phase === undefined || value.role === "assistant", {
+    path: ["phase"],
+    message: "`phase` is only valid on assistant messages.",
   });
 
 const FunctionCallItemSchema = z
@@ -117,6 +115,7 @@ const FunctionCallItemSchema = z
     call_id: z.string().optional(),
     name: z.string(),
     arguments: z.string(),
+    status: ItemStatusSchema.optional(),
   })
   .strict();
 
@@ -236,157 +235,60 @@ export type CreateResponseBody = z.infer<typeof CreateResponseBodySchema>;
 // Response Resource
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ResponseStatusSchema = z.enum([
-  "in_progress",
-  "completed",
-  "failed",
-  "cancelled",
-  "incomplete",
-]);
+type OutputTextContentPart = Extract<ContentPart, { type: "output_text" }>;
+type OutputStatus = "in_progress" | "completed";
 
-const OutputItemSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("message"),
-      id: z.string(),
-      role: z.literal("assistant"),
-      content: z.array(OutputTextContentPartSchema),
-      phase: AssistantPhaseSchema.optional(),
-      status: z.enum(["in_progress", "completed"]).optional(),
+export type OutputItem =
+  | (Omit<Extract<ItemParam, { type: "message" }>, "id" | "role" | "content" | "status"> & {
+      id: string;
+      role: "assistant";
+      content: OutputTextContentPart[];
+      status?: OutputStatus | undefined;
     })
-    .strict(),
-  z
-    .object({
-      type: z.literal("function_call"),
-      id: z.string(),
-      call_id: z.string(),
-      name: z.string(),
-      arguments: z.string(),
-      status: z.enum(["in_progress", "completed"]).optional(),
+  | (Omit<Extract<ItemParam, { type: "function_call" }>, "id" | "call_id" | "status"> & {
+      id: string;
+      call_id: string;
+      status?: OutputStatus | undefined;
     })
-    .strict(),
-  z
-    .object({
-      type: z.literal("reasoning"),
-      id: z.string(),
-      content: z.string().optional(),
-      summary: z.string().optional(),
-    })
-    .strict(),
-]);
+  | { type: "reasoning"; id: string; content?: string | undefined; summary?: string | undefined };
 
-export type OutputItem = z.infer<typeof OutputItemSchema>;
+export type Usage = {
+  input_tokens: number;
+  input_tokens_details: { cached_tokens: number; cache_write_tokens: number };
+  output_tokens: number;
+  output_tokens_details: { reasoning_tokens: number };
+  total_tokens: number;
+};
 
-const UsageSchema = z.object({
-  input_tokens: z.number().int().nonnegative(),
-  input_tokens_details: z.object({
-    cached_tokens: z.number().int().nonnegative(),
-    cache_write_tokens: z.number().int().nonnegative(),
-  }),
-  output_tokens: z.number().int().nonnegative(),
-  output_tokens_details: z.object({
-    reasoning_tokens: z.number().int().nonnegative(),
-  }),
-  total_tokens: z.number().int().nonnegative(),
-});
-
-export type Usage = z.infer<typeof UsageSchema>;
-
-const ResponseResourceSchema = z.object({
-  id: z.string(),
-  object: z.literal("response"),
-  created_at: z.number().int(),
-  status: ResponseStatusSchema,
-  model: z.string(),
-  output: z.array(OutputItemSchema),
-  usage: UsageSchema,
-  // Optional fields for future phases
-  error: z
-    .object({
-      code: z.string(),
-      message: z.string(),
-    })
-    .optional(),
-});
-
-export type ResponseResource = z.infer<typeof ResponseResourceSchema>;
+export type ResponseResource = {
+  id: string;
+  object: "response";
+  created_at: number;
+  status: "in_progress" | "completed" | "failed" | "cancelled" | "incomplete";
+  model: string;
+  output: OutputItem[];
+  usage: Usage;
+  error?: { code: string; message: string } | undefined;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Streaming Event Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ResponseCreatedEventSchema = z.object({
-  type: z.literal("response.created"),
-  response: ResponseResourceSchema,
-});
-
-const ResponseInProgressEventSchema = z.object({
-  type: z.literal("response.in_progress"),
-  response: ResponseResourceSchema,
-});
-
-const ResponseCompletedEventSchema = z.object({
-  type: z.literal("response.completed"),
-  response: ResponseResourceSchema,
-});
-
-const ResponseFailedEventSchema = z.object({
-  type: z.literal("response.failed"),
-  response: ResponseResourceSchema,
-});
-
-const OutputItemAddedEventSchema = z.object({
-  type: z.literal("response.output_item.added"),
-  output_index: z.number().int().nonnegative(),
-  item: OutputItemSchema,
-});
-
-const OutputItemDoneEventSchema = z.object({
-  type: z.literal("response.output_item.done"),
-  output_index: z.number().int().nonnegative(),
-  item: OutputItemSchema,
-});
-
-const ContentPartAddedEventSchema = z.object({
-  type: z.literal("response.content_part.added"),
-  item_id: z.string(),
-  output_index: z.number().int().nonnegative(),
-  content_index: z.number().int().nonnegative(),
-  part: OutputTextContentPartSchema,
-});
-
-const ContentPartDoneEventSchema = z.object({
-  type: z.literal("response.content_part.done"),
-  item_id: z.string(),
-  output_index: z.number().int().nonnegative(),
-  content_index: z.number().int().nonnegative(),
-  part: OutputTextContentPartSchema,
-});
-
-const OutputTextDeltaEventSchema = z.object({
-  type: z.literal("response.output_text.delta"),
-  item_id: z.string(),
-  output_index: z.number().int().nonnegative(),
-  content_index: z.number().int().nonnegative(),
-  delta: z.string(),
-});
-
-const OutputTextDoneEventSchema = z.object({
-  type: z.literal("response.output_text.done"),
-  item_id: z.string(),
-  output_index: z.number().int().nonnegative(),
-  content_index: z.number().int().nonnegative(),
-  text: z.string(),
-});
+type ContentEventPosition = {
+  item_id: string;
+  output_index: number;
+  content_index: number;
+};
 
 export type StreamingEvent =
-  | z.infer<typeof ResponseCreatedEventSchema>
-  | z.infer<typeof ResponseInProgressEventSchema>
-  | z.infer<typeof ResponseCompletedEventSchema>
-  | z.infer<typeof ResponseFailedEventSchema>
-  | z.infer<typeof OutputItemAddedEventSchema>
-  | z.infer<typeof OutputItemDoneEventSchema>
-  | z.infer<typeof ContentPartAddedEventSchema>
-  | z.infer<typeof ContentPartDoneEventSchema>
-  | z.infer<typeof OutputTextDeltaEventSchema>
-  | z.infer<typeof OutputTextDoneEventSchema>;
+  | { type: "response.created"; response: ResponseResource }
+  | { type: "response.in_progress"; response: ResponseResource }
+  | { type: "response.completed"; response: ResponseResource }
+  | { type: "response.failed"; response: ResponseResource }
+  | { type: "response.output_item.added"; output_index: number; item: OutputItem }
+  | { type: "response.output_item.done"; output_index: number; item: OutputItem }
+  | (ContentEventPosition & { type: "response.content_part.added"; part: OutputTextContentPart })
+  | (ContentEventPosition & { type: "response.content_part.done"; part: OutputTextContentPart })
+  | (ContentEventPosition & { type: "response.output_text.delta"; delta: string })
+  | (ContentEventPosition & { type: "response.output_text.done"; text: string });

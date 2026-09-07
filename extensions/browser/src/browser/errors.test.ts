@@ -1,12 +1,49 @@
 // Browser tests cover errors plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  BROWSER_ACT_ERROR_CODES,
   BROWSER_ERROR_REASONS,
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
   parseBrowserErrorPayload,
   toBrowserErrorResponse,
 } from "./errors.js";
+
+describe("browser action errors", () => {
+  it("preserves known codes and drops unknown route metadata", () => {
+    expect(
+      parseBrowserErrorPayload({
+        error: "evaluation disabled",
+        code: BROWSER_ACT_ERROR_CODES.evaluateDisabled,
+        untrusted: "drop me",
+      }),
+    ).toEqual({
+      error: "evaluation disabled",
+      code: BROWSER_ACT_ERROR_CODES.evaluateDisabled,
+    });
+    expect(parseBrowserErrorPayload({ error: "failure", code: "UNTRUSTED_CODE" })).toEqual({
+      error: "failure",
+      unrecognizedCode: true,
+    });
+  });
+
+  it("preserves the navigation reason without forwarding policy details", () => {
+    expect(
+      parseBrowserErrorPayload({
+        error: "browser navigation blocked by policy",
+        reason: "navigation_blocked",
+        details: { url: "http://internal.example/admin", address: "10.0.0.1" },
+        cause: "private lookup details",
+      }),
+    ).toEqual({
+      error: "browser navigation blocked by policy",
+      reason: "navigation_blocked",
+    });
+    expect(
+      parseBrowserErrorPayload({ error: "failure", reason: "untrusted_reason", details: {} }),
+    ).toEqual({ error: "failure" });
+  });
+});
 
 describe("BrowserTabNotFoundError", () => {
   it("teaches agents that bare numbers are not stable tab targets", () => {

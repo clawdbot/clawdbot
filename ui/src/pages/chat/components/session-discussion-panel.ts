@@ -7,10 +7,11 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { buildWidgetThemeMessage, postWidgetTheme } from "../../../lib/widget-theme.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import { buildWidgetThemeMessage, postWidgetTheme } from "./widget-theme.ts";
 
 type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
 type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDiscussionInfo>;
@@ -213,26 +214,28 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     const openUrl = resolveDiscussionUrl(info.openUrl);
     return html`
       <div class="session-discussion__open">
-        ${embedUrl
-          ? html`
-              <iframe
-                class="session-discussion__frame"
-                src=${embedUrl}
-                title=${t("chat.sessionDiscussion.frameTitle")}
-                sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
-                @load=${this.handleDiscussionFrameLoad}
-              ></iframe>
-            `
-          : renderPanelEmptyState({
-              icon: icons.messageSquare,
-              heading: t("chat.sidePanel.discussion"),
-              description: t("chat.sessionDiscussion.unavailable"),
-              action: openUrl
-                ? html`<a class="session-link" href=${openUrl} target="_blank" rel="noopener">
-                    ${t("chat.sessionDiscussion.openExternal")}
-                  </a>`
-                : nothing,
-            })}
+        ${
+          embedUrl
+            ? html`
+                <iframe
+                  class="session-discussion__frame"
+                  src=${embedUrl}
+                  title=${t("chat.sessionDiscussion.frameTitle")}
+                  sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+                  @load=${this.handleDiscussionFrameLoad}
+                ></iframe>
+              `
+            : renderPanelEmptyState({
+                icon: icons.messageSquare,
+                heading: t("chat.sidePanel.discussion"),
+                description: t("chat.sessionDiscussion.unavailable"),
+                action: openUrl
+                  ? html`<a class="session-link" href=${openUrl} target="_blank" rel="noopener">
+                      ${t("chat.sessionDiscussion.openExternal")}
+                    </a>`
+                  : nothing,
+              })
+        }
       </div>
     `;
   }
@@ -245,19 +248,17 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
       </div>`;
     }
     const value = this.discussionTask.value;
-    if (
-      this.discussionTask.status === TaskStatus.PENDING &&
-      this.openingDiscussion &&
-      this.isOpeningCurrent(this.openingDiscussion)
-    ) {
-      return html`<div class="session-discussion__empty">
-        ${t("chat.sessionDiscussion.opening")}
-      </div>`;
+    const loading =
+      Boolean(this.loadInfo && this.sessionKey.trim()) &&
+      this.discussionTask.status === TaskStatus.PENDING;
+    if (loading && this.openingDiscussion && this.isOpeningCurrent(this.openingDiscussion)) {
+      return renderPanelLoadingSkeleton("discussion", t("chat.sessionDiscussion.opening"));
+    }
+    if (loading) {
+      return renderPanelLoadingSkeleton("discussion", t("chat.sessionDiscussion.loading"));
     }
     if (this.discussionTask.status !== TaskStatus.COMPLETE || !value) {
-      return html`<div class="session-discussion__empty">
-        ${t("chat.sessionDiscussion.loading")}
-      </div>`;
+      return nothing;
     }
     const { info } = value;
     if (info.state === "none") {
@@ -265,7 +266,11 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     }
     if (info.state === "available") {
       return this.canOpen
-        ? html`<div class="session-discussion__empty">${t("chat.sessionDiscussion.opening")}</div>`
+        ? renderPanelEmptyState({
+            icon: icons.messageSquare,
+            heading: t("chat.sidePanel.discussion"),
+            description: t("chat.sessionDiscussion.unavailable"),
+          })
         : renderPanelEmptyState({
             icon: icons.messageSquare,
             heading: t("chat.sidePanel.discussion"),

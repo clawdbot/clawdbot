@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import type { Command } from "commander";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import {
   assertOkOrThrowHttpError,
   assertProviderBinaryResponseContent,
@@ -32,13 +32,13 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { publishOutputFileAtomically, writeOutputAsset } from "../media-output.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   parseOptionalFiniteNumber,
   parseOptionalTimeoutMs,
   providerHasGenericConfig,
   requireProviderModelOverride,
+  resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
@@ -117,13 +117,15 @@ async function runVideoGenerate(params: {
   audio?: boolean;
   watermark?: boolean;
   timeoutMs?: number;
+  agent?: string;
 }) {
   requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer video.generate",
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video.generate");
+  const agentDir = resolveAgentDir(cfg, agentId);
   const result = await generateVideo({
     cfg,
     agentDir,
@@ -232,15 +234,20 @@ async function runVideoGenerate(params: {
   } satisfies CapabilityEnvelope;
 }
 
-async function runVideoDescribe(params: { file: string; model?: string }) {
+async function runVideoDescribe(params: { file: string; model?: string; agent?: string }) {
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer video.describe",
     targetIds: getModelsCommandSecretTargetIds(),
   });
+  const agentDir = resolveAgentDir(
+    cfg,
+    resolveCapabilityProviderAgentId(cfg, params.agent, "infer video describe"),
+  );
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),
     cfg,
+    agentDir,
     activeModel,
   });
   if (!result.text) {
@@ -258,7 +265,10 @@ async function runVideoDescribe(params: { file: string; model?: string }) {
 }
 
 export function registerVideoCapabilityCommands(capability: Command): void {
-  const video = capability.command("video").description("Video generation and description");
+  const video = capability
+    .command("video")
+    .description("Video generation and description")
+    .option("--agent <id>", "Agent whose model and auth state should be used");
 
   video
     .command("generate")
@@ -273,11 +283,16 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--watermark", "Request provider watermark when supported")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
+    .option(
+      "--agent <id>",
+      "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runVideoGenerate({
           prompt: String(opts.prompt),
+          agent: resolveCapabilityAgentOption(command, opts.agent),
           model: opts.model as string | undefined,
           output: opts.output as string | undefined,
           size: opts.size as string | undefined,
@@ -296,12 +311,14 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .command("describe")
     .description("Describe one video file")
     .requiredOption("--file <path>", "Video file")
+    .option("--agent <id>", "Agent whose model and auth state should be used")
     .option("--model <provider/model>", "Model override")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runVideoDescribe({
           file: String(opts.file),
+          agent: resolveCapabilityAgentOption(command, opts.agent),
           model: opts.model as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -313,10 +330,13 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .description("List video generation and description providers")
     .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
+        const agentId = resolveCapabilityProviderAgentId(
+          cfg,
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
         const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
         );

@@ -18,6 +18,7 @@ function setup(
     confirmationRequired?: boolean;
     omitPromptDecision?: boolean;
     now?: () => number;
+    openUrl?: (url: string) => boolean;
   } = {},
 ) {
   const client = {
@@ -40,11 +41,58 @@ function setup(
     confirmPrompt,
     dispatchPrompt,
     now: options.now,
+    openUrl: options.openUrl,
   });
   return { client, confirmPrompt, dispatchPrompt, controller };
 }
 
 describe("board widget bridge", () => {
+  it("opens HTTPS widget links in a new tab without opener or referrer access", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    const { controller, client } = setup();
+
+    await expect(
+      controller.handle(request("host.open", { url: "https://example.com/path" })),
+    ).resolves.toEqual({ ok: true });
+
+    expect(open).toHaveBeenCalledWith("https://example.com/path", "_blank", "noopener,noreferrer");
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("opens HTTP widget links through the injected host opener", async () => {
+    const openUrl = vi.fn(() => true);
+    const { controller } = setup({ openUrl });
+
+    await expect(
+      controller.handle(request("host.open", { url: "http://example.com/path" })),
+    ).resolves.toEqual({ ok: true });
+
+    expect(openUrl).toHaveBeenCalledWith("http://example.com/path");
+  });
+
+  it.each(["javascript:alert(1)", "data:text/html,x", "/relative"])(
+    "rejects unsafe widget link destinations without opening %s",
+    async (url) => {
+      const openUrl = vi.fn(() => true);
+      const { controller } = setup({ openUrl });
+
+      await expect(controller.handle(request("host.open", { url }))).rejects.toThrow(
+        "widget link url is invalid",
+      );
+      expect(openUrl).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports when the browser blocks a widget link", async () => {
+    const openUrl = vi.fn(() => false);
+    const { controller } = setup({ openUrl });
+
+    await expect(
+      controller.handle(request("host.open", { url: "https://example.com/path" })),
+    ).rejects.toThrow("widget link could not be opened");
+    expect(openUrl).toHaveBeenCalledOnce();
+  });
+
   it("asks for per-click confirmation when prompt is not granted", async () => {
     const { controller, confirmPrompt, dispatchPrompt } = setup({ confirmationRequired: true });
 
@@ -199,11 +247,14 @@ describe("board widget bridge", () => {
     expect(client.request).toHaveBeenCalledTimes(13);
   });
 
-  it("maps read and cron requests to ticket-bound board RPCs", async () => {
+  it("maps read, action, and cron requests to ticket-bound board RPCs", async () => {
     const { controller, client } = setup();
 
     await controller.handle(
       request("data.read", { bindingId: "health", params: { probe: false } }),
+    );
+    await controller.handle(
+      request("action.run", { action: "example.resolve", params: { eventId: "event-1" } }),
     );
     await controller.handle(request("cron.trigger", { jobId: "job-1" }));
 
@@ -214,8 +265,22 @@ describe("board widget bridge", () => {
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "board.action", {
       ticket: "ticket",
+      action: "example.resolve",
+      params: { eventId: "event-1" },
+    });
+    expect(client.request).toHaveBeenNthCalledWith(3, "board.action", {
+      ticket: "ticket",
       action: "cron.trigger",
       jobId: "job-1",
     });
+  });
+
+  it("rejects non-object action params", async () => {
+    const { controller, client } = setup();
+
+    await expect(
+      controller.handle(request("action.run", { action: "example.resolve", params: "bad" })),
+    ).rejects.toThrow("widget action params are invalid");
+    expect(client.request).not.toHaveBeenCalled();
   });
 });

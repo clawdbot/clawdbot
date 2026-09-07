@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -9,8 +9,22 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+
+const oauth = vi.hoisted(() => ({
+  create: vi.fn(),
+  install: vi.fn(),
+  start: vi.fn(),
+  stop: vi.fn(),
+  uninstall: vi.fn(),
+}));
+
+vi.mock("./github-oauth-lifecycle.js", () => ({
+  createGitHubOAuthLifecycle: oauth.create,
+  installActiveGitHubOAuthLifecycle: oauth.install,
+}));
 
 const roots: string[] = [];
 
@@ -47,6 +61,17 @@ afterEach(() => {
 });
 
 describe("gateway lifetime sidecars", () => {
+  beforeEach(() => {
+    oauth.start.mockReset();
+    oauth.stop.mockReset().mockResolvedValue(undefined);
+    oauth.uninstall.mockReset();
+    oauth.create.mockReset().mockReturnValue({
+      start: oauth.start,
+      stop: oauth.stop,
+    });
+    oauth.install.mockReset().mockReturnValue(oauth.uninstall);
+  });
+
   test("keeps pre-published sidecars reachable by shutdown", async () => {
     const metadataListener = { stop: vi.fn(async () => {}) };
     const sessionChange = { stop: vi.fn(async () => {}) };
@@ -66,6 +91,78 @@ describe("gateway lifetime sidecars", () => {
     expect(metadataListener.stop).toHaveBeenCalledOnce();
     expect(sessionChange.stop).toHaveBeenCalledOnce();
     expect(worker.stop).toHaveBeenCalledOnce();
+  });
+
+  test("owns standalone GitHub publication recovery when worker placement is unavailable", async () => {
+    vi.useFakeTimers();
+    const reconcileGitHubPublications = vi.fn(async () => {});
+    const sidecars: GatewayPostReadySidecarHandle[] = [];
+    const owner = createGatewaySidecarStopOwner({
+      getRegistered: () => sidecars,
+      setRegistered: (next) => sidecars.splice(0, sidecars.length, ...next),
+    });
+
+    await attachInitialGatewayLifetimeSidecars({
+      chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+      gatewayRequestContext: {} as never,
+      flushPendingSessionsChangedEvents: vi.fn(),
+      minimalTestGateway: false,
+      logWarning: vi.fn(),
+      reconcileGitHubPublications,
+      sidecars,
+    });
+    vi.runAllTicks();
+    expect(reconcileGitHubPublications).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
+    await owner.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
+  });
+
+  test("attaches and retires authorization lifecycles with the Gateway", async () => {
+    const sidecars: GatewayPostReadySidecarHandle[] = [];
+    const owner = createGatewaySidecarStopOwner({
+      getRegistered: () => sidecars,
+      setRegistered: (next) => sidecars.splice(0, sidecars.length, ...next),
+    });
+    const context: Pick<
+      GatewayRequestContext,
+      "getRuntimeConfig" | "githubOAuthService" | "modelAccountConnectService"
+    > = {
+      getRuntimeConfig: vi.fn(() => ({})),
+    };
+    const warn = vi.fn();
+
+    await attachInitialGatewayLifetimeSidecars({
+      chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+      gatewayRequestContext: context as never,
+      flushPendingSessionsChangedEvents: vi.fn(),
+      minimalTestGateway: false,
+      logWarning: warn,
+      sidecars,
+    });
+
+    expect(oauth.create).toHaveBeenCalledWith({
+      getConfig: context.getRuntimeConfig,
+      getPersistedConfig: expect.any(Function),
+      warn,
+    });
+    expect(oauth.install).toHaveBeenCalledWith(context.githubOAuthService);
+    expect(oauth.start).toHaveBeenCalledOnce();
+    expect(context.githubOAuthService).toBeDefined();
+    expect(context.modelAccountConnectService).toBeDefined();
+    const modelAccounts = context.modelAccountConnectService;
+
+    await owner.stop();
+    expect(oauth.uninstall).toHaveBeenCalledOnce();
+    expect(oauth.stop).toHaveBeenCalledOnce();
+    expect(context.githubOAuthService).toBeUndefined();
+    expect(context.modelAccountConnectService).toBeUndefined();
+    expect(() =>
+      modelAccounts?.status({ owner: "profile-1", assertCurrent: () => {} }, "stale-flow"),
+    ).toThrow("current authorized connection");
   });
 
   test.each([

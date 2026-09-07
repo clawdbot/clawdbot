@@ -3,7 +3,11 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchCatalogIconBlobUrl, fetchPluginIconBlobUrl } from "./icon-loader.ts";
+import {
+  fetchCatalogIconBlobUrl,
+  fetchLinkFaviconBlobUrl,
+  fetchPluginIconBlobUrl,
+} from "./icon-loader.ts";
 
 const auth = {
   settings: { token: "test-token" },
@@ -68,7 +72,8 @@ describe("catalog icon loader", () => {
     const createObjectURL = vi
       .fn()
       .mockReturnValueOnce("blob:plugin-icon")
-      .mockReturnValueOnce("blob:catalog-icon");
+      .mockReturnValueOnce("blob:catalog-icon")
+      .mockReturnValueOnce("blob:link-favicon");
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(
       "URL",
@@ -81,7 +86,7 @@ describe("catalog icon loader", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const common = {
       auth,
-      basePath: "/openclaw",
+      resourceBasePath: "/openclaw",
       gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
       signal: new AbortController().signal,
     };
@@ -93,14 +98,18 @@ describe("catalog icon loader", () => {
     await expect(fetchCatalogIconBlobUrl({ ...common, iconUrl })).resolves.toBe(
       "blob:catalog-icon",
     );
+    await expect(
+      fetchLinkFaviconBlobUrl({ ...common, hostname: "docs.example.com" }),
+    ).resolves.toBe("blob:link-favicon");
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/openclaw/__openclaw__/plugin-icon/firecrawl",
       `/openclaw/__openclaw__/catalog-icon/${encodeURIComponent(iconUrl)}`,
+      "/openclaw/__openclaw__/link-favicon/docs.example.com",
     ]);
     expect(
       fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
-    ).toEqual(["Bearer test-token", "Bearer test-token"]);
+    ).toEqual(["Bearer test-token", "Bearer test-token", "Bearer test-token"]);
     expect(fetchMock.mock.calls.some(([url]) => url === iconUrl)).toBe(false);
   });
 
@@ -111,7 +120,7 @@ describe("catalog icon loader", () => {
     await expect(
       fetchCatalogIconBlobUrl({
         auth,
-        basePath: "",
+        resourceBasePath: "",
         gatewayUrl: "wss://remote.example.test",
         iconUrl: "https://cdn.example.test/provider.svg",
         signal: new AbortController().signal,
@@ -141,7 +150,7 @@ describe("catalog icon loader", () => {
             hello: { auth: { deviceToken: "stale-device-token" } },
             settings: { token: "fallback-token" },
           },
-          basePath: "",
+          resourceBasePath: "",
           gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
           pluginId: "streaming-errors",
           signal: new AbortController().signal,
@@ -173,7 +182,7 @@ describe("catalog icon loader", () => {
       await expect(
         fetchPluginIconBlobUrl({
           auth,
-          basePath: "",
+          resourceBasePath: "",
           gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
           pluginId: "wrong-mime",
           signal: new AbortController().signal,
@@ -204,7 +213,7 @@ describe("catalog icon loader", () => {
           hello: { auth: { deviceToken: "stale-device-token" } },
           settings: { token: "fallback-token" },
         },
-        basePath: "",
+        resourceBasePath: "",
         gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
         pluginId: "stalled-cancellation",
         signal: new AbortController().signal,

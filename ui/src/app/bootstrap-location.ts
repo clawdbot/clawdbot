@@ -1,15 +1,15 @@
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { AgentsListResult } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { routeIdFromPath } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import {
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
-  type UiSessionDefaultsHost,
 } from "../lib/sessions/session-key.ts";
-import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
 import type { ApplicationGateway } from "./context.ts";
 import { waitForGatewayClient } from "./gateway-readiness.ts";
 
@@ -17,6 +17,30 @@ type ReleasedSessionQuery = {
   face: BoardFace;
   sessionKey: string;
 };
+
+// Saved selection only fills an implicit landing. Agent paths remain explicit,
+// even when first-run setup is eligible to run on that same path.
+function isPersistedSessionLanding(location: RouteLocation, basePath: string): boolean {
+  return (
+    !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
+    (routeIdFromPath(location.pathname, basePath) === null ||
+      /^\/chat\/?$/u.test(location.pathname.slice(basePath.length)))
+  );
+}
+
+function resolvePersistedAgentId(
+  selectedAgentId: string | null | undefined,
+  agentsList: AgentsListResult | null,
+): string | null {
+  const selectedId = selectedAgentId?.trim();
+  if (!selectedId || !agentsList) {
+    return null;
+  }
+  const normalizedId = normalizeAgentId(selectedId);
+  return agentsList.agents.some((agent) => normalizeAgentId(agent.id) === normalizedId)
+    ? normalizedId
+    : null;
+}
 
 function releasedSessionQuery(
   location: RouteLocation,
@@ -47,7 +71,8 @@ async function normalizeReleasedSessionQueryLocation(params: {
   location: RouteLocation;
   basePath: string;
   gateway: Pick<ApplicationGateway, "snapshot" | "subscribe">;
-  agentsList: () => UiSessionDefaultsHost["agentsList"];
+  agentsList: () => AgentsListResult | null;
+  selectedAgentId?: string | null;
   signal: AbortSignal;
 }): Promise<RouteLocation | null> {
   const released = releasedSessionQuery(params.location, params.basePath);
@@ -66,7 +91,10 @@ async function normalizeReleasedSessionQueryLocation(params: {
     agentsList: params.agentsList(),
     hello: params.gateway.snapshot.hello,
   };
-  const agentId = parsed?.agentId ?? resolveUiDefaultAgentId(defaults);
+  const agentId =
+    parsed?.agentId ??
+    (resolvePersistedAgentId(params.selectedAgentId, defaults.agentsList) ||
+      resolveUiDefaultAgentId(defaults));
   const mainKey = resolveUiConfiguredMainKey(defaults);
   const pathname = released.sessionKey
     ? pathForSession(released.face, agentId, released.sessionKey, params.basePath, {
@@ -84,14 +112,14 @@ async function normalizeReleasedSessionQueryLocation(params: {
   };
 }
 
-export function normalizeInitialApplicationLocation(
+function normalizeInitialApplicationLocation(
   location: RouteLocation,
   basePath: string,
   sessionKey: string,
   fallbackAgentId: string,
   mainKey?: string | null,
 ) {
-  if (!isDefaultChatLanding(location, basePath, routeIdFromPath) || !sessionKey.trim()) {
+  if (!isPersistedSessionLanding(location, basePath) || !sessionKey.trim()) {
     return location;
   }
   const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId.trim();
@@ -107,14 +135,15 @@ export async function resolveInitialApplicationLocation(params: {
   basePath: string;
   sessionKey: string;
   gateway: Pick<ApplicationGateway, "snapshot" | "subscribe">;
-  agentsList: () => UiSessionDefaultsHost["agentsList"];
+  agentsList: () => AgentsListResult | null;
+  selectedAgentId?: string | null;
   signal: AbortSignal;
 }): Promise<RouteLocation> {
   const releasedLocation = await normalizeReleasedSessionQueryLocation(params);
   if (releasedLocation) {
     return releasedLocation;
   }
-  if (!isDefaultChatLanding(params.location, params.basePath, routeIdFromPath)) {
+  if (!isPersistedSessionLanding(params.location, params.basePath)) {
     return params.location;
   }
   // Explicit routes must start immediately; only the implicit session landing
@@ -130,7 +159,8 @@ export async function resolveInitialApplicationLocation(params: {
     params.location,
     params.basePath,
     params.sessionKey.trim() || params.gateway.snapshot.sessionKey,
-    resolveUiDefaultAgentId(defaults),
+    resolvePersistedAgentId(params.selectedAgentId, defaults.agentsList) ||
+      resolveUiDefaultAgentId(defaults),
     resolveUiConfiguredMainKey(defaults),
   );
 }

@@ -7,21 +7,22 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { isMalformedApiKeyInput } from "../agents/auth-profiles/credential-state.js";
-import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
-import {
-  extractEnvVarFromSourceLabel,
-  promptSecretRefForSetup,
-  resolveRefFallbackInput,
-} from "./provider-auth-ref.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
-export { promptSecretRefForSetup } from "./provider-auth-ref.js";
 export { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
+
+const loadModelAuthEnv = createLazyRuntimeModule(() => import("../agents/model-auth-env.js"));
+const loadProviderAuthRef = createLazyRuntimeModule(() => import("./provider-auth-ref.js"));
+
+/** Keeps secret resolution out of synchronous provider setup metadata imports. */
+export const promptSecretRefForSetup: typeof import("./provider-auth-ref.js").promptSecretRefForSetup =
+  async (...args) => (await loadProviderAuthRef()).promptSecretRefForSetup(...args);
 
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 
@@ -137,6 +138,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   secretInputMode?: SecretInputMode;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   expectedProviders: string[];
   provider: string;
   envLabel: string;
@@ -168,6 +170,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
     env: params.env,
+    workspaceDir: params.workspaceDir,
     provider: params.provider,
     envLabel: params.envLabel,
     promptMessage: params.promptMessage,
@@ -183,6 +186,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   provider: string;
   envLabel: string;
   promptMessage: string;
@@ -196,16 +200,22 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     prompter: params.prompter,
     explicitMode: params.secretInputMode,
   });
+  const [
+    { resolveEnvApiKey },
+    {
+      extractEnvVarFromSourceLabel,
+      promptSecretRefForSetup: promptSecretRef,
+      resolveRefFallbackInput,
+    },
+  ] = await Promise.all([loadModelAuthEnv(), loadProviderAuthRef()]);
   const env = params.env ?? process.env;
   // Setup must resolve the same trusted workspace/provider descriptors as
   // runtime; dropping the staged config silently changes credential ownership.
   const envKey = resolveEnvApiKey(params.provider, env, {
     config: params.config,
-    workspaceDir: resolveAgentWorkspaceDir(
-      params.config,
-      resolveDefaultAgentId(params.config),
-      env,
-    ),
+    workspaceDir:
+      params.workspaceDir ??
+      resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), env),
   });
 
   if (selectedMode === "ref") {
@@ -219,7 +229,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
       await params.setCredential(fallback.ref, selectedMode);
       return fallback.resolvedValue;
     }
-    const resolved = await promptSecretRefForSetup({
+    const resolved = await promptSecretRef({
       provider: params.provider,
       config: params.config,
       prompter: params.prompter,

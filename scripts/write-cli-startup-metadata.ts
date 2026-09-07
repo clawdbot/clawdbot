@@ -1,5 +1,5 @@
 // Write Cli Startup Metadata script supports OpenClaw repository automation.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs, {
   existsSync,
@@ -17,7 +17,7 @@ import pMap from "p-map";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveCliStartupRootHelpBundleIdentity } from "./lib/cli-startup-root-help-bundle.js";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
+import { terminateManagedChild } from "./lib/managed-child-process.mts";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -46,6 +46,7 @@ const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
 // proxy for module-loading throughput on a disk-contended host.
 const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
+  "config",
   "doctor",
   "gateway",
   "models",
@@ -104,16 +105,6 @@ type SourceHelpRenderer<T = string> = (
   renderContext: RootHelpRenderContext,
   taskContext?: RenderTaskContext,
 ) => Awaitable<T>;
-type KillableChild = {
-  kill(signal: NodeJS.Signals): boolean;
-  pid?: number;
-};
-type RunTaskkill = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: unknown; status?: number | null } | undefined;
-
 class CliStartupMetadataRenderSupervisor {
   readonly #abortController = new AbortController();
   readonly #parentSignalHandlers: Array<{ handler: () => void; signal: NodeJS.Signals }> = [];
@@ -214,65 +205,6 @@ class CliStartupMetadataRenderSupervisor {
   }
 }
 
-function signalWindowsProcessTree(
-  pid: number,
-  signal: NodeJS.Signals,
-  runTaskkill: RunTaskkill = spawnSync,
-): boolean {
-  const args = ["/PID", String(pid), "/T"];
-  if (signal === "SIGKILL") {
-    args.push("/F");
-  }
-  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
-  return !result?.error && result?.status === 0;
-}
-
-function signalWindowsProcessTreeOrForce(
-  pid: number,
-  signal: NodeJS.Signals,
-  runTaskkill: RunTaskkill = spawnSync,
-): boolean {
-  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
-    return true;
-  }
-  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
-}
-
-function signalCliStartupMetadataProcessTree(
-  child: KillableChild,
-  signal: NodeJS.Signals,
-  {
-    appendDiagnostic = () => {},
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    appendDiagnostic?: (message: string) => void;
-    platform?: NodeJS.Platform;
-    runTaskkill?: RunTaskkill;
-    useProcessGroup?: boolean;
-  } = {},
-): void {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-        appendDiagnostic(
-          `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`,
-        );
-      }
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
-      return;
-    }
-  }
-  child.kill(signal);
-}
-
 function updateHashFromFiles(
   hash: ReturnType<typeof createHash>,
   files: string[],
@@ -331,8 +263,6 @@ function resolveNodesHelpSourceSignature(sourceRootDir: string = rootDir): strin
     [
       path.join(sourceRootDir, "extensions/canvas/cli-metadata.ts"),
       path.join(sourceRootDir, "extensions/canvas/index.ts"),
-      path.join(sourceRootDir, "extensions/canvas/src/a2ui-jsonl.ts"),
-      path.join(sourceRootDir, "extensions/canvas/src/cli-helpers.ts"),
       path.join(sourceRootDir, "extensions/canvas/src/cli.ts"),
       path.join(sourceRootDir, "src/cli/program/help.ts"),
       path.join(sourceRootDir, "src/cli/program/context.ts"),
@@ -353,6 +283,7 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
       path.join(sourceRootDir, "src/cli/program/context.ts"),
       path.join(sourceRootDir, "src/cli/banner.ts"),
       path.join(sourceRootDir, "src/cli/help-format.ts"),
+      path.join(sourceRootDir, "src/cli/config-cli.ts"),
       path.join(sourceRootDir, "src/cli/daemon-cli/register-service-commands.ts"),
       path.join(sourceRootDir, "src/cli/program/register.maintenance.ts"),
       path.join(sourceRootDir, "src/cli/program/register.status-health-sessions.ts"),
@@ -580,9 +511,9 @@ async function spawnText(
     let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     const signalChild = (signal: NodeJS.Signals) => {
-      signalCliStartupMetadataProcessTree(child, signal, {
-        appendDiagnostic: (message) => {
-          stderr += message;
+      terminateManagedChild(child, signal, {
+        onProcessGroupSignalError: (error) => {
+          stderr += `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`;
         },
         useProcessGroup,
       });
@@ -1195,7 +1126,6 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
 
 export const testing = {
   renderSourceRootHelpText,
-  signalCliStartupMetadataProcessTree,
   spawnText,
   writeCliStartupMetadata,
 };

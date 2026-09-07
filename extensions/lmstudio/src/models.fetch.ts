@@ -1,13 +1,14 @@
 // Lmstudio plugin module implements models.fetch behavior.
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
-  readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
+import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
@@ -23,6 +24,24 @@ import { buildLmstudioAuthHeaders } from "./runtime.js";
 
 const log = createSubsystemLogger("extensions/lmstudio/models");
 const LMSTUDIO_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+
+function redactLmstudioLoadError(value: string, headers: Record<string, string> | undefined) {
+  const credentials = Object.entries(headers ?? {})
+    .filter(([name]) => name.toLowerCase() !== "content-type")
+    .flatMap(([name, header]) => {
+      const normalized = header.trim();
+      if (!normalized) {
+        return [];
+      }
+      return name.toLowerCase() === "authorization"
+        ? [normalized, normalized.replace(/^\S+\s+/u, "")]
+        : [normalized];
+    })
+    .toSorted((left, right) => right.length - left.length);
+  return redactToolPayloadText(
+    credentials.reduce((redacted, credential) => redacted.replaceAll(credential, "***"), value),
+  );
+}
 
 type LmstudioLoadResponse = {
   status?: string;
@@ -44,15 +63,10 @@ type DiscoverLmstudioModelsParams = {
   apiKey: string;
   headers?: Record<string, string>;
   quiet: boolean;
+  discoveryMode?: "strict";
   /** Injectable fetch implementation; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
 };
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
 
 async function fetchLmstudioEndpoint(params: {
   url: string;
@@ -87,7 +101,10 @@ async function fetchLmstudioEndpoint(params: {
   return {
     response,
     release: async () => {
-      await cancelUnreadResponseBody(response);
+      // A capture tee must not delay the guard's bounded dispatcher release.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       await release();
     },
   };
@@ -180,27 +197,21 @@ export async function discoverLmstudioModels(
     fetchImpl: params.fetchImpl,
   });
   const quiet = params.quiet;
-  if (!fetched.reachable) {
-    if (!quiet) {
-      log.debug(`Failed to discover LM Studio models: ${String(fetched.error)}`);
+  if (!fetched.reachable || (fetched.status !== undefined && fetched.status >= 400)) {
+    const error =
+      fetched.status === undefined
+        ? fetched.error
+        : new LiveModelCatalogHttpError("lmstudio", fetched.status);
+    if (params.discoveryMode === "strict") {
+      throw error;
     }
-    return [];
-  }
-  if (fetched.status !== undefined && fetched.status >= 400) {
     if (!quiet) {
-      log.debug(`Failed to discover LM Studio models: ${fetched.status}`);
-    }
-    return [];
-  }
-  const models = fetched.models;
-  if (models.length === 0) {
-    if (!quiet) {
-      log.debug("No LM Studio models found on local instance");
+      log.debug(`Failed to discover LM Studio models: ${String(error)}`);
     }
     return [];
   }
 
-  return models
+  return fetched.models
     .map((entry): ModelDefinitionConfig | null => {
       const base = mapLmstudioWireEntry(entry);
       if (!base) {
@@ -275,15 +286,16 @@ export async function ensureLmstudioModelLoaded(params: {
   }
 
   try {
+    const requestHeaders = buildLmstudioAuthHeaders({
+      apiKey: params.apiKey,
+      headers: params.headers,
+      json: true,
+    });
     const { response, release } = await fetchLmstudioEndpoint({
       url: `${baseUrl}/api/v1/models/load`,
       init: {
         method: "POST",
-        headers: buildLmstudioAuthHeaders({
-          apiKey: params.apiKey,
-          headers: params.headers,
-          json: true,
-        }),
+        headers: requestHeaders,
         body: JSON.stringify({
           model: canonicalModelKey,
           // Ask LM Studio to load with our default target, capped to the model's own limit.
@@ -297,9 +309,15 @@ export async function ensureLmstudioModelLoaded(params: {
     });
     try {
       if (!response.ok) {
-        const body = await readResponseTextLimited(response, LMSTUDIO_ERROR_BODY_LIMIT_BYTES);
+        const bodyRead = await readResponseTextPrefix(response, LMSTUDIO_ERROR_BODY_LIMIT_BYTES, {
+          chunkTimeoutMs: 10_000,
+        });
+        // A truncated credential cannot be identified safely; drop the entire diagnostic.
+        const detail = bodyRead.truncated
+          ? ""
+          : redactLmstudioLoadError(bodyRead.text, requestHeaders);
         throw new Error(
-          `LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`,
+          `LM Studio model load failed (${response.status})${detail ? `: ${detail}` : ""}`,
         );
       }
       // Read the success body through the shared byte-capped reader so a misbehaving
@@ -310,7 +328,8 @@ export async function ensureLmstudioModelLoaded(params: {
         "LM Studio model load",
       );
       if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
-        throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
+        const status = redactLmstudioLoadError(payload.status, requestHeaders);
+        throw new Error(`LM Studio model load returned unexpected status: ${status}`);
       }
     } finally {
       await release();

@@ -112,44 +112,39 @@ export function listNativeExecApprovalClientLabels(params?: {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
-/** Returns channel-specific setup guidance for native exec approvals, when available. */
-export function describeNativeExecApprovalClientSetup(params: {
+type NativeApprovalClientSetupParams = {
   channel?: string | null;
   channelLabel?: string | null;
   accountId?: string | null;
-}): string | null {
+};
+
+function describeNativeApprovalClientSetup(
+  params: NativeApprovalClientSetupParams,
+  approvalKind: ChannelApprovalKind,
+): string | null {
   const channel = normalizeMessageChannel(params.channel);
   if (!channel || channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
     return null;
   }
   const channelLabel = normalizeOptionalString(params.channelLabel) ?? labelForChannel(channel);
   const accountId = normalizeOptionalString(params.accountId);
-  return (
-    resolveChannelApprovalCapability(getChannelPlugin(channel))?.describeExecApprovalSetup?.({
-      channel,
-      channelLabel,
-      accountId,
-    }) ?? null
-  );
+  const capability = resolveChannelApprovalCapability(getChannelPlugin(channel));
+  const setupParams = { channel, channelLabel, accountId };
+  return approvalKind === "exec"
+    ? (capability?.describeExecApprovalSetup?.(setupParams) ?? null)
+    : (capability?.describePluginApprovalSetup?.(setupParams) ?? null);
+}
+
+/** Returns channel-specific setup guidance for native exec approvals, when available. */
+export function describeNativeExecApprovalClientSetup(
+  params: NativeApprovalClientSetupParams,
+): string | null {
+  return describeNativeApprovalClientSetup(params, "exec");
 }
 
 /** Returns channel-specific setup guidance for native plugin approvals, when available. */
-export function describeNativePluginApprovalClientSetup(params: {
-  channel?: string | null;
-  channelLabel?: string | null;
-  accountId?: string | null;
-}): string | null {
-  const channel = normalizeMessageChannel(params.channel);
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
-    return null;
-  }
-  const channelLabel = normalizeOptionalString(params.channelLabel) ?? labelForChannel(channel);
-  const accountId = normalizeOptionalString(params.accountId);
-  return (
-    resolveChannelApprovalCapability(getChannelPlugin(channel))?.describePluginApprovalSetup?.({
-      channel,
-      channelLabel,
-      accountId,
-    }) ?? null
-  );
+export function describeNativePluginApprovalClientSetup(
+  params: NativeApprovalClientSetupParams,
+): string | null {
+  return describeNativeApprovalClientSetup(params, "plugin");
 }

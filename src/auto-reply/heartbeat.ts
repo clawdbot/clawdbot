@@ -1,15 +1,15 @@
-/** Heartbeat prompt defaults, token stripping, task parsing, and due-time helpers. */
+/** Heartbeat prompt defaults, scratch detection, and acknowledgment handling. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
-import { HEARTBEAT_TOKEN } from "./tokens.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN, isSilentReplyPayloadText } from "./tokens.js";
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
-export const HEARTBEAT_CRON_TASK_GUIDANCE =
+const HEARTBEAT_CRON_TASK_GUIDANCE =
   "Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch.";
 const HEARTBEAT_CONTEXT_PROMPT = `Follow the heartbeat monitor scratch context when provided. ${HEARTBEAT_CRON_TASK_GUIDANCE} Do not infer or repeat old tasks from prior chats.`;
 /** Default prompt for heartbeat turns when config does not override it. */
-export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply HEARTBEAT_OK.`;
+export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply ${SILENT_REPLY_TOKEN}.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
   "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
 export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
@@ -50,11 +50,10 @@ function stripHeartbeatHtmlComments(content: string): string[] {
  * Check if heartbeat scratch is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
  *
- * A file is considered effectively empty if it contains only:
+ * Scratch is considered effectively empty if it contains only:
  * - Whitespace / empty lines
  * - Markdown/HTML comments
  * - Markdown ATX headers (`#`, `##`, ...)
- * - One-line HTML comments (`<!-- ... -->`)
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
  *
@@ -69,39 +68,18 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     return false;
   }
 
-  const lines = stripHeartbeatHtmlComments(content);
-  for (const line of lines) {
+  for (const line of stripHeartbeatHtmlComments(content)) {
     const trimmed = line.trim();
-    // Skip empty lines
-    if (!trimmed) {
+    if (
+      !trimmed ||
+      /^#+(\s|$)/.test(trimmed) ||
+      /^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed) ||
+      /^```[A-Za-z0-9_-]*$/.test(trimmed)
+    ) {
       continue;
     }
-    // Skip single-line HTML comments used by the bundled runtime template.
-    if (/^<!--.*-->$/.test(trimmed)) {
-      continue;
-    }
-    // Skip markdown header lines (# followed by space or EOL, ## etc)
-    // This intentionally does NOT skip lines like "#TODO" or "#hashtag" which might be content
-    // (Those aren't valid markdown headers - ATX headers require space after #)
-    if (/^#+(\s|$)/.test(trimmed)) {
-      continue;
-    }
-    if (/^<!--.*-->$/.test(trimmed)) {
-      continue;
-    }
-    // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "
-    if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
-      continue;
-    }
-    // Ignore markdown fence markers and HTML comments that only document the
-    // workspace template; neither carries heartbeat task semantics.
-    if (/^```[A-Za-z0-9_-]*$/.test(trimmed) || /^<!--.*-->$/.test(trimmed)) {
-      continue;
-    }
-    // Found a non-empty, non-comment line - there's actionable content
     return false;
   }
-  // All lines were either empty or comments
   return true;
 }
 
@@ -111,23 +89,15 @@ export function resolveHeartbeatPromptCore(raw?: string): string {
   return trimmed || HEARTBEAT_PROMPT;
 }
 
-function appendHeartbeatResponseToolInstructions(prompt: string): string {
-  const trimmed = normalizeOptionalString(prompt) ?? "";
-  if (!trimmed) {
-    return HEARTBEAT_RESPONSE_TOOL_PROMPT;
-  }
-  if (trimmed.includes(HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS)) {
-    return trimmed;
-  }
-  return `${trimmed}\n\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
-}
-
 /** Resolves heartbeat prompt text and guarantees heartbeat_respond tool instructions are present. */
 export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
-  const trimmed = normalizeOptionalString(raw) ?? "";
-  return trimmed
-    ? appendHeartbeatResponseToolInstructions(trimmed)
-    : HEARTBEAT_RESPONSE_TOOL_PROMPT;
+  const prompt = normalizeOptionalString(raw);
+  if (!prompt) {
+    return HEARTBEAT_RESPONSE_TOOL_PROMPT;
+  }
+  return prompt.includes(HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS)
+    ? prompt
+    : `${prompt}\n\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
 }
 
 type StripHeartbeatMode = "heartbeat" | "message";
@@ -192,6 +162,10 @@ export function stripHeartbeatToken(
   if (!trimmed) {
     return { shouldSkip: true, text: "", didStrip: false };
   }
+  // Markup cleanup inserts spaces or removes edge wrappers; it cannot create this token.
+  if (!trimmed.includes(HEARTBEAT_TOKEN)) {
+    return { shouldSkip: false, text: trimmed, didStrip: false };
+  }
 
   const mode: StripHeartbeatMode = opts.mode ?? "message";
   const maxAckCharsRaw = opts.maxAckChars;
@@ -217,10 +191,6 @@ export function stripHeartbeatToken(
       .replace(/[*`~_]+$/, "");
 
   const trimmedNormalized = stripMarkup(trimmed);
-  const hasToken = trimmed.includes(HEARTBEAT_TOKEN) || trimmedNormalized.includes(HEARTBEAT_TOKEN);
-  if (!hasToken) {
-    return { shouldSkip: false, text: trimmed, didStrip: false };
-  }
 
   const strippedOriginal = stripTokenAtEdges(trimmed);
   const strippedNormalized = stripTokenAtEdges(trimmedNormalized);
@@ -242,4 +212,15 @@ export function stripHeartbeatToken(
   }
 
   return { shouldSkip: false, text: rest, didStrip: true };
+}
+
+/** Recognizes canonical silent replies and backwards-compatible heartbeat acknowledgements. */
+export function isHeartbeatAcknowledgementText(
+  text: string | undefined,
+  maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+): boolean {
+  return (
+    isSilentReplyPayloadText(text) ||
+    stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars }).shouldSkip
+  );
 }

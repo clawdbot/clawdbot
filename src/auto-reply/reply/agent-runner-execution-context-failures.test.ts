@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -9,14 +9,16 @@ import {
   makeTestModel,
   getExecuteAgentTurnForTest,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   createMockReplyOperation,
   requireRecord,
   expectRecordFields,
   createMinimalRunAgentTurnParams,
+  makeTestSessionStorePath,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: context failures", () => {
   it("preserves the active session when embedded overflow recovery fails", async () => {
@@ -48,7 +50,7 @@ describe("executeAgentTurn: context failures", () => {
       sessionKey: "agent:main:main",
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
-      storePath: "/tmp/sessions.json",
+      storePath: makeTestSessionStorePath(),
     });
 
     expect(result.kind).toBe("final");
@@ -94,7 +96,7 @@ describe("executeAgentTurn: context failures", () => {
       sessionKey: "agent:main:main",
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
-      storePath: "/tmp/sessions.json",
+      storePath: makeTestSessionStorePath(),
     });
 
     expect(result.kind).toBe("final");
@@ -113,45 +115,6 @@ describe("executeAgentTurn: context failures", () => {
     expect(updateSessionIdMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      reason: "server_error" as const,
-      message: "upstream provider failed briefly",
-    },
-    {
-      reason: "timeout" as const,
-      message: "provider request timed out without status token",
-    },
-  ])(
-    "retries once for structured FailoverError $reason without leading HTTP status text",
-    async ({ reason, message }) => {
-      vi.useFakeTimers();
-      state.runEmbeddedAgentMock
-        .mockRejectedValueOnce(
-          new FailoverError(message, {
-            reason,
-            provider: "openai",
-            model: "gpt-5.5",
-          }),
-        )
-        .mockResolvedValueOnce({
-          payloads: [{ text: "recovered after transient failover" }],
-          meta: {},
-        });
-
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const resultPromise = executeAgentTurn(createMinimalRunAgentTurnParams());
-      await vi.advanceTimersByTimeAsync(2_500);
-      const result = await resultPromise;
-
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-      expect(result.kind).toBe("success");
-      if (result.kind === "success") {
-        expect(result.runResult.payloads?.[0]?.text).toBe("recovered after transient failover");
-      }
-    },
-  );
 
   it("uses structured FailoverError context_overflow over non-overflow message text", async () => {
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
@@ -188,7 +151,7 @@ describe("executeAgentTurn: context failures", () => {
   it("uses the built-in compaction failure hint when the fallback candidate throws", async () => {
     state.isCompactionFailureErrorMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("custom", "uncataloged-32k");
+      await params.run("custom", "uncataloged-32k", initialFallbackAttemptOptions(params));
       throw new Error("expected fallback candidate to throw");
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(

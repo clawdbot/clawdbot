@@ -161,7 +161,19 @@ describe("browser plugin", () => {
   it("exposes static browser metadata on the plugin definition", () => {
     expect(browserPluginReload).toEqual({
       restartPrefixes: ["browser"],
-      hotPrefixes: ["browser.profiles"],
+      hotPrefixes: [
+        "browser.profiles",
+        "browser.defaultProfile",
+        "browser.headless",
+        "browser.executablePath",
+        "browser.attachOnly",
+        "browser.cdpUrl",
+        "browser.noSandbox",
+        "browser.extraArgs",
+        "browser.snapshotDefaults",
+        "browser.tabCleanup",
+        "browser.allowSystemProfileImport",
+      ],
     });
     expect(browserPluginNodeHostCommands.map((entry) => entry.command)).toEqual([
       "browser.proxy",
@@ -223,6 +235,14 @@ describe("browser plugin", () => {
     expect(tool.description).toContain("action=profiles");
     expect(tool.description).not.toContain('profile="user"');
     expect(tool.outputSchema).toBe(BrowserToolOutputSchema);
+    const properties = (
+      tool.parameters as {
+        properties: Record<string, { description?: string }>;
+      }
+    ).properties;
+    expect(properties.actions?.description).toContain("batch");
+    expect(properties.doubleClick?.description).toContain("clickCoords");
+    expect(properties.labels?.description).toContain("snapshot");
     expect(runtimeApiMocks.createBrowserTool).not.toHaveBeenCalled();
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
@@ -233,6 +253,7 @@ describe("browser plugin", () => {
         sessionKey: "agent:main:webchat:direct:123",
         chatType: "direct",
       },
+      toolCapabilities: expect.any(Object),
     });
   });
 
@@ -260,6 +281,7 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:webchat:direct:123",
+      agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       activeModel: { provider: "openai", model: "gpt-5.5" },
@@ -268,6 +290,7 @@ describe("browser plugin", () => {
         channel: "telegram",
         chatType: "direct",
       },
+      toolCapabilities: expect.any(Object),
     });
   });
 
@@ -291,7 +314,122 @@ describe("browser plugin", () => {
     }
 
     await tool.execute("call-1", { action: "snapshot" });
-    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({ runToolBinding: binding });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      runToolBinding: binding,
+      toolCapabilities: expect.any(Object),
+    });
+  });
+
+  it("describes and freezes only effective tab-bound actions when evaluation is disabled", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+    const tool = factory({
+      runtimeConfig: { browser: { evaluateEnabled: false } },
+      toolBindings: {
+        browser: {
+          kind: "tab",
+          tabId: 7,
+          target: "host",
+          profile: "chrome",
+          targetId: "target-7",
+        },
+      },
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+    const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
+    const action = properties.action as { enum?: string[] };
+    const kind = properties.kind as { enum?: string[] };
+    const request = properties.request as {
+      properties?: Record<string, { enum?: string[] }>;
+    };
+
+    expect(action.enum).toEqual([
+      "act",
+      "close",
+      "console",
+      "requests",
+      "errors",
+      "text",
+      "emulate",
+      "dialog",
+      "download",
+      "focus",
+      "navigate",
+      "pdf",
+      "screenshot",
+      "snapshot",
+      "tabs",
+      "upload",
+      "waitfordownload",
+    ]);
+    expect(kind.enum).not.toContain("evaluate");
+    expect(request.properties?.kind?.enum).not.toContain("evaluate");
+    expect(properties).not.toHaveProperty("fn");
+    expect(request.properties).not.toHaveProperty("fn");
+    expect(tool.description).not.toContain("action=profiles");
+    expect(tool.description).not.toContain("target selects browser location");
+    expect(tool.description).not.toContain("act:evaluate");
+
+    await tool.execute("call-1", { action: "snapshot" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      runToolBinding: expect.objectContaining({ profile: "chrome", targetId: "target-7" }),
+      toolCapabilities: expect.objectContaining({
+        tabBound: true,
+      }),
+    });
+  });
+
+  it("omits unsupported actions for a host-bound existing-session profile", () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+    const tool = factory({
+      runtimeConfig: {
+        browser: {
+          profiles: { user: { driver: "existing-session", attachOnly: true } },
+        },
+      },
+      toolBindings: {
+        browser: {
+          kind: "tab",
+          tabId: 7,
+          target: "host",
+          profile: "user",
+          targetId: "target-7",
+        },
+      },
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+    const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
+    const actions = (properties.action as { enum?: string[] }).enum;
+    const actKinds = (properties.kind as { enum?: string[] }).enum;
+
+    for (const action of [
+      "pdf",
+      "download",
+      "waitfordownload",
+      "requests",
+      "errors",
+      "text",
+      "emulate",
+    ]) {
+      expect(actions).not.toContain(action);
+    }
+    expect(actions).toEqual(expect.arrayContaining(["snapshot", "screenshot"]));
+    expect(actKinds).not.toContain("batch");
+    expect((properties.actions as { description?: string }).description).toBeUndefined();
+    expect((properties.stopOnError as { description?: string }).description).toBeUndefined();
   });
 
   it("rejects malformed run bindings before creating the lazy browser tool", () => {
@@ -332,6 +470,7 @@ describe("browser plugin", () => {
         channel: "telegram",
         chatType: "group",
       },
+      toolCapabilities: expect.any(Object),
     });
   });
 

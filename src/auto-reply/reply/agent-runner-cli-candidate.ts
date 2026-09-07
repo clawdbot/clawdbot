@@ -1,105 +1,65 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
-import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
+import {
+  clearCliSessionInStore,
+  persistCliSessionBindingResult,
+  settleCliSessionResult,
+} from "../../agents/cli-session-store.js";
 import {
   getCliSessionBinding,
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
-import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
-import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
-import {
-  AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  resolveAgentRunErrorLifecycleFields,
-} from "../../agents/run-termination.js";
-import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
+import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import type { ModelFallbackResultClassification } from "../../agents/model-fallback-attempt.js";
+import { createAgentRunSupersededAbortError } from "../../agents/run-termination.js";
+import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
-import type { ThinkLevel } from "../thinking.js";
-import {
-  createAgentLifecycleTerminalBackstop,
-  type AgentLifecycleTerminalBackstop,
-} from "./agent-lifecycle-terminal.js";
+import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
-  clearCliSessionBindingForRun,
   createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
-import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import type { createAgentTurnPresentation } from "./agent-runner-presentation.js";
-import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
+import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
+import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import type { FollowupRun } from "./queue.js";
-import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 
-type CliPresentation = Pick<
-  ReturnType<typeof createAgentTurnPresentation>,
-  | "blockReplyHandler"
-  | "classifyStreamingPartial"
-  | "sanitizeStreamingText"
-  | "startPresentationWhileTyping"
->;
-
-export async function runCliFallbackCandidate(params: {
-  preparedRunAdmission: PreparedAgentRunAdmission;
-  turn: AgentTurnParams;
-  candidateRun: FollowupRun["run"];
-  runtimeConfig: OpenClawConfig;
-  provider: string;
-  model: string;
-  cliExecutionProvider: string;
-  candidateThinkLevel?: ThinkLevel;
-  candidateFastMode: Pick<RunCliAgentParams, "fastMode" | "fastModeAutoOnSeconds">;
-  runId: string;
-  lifecycleGeneration: string;
-  runAbortSignal?: AbortSignal;
-  runLane: RunCliAgentParams["lane"];
-  isFinalFallbackAttempt?: boolean;
-  suppressQueuedUserPersistenceForCandidate: boolean;
-  userTurnTranscriptRecorder: RunCliAgentParams["userTurnTranscriptRecorder"];
-  contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
-  onContextEngineTurnCandidate: RunCliAgentParams["onContextEngineTurnCandidate"];
-  notifyUserMessagePersisted: () => void;
-  fastModeStartedAtMs: number;
-  fastModeAutoProgressState: FastModeAutoProgressState;
-  bootstrapContextRunKind: BootstrapContextRunKind;
-  bootstrapPromptWarningSignaturesSeen: string[];
-  currentTurnImages: Awaited<
-    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnImages>
-  >;
-  signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
-  notifyAgentRunStart: () => void;
-  preserveProgressCallbackStartOrder: boolean;
-  presentation: CliPresentation;
-  timing: AgentTurnTimingTracker;
-  onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
-}): Promise<{
+export async function runCliFallbackCandidate(
+  params: AgentFallbackCandidateCommonParams & {
+    cliExecutionProvider: string;
+    classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
+    lifecycleGeneration: string;
+  },
+): Promise<{
   result: Awaited<ReturnType<typeof runCliAgentWithLifecycle>>;
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const modelHasVision = Boolean(
-    turn.followupRun.run.thinkingCatalog
-      ?.find(
-        (entry) =>
-          normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.model,
-      )
-      ?.input?.includes("image"),
+  const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
+  const selectedModelEntry = findModelInCatalog(
+    params.candidateRun.thinkingCatalog ?? [],
+    params.provider,
+    params.model,
   );
+  const modelHasVision = await resolveRunModelHasVision({
+    run: params.candidateRun,
+    provider: params.provider,
+    model: params.model,
+  });
   const sessionKey = turn.sessionKey ?? turn.followupRun.run.sessionKey;
   const sessionTarget =
     sessionKey && turn.storePath
@@ -110,31 +70,19 @@ export async function runCliFallbackCandidate(params: {
           storePath: turn.storePath,
         }
       : undefined;
-  const cliSessionBinding = getCliSessionBinding(
-    turn.getActiveSessionEntry(),
-    params.cliExecutionProvider,
-  );
   const cliLifecycleStartedAt = Date.now();
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
     sessionKey: turn.sessionKey,
     startedAt: cliLifecycleStartedAt,
     getLifecycleGeneration: () => params.lifecycleGeneration,
-    resolveTerminationFields: (error) => ({
-      ...resolveAgentRunErrorLifecycleFields(error, params.runAbortSignal),
-      ...(isReplyOperationRestartAbort(turn.replyOperation)
-        ? {
-            aborted: true as const,
-            stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-          }
-        : {}),
-    }),
+    resolveTerminationFields: (error) =>
+      resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
   const authProfile = resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
     config: params.runtimeConfig,
   });
-  let droppedCliSessionReplacement = false;
   const hookMessageProvider = resolveOriginMessageProvider({
     originatingChannel: turn.followupRun.originatingChannel,
     provider: turn.sessionCtx.Provider,
@@ -190,20 +138,33 @@ export async function runCliFallbackCandidate(params: {
     Boolean(params.presentation.blockReplyHandler) &&
     (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
-  turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
+  const toolAuthorityFingerprint = turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   const result = await params.timing.measure("cli_run", () =>
-    withLocalSessionPlacementTurnAdmission(
+    withLocalSessionPlacementTurnSettlement(
       {
         sessionId: turn.followupRun.run.sessionId,
-        sessionKey: turn.sessionKey,
+        sessionKey,
         agentId: turn.followupRun.run.agentId,
         runId: params.runId,
       },
-      async () => {
-        // Admission may wait behind another turn that starts detached media.
-        // Snapshot only after this turn owns the session placement.
+      async (assertSettlementCurrent) => {
+        // Placement admission may wait behind an older turn. Snapshot placement,
+        // permission, and native resume identity only after this turn owns it.
+        const sessionEntry = sessionTarget
+          ? loadSessionEntry({ ...sessionTarget, readConsistency: "latest" })
+          : turn.getActiveSessionEntry();
+        if (
+          sessionTarget &&
+          (sessionEntry?.sessionId !== sessionTarget.sessionId ||
+            sessionEntry.lifecycleRevision !== expectedLifecycleRevision)
+        ) {
+          throw createAgentRunSupersededAbortError();
+        }
+        const diagnosticOwner = params.deferredLifecycle.handoffToCli();
+        const cliSessionBinding = getCliSessionBinding(sessionEntry, params.cliExecutionProvider);
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
-        return await runCliAgentWithLifecycle({
+        let droppedCliSessionReplacement = false;
+        const candidateResult = await runCliAgentWithLifecycle({
           runId: params.runId,
           lifecycleGeneration: params.lifecycleGeneration,
           provider: params.cliExecutionProvider,
@@ -227,13 +188,15 @@ export async function runCliFallbackCandidate(params: {
                   ) {
                     return;
                   }
-                  await clearCliSessionBindingForRun({
+                  await clearCliSessionInStore({
                     provider: params.cliExecutionProvider,
-                    expectedSessionId: cliSessionBinding.sessionId,
+                    expectedCliSessionId: cliSessionBinding.sessionId,
+                    expectedSessionId: sessionEntry?.sessionId,
+                    assertCommitAllowed: assertSettlementCurrent,
                     sessionKey: turn.sessionKey,
                     sessionStore: turn.activeSessionStore,
                     storePath: turn.storePath,
-                    activeSessionEntry: turn.getActiveSessionEntry(),
+                    activeSessionEntry: sessionEntry,
                   });
                 }
               : undefined,
@@ -246,25 +209,12 @@ export async function runCliFallbackCandidate(params: {
             const textForTyping = classified.text;
             const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
             const onPartialReply = turn.opts?.onPartialReply;
-            if (!params.preserveProgressCallbackStartOrder) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              if (sanitized.skip || !sanitized.text || !onPartialReply) {
-                return false;
-              }
-              return await onPartialReply({ text: sanitized.text });
-            }
-            if (sanitized.skip || !sanitized.text) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              return false;
-            }
-            if (!onPartialReply) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              return false;
-            }
-            // Assistant and tool CLI bridges drain independently. Stage presentation first.
-            return await params.presentation.startPresentationWhileTyping(
+            return await params.presentation.presentWithTyping(
               turn.typingSignals.signalTextDelta(textForTyping),
-              () => onPartialReply({ text: sanitized.text }),
+              () =>
+                sanitized.skip || !sanitized.text || !onPartialReply
+                  ? false
+                  : onPartialReply({ text: sanitized.text }),
             );
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
@@ -272,6 +222,8 @@ export async function runCliFallbackCandidate(params: {
           onReasoningProgress: async (payload) => {
             await turn.opts?.onReasoningProgress?.(payload);
           },
+          onCompactionStart: turn.opts?.onCompactionStart,
+          onCompactionEnd: turn.opts?.onCompactionEnd,
           onToolEvent: async (payload) => {
             if (!params.preserveProgressCallbackStartOrder) {
               const commandBearing = await cliToolSummaryTracker.noteToolEvent(payload);
@@ -302,7 +254,7 @@ export async function runCliFallbackCandidate(params: {
             // Tool and assistant bridges drain independently. Preserve source order.
             await Promise.all([
               summaryPromise,
-              params.presentation.startPresentationWhileTyping(
+              params.presentation.presentWithTyping(
                 turn.typingSignals.signalToolStart(),
                 async () => {
                   await turn.opts?.onToolStart?.({
@@ -360,9 +312,11 @@ export async function runCliFallbackCandidate(params: {
               : undefined,
           runParams: {
             preparedRunAdmission: params.preparedRunAdmission,
+            diagnosticOwner,
             sessionId: turn.followupRun.run.sessionId,
-            sessionKey: turn.sessionKey,
+            sessionKey,
             sessionTarget,
+            sessionEntry,
             chatType:
               normalizeChatType(turn.followupRun.originatingChatType) ??
               normalizeChatType(turn.sessionCtx.ChatType) ??
@@ -384,6 +338,7 @@ export async function runCliFallbackCandidate(params: {
             contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
             onUserMessagePersisted: params.notifyUserMessagePersisted,
+            prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
             persistAssistantTranscript:
               turn.followupRun.currentInboundEventKind !== "room_event" &&
               turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
@@ -391,8 +346,22 @@ export async function runCliFallbackCandidate(params: {
             currentInboundEventKind: turn.followupRun.currentInboundEventKind,
             currentInboundContext: turn.followupRun.currentInboundContext,
             inputProvenance: turn.followupRun.run.inputProvenance,
+            // Candidate zero is the primary attempt; later candidates are
+            // fallbacks. Carry the runner-owned fact instead of inferring from
+            // this shared dispatch path, or primary CLI runs lose delegation.
+            ...buildCliMcpDelegationCapabilityBinding(
+              resolveDelegationCapability({
+                fallbackActive: params.isFallbackRetry,
+                inputProvenance: turn.followupRun.run.inputProvenance,
+                disableTools: turn.opts?.disableTools,
+                toolsAllow: turn.opts?.toolsAllow,
+              }),
+            ),
             modelProvider: params.provider,
             modelHasVision,
+            modelContextWindow: selectedModelEntry?.contextWindow,
+            modelContextTokens: selectedModelEntry?.contextTokens,
+            contextWindow: sessionEntry?.contextWindow,
             provider: params.cliExecutionProvider,
             execOverrides: turn.followupRun.run.execOverrides,
             bashElevated: turn.followupRun.run.bashElevated,
@@ -454,29 +423,64 @@ export async function runCliFallbackCandidate(params: {
             senderIsOwner: turn.followupRun.run.senderIsOwner,
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
+            skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
+            skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
             disableTools: turn.opts?.disableTools,
-            toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
-              turn.followupRun,
-              toolAuthorityRoute,
-            ),
+            toolAuthorityFingerprint,
             abortSignal: params.runAbortSignal,
+            // Native input is already host-authored. Keep its stable delivery
+            // context out of the model-output normalization wrapper.
+            onBlockReply: turn.opts?.onBlockReply,
+            onPartialReply: turn.opts?.onPartialReply,
             onExecutionPhase: params.signalExecutionPhaseForTyping,
             replyOperation: turn.replyOperation,
           },
         });
+        if (droppedCliSessionReplacement) {
+          // The room-event transform removed native continuity; only its guarded
+          // invalidation remains, and failure must retain the returned turn.
+          return await settleCliSessionResult(candidateResult, async () => {
+            await clearCliSessionInStore({
+              provider: params.cliExecutionProvider,
+              expectedCliSessionId: cliSessionBinding?.sessionId,
+              expectedSessionId: sessionEntry?.sessionId,
+              assertCommitAllowed: assertSettlementCurrent,
+              sessionKey: turn.sessionKey,
+              sessionStore: turn.activeSessionStore,
+              storePath: turn.storePath,
+              activeSessionEntry: sessionEntry,
+            });
+            params.classifyResult(candidateResult);
+          });
+        }
+        const classification = params.classifyResult(candidateResult);
+        if (
+          (!classification || candidateResult.meta.agentMeta?.clearCliSessionBinding === true) &&
+          !shouldPreserveUserFacingSessionStateForInputProvenance(
+            turn.followupRun.run.inputProvenance,
+          )
+        ) {
+          return await persistCliSessionBindingResult({
+            provider: params.cliExecutionProvider,
+            result: candidateResult,
+            sessionKey,
+            storePath: turn.storePath,
+            sessionStore: turn.activeSessionStore,
+            expectedSession: sessionEntry,
+            assertSettlementCurrent,
+            abortSignal: params.runAbortSignal,
+          });
+        }
+        return candidateResult;
+      },
+      {
+        lifecycleGeneration: params.lifecycleGeneration,
+        abortSignal: params.runAbortSignal,
+        trigger: turn.isHeartbeat ? "heartbeat" : "user",
+        inputProvenance: turn.followupRun.run.inputProvenance,
       },
     ),
   );
-  if (droppedCliSessionReplacement) {
-    await clearCliSessionBindingForRun({
-      provider: params.cliExecutionProvider,
-      expectedSessionId: cliSessionBinding?.sessionId,
-      sessionKey: turn.sessionKey,
-      sessionStore: turn.activeSessionStore,
-      storePath: turn.storePath,
-      activeSessionEntry: turn.getActiveSessionEntry(),
-    });
-  }
   return {
     result,
     bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(

@@ -72,7 +72,12 @@ type TelegramMessageProcessorDeps = Omit<
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   opts: Pick<
     TelegramBotOptions,
-    "token" | "ownerAgentId" | "allowFrom" | "groupAllowFrom" | "replyToMode"
+    | "token"
+    | "ownerAgentId"
+    | "allowFrom"
+    | "groupAllowFrom"
+    | "replyToMode"
+    | "dispatchReplyFromConfig"
   >;
 };
 
@@ -271,6 +276,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         admission?: "exclusive" | "cancel-only";
         onAdopted: () => void | Promise<void>;
         onDeferred?: () => void;
+        onDeferredHeartbeat?: () => void;
         onAbandoned?: () => void;
         abortSignal?: AbortSignal;
       };
@@ -431,6 +437,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
               deferred = true;
               drainLifecycle?.onDeferred();
             },
+            onDeferredHeartbeat: () => drainLifecycle?.onDeferredHeartbeat?.(),
             onAbandoned: () => {
               if (!adopted) {
                 void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
@@ -446,6 +453,18 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         }
         if (settledResult) {
           return settledResult;
+        }
+        if (turnAbortSignal.aborted) {
+          const abortResult: TelegramMessageProcessingResult =
+            turnAbortSignal.reason === "skipped"
+              ? { kind: "skipped" }
+              : {
+                  kind: "failed-retryable",
+                  error:
+                    turnAbortSignal.reason ??
+                    new Error("telegram spooled replay owner cancelled before adoption"),
+                };
+          return await settle(abortResult, "terminal");
         }
         if (adoptionAttempted && !deferred && result.kind === "completed") {
           runtime.error?.(

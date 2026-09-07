@@ -5,11 +5,13 @@ import type { ExtraGatewayService } from "../daemon/inspect.js";
 import * as launchd from "../daemon/launchd.js";
 import type { GatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
   SERVICE_REPAIR_POLICY_ENV,
 } from "./doctor-service-repair-policy.js";
+import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const service = vi.hoisted(() => ({
   isLoaded: vi.fn(),
@@ -22,6 +24,7 @@ const service = vi.hoisted(() => ({
 const note = vi.hoisted(() => vi.fn());
 const sleep = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
+const formatGatewayClosedDiagnostic = vi.hoisted(() => vi.fn((): string | undefined => undefined));
 const inspectPortConnections = vi.hoisted(() => vi.fn());
 const inspectPortUsage = vi.hoisted(() => vi.fn());
 const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is already in use."]));
@@ -35,7 +38,14 @@ const findSystemGatewayServices = vi.hoisted(() =>
 );
 const buildGatewayRuntimeHints = vi.hoisted(() => vi.fn((): string[] => []));
 const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => null));
+const renderSystemdUnavailableHints = vi.hoisted(() => vi.fn((): string[] => []));
 const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
+const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
+const findInstalledSystemdGatewayScope = vi.hoisted(() =>
+  vi.fn<(typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]>(
+    async () => null,
+  ),
+);
 const resolveGatewayBindHost = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 
 vi.mock("../config/config.js", async () => {
@@ -84,20 +94,17 @@ vi.mock("../daemon/service.js", async () => {
   };
 });
 
-vi.mock("../daemon/systemd-hints.js", () => ({
-  renderSystemdUnavailableHints: vi.fn(() => []),
+vi.mock("../daemon/systemd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd.js")>()),
+  findInstalledSystemdGatewayScope,
 }));
 
-vi.mock("../daemon/systemd.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../daemon/systemd.js")>("../daemon/systemd.js");
-  return {
-    ...actual,
-    isSystemdUserServiceAvailable: vi.fn(async () => true),
-  };
-});
+vi.mock("../daemon/systemd-hints.js", () => ({
+  renderSystemdUnavailableHints,
+}));
 
-vi.mock("../gateway/net.js", () => ({
+vi.mock("../gateway/net.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/net.js")>()),
   resolveGatewayBindHost,
   resolveGatewayRequiredListenHosts: (bindHost: string) =>
     bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
@@ -107,6 +114,8 @@ vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortConnections,
   inspectPortUsage,
 }));
+
+vi.mock("../infra/container-environment.js", () => ({ isContainerEnvironment }));
 
 vi.mock("../infra/ports-format.js", () => ({
   formatPortDiagnostics,
@@ -154,12 +163,12 @@ vi.mock("./gateway-install-token.js", () => ({
 }));
 
 vi.mock("./health-format.js", () => ({
-  formatGatewayClosedDiagnostic: vi.fn(() => undefined),
+  formatGatewayClosedDiagnostic,
   formatHealthCheckFailure: vi.fn(() => "health failed"),
 }));
 
 vi.mock("./health.js", () => ({
-  healthCommand,
+  healthCommandNonExiting: healthCommand,
 }));
 
 describe("maybeRepairGatewayDaemon", () => {
@@ -173,11 +182,15 @@ describe("maybeRepairGatewayDaemon", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    formatGatewayClosedDiagnostic.mockReset();
+    formatGatewayClosedDiagnostic.mockReturnValue(undefined);
+    findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
     service.isLoaded.mockResolvedValue(true);
     service.readRuntime.mockResolvedValue({ status: "running" });
     service.readCommand.mockResolvedValue(null);
     service.restart.mockResolvedValue({ outcome: "completed" });
     isDefaultInstallIdentity.mockReturnValue(true);
+    isContainerEnvironment.mockReturnValue(false);
     readGatewayRestartHandoffSync.mockReturnValue(null);
     findSystemGatewayServices.mockResolvedValue([]);
     resolveGatewayBindHost.mockResolvedValue("127.0.0.1");
@@ -200,6 +213,7 @@ describe("maybeRepairGatewayDaemon", () => {
     });
     buildGatewayRuntimeHints.mockReturnValue([]);
     formatGatewayRuntimeSummary.mockReturnValue(null);
+    renderSystemdUnavailableHints.mockReset().mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -330,14 +344,72 @@ describe("maybeRepairGatewayDaemon", () => {
     );
   });
 
-  it("still inspects the managed service for the default install identity", async () => {
-    await withEnvAsync(
-      { OPENCLAW_STATE_DIR: undefined, OPENCLAW_CONFIG_PATH: undefined },
-      runNonInteractiveRepair,
-    );
+  it.each([
+    { environment: "container without an OpenClaw service", detected: true },
+    { environment: "Kubernetes pod without container markers", kubernetes: true },
+    { environment: "globally external supervisor", external: true },
+  ])(
+    "keeps port diagnostics but never probes host services in a $environment",
+    async (scenario) => {
+      setPlatform("linux");
+      isContainerEnvironment.mockReturnValue(scenario.detected === true);
+      inspectPortUsage.mockResolvedValueOnce({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 1234, command: "other-process" }],
+        hints: [],
+      });
 
-    expect(service.isLoaded).toHaveBeenCalledTimes(1);
-    expect(service.readRuntime).toHaveBeenCalledTimes(1);
+      await withEnvAsync(
+        {
+          KUBERNETES_SERVICE_HOST: scenario.kubernetes ? "10.96.0.1" : undefined,
+          KUBERNETES_SERVICE_PORT: scenario.kubernetes ? "443" : undefined,
+          OPENCLAW_SUPERVISOR_MODE: scenario.external ? "external" : undefined,
+        },
+        runNonInteractiveRepair,
+      );
+
+      expect(inspectPortUsage).toHaveBeenCalledOnce();
+      expect(note).toHaveBeenCalledWith("Port 18789 is already in use.", "Gateway port");
+      expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+      expect(findInstalledSystemdGatewayScope).toHaveBeenCalledTimes(scenario.detected ? 1 : 0);
+      expect(service.isLoaded).not.toHaveBeenCalled();
+      expect(service.readRuntime).not.toHaveBeenCalled();
+      expect(service.readCommand).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+      expect(service.restart).not.toHaveBeenCalled();
+      expect(findSystemGatewayServices).not.toHaveBeenCalled();
+    },
+  );
+
+  it("recovers an installed local service through a reachable Docker systemd manager", async () => {
+    setPlatform("linux");
+    isContainerEnvironment.mockReturnValue(true);
+    findInstalledSystemdGatewayScope.mockResolvedValue({
+      scope: "user",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
+    });
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
+    const prompter = createPrompter(() => true);
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: { mode: "local" } },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter,
+      options: {},
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      healthSkipped: false,
+    });
+
+    expect(service.isLoaded).toHaveBeenCalledWith({ env: process.env, timeoutMs: 5_000 });
+    expect(service.readRuntime).toHaveBeenCalledOnce();
+    expect(prompter.confirmRuntimeRepair).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Start gateway service now?" }),
+    );
+    expect(service.restart).toHaveBeenCalledOnce();
+    expect(note).not.toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
   });
 
   it("reports recent restart handoffs during deep doctor", async () => {
@@ -418,24 +490,110 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(note).toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
   });
 
-  it("does not audit local services when skipped gateway health is remote", async () => {
+  it("reports unknown service inspection without offering or executing repair", async () => {
     setPlatform("linux");
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: Failed to connect to bus: No medium found"),
+    );
+    renderSystemdUnavailableHints.mockReturnValueOnce(["restore the systemd user bus"]);
+    const prompter = createPrompter(() => true);
 
     await maybeRepairGatewayDaemon({
-      cfg: { gateway: { mode: "remote" } },
+      cfg: { gateway: {} },
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      prompter: createDoctorPrompter({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        options: { nonInteractive: true },
-      }),
-      options: { deep: false, nonInteractive: true },
+      prompter,
+      options: { deep: false },
       gatewayDetailsMessage: "details",
       healthOk: false,
-      healthSkipped: true,
     });
 
+    expect(renderSystemdUnavailableHints).toHaveBeenCalledWith({
+      wsl: false,
+      kind: "user_bus_unavailable",
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service status could not be determined"),
+      "Gateway",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("restore the systemd user bus"),
+      "Gateway",
+    );
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(findSystemGatewayServices).not.toHaveBeenCalled();
+  });
+
+  describe.each(["darwin", "linux", "win32"] as const)("%s remote health", (platform) => {
+    it.each([
+      { name: "failed with a stopped local service", runtimeStatus: "stopped" },
+      { name: "failed with an unknown local runtime", runtimeStatus: "unknown" },
+      { name: "failed with a running local service", runtimeStatus: "running" },
+      { name: "failed through a loopback tunnel", url: "ws://127.0.0.1:18789" },
+      { name: "failed without a remote URL", url: undefined },
+      { name: "failed without a local service", loaded: false },
+      { name: "skipped", healthSkipped: true },
+      { name: "healthy", healthOk: true },
+    ])("never inspects or repairs local services when $name", async (scenario) => {
+      setPlatform(platform);
+      service.isLoaded.mockResolvedValue(scenario.loaded !== false);
+      service.readRuntime.mockResolvedValue({ status: scenario.runtimeStatus ?? "running" });
+      const prompter = createPrompter(() => true);
+      const url = "url" in scenario ? scenario.url : "wss://gateway.example";
+
+      await maybeRepairGatewayDaemon({
+        cfg: { gateway: { mode: "remote", remote: { url } } },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        prompter,
+        options: { deep: true },
+        gatewayDetailsMessage: "remote connection details",
+        healthOk: scenario.healthOk === true,
+        healthSkipped: scenario.healthSkipped === true,
+      });
+
+      expect(service.restart).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+      expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+      expect(service.isLoaded).not.toHaveBeenCalled();
+      expect(service.readRuntime).not.toHaveBeenCalled();
+      expect(service.readCommand).not.toHaveBeenCalled();
+      expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
+      expect(inspectPortUsage).not.toHaveBeenCalled();
+      expect(inspectPortConnections).not.toHaveBeenCalled();
+      expect(note).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves a real remote health failure through the ordered recovery contributions", async () => {
+    const {
+      createDoctorHealthFlowContext,
+      resolveDoctorHealthContributions,
+      runDoctorHealthContributionList,
+    } = await import("../flows/doctor-health-contributions.test-support.js");
+    const prompter = createPrompter(() => true);
+    const ctx = createDoctorHealthFlowContext({
+      cfg: { gateway: { mode: "remote" } },
+      prompter,
+    });
+    const contributions = resolveDoctorHealthContributions().filter(
+      ({ id }) => id === "doctor:gateway-health" || id === "doctor:gateway-daemon",
+    );
+    expect(contributions.map(({ id }) => id)).toEqual([
+      "doctor:gateway-health",
+      "doctor:gateway-daemon",
+    ]);
+
+    // The real Gateway call rejects a missing remote URL before opening a socket.
+    await runDoctorHealthContributionList(ctx, contributions);
+
+    expect(ctx).toMatchObject({ healthOk: false, gatewayHealthSkipped: false });
+    expect(ctx.runtime.error).toHaveBeenCalledOnce();
+    expect(service.restart).not.toHaveBeenCalled();
     expect(service.isLoaded).not.toHaveBeenCalled();
-    expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+    expect(service.readCommand).not.toHaveBeenCalled();
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("does not start loaded services with unknown runtime when health was skipped", async () => {
@@ -577,6 +735,49 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+  it("retains operator heap ownership when reinstalling a disabled service", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
+    const managedDefinition = {
+      programArguments: ["node", "/opt/openclaw/dist/index.js", "gateway"],
+      environment: { NODE_OPTIONS: "", UNRELATED: "not-persisted" },
+    };
+    const existingCommand = {
+      ...managedDefinition,
+      environment: { NODE_OPTIONS: "--max-old-space-size=512" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
+    service.readCommand.mockResolvedValue(existingCommand);
+    vi.mocked(resolveGatewayInstallToken).mockResolvedValueOnce({
+      warnings: [],
+    });
+    vi.mocked(buildGatewayInstallPlan).mockResolvedValueOnce({
+      programArguments: managedDefinition.programArguments,
+      environment: { NODE_OPTIONS: "" },
+    });
+    const prompter = createPrompter(() => true);
+    prompter.select.mockResolvedValue("node");
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter,
+      options: { deep: false },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ existingCommand }),
+    );
+    expect(vi.mocked(buildGatewayInstallPlan).mock.calls[0]?.[0]).not.toHaveProperty(
+      "existingEnvironment",
+    );
+    expect(service.install).toHaveBeenCalledOnce();
+  });
+
   it("skips gateway install during non-interactive doctor repairs", async () => {
     setPlatform("linux");
     service.isLoaded.mockResolvedValue(false);
@@ -599,11 +800,13 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
-  it("skips running service restart during non-interactive repairs", async () => {
+  it("inspects but does not restart a running service during non-interactive repairs", async () => {
     setPlatform("linux");
 
     await runNonInteractiveRepair();
 
+    expect(service.isLoaded).toHaveBeenCalledOnce();
+    expect(service.readRuntime).toHaveBeenCalledOnce();
     expect(service.restart).not.toHaveBeenCalled();
   });
 
@@ -616,29 +819,43 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
-  it("restarts running service when repair is explicitly approved", async () => {
+  it.each([{ repair: true }, { yes: true }])("restarts with explicit %j", async (options) => {
     setPlatform("linux");
 
-    await runAutoRepair();
+    await runAutoRepair(options);
 
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
-  it("restarts running service when --yes explicitly approves repairs", async () => {
+  it("reports a typed close after restart without depending on error wording", async () => {
     setPlatform("linux");
+    const error = new Error("transport closed after restart");
+    healthCommand.mockRejectedValueOnce(error);
+    formatGatewayClosedDiagnostic.mockReturnValueOnce(
+      "Gateway connect failed: transport closed after restart",
+    );
 
-    await runAutoRepair({ yes: true });
+    const runtime = await runAutoRepair();
 
-    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(formatGatewayClosedDiagnostic).toHaveBeenCalledWith(error);
+    expect(note).toHaveBeenCalledWith(
+      "Gateway connect failed: transport closed after restart",
+      "Gateway",
+    );
+    expect(note).toHaveBeenCalledWith("details", "Gateway connection");
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("skips gateway service install when service repair policy is external", async () => {
+  it.each([
+    { action: "install", loaded: false, runtime: "stopped" },
+    { action: "start", loaded: true, runtime: "stopped" },
+    { action: "restart", loaded: true, runtime: "running" },
+  ])("skips service $action under external repair policy", async ({ loaded, runtime }) => {
     setPlatform("linux");
-    service.isLoaded.mockResolvedValue(false);
+    service.isLoaded.mockResolvedValue(loaded);
+    service.readRuntime.mockResolvedValue({ status: runtime });
 
-    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
-      await runAutoRepair();
-    });
+    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, runAutoRepair);
 
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
@@ -676,29 +893,6 @@ describe("maybeRepairGatewayDaemon", () => {
     );
   });
 
-  it("skips gateway service start when service repair policy is external", async () => {
-    setPlatform("linux");
-    service.readRuntime.mockResolvedValue({ status: "stopped" });
-
-    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
-      await runAutoRepair();
-    });
-
-    expect(service.restart).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
-  });
-
-  it("skips gateway service restart when service repair policy is external", async () => {
-    setPlatform("linux");
-
-    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
-      await runAutoRepair();
-    });
-
-    expect(service.restart).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
-  });
-
   it("skips LaunchAgent bootstrap repair when service repair policy is external", async () => {
     setPlatform("darwin");
     service.isLoaded.mockResolvedValue(false);
@@ -721,7 +915,7 @@ describe("maybeRepairGatewayDaemon", () => {
     setPlatform("darwin");
     service.isLoaded.mockResolvedValueOnce(false).mockResolvedValue(true);
     service.readRuntime
-      .mockResolvedValueOnce({ status: "unknown", missingSupervision: true })
+      .mockResolvedValueOnce({ status: "stopped" })
       .mockResolvedValue({ status: "running" });
     vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
     vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
@@ -741,7 +935,6 @@ describe("maybeRepairGatewayDaemon", () => {
     service.readRuntime.mockResolvedValue({
       status: "unknown",
       detail: "Bootstrap failed: 125: Domain does not support specified action",
-      missingSupervision: true,
       missingGuiSession: true,
     });
     buildGatewayRuntimeHints.mockReturnValue([
@@ -795,7 +988,7 @@ describe("maybeRepairGatewayDaemon", () => {
   it("surfaces typed system ownership from bootstrap repair and stops recovery", async () => {
     setPlatform("darwin");
     service.isLoaded.mockResolvedValue(false);
-    service.readRuntime.mockResolvedValue({ status: "unknown", missingSupervision: true });
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
     vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
     vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
     vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValueOnce({
@@ -832,10 +1025,7 @@ describe("maybeRepairGatewayDaemon", () => {
   it("routes GUI-session bootstrap failures through the doctor runtime hint", async () => {
     setPlatform("darwin");
     service.isLoaded.mockResolvedValue(false);
-    service.readRuntime.mockResolvedValue({
-      status: "unknown",
-      missingSupervision: true,
-    });
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
     vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
     vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
     vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValueOnce({

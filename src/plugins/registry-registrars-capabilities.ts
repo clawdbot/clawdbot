@@ -7,7 +7,7 @@ import { defaultSlotIdForKey } from "./slots.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "./types.js";
 
 export function createCapabilityRegistrars(state: PluginRegistryState) {
-  const { registry, pushDiagnostic } = state;
+  const { registry, reportRegistrationError, reportRegistrationWarning } = state;
 
   const registerDetachedTaskRuntime = (
     record: PluginRecord,
@@ -15,12 +15,10 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
   ) => {
     const existing = registry.detachedTaskRuntimes[0];
     if (existing && existing.pluginId !== record.id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `detached task runtime already registered by ${existing.pluginId}`,
-      });
+      reportRegistrationError(
+        record,
+        `detached task runtime already registered by ${existing.pluginId}`,
+      );
       return;
     }
     const next = { pluginId: record.id, runtime };
@@ -40,12 +38,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       pluginRoot: record.rootDir,
     });
     if (!result.ok) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: result.error ?? "interactive handler registration failed",
-      });
+      reportRegistrationWarning(record, result.error ?? "interactive handler registration failed");
     }
   };
 
@@ -57,30 +50,18 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
   ) => {
     const normalizedId = normalizeOptionalString(id) ?? "";
     if (!normalizedId) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "context engine registration missing id",
-      });
+      reportRegistrationError(record, "context engine registration missing id");
       return;
     }
     if (typeof factory !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `context engine "${normalizedId}" registration missing factory`,
-      });
+      reportRegistrationError(
+        record,
+        `context engine "${normalizedId}" registration missing factory`,
+      );
       return;
     }
     if (normalizedId === defaultSlotIdForKey("contextEngine")) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `context engine id reserved by core: ${normalizedId}`,
-      });
+      reportRegistrationError(record, `context engine id reserved by core: ${normalizedId}`);
       return;
     }
     const result = registerContextEngineInRegistry(
@@ -94,12 +75,10 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       },
     );
     if (!result.ok) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `context engine already registered: ${normalizedId} (${result.existingOwner})`,
-      });
+      reportRegistrationError(
+        record,
+        `context engine already registered: ${normalizedId} (${result.existingOwner})`,
+      );
       return;
     }
     if (!record.contextEngineIds?.includes(normalizedId)) {
@@ -116,32 +95,20 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
         ?.id,
     );
     if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "compaction provider registration missing id",
-      });
+      reportRegistrationError(record, "compaction provider registration missing id");
       return;
     }
     if (typeof provider?.summarize !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `compaction provider "${id}" registration missing summarize`,
-      });
+      reportRegistrationError(record, `compaction provider "${id}" registration missing summarize`);
       return;
     }
     const existing = registry.compactionProviders.find((entry) => entry.provider.id === id);
     if (existing) {
       const ownerDetail = existing.ownerPluginId ? ` (owner: ${existing.ownerPluginId})` : "";
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `compaction provider already registered: ${id}${ownerDetail}`,
-      });
+      reportRegistrationError(
+        record,
+        `compaction provider already registered: ${id}${ownerDetail}`,
+      );
       return;
     }
     registry.compactionProviders.push({ provider, ownerPluginId: record.id });

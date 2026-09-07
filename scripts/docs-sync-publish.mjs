@@ -5,13 +5,16 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { renderDocsHeadingMap } from "./docs-list.js";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const ROOT = resolveRepoRoot(import.meta.url);
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
+const SLUGIFY_PACKAGE = "@sindresorhus/slugify";
 const INTERNAL_DOCS_DIRS = ["internal"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
@@ -21,6 +24,16 @@ const DEFAULT_CLAWHUB_REPO_CANDIDATES = [
   path.resolve(ROOT, "..", "clawhub"),
 ];
 const SYNC_SUPPORT_FILES = [
+  // File URLs declare the copied runtime closure without executing modules:
+  // source sync runs before parser dependencies are installed.
+  {
+    source: new URL("./lib/docs-markdown.mjs", import.meta.url),
+    target: path.join(".openclaw-sync", "lib", "docs-markdown.mjs"),
+  },
+  {
+    source: new URL("./lib/docs-redirects.mjs", import.meta.url),
+    target: path.join(".openclaw-sync", "lib", "docs-redirects.mjs"),
+  },
   {
     source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
     target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),
@@ -30,8 +43,20 @@ const SYNC_SUPPORT_FILES = [
     target: path.join(".openclaw-sync", "check-docs-mdx.mts"),
   },
   {
+    source: path.join(ROOT, "scripts", "lib", "arg-utils.runtime.mjs"),
+    target: path.join(".openclaw-sync", "lib", "arg-utils.runtime.mjs"),
+  },
+  {
     source: path.join(ROOT, "scripts", "lib", "tsx-cli-shim.mjs"),
     target: path.join(".openclaw-sync", "lib", "tsx-cli-shim.mjs"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "lib", "local-check-runtime.mts"),
+    target: path.join(".openclaw-sync", "lib", "local-check-runtime.mts"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "tsx.mjs"),
+    target: path.join(".openclaw-sync", "tsx.mjs"),
   },
   {
     source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),
@@ -193,14 +218,6 @@ const GENERATED_LOCALES = [
   },
 ];
 
-function readOptionValue(argv, index, optionName) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv) {
   const args = {
     target: "",
@@ -216,27 +233,27 @@ export function parseArgs(argv) {
     const part = argv[index];
     switch (part) {
       case "--target":
-        args.target = readOptionValue(argv, index, part);
+        args.target = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--source-repo":
-        args.sourceRepo = readOptionValue(argv, index, part);
+        args.sourceRepo = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--source-sha":
-        args.sourceSha = readOptionValue(argv, index, part);
+        args.sourceSha = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--clawhub-repo":
-        args.clawhubRepo = readOptionValue(argv, index, part);
+        args.clawhubRepo = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-repo":
-        args.clawhubSourceRepo = readOptionValue(argv, index, part);
+        args.clawhubSourceRepo = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-sha":
-        args.clawhubSourceSha = readOptionValue(argv, index, part);
+        args.clawhubSourceSha = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       default:
@@ -842,12 +859,84 @@ function writeSyncMetadata(targetRoot, args, sources) {
   writeJson(path.join(targetRoot, ".openclaw-sync", "source.json"), metadata);
 }
 
+function sourceSlugifyVersion() {
+  const version = readJson(path.join(ROOT, "package.json")).devDependencies[SLUGIFY_PACKAGE];
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error("docs sync requires an exact source slugify version");
+  }
+  return version;
+}
+
+function readPublishDependencies(targetRoot) {
+  return {
+    packageJson: readJson(path.join(targetRoot, "package.json")),
+    packageLock: readJson(path.join(targetRoot, "package-lock.json")),
+  };
+}
+
+function matchesSlugifyVersion({ packageJson, packageLock }, version) {
+  return (
+    packageJson.devDependencies?.[SLUGIFY_PACKAGE] === version &&
+    packageLock.lockfileVersion === 3 &&
+    packageLock.packages?.[""]?.devDependencies?.[SLUGIFY_PACKAGE] === version &&
+    packageLock.packages?.[`node_modules/${SLUGIFY_PACKAGE}`]?.version === version
+  );
+}
+
+/** Checks sync output here and against fresh publisher main after the workflow rebases. */
+export function validateDocsSyncDependencies(targetRoot, baseline) {
+  const current = readPublishDependencies(targetRoot);
+  const version = sourceSlugifyVersion();
+  if (!matchesSlugifyVersion(current, version)) {
+    throw new Error(`docs sync publisher manifest and lock must both pin slugify ${version}`);
+  }
+  // Only this dependency's declaration and resolved row belong to source sync.
+  // Compare objects, not JSON formatting; never absorb unrelated npm or rebase churn.
+  const expected = structuredClone(baseline);
+  expected.packageJson.devDependencies[SLUGIFY_PACKAGE] = version;
+  expected.packageLock.packages[""].devDependencies[SLUGIFY_PACKAGE] = version;
+  const slugifyPath = `node_modules/${SLUGIFY_PACKAGE}`;
+  expected.packageLock.packages[slugifyPath] = current.packageLock.packages[slugifyPath];
+  if (!isDeepStrictEqual(current, expected)) {
+    throw new Error(
+      "docs sync changed unrelated publisher dependencies; reconcile the lock before retrying",
+    );
+  }
+  for (const entry of SYNC_SUPPORT_FILES) {
+    const copied = fs.readFileSync(path.join(targetRoot, entry.target));
+    if (!fs.readFileSync(entry.source).equals(copied)) {
+      throw new Error(`docs sync support file differs from source: ${entry.target}`);
+    }
+  }
+}
+
 function syncSupportFiles(targetRoot) {
+  const baseline = readPublishDependencies(targetRoot);
+  const version = sourceSlugifyVersion();
+  if (!matchesSlugifyVersion(baseline, version)) {
+    // Generate the lock from the publisher's existing graph, without installing
+    // packages. Parser, manifest and lock are committed together by the workflow.
+    run(
+      "npm",
+      [
+        "install",
+        "--package-lock-only",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--save-dev",
+        "--save-exact",
+        `${SLUGIFY_PACKAGE}@${version}`,
+      ],
+      { cwd: targetRoot, timeout: 120_000 },
+    );
+  }
   for (const entry of SYNC_SUPPORT_FILES) {
     const targetPath = path.join(targetRoot, entry.target);
     ensureDir(path.dirname(targetPath));
     fs.copyFileSync(entry.source, targetPath);
   }
+  validateDocsSyncDependencies(targetRoot, baseline);
 }
 
 function main() {

@@ -37,6 +37,14 @@ describe("channels command", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
+  it("guides operators when no channels are configured", () => {
+    const lines = formatGatewayChannelsStatusLines({ channelAccounts: {} });
+
+    expect(lines).toContain(
+      "- no configured chat channels (run `openclaw channels list --all` to see installable channels)",
+    );
+  });
+
   it("surfaces Signal runtime errors in channels status output", () => {
     const lines = formatGatewayChannelsStatusLines({
       channelLabels: {
@@ -121,6 +129,25 @@ describe("channels command", () => {
 
     expect(lines.join("\n")).toMatch(/Channel status is partial/);
     expect(lines.join("\n")).toContain("whatsapp:default status failed: snapshot failed");
+  });
+
+  it("renders Gateway policy diagnostics and recovery without calling status partial", () => {
+    const lines = formatGatewayChannelsStatusLines({
+      channelAccounts: { signal: [{ accountId: "default", configured: true, running: true }] },
+      statusIssues: [
+        {
+          channel: "signal",
+          accountId: "default",
+          kind: "config",
+          message: "Channel configuration reload is deferred while active work finishes.",
+          fix: "Wait for active work to finish, then refresh channel status.",
+        },
+      ],
+    }).join("\n");
+    expect(lines).toContain("running");
+    expect(lines).toContain("configuration reload is deferred");
+    expect(lines).toContain("Wait for active work to finish");
+    expect(lines).not.toContain("status is partial");
   });
 
   it("surfaces transport liveness timestamps in channels status output", () => {

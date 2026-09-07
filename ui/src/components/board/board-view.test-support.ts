@@ -61,8 +61,12 @@ export function callbacks(overrides: Partial<BoardViewCallbacks> = {}): BoardVie
   };
 }
 
-export function gatewayContext(client: { request: ReturnType<typeof vi.fn> } | null) {
+export function gatewayContext(
+  client: { request: ReturnType<typeof vi.fn> } | null,
+  basePath = "",
+) {
   return {
+    basePath,
     gateway: {
       connection: { gatewayUrl: "" },
       snapshot: { client },

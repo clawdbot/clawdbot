@@ -14,9 +14,9 @@ on:
         required: true
         type: string
       baselines:
-        description: Published baselines to migrate; use all-since-2026.4.23 for full coverage
-        default: all-since-2026.4.23
-        required: true
+        description: Optional historical baselines; blank uses latest stable, all-since-2026.4.23 replays history
+        default: ""
+        required: false
         type: string
       scenarios:
         description: Update survivor scenarios

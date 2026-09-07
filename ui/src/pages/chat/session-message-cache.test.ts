@@ -189,12 +189,15 @@ describe("session message cache", () => {
   it("claims a shared gateway event only once across retained panes", () => {
     const { host, cache } = createCacheContext();
     const target = { sessionKey: "agent:ops:background" };
-    const event = {};
+    const cached = { role: "user", content: "cached", __openclaw: { id: "cached", seq: 1 } };
+    const final = { role: "assistant", content: "final", __openclaw: { id: "final", seq: 2 } };
+    const event = { messageId: "final", messageSeq: 2 };
+    cacheChatMessages(cache, host, target, [cached]);
 
-    appendChatMessageToCache(cache, host, target, "final", event);
-    appendChatMessageToCache(cache, host, target, "final", event);
+    appendChatMessageToCache(cache, host, target, final, event);
+    appendChatMessageToCache(cache, host, target, final, event);
 
-    expect(readChatMessagesFromCache(cache, host, target)).toEqual(["final"]);
+    expect(readChatMessagesFromCache(cache, host, target)).toEqual([cached, final]);
   });
 
   it("does not retain history across backing session changes", () => {

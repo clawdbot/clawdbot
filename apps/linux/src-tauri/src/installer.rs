@@ -105,6 +105,13 @@ pub fn install(app: &AppHandle, channel: InstallChannel) -> Result<(), String> {
                 line: &line,
             },
         );
+        // Structured step events belong to the log pane; the failure tail is
+        // shown as prose and must keep only human-readable diagnostics.
+        if serde_json::from_str::<serde_json::Value>(&line)
+            .is_ok_and(|value| value.get("event").is_some())
+        {
+            continue;
+        }
         if tail.len() == ERROR_TAIL_LINES {
             tail.pop_front();
         }

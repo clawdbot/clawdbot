@@ -1,3 +1,4 @@
+import { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 // Proxy stream wrapper applies provider-specific wrappers around base stream functions.
 import {
@@ -5,7 +6,10 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderRequestPolicy } from "../../../agents/provider-attribution.js";
-import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-request-config.js";
+import {
+  getModelProviderRequestRouteFacts,
+  resolveProviderRequestPolicyConfig,
+} from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { normalizeOpenAICompatibleReasoningPayload } from "../../../plugin-sdk/provider-stream-shared.js";
@@ -28,6 +32,19 @@ const BOOLEAN_PARAM_PARSE_OPTIONS = {
 function resolveKilocodeAppHeaders(): Record<string, string> {
   const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
   return { [KILOCODE_FEATURE_HEADER]: feature };
+}
+
+function resolveModelEndpointClass(model: Parameters<StreamFn>[0]) {
+  return (
+    getModelProviderRequestRouteFacts(model)?.capabilities.endpointClass ??
+    resolveProviderRequestPolicy({
+      provider: readStringValue(model.provider),
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
+      capability: "llm",
+      transport: "stream",
+    }).endpointClass
+  );
 }
 
 function readExtraParam(
@@ -60,13 +77,7 @@ function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | unde
 
 function shouldApplyOpenRouterResponseCacheHeaders(model: Parameters<StreamFn>[0]): boolean {
   const provider = readStringValue(model.provider);
-  const endpointClass = resolveProviderRequestPolicy({
-    provider,
-    api: readStringValue(model.api),
-    baseUrl: readStringValue(model.baseUrl),
-    capability: "llm",
-    transport: "stream",
-  }).endpointClass;
+  const endpointClass = resolveModelEndpointClass(model);
   return (
     endpointClass === "openrouter" ||
     (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
@@ -128,13 +139,7 @@ export function createOpenRouterSystemCacheWrapper(
     const modelId = readStringValue(model.id);
     // Keep OpenRouter-specific cache markers on verified OpenRouter routes
     // (or the provider's default route), but not on arbitrary OpenAI proxies.
-    const endpointClass = resolveProviderRequestPolicy({
-      provider,
-      api: readStringValue(model.api),
-      baseUrl: readStringValue(model.baseUrl),
-      capability: "llm",
-      transport: "stream",
-    }).endpointClass;
+    const endpointClass = resolveModelEndpointClass(model);
     if (
       !modelId ||
       !isAnthropicModelRef(modelId) ||
@@ -146,6 +151,7 @@ export function createOpenRouterSystemCacheWrapper(
       return underlying(model, context, options);
     }
 
+    const isCompletions = model.api === "openai-completions";
     const cacheRetention =
       readCacheRetention(options?.cacheRetention) ??
       readCacheRetention(extraParams?.cacheRetention);
@@ -153,9 +159,12 @@ export function createOpenRouterSystemCacheWrapper(
       underlying,
       model,
       context,
-      stripCacheRetentionOption(options),
+      isCompletions ? { ...options, cacheRetention } : stripCacheRetentionOption(options),
       (payloadObj) => {
-        applyAnthropicEphemeralCacheControlMarkers(
+        const applyMarkers = isCompletions
+          ? applyCompletionsAnthropicCacheControl
+          : applyAnthropicEphemeralCacheControlMarkers;
+        applyMarkers(
           payloadObj,
           resolveAnthropicEphemeralCacheControl(readStringValue(model.baseUrl), cacheRetention) ??
             null,
@@ -192,6 +201,7 @@ export function createOpenRouterWrapper(
       baseUrl: readStringValue(model.baseUrl),
       capability: "llm",
       transport: "stream",
+      routeFacts: getModelProviderRequestRouteFacts(model),
       callerHeaders: options?.headers,
       providerHeaders,
       precedence: "caller-wins",
@@ -231,6 +241,7 @@ export function createKilocodeWrapper(
       baseUrl: readStringValue(model.baseUrl),
       capability: "llm",
       transport: "stream",
+      routeFacts: getModelProviderRequestRouteFacts(model),
       callerHeaders: options?.headers,
       providerHeaders: resolveKilocodeAppHeaders(),
       precedence: "defaults-win",

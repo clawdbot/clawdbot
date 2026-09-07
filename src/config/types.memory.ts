@@ -61,8 +61,8 @@ export type MemorySearchConfig = {
   /** Optional provider-specific embedding input_type for document/index embeddings. */
   documentInputType?: string;
   /**
-   * Gemini embedding-2 models only: output vector dimensions.
-   * Supported values today are 768, 1536, and 3072.
+   * Provider-specific output vector dimensions. Gemini supports 128 to 3072.
+   * Google recommends 768, 1536, or 3072 dimensions.
    */
   outputDimensionality?: number;
   /** Local embedding settings for the managed llama.cpp server. */

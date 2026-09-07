@@ -8,15 +8,15 @@ export type BundledCliBackendAuthPolicy = {
   strictSelectedProfile: boolean;
   /** Owner responsible for refreshing selected OAuth credentials before execution. */
   oauthRefreshOwner: "core" | "cli";
-  /** Provider whose imported OAuth profiles use identity-verified native passthrough. */
-  nativePassthroughProviderId?: string;
+  /** Retired OAuth profile identities that the native runtime owns instead. */
+  nativeAuthProfileIds?: readonly string[];
 };
 
 const BUNDLED_CLI_BACKEND_AUTH_POLICIES = {
   "claude-cli": {
     strictSelectedProfile: true,
     oauthRefreshOwner: "core",
-    nativePassthroughProviderId: "claude-cli",
+    nativeAuthProfileIds: ["anthropic:claude-cli"],
   },
   "google-gemini-cli": {
     strictSelectedProfile: false,

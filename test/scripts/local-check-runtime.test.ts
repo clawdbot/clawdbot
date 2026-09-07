@@ -63,32 +63,39 @@ describe("local-check-runtime", () => {
     ).toBe(localPath);
   });
 
-  it("links dependency-less worktrees to the selected checkout's modules", () => {
-    const primaryRoot = createTempDir("openclaw-primary-toolchain-");
-    const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
-    const commonDir = path.join(primaryRoot, ".git");
-    const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
-    const primaryNodeModules = path.join(primaryRoot, "node_modules");
-    const localNodeModules = path.join(cwd, "node_modules");
-    fs.mkdirSync(path.dirname(primaryTsgo), { recursive: true });
-    fs.mkdirSync(cwd, { recursive: true });
-
-    expect(
-      ensureRepoToolNodeModulesLink(primaryTsgo, {
+  it.each([
+    { platform: "linux" as const, linkType: "dir" },
+    { platform: "win32" as const, linkType: "junction" },
+  ])(
+    "links dependency-less $platform worktrees to the selected checkout's modules",
+    ({ platform, linkType }) => {
+      const primaryRoot = createTempDir("openclaw-primary-toolchain-");
+      const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");
+      const commonDir = path.join(primaryRoot, ".git");
+      const primaryTsgo = path.join(primaryRoot, "node_modules", ".bin", "tsgo");
+      const primaryNodeModules = path.join(primaryRoot, "node_modules");
+      const localNodeModules = path.join(cwd, "node_modules");
+      fs.mkdirSync(path.dirname(primaryTsgo), { recursive: true });
+      fs.mkdirSync(cwd, { recursive: true });
+      const linkTypes: Array<Parameters<typeof fs.symlinkSync>[2]> = [];
+      const linkOptions = {
         cwd,
         resolveCommonDir: () => commonDir,
-      }),
-    ).toBe(localNodeModules);
-    expect(fs.realpathSync(localNodeModules)).toBe(fs.realpathSync(primaryNodeModules));
+        platform,
+        symlink: (...args: Parameters<typeof fs.symlinkSync>) => {
+          linkTypes.push(args[2]);
+          fs.symlinkSync(...args);
+        },
+      };
 
-    // The stable link is idempotent for concurrent and later local runners.
-    expect(
-      ensureRepoToolNodeModulesLink(primaryTsgo, {
-        cwd,
-        resolveCommonDir: () => commonDir,
-      }),
-    ).toBe(localNodeModules);
-  });
+      expect(ensureRepoToolNodeModulesLink(primaryTsgo, linkOptions)).toBe(localNodeModules);
+      expect(fs.realpathSync(localNodeModules)).toBe(fs.realpathSync(primaryNodeModules));
+
+      // The stable link is idempotent for concurrent and later local runners.
+      expect(ensureRepoToolNodeModulesLink(primaryTsgo, linkOptions)).toBe(localNodeModules);
+      expect(linkTypes).toEqual([linkType]);
+    },
+  );
 
   it("leaves existing worktree node_modules directories locally owned", () => {
     const primaryRoot = createTempDir("openclaw-primary-toolchain-");
@@ -342,38 +349,131 @@ describe("local-check-runtime", () => {
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
-  it("passes the throttled Go concurrency limit to the oxlint child", () => {
-    const cwd = createTempDir("openclaw-oxlint-go-limit-");
-    const binDir = path.join(cwd, "node_modules", ".bin");
-    const capturePath = path.join(cwd, "gomaxprocs.txt");
-    const oxlintPath = path.join(binDir, "oxlint");
-    fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(
-      oxlintPath,
-      "#!/usr/bin/env node\nrequire('node:fs').writeFileSync(process.env.CAPTURE_PATH, process.env.GOMAXPROCS || '');\n",
-      "utf8",
-    );
-    fs.chmodSync(oxlintPath, 0o755);
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      CAPTURE_PATH: capturePath,
-      OPENCLAW_LOCAL_CHECK: "1",
-      OPENCLAW_LOCAL_CHECK_MODE: "throttled",
-      OPENCLAW_OXLINT_SKIP_PREPARE: "1",
-    };
-    delete env.GOMAXPROCS;
+  it.each([
+    { name: "small CI runner", ci: "true", cpus: 4, gib: 16, throttled: true },
+    { name: "memory-constrained CI runner", ci: "true", cpus: 16, gib: 16, throttled: true },
+    { name: "CPU-constrained CI runner", ci: "true", cpus: 4, gib: 32, throttled: true },
+    { name: "parallel CI boundary", ci: "true", cpus: 8, gib: 24, throttled: false },
+    { name: "large CI runner", ci: "true", cpus: 16, gib: 32, throttled: false },
+    { name: "disabled local policy", ci: undefined, cpus: 4, gib: 16, throttled: false },
+  ])("applies compiler memory policy for $name", ({ ci, cpus, gib, throttled }) => {
+    const inputEnv = makeEnv({
+      CI: ci,
+      OPENCLAW_LOCAL_CHECK: "0",
+      GOMAXPROCS: "2",
+      GOGC: undefined,
+      GOMEMLIMIT: undefined,
+    });
+    const { args, env } = applyLocalOxlintPolicy(["--threads=1"], inputEnv, {
+      logicalCpuCount: cpus,
+      totalMemoryBytes: gib * GIB,
+    });
 
-    const result = spawnSync(
-      process.execPath,
-      [path.resolve("scripts/run-oxlint.mjs"), "--tsconfig", "config/tsconfig/oxlint.core.json"],
-      { cwd, encoding: "utf8", env },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(fs.readFileSync(capturePath, "utf8")).toBe(
-      String(Math.min(2, Math.max(1, os.availableParallelism()))),
-    );
+    expect(env.GOMAXPROCS).toBe("2");
+    expect(env.GOGC).toBe(throttled ? "30" : undefined);
+    expect(env.GOMEMLIMIT).toBe(throttled ? "3GiB" : undefined);
+    expect(inputEnv.GOGC).toBeUndefined();
+    expect(inputEnv.GOMEMLIMIT).toBeUndefined();
+    expect(args.filter((arg) => arg.startsWith("--threads"))).toEqual(["--threads=1"]);
+    expect(args).toContain("--type-aware");
   });
+
+  it("preserves explicit compiler limits on constrained GitHub Actions runners", () => {
+    const { args, env } = applyLocalOxlintPolicy(
+      ["--threads=3"],
+      makeEnv({
+        CI: undefined,
+        GITHUB_ACTIONS: "true",
+        OPENCLAW_LOCAL_CHECK: "0",
+        GOMAXPROCS: "3",
+        GOGC: "80",
+        GOMEMLIMIT: "5GiB",
+      }),
+      { logicalCpuCount: 4, totalMemoryBytes: 16 * GIB },
+    );
+    expect(env.GOMAXPROCS).toBe("3");
+    expect(env.GOGC).toBe("80");
+    expect(env.GOMEMLIMIT).toBe("5GiB");
+    expect(args.filter((arg) => arg.startsWith("--threads"))).toEqual(["--threads=3"]);
+  });
+
+  it.each([
+    {
+      name: "default Go settings",
+      goEnv: { GOMAXPROCS: undefined, GOGC: undefined, GOMEMLIMIT: undefined },
+      prepGoEnv: { GOMAXPROCS: null, GOGC: null, GOMEMLIMIT: null },
+      lintGoEnv: {
+        GOMAXPROCS: String(Math.min(2, Math.max(1, os.availableParallelism()))),
+        GOGC: "30",
+        GOMEMLIMIT: "3GiB",
+      },
+    },
+    {
+      name: "explicit user Go settings",
+      goEnv: { GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" },
+      prepGoEnv: { GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" },
+      lintGoEnv: { GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" },
+    },
+  ])(
+    "keeps prep and oxlint resource policies separate with $name",
+    ({ goEnv, prepGoEnv, lintGoEnv }) => {
+      const cwd = createTempDir("openclaw-oxlint-go-limit-");
+      const binDir = path.join(cwd, "node_modules", ".bin");
+      const scriptsDir = path.join(cwd, "scripts");
+      const capturePath = path.join(cwd, "children.jsonl");
+      const oxlintPath = path.join(binDir, "oxlint");
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      const captureSource = `
+const goEnv = Object.fromEntries(["GOMAXPROCS", "GOGC", "GOMEMLIMIT"].map(key => [key, process.env[key] ?? null]));
+fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: process.argv.slice(2) }) + "\\n");
+`;
+      fs.writeFileSync(
+        path.join(scriptsDir, "prepare-extension-package-boundary-artifacts.mts"),
+        `import fs from "node:fs";\nconst step = "prep";\n${captureSource}`,
+        "utf8",
+      );
+      fs.writeFileSync(
+        oxlintPath,
+        `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst step = "lint";\n${captureSource}`,
+        "utf8",
+      );
+      fs.chmodSync(oxlintPath, 0o755);
+      const env = makeEnv({
+        CAPTURE_PATH: capturePath,
+        OPENCLAW_OXLINT_SKIP_PREPARE: undefined,
+        ...goEnv,
+      });
+
+      const result = spawnSync(
+        process.execPath,
+        [path.resolve("scripts/run-oxlint.mjs"), "--tsconfig", "extensions/tsconfig.json"],
+        { cwd, encoding: "utf8", env },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      const children = fs
+        .readFileSync(capturePath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(children).toEqual([
+        { step: "prep", goEnv: prepGoEnv, args: ["--mode=package-boundary"] },
+        {
+          step: "lint",
+          goEnv: lintGoEnv,
+          args: [
+            "--tsconfig",
+            "extensions/tsconfig.json",
+            "--type-aware",
+            "--report-unused-disable-directives-severity",
+            "error",
+            "--threads=1",
+          ],
+        },
+      ]);
+    },
+  );
 
   it("allows forcing full-speed oxlint runs on roomy hosts", () => {
     const { args, env } = applyLocalOxlintPolicy(

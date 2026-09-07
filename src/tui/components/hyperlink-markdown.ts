@@ -24,6 +24,7 @@ function sanitizeMarkdownDisplayText(text: string): string {
 export class HyperlinkMarkdown implements Component {
   private inner: Markdown;
   private urls: string[];
+  private cachedRender?: { width: number; lines: string[] };
 
   constructor(
     text: string,
@@ -39,16 +40,25 @@ export class HyperlinkMarkdown implements Component {
   }
 
   render(width: number): string[] {
-    return addOsc8Hyperlinks(this.inner.render(width), this.urls).map(isolateRtlRenderedLine);
+    if (this.cachedRender?.width === width) {
+      return this.cachedRender.lines;
+    }
+    const lines = addOsc8Hyperlinks(this.inner.render(width), this.urls).map(
+      isolateRtlRenderedLine,
+    );
+    this.cachedRender = { width, lines };
+    return lines;
   }
 
   setText(text: string): void {
     const displayText = sanitizeMarkdownDisplayText(text);
     this.inner.setText(displayText);
     this.urls = extractUrls(displayText);
+    this.cachedRender = undefined;
   }
 
   invalidate(): void {
     this.inner.invalidate();
+    this.cachedRender = undefined;
   }
 }

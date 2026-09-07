@@ -1,5 +1,6 @@
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelProgressDraftConfig } from "openclaw/plugin-sdk/channel-outbound";
+import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -10,6 +11,8 @@ import type { SlackMessageEvent } from "../../types.js";
 import { readSlackReplyBlocks, resolveSlackThreadTs } from "../replies.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
+
+type SlackProgressConfigEntry = Pick<SlackAccountConfig, "streaming"> | null | undefined;
 
 function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
   const ts = message.event_ts ?? message.ts;
@@ -84,11 +87,20 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
+export function resolveSlackProgressStyle(entry: SlackProgressConfigEntry): "card" | "compact" {
+  // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
+  const progress = entry?.streaming?.progress;
+  return progress?.style ?? (progress?.toolProgress === false ? "compact" : "card");
+}
+
 // Slack's native agent card is the default progress surface; operators opt out
 // with an explicit `false`, which falls back to the Block Kit progress card.
-export function resolveSlackNativeProgressTaskCards(
-  entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
-): boolean {
+export function resolveSlackNativeProgressTaskCards(entry: SlackProgressConfigEntry): boolean {
+  // THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
+  // DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
+  if (resolveSlackProgressStyle(entry) === "compact") {
+    return false;
+  }
   const streaming = entry?.streaming;
   if (!streaming || typeof streaming !== "object" || Array.isArray(streaming)) {
     return true;

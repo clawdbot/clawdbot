@@ -9,7 +9,6 @@ import {
   type QaChildFailure,
   throwQaGatewayChildFailure,
 } from "./gateway-child-process.js";
-import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
 
 export const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
@@ -59,67 +58,6 @@ export function resolveQaGatewayStartupRetry(params: {
     migrationConvergenceRestartUsed:
       params.migrationConvergenceRestartUsed || kind === "migration-convergence-restart",
   };
-}
-
-function isRetryableGatewayCallError(details: string): boolean {
-  return (
-    details.includes("handshake timeout") ||
-    details.includes("gateway closed (1000") ||
-    details.includes("gateway closed (1012)") ||
-    details.includes("gateway closed (1006") ||
-    details.includes("abnormal closure") ||
-    details.includes("service restart")
-  );
-}
-
-export async function callQaGatewayWithRetry<T>(params: {
-  deadlineMs?: number;
-  logs: () => string;
-  request: (options: { deadlineMs?: number; timeoutMs: number }) => Promise<T>;
-  throwChildFailure: () => void;
-  timeoutMs: number;
-  waitForReady: (timeoutMs: number) => Promise<void>;
-}) {
-  const remainingMs = () =>
-    params.deadlineMs === undefined ? undefined : params.deadlineMs - Date.now();
-  const deadlineError = () =>
-    new Error(`gateway call deadline exceeded${formatQaGatewayLogsForError(params.logs())}`);
-  let lastDetails = "";
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    params.throwChildFailure();
-    const requestRemainingMs = remainingMs();
-    if (requestRemainingMs !== undefined && requestRemainingMs <= 0) {
-      throw deadlineError();
-    }
-    try {
-      return await params.request({
-        ...(params.deadlineMs === undefined ? {} : { deadlineMs: params.deadlineMs }),
-        timeoutMs:
-          requestRemainingMs === undefined
-            ? params.timeoutMs
-            : Math.min(params.timeoutMs, requestRemainingMs),
-      });
-    } catch (error) {
-      params.throwChildFailure();
-      const details = formatErrorMessage(error);
-      lastDetails = details;
-      if (attempt >= 3 || !isRetryableGatewayCallError(details)) {
-        throw new Error(`${details}${formatQaGatewayLogsForError(params.logs())}`, {
-          cause: error,
-        });
-      }
-      const readinessRemainingMs = remainingMs();
-      if (readinessRemainingMs !== undefined && readinessRemainingMs <= 0) {
-        throw deadlineError();
-      }
-      await params.waitForReady(
-        readinessRemainingMs === undefined
-          ? Math.max(10_000, params.timeoutMs)
-          : Math.min(Math.max(10_000, params.timeoutMs), readinessRemainingMs),
-      );
-    }
-  }
-  throw new Error(`${lastDetails}${formatQaGatewayLogsForError(params.logs())}`);
 }
 
 async function fetchLocalGatewayHealth(params: {
@@ -256,6 +194,8 @@ export async function waitForGatewayListening(params: {
 }
 
 export function isRetryableRpcStartupError(error: unknown) {
+  // Startup errors cross the same low-level client/log boundary; timeout and
+  // token-mismatch retry facts exist only in the formatted diagnostic.
   const details = formatErrorMessage(error);
   return (
     details.includes("gateway timeout after") ||

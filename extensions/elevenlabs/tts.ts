@@ -1,21 +1,10 @@
 // Elevenlabs plugin module implements tts behavior.
-import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
-import { createBoundedProviderBinaryStream } from "openclaw/plugin-sdk/provider-binary-stream";
-import {
-  assertOkOrThrowProviderError,
-  assertProviderBinaryResponseContent,
-  readProviderBinaryResponse,
-} from "openclaw/plugin-sdk/provider-http";
 import {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
   requireInRange,
-} from "openclaw/plugin-sdk/speech";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+} from "openclaw/plugin-sdk/speech-provider";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 
 function assertElevenLabsVoiceSettings(settings: {
@@ -58,7 +47,7 @@ type ElevenLabsTtsRequestParams = {
   modelId: string;
   outputFormat: string;
   seed?: number;
-  applyTextNormalization?: "auto" | "on" | "off";
+  applyTextNormalization?: string;
   languageCode?: string;
   latencyTier?: number;
   voiceSettings: {
@@ -136,6 +125,10 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
     ...params,
     stream: false,
   });
+  const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
 
   const { response, release } = await fetchWithSsrFGuard({
     url: url.toString(),
@@ -155,7 +148,7 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
-    return Buffer.from(await readProviderBinaryResponse(response, "ElevenLabs API error", "audio"));
+    return await readProviderBinaryResponse(response, "ElevenLabs API error", "audio");
   } finally {
     await release();
   }
@@ -170,6 +163,13 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
     ...params,
     stream: true,
   });
+  const { MAX_AUDIO_BYTES } = await import("openclaw/plugin-sdk/media-runtime");
+  const { createBoundedProviderBinaryStream } =
+    await import("openclaw/plugin-sdk/provider-binary-stream");
+  const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
 
   const { response, release } = await fetchWithSsrFGuard({
     url: url.toString(),
@@ -198,22 +198,12 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
       createOverflowError: ({ maxBytes }) =>
         new Error(`ElevenLabs API error: audio response exceeds ${maxBytes} bytes`),
       createReleaseError: () => new Error("ElevenLabs TTS stream released"),
+      cleanup: release,
     });
-    let releasePromise: Promise<void> | undefined;
-    const releaseAll = () => {
-      releasePromise ??= (async () => {
-        try {
-          await boundedStream.release();
-        } finally {
-          await release();
-        }
-      })();
-      return releasePromise;
-    };
     handedOff = true;
     return {
       audioStream: boundedStream.stream,
-      release: releaseAll,
+      release: boundedStream.release,
     };
   } finally {
     if (!handedOff) {

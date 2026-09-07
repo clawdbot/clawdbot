@@ -248,6 +248,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
   };
 
   switch (event.type) {
+    case "gateway.rpc":
+    case "gateway.event_loop.sample":
+    case "diagnostic.gc":
+      // High-volume measurements are exporter-only and excluded by the subscription.
+      break;
     case "model.usage":
       record.channel = event.channel;
       record.provider = event.provider;
@@ -258,14 +263,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.durationMs = event.durationMs;
       break;
     case "webhook.received":
+    case "webhook.error":
       record.channel = event.channel;
       break;
     case "webhook.processed":
       record.channel = event.channel;
       record.durationMs = event.durationMs;
-      break;
-    case "webhook.error":
-      record.channel = event.channel;
       break;
     case "message.queued":
       record.channel = event.channel;
@@ -273,9 +276,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.queueDepth = event.queueDepth;
       break;
     case "message.received":
-      record.channel = event.channel;
-      record.source = event.source;
-      break;
     case "message.dispatch.started":
       record.channel = event.channel;
       record.source = event.source;
@@ -398,7 +398,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.bytes = event.promptChars;
       record.context =
         event.contextTokenBudget !== undefined ? { limit: event.contextTokenBudget } : undefined;
-      record.bytes = event.promptChars;
       break;
     case "diagnostic.heartbeat":
       record.webhooks = { ...event.webhooks };
@@ -689,18 +688,16 @@ export function recordDiagnosticExporterHealth(
 
 function listRecords(): DiagnosticStabilityEventRecord[] {
   const state = getDiagnosticStabilityState();
-  if (state.count === 0) {
-    return [];
+  const records: DiagnosticStabilityEventRecord[] = [];
+  const start = state.count < state.capacity ? 0 : state.nextIndex;
+  // Capture the ordered view before query normalization or summary getters can re-enter.
+  for (let offset = 0; offset < state.count; offset += 1) {
+    const record = state.records[(start + offset) % state.capacity];
+    if (record !== undefined) {
+      records.push(record);
+    }
   }
-  if (state.count < state.capacity) {
-    return state.records
-      .slice(0, state.count)
-      .filter((record): record is DiagnosticStabilityEventRecord => record !== undefined);
-  }
-  return [
-    ...state.records.slice(state.nextIndex),
-    ...state.records.slice(0, state.nextIndex),
-  ].filter((record): record is DiagnosticStabilityEventRecord => record !== undefined);
+  return records;
 }
 
 function listExporterRecords(): DiagnosticStabilityEventRecord[] {
@@ -855,23 +852,30 @@ export function startDiagnosticStabilityRecorder(): void {
   if (state.unsubscribe) {
     return;
   }
-  state.unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
-    if (event.type === "telemetry.exporter") {
-      return;
-    }
-    // Model-call instrumentation is trusted core telemetry required by recovery.
-    // Other trusted events retain their dedicated owners outside this ring.
-    if (
-      (metadata.trusted &&
+  state.unsubscribe = onInternalDiagnosticEvent(
+    (event, metadata) => {
+      // Model-call instrumentation is trusted core telemetry required by recovery.
+      // Other trusted events retain their dedicated owners outside this ring.
+      if (
+        metadata.trusted &&
         event.type !== "model.call.started" &&
         event.type !== "model.call.completed" &&
-        event.type !== "model.call.error") ||
-      event.type === "log.record"
-    ) {
-      return;
-    }
-    appendRecord(sanitizeDiagnosticEvent(event));
-  });
+        event.type !== "model.call.error"
+      ) {
+        return;
+      }
+      appendRecord(sanitizeDiagnosticEvent(event));
+    },
+    {
+      exclude: [
+        "log.record",
+        "telemetry.exporter",
+        "gateway.rpc",
+        "gateway.event_loop.sample",
+        "diagnostic.gc",
+      ],
+    },
+  );
 }
 
 /** Stops the process-wide diagnostic event recorder. */

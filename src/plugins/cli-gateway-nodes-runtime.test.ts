@@ -100,4 +100,13 @@ describe("createPluginCliGatewayNodesRuntime", () => {
     expect(callGatewayMock.mock.calls[0]?.[0]).not.toHaveProperty("signal");
     expect(callGatewayMock.mock.calls[0]?.[0].params).not.toHaveProperty("signal");
   });
+
+  it("rejects duplex commands without opening a polling Gateway fallback", async () => {
+    const nodes = createPluginCliGatewayNodesRuntime();
+
+    await expect(nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).rejects.toThrow(
+      "unavailable in the CLI",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
 });

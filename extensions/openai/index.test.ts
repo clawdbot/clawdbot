@@ -1,8 +1,10 @@
 // Openai tests cover index plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createCapturedPluginRegistration,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import {
@@ -39,24 +41,31 @@ vi.mock("./openai-chatgpt-oauth-flow.runtime.js", () => ({
 }));
 
 import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider-runtime.factory.js";
-async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
-  const on = vi.fn();
-  const providers: ProviderPlugin[] = [];
-  plugin.register(
-    createTestPluginApi({
-      id: "openai",
-      name: "OpenAI Provider",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      pluginConfig: params?.pluginConfig,
-      on,
-      registerProvider: (provider) => {
-        providers.push(provider);
-      },
-    }),
-  );
-  return { on, providers };
+const capturedRegistrations: ReturnType<typeof createCapturedPluginRegistration>[] = [];
+
+function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
+  const captured = createCapturedPluginRegistration({
+    id: "openai",
+    name: "OpenAI Provider",
+    source: "test",
+    config: {},
+  });
+  capturedRegistrations.push(captured);
+  const on = vi.fn(captured.api.on);
+  const registerHttpRoute = vi.fn(captured.api.registerHttpRoute);
+  const registerRuntimeLifecycle = vi.fn(captured.api.lifecycle.registerRuntimeLifecycle);
+  plugin.register({
+    ...captured.api,
+    runtime: {
+      config: { current: vi.fn(() => ({})) },
+      modelAuth: captured.api.runtime.modelAuth,
+    } as never,
+    pluginConfig: params?.pluginConfig,
+    on,
+    registerHttpRoute,
+    lifecycle: { ...captured.api.lifecycle, registerRuntimeLifecycle },
+  });
+  return { on, providers: captured.providers, registerHttpRoute, registerRuntimeLifecycle };
 }
 
 function expectOpenAIPromptContribution(
@@ -151,25 +160,21 @@ describe("openai plugin", () => {
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    try {
+      for (const captured of capturedRegistrations.splice(0)) {
+        for (const lifecycle of captured.runtimeLifecycles) {
+          await lifecycle.cleanup?.({ reason: "disable" });
+        }
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 
   it("registers the native GPT-Live offer route and cleanup lifecycle", async () => {
-    const registerHttpRoute = vi.fn();
-    const registerRuntimeLifecycle = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        id: "openai",
-        name: "OpenAI Provider",
-        source: "test",
-        config: {},
-        runtime: { config: { current: vi.fn(() => ({})) } } as never,
-        registerHttpRoute,
-        registerRuntimeLifecycle,
-      }),
-    );
+    const { registerHttpRoute, registerRuntimeLifecycle } = registerOpenAIPluginWithHook();
 
     expect(registerHttpRoute).toHaveBeenCalledWith({
       path: "/plugins/openai/realtime/calls",
@@ -183,24 +188,16 @@ describe("openai plugin", () => {
         cleanup: expect.any(Function),
       }),
     );
-    await registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup({ reason: "disable" });
+    const cleanup = expectDefined(
+      registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup,
+      "OpenAI runtime cleanup",
+    );
+    await cleanup({ reason: "disable" });
   });
 
   it("shares one GPT-Live broker across full registrations and ignores late old cleanup", async () => {
     const register = () => {
-      const registerHttpRoute = vi.fn();
-      const registerRuntimeLifecycle = vi.fn();
-      plugin.register(
-        createTestPluginApi({
-          id: "openai",
-          name: "OpenAI Provider",
-          source: "test",
-          config: {},
-          runtime: { config: { current: vi.fn(() => ({})) } } as never,
-          registerHttpRoute,
-          registerRuntimeLifecycle,
-        }),
-      );
+      const { registerHttpRoute, registerRuntimeLifecycle } = registerOpenAIPluginWithHook();
       return {
         handler: registerHttpRoute.mock.calls[0]?.[0].handler as unknown,
         cleanup: registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup as (ctx: {
@@ -224,18 +221,7 @@ describe("openai plugin", () => {
   });
 
   it("only cleans up the GPT-Live broker on plugin disable, not session reset/delete/restart", async () => {
-    const registerRuntimeLifecycle = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        id: "openai",
-        name: "OpenAI Provider",
-        source: "test",
-        config: {},
-        runtime: { config: { current: vi.fn(() => ({})) } } as never,
-        registerHttpRoute: vi.fn(),
-        registerRuntimeLifecycle,
-      }),
-    );
+    const { registerRuntimeLifecycle } = registerOpenAIPluginWithHook();
 
     const lifecycle = registerRuntimeLifecycle.mock.calls[0]?.[0] as {
       cleanup: (ctx: { reason: string }) => Promise<void> | void;
@@ -258,7 +244,9 @@ describe("openai plugin", () => {
       revisedPrompt: "revised",
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
+    const provider = buildOpenAIImageGenerationProvider(
+      createCapturedPluginRegistration().api.runtime.modelAuth,
+    );
     const authStore = { version: 1, profiles: {} };
     const result = await provider.generateImage({
       provider: "openai",
@@ -302,7 +290,9 @@ describe("openai plugin", () => {
         imageData: "edited-image",
       });
 
-    const provider = buildOpenAIImageGenerationProvider();
+    const provider = buildOpenAIImageGenerationProvider(
+      createCapturedPluginRegistration().api.runtime.modelAuth,
+    );
     const authStore = { version: 1, profiles: {} };
 
     const result = await provider.generateImage({
@@ -366,7 +356,9 @@ describe("openai plugin", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const provider = buildOpenAIImageGenerationProvider();
+    const provider = buildOpenAIImageGenerationProvider(
+      createCapturedPluginRegistration().api.runtime.modelAuth,
+    );
     await expect(
       provider.generateImage({
         provider: "openai",
@@ -417,8 +409,8 @@ describe("openai plugin", () => {
     );
   });
 
-  it("registers provider-owned OpenAI tool compat hooks for API and Codex transports", async () => {
-    const { providers } = await registerOpenAIPluginWithHook();
+  it("registers provider-owned OpenAI tool compat hooks for API and Codex transports", () => {
+    const { providers } = registerOpenAIPluginWithHook();
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     const noParamsTool = {
       name: "ping",
@@ -494,8 +486,8 @@ describe("openai plugin", () => {
     ).toStrictEqual([]);
   });
 
-  it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", async () => {
-    const { on, providers } = await registerOpenAIPluginWithHook({
+  it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", () => {
+    const { on, providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "friendly" },
     });
 
@@ -536,7 +528,7 @@ describe("openai plugin", () => {
     ).toEqual({
       stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
       sectionOverrides: {
-        interaction_style: `${OPENAI_FRIENDLY_PROMPT_OVERLAY}\n\n${OPENAI_HEARTBEAT_PROMPT_OVERLAY}`,
+        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
       },
     });
     expect(
@@ -601,8 +593,8 @@ describe("openai plugin", () => {
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("GPT-5 Output Contract");
   });
 
-  it("defaults to the friendly OpenAI interaction-style overlay", async () => {
-    const { on, providers } = await registerOpenAIPluginWithHook();
+  it("defaults to the friendly OpenAI interaction-style overlay", () => {
+    const { on, providers } = registerOpenAIPluginWithHook();
 
     expectNoBeforePromptBuildHook(on);
     const openaiProvider = requireRegisteredProvider(providers, "openai");
@@ -611,8 +603,8 @@ describe("openai plugin", () => {
     });
   });
 
-  it("supports opting out of the friendly prompt overlay via plugin config", async () => {
-    const { on, providers } = await registerOpenAIPluginWithHook({
+  it("supports opting out of the friendly prompt overlay via plugin config", () => {
+    const { on, providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "off" },
     });
 
@@ -621,8 +613,8 @@ describe("openai plugin", () => {
     expectOpenAIPromptContribution(openaiProvider, {});
   });
 
-  it("treats mixed-case off values as disabling the friendly prompt overlay", async () => {
-    const { providers } = await registerOpenAIPluginWithHook({
+  it("treats mixed-case off values as disabling the friendly prompt overlay", () => {
+    const { providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "Off" },
     });
 
@@ -630,8 +622,8 @@ describe("openai plugin", () => {
     expectOpenAIPromptContribution(openaiProvider, {});
   });
 
-  it("supports explicitly configuring the friendly prompt overlay", async () => {
-    const { on, providers } = await registerOpenAIPluginWithHook({
+  it("supports explicitly configuring the friendly prompt overlay", () => {
+    const { on, providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "friendly" },
     });
 
@@ -642,8 +634,8 @@ describe("openai plugin", () => {
     });
   });
 
-  it("uses live plugin config for GPT-5 prompt overlay mode", async () => {
-    const { providers } = await registerOpenAIPluginWithHook({
+  it("uses live plugin config for GPT-5 prompt overlay mode", () => {
+    const { providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "off" },
     });
 
@@ -678,8 +670,8 @@ describe("openai plugin", () => {
     });
   });
 
-  it("treats on as an alias for the friendly prompt overlay", async () => {
-    const { providers } = await registerOpenAIPluginWithHook({
+  it("treats on as an alias for the friendly prompt overlay", () => {
+    const { providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "on" },
     });
 

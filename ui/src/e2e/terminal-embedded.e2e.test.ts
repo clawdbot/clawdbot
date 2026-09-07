@@ -1,4 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -12,10 +17,79 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const deadSessionScreenshotPath = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCREENSHOT?.trim();
-const deadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
+const requestedDeadSessionScreenshotPath =
+  process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCREENSHOT?.trim();
+const requestedDeadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
 
 suite.define(() => {
+  it.each(["chat", "focus/terminal"])("routes focused terminal keys in %s", async (route) => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        terminalEnabled: true,
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
+        methodResponses: {
+          "terminal.list": { sessions: [] },
+          "terminal.open": {
+            agentId: "main",
+            confined: false,
+            cwd: "/workspace",
+            sessionId: "keyboard-terminal",
+            shell: "/bin/sh",
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}${route}`);
+      await waitForControlUiGatewayReady(page);
+      if (route === "chat") {
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await page.keyboard.press("Control+Backquote");
+      }
+      const panel = page
+        .locator("openclaw-terminal-panel")
+        .filter({ has: page.locator(".tp-host") });
+      const terminal = panel.locator(".tp-host");
+      await terminal.locator("canvas").waitFor();
+      await terminal.click();
+      await page.keyboard.type("x");
+      await gateway.waitForRequest("terminal.input");
+      const before = await gateway.getRequests("terminal.input");
+      await page.keyboard.press("Control+Backquote");
+      if (route === "chat") {
+        await panel.locator(".tp-header").waitFor({ state: "hidden" });
+        expect(await gateway.getRequests("terminal.input")).toEqual(before);
+        await page.keyboard.press("Control+Backquote");
+        await page.locator("openclaw-terminal-panel .tp-header").waitFor();
+      } else {
+        await expect
+          .poll(async () => (await gateway.getRequests("terminal.input")).length)
+          .toBe(before.length + 1);
+        expect(await panel.locator(".tp-header").isVisible()).toBe(true);
+        expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+      }
+    });
+  });
+
+  it("returns from an unavailable focused terminal", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}dashboards`);
+      await page.locator("openclaw-app-shell").waitFor();
+      await page.goto(`${suite.server.baseUrl}?view=terminal`);
+
+      await page.waitForURL(`${suite.server.baseUrl}focus/terminal`);
+      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+      expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
+
+      await page
+        .getByText("The terminal is not available on this gateway.", { exact: true })
+        .waitFor();
+      const back = page.getByRole("button", { name: "Back", exact: true });
+      await back.waitFor();
+      await back.click();
+      await page.waitForURL(`${suite.server.baseUrl}dashboards`);
+    });
+  });
+
   it("fences an SW-less stale build before it can restore an ownerless terminal", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gatewayUrl = suite.server.baseUrl.replace(/^http/u, "ws");
@@ -127,21 +201,6 @@ suite.define(() => {
             mainKey: "main",
             scope: "agent",
           },
-          // The startup projection owns the roster when chat.startup is
-          // advertised, so the second agent must arrive through it.
-          "chat.startup": {
-            agentsList: {
-              agents: [
-                { id: "main", identity: { name: "Main" }, name: "Main" },
-                { id: "research", identity: { name: "Research" }, name: "Research" },
-              ],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-            },
-            messages: [],
-            sessionId: "terminal-selection-e2e-session",
-          },
           "terminal.open": {
             agentId: "research",
             confined: false,
@@ -153,9 +212,11 @@ suite.define(() => {
         terminalEnabled: true,
       });
 
-      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+      // Global selection owns standalone docks; Chat terminals belong to their
+      // conversation regardless of a later global agent selection.
+      expect((await page.goto(`${suite.server.baseUrl}new`))?.status()).toBe(200);
       await gateway.waitForRequest("connect");
-      await gateway.waitForRequest("chat.startup");
+      await page.locator(".new-session-page__message").waitFor();
       await page.waitForFunction(() => {
         const panel = document.querySelector("openclaw-terminal-panel") as
           | (HTMLElement & { available: boolean })
@@ -166,9 +227,7 @@ suite.define(() => {
             })
           | null;
         return (
-          customElements.get("openclaw-terminal-panel") !== undefined &&
-          panel?.available &&
-          typeof shell?.runtime?.context?.agentSelection?.set === "function"
+          panel?.available && typeof shell?.runtime?.context?.agentSelection?.set === "function"
         );
       });
       await page.evaluate(() => {
@@ -223,7 +282,7 @@ suite.define(() => {
         terminalEnabled: true,
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}?view=terminal`);
+      const response = await page.goto(`${suite.server.baseUrl}focus/terminal`);
       expect(response?.status()).toBe(200);
       const connect = await gateway.waitForRequest("connect");
 
@@ -237,23 +296,27 @@ suite.define(() => {
         cols: expect.any(Number),
         rows: expect.any(Number),
       });
-      const colorQueries = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\";
+      const colorQueries = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b]12;?\u001b\\";
       await gateway.emitGatewayEvent("terminal.data", {
         sessionId: "terminal-e2e",
         seq: colorQueries.length,
         data: colorQueries,
       });
-      await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(2);
-      expect((await gateway.getRequests("terminal.input")).map(({ params }) => params)).toEqual([
-        {
+      await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(3);
+      const themeColors = await page.evaluate(() => {
+        const styles = getComputedStyle(document.documentElement);
+        return ["--text", "--bg", "--accent"].map((property) =>
+          styles.getPropertyValue(property).trim(),
+        );
+      });
+      expect((await gateway.getRequests("terminal.input")).map(({ params }) => params)).toEqual(
+        themeColors.map((color, index) => ({
           sessionId: "terminal-e2e",
-          data: "\u001b]10;rgb:1b1b/1e1e/2626\u001b\\",
-        },
-        {
-          sessionId: "terminal-e2e",
-          data: "\u001b]11;rgb:f7f7/f8f8/fafa\u001b\\",
-        },
-      ]);
+          data: `\u001b]${index + 10};rgb:${[1, 3, 5]
+            .map((offset) => color.slice(offset, offset + 2).repeat(2))
+            .join("/")}\u001b\\`,
+        })),
+      );
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
       expect(await page.locator("openclaw-terminal-panel").count()).toBe(1);
       const closeControlMetrics = await page
@@ -308,6 +371,27 @@ suite.define(() => {
   });
 
   it("restores a persisted session with no gateway PTY as exited", async () => {
+    const screenshotDir = requestedDeadSessionScreenshotPath
+      ? createControlUiE2eArtifactDir(
+          "terminal-dead-session",
+          path.dirname(requestedDeadSessionScreenshotPath),
+        )
+      : undefined;
+    const deadSessionScreenshotPath =
+      screenshotDir && requestedDeadSessionScreenshotPath
+        ? path.join(screenshotDir, path.basename(requestedDeadSessionScreenshotPath))
+        : undefined;
+    const deadSessionVideoDir = requestedDeadSessionVideoDir
+      ? screenshotDir &&
+        requestedDeadSessionScreenshotPath &&
+        path.resolve(requestedDeadSessionVideoDir) ===
+          path.resolve(path.dirname(requestedDeadSessionScreenshotPath))
+        ? screenshotDir
+        : createControlUiE2eArtifactDir("terminal-dead-session", requestedDeadSessionVideoDir)
+      : undefined;
+    if (deadSessionScreenshotPath) {
+      console.info(`[control-ui-e2e] screenshot: ${deadSessionScreenshotPath}`);
+    }
     await suite.withPage(
       {
         serviceWorkers: "block",
@@ -350,7 +434,7 @@ suite.define(() => {
           terminalEnabled: true,
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}?view=terminal`);
+        const response = await page.goto(`${suite.server.baseUrl}focus/terminal`);
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
@@ -358,7 +442,16 @@ suite.define(() => {
         await page.waitForTimeout(250);
 
         if (deadSessionScreenshotPath) {
-          await page.screenshot({ path: deadSessionScreenshotPath, fullPage: true });
+          if (deadSessionVideoDir) {
+            await writeFile(
+              deadSessionScreenshotPath,
+              await takeControlUiViewportScreenshot(page, page.locator("openclaw-terminal-panel"), [
+                page.locator("openclaw-terminal-panel .tabstrip-tab__status"),
+              ]),
+            );
+          } else {
+            await page.screenshot({ path: deadSessionScreenshotPath, fullPage: true });
+          }
         }
         const status = page.locator("openclaw-terminal-panel .tabstrip-tab__status");
         await expect

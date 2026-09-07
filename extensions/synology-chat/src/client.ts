@@ -9,8 +9,8 @@ import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-s
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { classifyTransientNetworkErrorCode, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleep, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
@@ -100,13 +100,11 @@ const ChatUserSchema = z
     username: z.string().optional(),
     nickname: z.string().optional(),
   })
-  .transform(
-    (user): ChatUser => ({
-      user_id: user.user_id,
-      username: user.username ?? "",
-      nickname: user.nickname ?? "",
-    }),
-  );
+  .transform((user): ChatUser => ({
+    user_id: user.user_id,
+    username: user.username ?? "",
+    nickname: user.nickname ?? "",
+  }));
 
 const ChatUserListResponseSchema = z.object({
   success: z.boolean(),
@@ -149,24 +147,26 @@ export async function sendMessage(
     // Synology Chat API requires numeric user_ids to specify the recipient.
     const body = buildWebhookBody({ text: chunk }, userId);
     // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      await waitForSendSlot();
-      await onPlatformSendDispatch?.();
-      try {
-        const result = await doPost(incomingUrl, body, allowInsecureSsl);
-        if (result === "accepted") {
-          break;
-        }
-        return false;
-      } catch (error) {
-        if (!isProvenPreConnectFailure(error)) {
-          return false;
-        }
-      }
-      if (attempt === 2) {
-        return false;
-      }
-      await sleep(300 * 2 ** attempt);
+    await waitForSendSlot();
+    await onPlatformSendDispatch?.();
+    let result: SynologyHostedFileSendResult["status"];
+    try {
+      result = await retryAsync(() => doPost(incomingUrl, body, allowInsecureSsl), {
+        attempts: 3,
+        minDelayMs: 0,
+        shouldRetry: isProvenPreConnectFailure,
+        delayMs: ({ attempt }) => 300 * 2 ** (attempt - 1),
+        sleep: async (delayMs) => {
+          await sleepWithAbort(delayMs);
+          await waitForSendSlot();
+          await onPlatformSendDispatch?.();
+        },
+      });
+    } catch {
+      return false;
+    }
+    if (result !== "accepted") {
+      return false;
     }
   }
   return true;

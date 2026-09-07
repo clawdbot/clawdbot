@@ -1,7 +1,13 @@
 // Status message tests cover status message formatting and persistence.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+
+vi.mock("../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version.js")>();
+  return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
+});
 import { buildStatusMessage, buildStatusMessageParts } from "./status-message.js";
 
 function statusTestModel(id: string, name: string, contextWindow: number): ModelDefinitionConfig {
@@ -41,6 +47,20 @@ describe("buildStatusMessage current time", () => {
 });
 
 describe("buildStatusMessageParts presentation", () => {
+  it("reports the loaded build commit", () => {
+    const parts = buildStatusMessageParts({
+      now: 1_751_529_600_000,
+      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(parts.presentation.title).toContain("(aaaaaaa)");
+  });
+
   it("mirrors the text body as a titled status table with context lines", () => {
     const parts = buildStatusMessageParts({
       now: 1_751_529_600_000,
@@ -51,7 +71,7 @@ describe("buildStatusMessageParts presentation", () => {
       queue: { mode: "steer", depth: 0 },
       modelAuth: "api-key",
       uptimeValue: "gateway 1h · system 2d",
-      channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
+      channelFeatureLine: "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled",
     });
 
     expect(parts.text).toBe(
@@ -64,7 +84,7 @@ describe("buildStatusMessageParts presentation", () => {
         queue: { mode: "steer", depth: 0 },
         modelAuth: "api-key",
         uptimeValue: "gateway 1h · system 2d",
-        channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
+        channelFeatureLine: "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled",
       }),
     );
     expect(parts.text).toContain("⏱️ Uptime: gateway 1h · system 2d");
@@ -138,7 +158,237 @@ describe("buildStatusMessageParts presentation", () => {
   });
 });
 
+describe("buildStatusMessage cost snapshot", () => {
+  it.each([
+    {
+      name: "recorded per-call total",
+      recorded: 0.25,
+      tiered: true,
+      expected: "Cost: $0.25",
+      tokens: true,
+    },
+    { name: "recorded zero", recorded: 0, tiered: true, expected: "Cost: $0.0000", tokens: true },
+    {
+      name: "unknown tiered total",
+      recorded: undefined,
+      tiered: true,
+      expected: undefined,
+      tokens: true,
+    },
+    {
+      name: "legacy flat estimate",
+      recorded: undefined,
+      tiered: false,
+      expected: "Cost: $0.30",
+      tokens: true,
+    },
+    {
+      name: "cost-only positive total",
+      recorded: 0.25,
+      tiered: true,
+      expected: "Cost: $0.25",
+      tokens: false,
+    },
+    {
+      name: "cost-only zero total",
+      recorded: 0,
+      tiered: true,
+      expected: "Cost: $0.0000",
+      tokens: false,
+    },
+  ])("uses $name without repricing combined calls", ({ recorded, tiered, expected, tokens }) => {
+    const text = buildStatusMessage({
+      agent: { model: "fixture/priced" },
+      config: {
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://fixture.invalid",
+              models: [
+                {
+                  ...statusTestModel("priced", "Priced", 1_000_000),
+                  cost: {
+                    input: 1,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    ...(tiered
+                      ? {
+                          tieredPricing: [
+                            { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
+                          ],
+                        }
+                      : {}),
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "status-cost",
+        updatedAt: 0,
+        modelProvider: "fixture",
+        model: "priced",
+        ...(tokens ? { inputTokens: 300_000, outputTokens: 200 } : {}),
+        estimatedCostUsd: recorded,
+      },
+    });
+
+    if (expected) {
+      expect(text).toContain(expected);
+    } else {
+      expect(text).not.toContain("Cost:");
+    }
+    if (!tokens) {
+      expect(text).not.toContain("Tokens:");
+      expect(text).not.toContain("Cache:");
+    }
+  });
+});
+
 describe("buildStatusMessage context window", () => {
+  it("rejects a stale runtime window after a same-model harness change", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.6-sol",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [statusTestModel("gpt-5.6-sol", "GPT-5.6 Sol", 1_050_000)],
+            },
+          },
+        },
+      },
+      agent: { model: "openai/gpt-5.6-sol" },
+      runtimeContextTokens: 1_000_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "same-model-runtime-change",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "openclaw",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+        totalTokens: 11,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+    expect(text).not.toContain("Context: 11/272k");
+  });
+
+  it("replaces matching runtime telemetry with a newly authored effective cap", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.6-sol",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  ...statusTestModel("gpt-5.6-sol", "GPT-5.6 Sol", 1_050_000),
+                  contextTokens: 1_000_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      agent: { model: "openai/gpt-5.6-sol" },
+      runtimeContextTokens: 1_000_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "authored-context-cap",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+        totalTokens: 11,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+    expect(text).not.toContain("Context: 11/272k");
+  });
+
+  it("preserves a locked legacy session window", () => {
+    const text = buildStatusMessage({
+      agent: { model: "openai/gpt-5.6-sol" },
+      runtimeContextTokens: 272_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "locked-legacy-window",
+        updatedAt: 0,
+        modelSelectionLocked: true,
+        contextTokens: 1_000_000,
+        totalTokens: 11,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+    expect(text).not.toContain("Context: 11/272k");
+  });
+
+  it("caps matching unlocked runtime telemetry to the lower current window", () => {
+    const text = buildStatusMessage({
+      agent: { model: "openai/gpt-5.6-sol" },
+      runtimeContextTokens: 272_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "unlocked-runtime-window",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokens: 1_000_000,
+        contextTokensSource: "runtime",
+        totalTokens: 11,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/272k");
+    expect(text).not.toContain("Context: 11/1.0m");
+  });
+
   it("ignores stale runtime context after a manual session model switch", () => {
     const text = buildStatusMessage({
       config: {
@@ -297,6 +547,9 @@ describe("buildStatusMessage context window", () => {
         modelOverrideFallbackOriginModel: "deepseek-v4-pro",
         modelProvider: "ollama-cloud",
         model: "deepseek-v4-pro",
+        agentHarnessId: "openclaw",
+        contextTokens: 128_000,
+        contextTokensSource: "runtime",
         totalTokens: 50_000,
         totalTokensFresh: true,
         totalTokensVersion: 1,
@@ -305,12 +558,14 @@ describe("buildStatusMessage context window", () => {
       sessionScope: "per-sender",
       queue: { mode: "steer", depth: 0 },
       modelAuth: "api-key",
+      resolvedHarness: "openclaw",
     });
 
     expect(text).toContain("Model: ollama-cloud/qwen3.6-blue");
     expect(text).toContain("auto fallback; config primary ollama-cloud/deepseek-v4-pro");
     expect(text).toContain("check provider");
     expect(text).not.toContain("pinned session");
+    expect(text).toContain("Context: 50k/128k");
   });
 
   it("does not label a configured subagent model as auto fallback", () => {

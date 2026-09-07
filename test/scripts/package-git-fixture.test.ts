@@ -3,10 +3,62 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 describe("package git fixture", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("installs the packed runtime without resolving checkout-only development dependencies", () => {
+    const root = tempDirs.make("openclaw-package-git-fixture-install-");
+    const runtimeDir = path.join(root, "runtime");
+    mkdirSync(runtimeDir);
+    writeFileSync(
+      path.join(runtimeDir, "package.json"),
+      JSON.stringify({ name: "fixture-runtime", version: "1.0.0", main: "index.cjs" }),
+    );
+    writeFileSync(path.join(runtimeDir, "index.cjs"), 'module.exports = "packed runtime";\n');
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "prebuilt-fixture",
+        version: "1.0.0",
+        dependencies: { "fixture-runtime": "file:./runtime" },
+        devDependencies: { "checkout-build-tool": "workspace:*" },
+      }),
+    );
+    const prepared = spawnSync(
+      process.execPath,
+      ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root],
+      { encoding: "utf8" },
+    );
+    expect(prepared.status, prepared.stderr).toBe(0);
+    const npm = resolveNpmRunner({
+      npmArgs: [
+        "install",
+        "--omit=dev",
+        "--offline",
+        "--ignore-scripts",
+        "--no-fund",
+        "--no-audit",
+      ],
+    });
+    const installed = spawnSync(npm.command, npm.args, {
+      cwd: root,
+      encoding: "utf8",
+      env: npm.env,
+      shell: npm.shell,
+      windowsVerbatimArguments: npm.windowsVerbatimArguments,
+      timeout: 30_000,
+    });
+    expect(installed.status, `${installed.stdout}\n${installed.stderr}`).toBe(0);
+    const runtime = spawnSync(process.execPath, ["-p", 'require("fixture-runtime")'], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(runtime.status, runtime.stderr).toBe(0);
+    expect(runtime.stdout.trim()).toBe("packed runtime");
+  });
 
   it("stages bundled ai runtime as a local file dependency", async () => {
     const root = tempDirs.make("openclaw-package-git-fixture-");
@@ -18,6 +70,11 @@ describe("package git fixture", () => {
         {
           dependencies: { "@openclaw/ai": "2026.6.11", chalk: "5.6.2" },
           bundleDependencies: ["@openclaw/ai", "chalk"],
+          scripts: {
+            build: "node build.mjs",
+            openclaw: "node scripts/run-node.mjs",
+            postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          },
         },
         null,
         2,
@@ -48,6 +105,10 @@ describe("package git fixture", () => {
     const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
     expect(packageJson.dependencies["@openclaw/ai"]).toBe("file:.openclaw-fixture/packages/ai");
     expect(packageJson.bundleDependencies).toEqual(["chalk"]);
+    expect(packageJson.scripts).toEqual({
+      build: "node build.mjs",
+      openclaw: "node openclaw.mjs",
+    });
     const relocatedAiPackage = JSON.parse(
       readFileSync(path.join(root, ".openclaw-fixture", "packages", "ai", "package.json"), "utf8"),
     );
@@ -78,5 +139,38 @@ describe("package git fixture", () => {
     expect(staged.status).toBe(0);
     expect(staged.stdout).not.toContain("node_modules");
     expect(staged.stdout).not.toContain("pnpm-lock.yaml");
+  });
+
+  it("uses the packed entrypoint without a bundled ai runtime", () => {
+    const root = tempDirs.make("openclaw-package-git-fixture-no-ai-");
+    writeFileSync(
+      path.join(root, "package.json"),
+      `${JSON.stringify(
+        {
+          dependencies: { chalk: "5.6.2" },
+          scripts: {
+            lint: "node lint.mjs",
+            openclaw: "node scripts/run-node.mjs",
+            postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(packageJson.scripts).toEqual({
+      lint: "node lint.mjs",
+      openclaw: "node openclaw.mjs",
+    });
+    expect(packageJson.dependencies).not.toHaveProperty("@openclaw/ai");
   });
 });

@@ -1,6 +1,5 @@
 // QA Lab Slack native approval observation and resolution.
 import { randomUUID } from "node:crypto";
-import type { WebClient } from "@slack/web-api";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { assertApprovalDecisionResult } from "../shared/live-approval-result.js";
 import {
@@ -18,6 +17,7 @@ import {
   type SlackObservedMessage,
   type SlackApprovalArtifact,
   type SlackMessage,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import {
   listSlackMessages,

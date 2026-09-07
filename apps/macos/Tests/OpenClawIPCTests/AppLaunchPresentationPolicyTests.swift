@@ -84,6 +84,7 @@ struct AppLaunchRuntimePlanTests {
         #expect(policy.allowsUpdater)
         #expect(policy.allowsDockIcon)
         #expect(policy.allowsInteractiveServices)
+        #expect(policy.allowsCuaComputerControl)
         #expect(policy.shouldAutoOpenChat(arguments: ["OpenClaw", "--chat"]))
         #expect(policy.shouldAutoOpenDashboard(arguments: ["OpenClaw", "--dashboard"]))
     }
@@ -99,6 +100,7 @@ struct AppLaunchRuntimePlanTests {
         #expect(policy.allowsUpdater)
         #expect(policy.allowsDockIcon)
         #expect(policy.allowsInteractiveServices)
+        #expect(policy.allowsCuaComputerControl)
         #expect(!policy.shouldAutoOpenChat(arguments: arguments))
         #expect(!policy.shouldAutoOpenDashboard(arguments: arguments))
     }
@@ -115,12 +117,25 @@ struct AppLaunchRuntimePlanTests {
         #expect(!policy.allowsUpdater)
         #expect(!policy.allowsDockIcon)
         #expect(!policy.allowsInteractiveServices)
+        #expect(!policy.allowsCuaComputerControl)
         #expect(!policy.shouldAutoOpenChat(arguments: arguments))
         #expect(!policy.shouldAutoOpenDashboard(arguments: arguments))
         #expect(DockIconManager.activationPolicy(
             launchPlan: policy,
             userWantsDockHidden: false,
             hasVisibleWindows: true) == .accessory)
+    }
+
+    @Test func `elevation host derives pause and Peekaboo roles in memory`() {
+        let interactive = AppLaunchRuntimePlan(arguments: ["OpenClaw"])
+        let elevation = AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"])
+
+        for storedValue in [false, true] {
+            #expect(interactive.resolvePaused(storedValue) == storedValue)
+            #expect(interactive.resolvePeekabooBridgeEnabled(storedValue) == storedValue)
+        }
+        #expect(!elevation.resolvePaused(true))
+        #expect(elevation.resolvePeekabooBridgeEnabled(false))
     }
 
     @Test func `attach-only does not change presentation behavior`() {

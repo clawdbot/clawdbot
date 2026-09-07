@@ -9,6 +9,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticSecurityEvent } from "../infra/diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import {
+  requestDeferredPluginInstall,
+  resolvePluginInstallTransaction,
+} from "./install-transaction.js";
+import type { PluginInstallArtifactConsentRequest } from "./install-types.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const installPluginFromInstalledPackageDirMock = vi.fn();
@@ -152,7 +161,7 @@ describe("isImmutableGitCommitRef", () => {
 });
 
 describe("installPluginFromGitSpec", () => {
-  const tempDirs: string[] = [];
+  let state: OpenClawTestState;
   const trackedTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(async () => {
@@ -160,20 +169,14 @@ describe("installPluginFromGitSpec", () => {
     installPluginFromInstalledPackageDirMock.mockReset();
     preflightPluginGitInstallPolicyMock.mockReset();
     preflightPluginGitInstallPolicyMock.mockResolvedValue(null);
-    const globalConfigRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-git-install-npmrc-"),
-    );
-    tempDirs.push(globalConfigRoot);
-    const globalConfig = path.join(globalConfigRoot, "global-npmrc");
-    await fs.writeFile(globalConfig, "", "utf8");
+    state = await createOpenClawTestState({ label: "git-install" });
+    const globalConfig = await state.writeText("global-npmrc", "");
     vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", globalConfig);
   });
 
   afterEach(async () => {
     vi.unstubAllEnvs();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    await state.cleanup();
   });
 
   it("rejects option-leading clone sources before invoking git", async () => {
@@ -561,6 +564,98 @@ describe("installPluginFromGitSpec", () => {
     }
   });
 
+  it("reviews the final copied artifact before publishing a deferred git install", async () => {
+    const gitDir = trackedTempDirs.make("openclaw-git-consent-stage-");
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    installPluginFromInstalledPackageDirMock.mockImplementation(
+      async (params: { packageDir: string }) => {
+        await fs.mkdir(params.packageDir, { recursive: true });
+        await fs.writeFile(path.join(params.packageDir, "index.js"), "reviewed capabilities");
+        return {
+          ok: true,
+          pluginId: "demo",
+          targetDir: params.packageDir,
+          extensions: ["index.js"],
+        };
+      },
+    );
+    let reviewedArtifactDir: string | undefined;
+
+    const result = await installPluginFromGitSpec(
+      requestDeferredPluginInstall({
+        spec: "git:github.com/acme/demo",
+        gitDir,
+        onBeforePluginArtifactCommit: async ({
+          stagedArtifactDir,
+        }: PluginInstallArtifactConsentRequest) => {
+          reviewedArtifactDir = stagedArtifactDir;
+          await expect(fs.readFile(path.join(stagedArtifactDir, "index.js"), "utf8")).resolves.toBe(
+            "reviewed capabilities",
+          );
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(reviewedArtifactDir).not.toBe(firstInstallOptions()?.packageDir);
+    expect(
+      path.basename(expectDefined(reviewedArtifactDir, "reviewed artifact test invariant")),
+    ).toMatch(/^\.openclaw-install-stage-/);
+    await expect(fs.readFile(path.join(result.targetDir, "index.js"), "utf8")).resolves.toBe(
+      "reviewed capabilities",
+    );
+    await resolvePluginInstallTransaction(result)?.commit();
+  });
+
+  it("preserves a deferred git consent rejection without publishing its staged artifact", async () => {
+    const gitDir = trackedTempDirs.make("openclaw-git-consent-rejection-");
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    installPluginFromInstalledPackageDirMock.mockImplementation(
+      async (params: { packageDir: string }) => {
+        await fs.mkdir(params.packageDir, { recursive: true });
+        return {
+          ok: true,
+          pluginId: "demo",
+          targetDir: params.packageDir,
+          extensions: ["index.js"],
+        };
+      },
+    );
+    const consentRejection = new Error("plugin capabilities require review");
+
+    await expect(
+      installPluginFromGitSpec(
+        requestDeferredPluginInstall({
+          spec: "git:github.com/acme/demo",
+          gitDir,
+          onBeforePluginArtifactCommit: async ({
+            stagedArtifactDir,
+          }: PluginInstallArtifactConsentRequest) => {
+            expect(stagedArtifactDir).not.toBe(firstInstallOptions()?.packageDir);
+            throw consentRejection;
+          },
+        }),
+      ),
+    ).rejects.toBe(consentRejection);
+    await expect(
+      fs.access(
+        expectedGitRepoDir({
+          gitDir,
+          normalizedSpec: "git:https://github.com/acme/demo.git",
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
   it("falls back to the OpenClaw temp root when target workspace creation fails", async () => {
     const gitDir = trackedTempDirs.make("openclaw-git-install-stage-fallback-");
     runCommandWithTimeoutMock
@@ -590,9 +685,12 @@ describe("installPluginFromGitSpec", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(mkdtempSpy).toHaveBeenCalledTimes(2);
-      const targetPrefix = mkdtempSpy.mock.calls[0]?.[0];
-      const fallbackPrefix = mkdtempSpy.mock.calls[1]?.[0];
+      const cloneWorkspaceCalls = mkdtempSpy.mock.calls.filter(([prefix]) =>
+        path.basename(prefix).startsWith("openclaw-git-plugin-"),
+      );
+      expect(cloneWorkspaceCalls).toHaveLength(2);
+      const targetPrefix = cloneWorkspaceCalls[0]?.[0];
+      const fallbackPrefix = cloneWorkspaceCalls[1]?.[0];
       const persistentRepoDir = expectedGitRepoDir({
         gitDir,
         normalizedSpec: "git:https://github.com/acme/demo.git",

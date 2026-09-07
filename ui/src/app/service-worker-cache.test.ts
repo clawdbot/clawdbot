@@ -4,80 +4,96 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serviceWorkerPath = path.join(here, "../../public/sw.js");
 
 describe("Control UI service worker cache versioning", () => {
-  it("broadcasts updated versions to uncontrolled window clients during activation", async () => {
-    const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, "utf8");
-    const windowClient = { postMessage: vi.fn() };
-    const matchedClients = createDeferred<Array<typeof windowClient>>();
-    const listeners = new Map<string, Array<(event: ActivateEventStub) => void>>();
+  it("announces only to legacy root/chat clients without reloading older settings tabs", async () => {
+    const client = (url: string) => ({ url, postMessage: vi.fn(), navigate: vi.fn() });
+    const included = [
+      client("https://control.example/openclaw/"),
+      client("https://control.example/openclaw/chat/main/session?mode=compact#latest"),
+    ];
+    const excluded = [
+      client("https://control.example/openclaw/settings/appearance"),
+      client("https://control.example/openclaw/config?raw=1#editor"),
+      client("https://control.example/openclaw-other/chat"),
+      client("https://other.example/openclaw/chat/main/session"),
+    ];
+    const listeners = new Map<string, (event: ActivateEventStub) => void>();
     const cacheDelete = vi.fn(async () => true);
     const clients = {
       claim: vi.fn(async () => undefined),
-      matchAll: vi.fn(() => matchedClients.promise),
-    };
-    const caches = {
-      delete: cacheDelete,
-      keys: vi.fn(async () => [
-        "openclaw-control-oldest",
-        "openclaw-control-older",
-        "openclaw-control-previous",
-        "openclaw-control-new-build",
-        "other-cache",
-      ]),
-      open: vi.fn(),
-    };
-    const serviceWorkerGlobal = {
-      addEventListener(type: string, listener: (event: ActivateEventStub) => void) {
-        listeners.set(type, [...(listeners.get(type) ?? []), listener]);
-      },
-      clients,
-      location: { href: "https://control.example/sw.js?v=new-build" },
-      registration: { showNotification: vi.fn() },
-      skipWaiting: vi.fn(),
+      matchAll: vi.fn(async () => [...included, ...excluded]),
     };
     const context = vm.createContext({
       URL,
-      caches,
-      fetch: vi.fn(),
-      self: serviceWorkerGlobal,
-    });
-
-    new vm.Script(serviceWorkerSource, { filename: "ui/public/sw.js" }).runInContext(context);
-
-    const activateHandler = listeners.get("activate")?.[0];
-    expect(activateHandler).toBeDefined();
-    let activationPromise: Promise<unknown> | undefined;
-    activateHandler?.({
-      waitUntil(promise: Promise<unknown>) {
-        activationPromise = promise;
+      caches: {
+        delete: cacheDelete,
+        keys: async () => [
+          "openclaw-control-oldest",
+          "openclaw-control-older",
+          "openclaw-control-previous",
+          "openclaw-control-new-build",
+          "other-cache",
+        ],
+      },
+      self: {
+        addEventListener: (type: string, listener: (event: ActivateEventStub) => void) =>
+          listeners.set(type, listener),
+        clients,
+        location: { href: "https://control.example/openclaw/sw.js?v=new-build" },
+        registration: { scope: "https://control.example/openclaw/" },
       },
     });
-
-    let activationSettled = false;
-    void activationPromise?.then(() => {
-      activationSettled = true;
+    new vm.Script(fs.readFileSync(serviceWorkerPath, "utf8")).runInContext(context);
+    let activation: Promise<unknown> | undefined;
+    listeners.get("activate")?.({
+      waitUntil: (pending) => {
+        activation = pending;
+      },
     });
-    await Promise.resolve();
+    await expect(activation).resolves.toBeUndefined();
+    expect(clients.claim).toHaveBeenCalledBefore(clients.matchAll);
+    expect(cacheDelete).toHaveBeenCalledExactlyOnceWith("openclaw-control-oldest");
+    for (const page of included) {
+      expect(page.postMessage).toHaveBeenCalledExactlyOnceWith(
+        { type: "sw-updated", version: "new-build" },
+        [],
+      );
+      expect(page.navigate).not.toHaveBeenCalled();
+    }
+    for (const page of excluded) {
+      expect(page.postMessage).not.toHaveBeenCalled();
+      expect(page.navigate).not.toHaveBeenCalled();
+    }
+  });
 
-    expect(activationSettled).toBe(false);
-    expect(windowClient.postMessage).not.toHaveBeenCalled();
-
-    matchedClients.resolve([windowClient]);
-    await activationPromise;
-
-    expect(clients.matchAll).toHaveBeenCalledWith({ type: "window", includeUncontrolled: true });
-    expect(clients.claim).toHaveBeenCalled();
-    expect(cacheDelete).toHaveBeenCalledWith("openclaw-control-oldest");
-    expect(windowClient.postMessage).toHaveBeenCalledWith({
-      type: "sw-updated",
-      version: "new-build",
+  it("answers a resumed document from embedded build identity, not the registering URL", () => {
+    const listeners = new Map<string, (event: { data: unknown; ports: unknown[] }) => void>();
+    const reply = vi.fn();
+    const source = fs
+      .readFileSync(serviceWorkerPath, "utf8")
+      .replace(
+        'const EMBEDDED_CACHE_VERSION = "__OPENCLAW_CONTROL_UI_BUILD_ID__";',
+        'const EMBEDDED_CACHE_VERSION = "new-build";',
+      );
+    new vm.Script(source).runInNewContext({
+      URL,
+      self: {
+        addEventListener: (
+          type: string,
+          listener: (event: { data: unknown; ports: unknown[] }) => void,
+        ) => listeners.set(type, listener),
+        location: { href: "https://control.example/sw.js?v=old-build" },
+      },
     });
-    expect(windowClient.postMessage.mock.calls[0]).toHaveLength(1);
+    listeners.get("message")?.({
+      data: { type: "sw-version-probe" },
+      ports: [{ postMessage: reply }],
+    });
+    expect(reply).toHaveBeenCalledExactlyOnceWith({ type: "sw-updated", version: "new-build" });
   });
 });
 
@@ -190,6 +206,16 @@ describe("Control UI service worker notification scope", () => {
       nestedScope,
       [`${nestedScope}chat?session=42#latest`],
       { target: "chat?session=42#latest", navigatedUrl: `${nestedScope}chat?session=42#latest` },
+    ),
+    notificationScenario(
+      "opens a scope-relative approval route with its Gateway handoff fragment",
+      nestedScope,
+      [],
+      {
+        target: "approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example",
+        openedUrl:
+          "https://control.example/openclaw/approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example",
+      },
     ),
     notificationScenario(
       "prefers a later exact explicit route over an unrelated nested app tab",
@@ -411,6 +437,27 @@ describe("Control UI service worker notification scope", () => {
     },
   );
 
+  it("preserves a quiet shared tag for approval terminal replacements", async () => {
+    const worker = createNotificationServiceWorker(nestedScope, []);
+    const tag = "openclaw-approval-exec:replacement";
+
+    const requested = await worker.dispatchPush({
+      title: "OpenClaw approval requested",
+      body: "Open OpenClaw to review this request.",
+      tag,
+      renotify: false,
+    });
+    const terminal = await worker.dispatchPush({
+      title: "OpenClaw approval updated",
+      body: "This approval is no longer pending.",
+      tag,
+      renotify: false,
+    });
+
+    expect(requested.options).toMatchObject({ tag, renotify: false });
+    expect(terminal.options).toMatchObject({ tag, renotify: false });
+  });
+
   it.each([
     {
       name: "root",
@@ -522,6 +569,8 @@ type NotificationClickScenario = {
 type ServiceWorkerPushPayload = {
   title: string;
   body: string;
+  renotify?: boolean;
+  tag?: string;
   url?: string;
 };
 
@@ -530,6 +579,7 @@ type ServiceWorkerNotificationOptions = {
   icon: string;
   badge: string;
   tag: string;
+  renotify: boolean;
   data: { url: string; explicitUrl: boolean };
 };
 

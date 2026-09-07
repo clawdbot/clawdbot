@@ -24,6 +24,7 @@ describe("checkTwitchAccessControl", () => {
     message?: Partial<TwitchChatMessage>;
   }) {
     return checkTwitchAccessControl({
+      accountId: "secondary",
       message: {
         ...mockMessage,
         ...params.message,
@@ -34,21 +35,6 @@ describe("checkTwitchAccessControl", () => {
       },
       botUsername: "testbot",
     });
-  }
-
-  async function expectSingleRoleAllowed(params: {
-    role: NonNullable<TwitchAccountConfig["allowedRoles"]>[number];
-    message: Partial<TwitchChatMessage>;
-  }) {
-    const result = await runAccessCheck({
-      account: { allowedRoles: [params.role] },
-      message: {
-        message: "@testbot hello",
-        ...params.message,
-      },
-    });
-    expect(result.allowed).toBe(true);
-    return result;
   }
 
   async function expectAllowedAccessCheck(params: {
@@ -179,6 +165,7 @@ describe("checkTwitchAccessControl", () => {
       };
 
       const result = await checkTwitchAccessControl({
+        accountId: "secondary",
         message,
         account,
         botUsername: "testbot",
@@ -206,13 +193,30 @@ describe("checkTwitchAccessControl", () => {
   });
 
   describe("allowedRoles", () => {
-    it("allows users with matching role", async () => {
-      const result = await expectSingleRoleAllowed({
-        role: "moderator",
-        message: { isMod: true },
-      });
-      expect(result.matchSource).toBe("role");
-    });
+    it.each([
+      { role: "moderator", flag: "isMod" },
+      { role: "owner", flag: "isOwner" },
+      { role: "vip", flag: "isVip" },
+      { role: "subscriber", flag: "isSub" },
+    ] as const)(
+      "admits only the matching $role alias, including absent native IDs",
+      async ({ role, flag }) => {
+        for (const userId of ["123456", undefined]) {
+          for (const matching of [false, true]) {
+            const result = await runAccessCheck({
+              account: { allowedRoles: [role] },
+              message: { message: "@testbot hello", userId, [flag]: matching },
+            });
+            expect(result.allowed).toBe(matching);
+            if (matching) {
+              expect(result.matchSource).toBe("role");
+            } else {
+              expect(result.reason).toContain("does not have any of the required roles");
+            }
+          }
+        }
+      },
+    );
 
     it("allows users with any of multiple roles", async () => {
       const account: TwitchAccountConfig = {
@@ -228,6 +232,7 @@ describe("checkTwitchAccessControl", () => {
       };
 
       const result = await checkTwitchAccessControl({
+        accountId: "secondary",
         message,
         account,
         botUsername: "testbot",
@@ -247,6 +252,7 @@ describe("checkTwitchAccessControl", () => {
       };
 
       const result = await checkTwitchAccessControl({
+        accountId: "secondary",
         message,
         account,
         botUsername: "testbot",
@@ -255,42 +261,36 @@ describe("checkTwitchAccessControl", () => {
       expect(result.reason).toContain("does not have any of the required roles");
     });
 
-    it("allows all users when role is 'all'", async () => {
-      const result = await expectAllowedAccessCheck({
-        account: {
-          allowedRoles: ["all"],
-        },
+    it.each(["123456", undefined])(
+      "allows wildcard roles without requiring a native ID (%s)",
+      async (userId) => {
+        const result = await expectAllowedAccessCheck({
+          account: {
+            allowedRoles: ["all"],
+          },
+          message: { userId },
+        });
+        expect(result.matchKey).toBe("all");
+      },
+    );
+
+    it("does not treat a native ID spelling a role as role membership", async () => {
+      const result = await runAccessCheck({
+        account: { allowedRoles: ["moderator"] },
+        message: { message: "@testbot hello", userId: "moderator" },
       });
-      expect(result.matchKey).toBe("all");
+      expect(result.allowed).toBe(false);
     });
 
-    it("handles moderator role", async () => {
-      await expectSingleRoleAllowed({
-        role: "moderator",
-        message: { isMod: true },
-      });
-    });
-
-    it("handles subscriber role", async () => {
-      await expectSingleRoleAllowed({
-        role: "subscriber",
-        message: { isSub: true },
-      });
-    });
-
-    it("handles owner role", async () => {
-      await expectSingleRoleAllowed({
-        role: "owner",
-        message: { isOwner: true },
-      });
-    });
-
-    it("handles vip role", async () => {
-      await expectSingleRoleAllowed({
-        role: "vip",
-        message: { isVip: true },
-      });
-    });
+    it.each([undefined, []])(
+      "keeps an open policy for absent or empty roles (%s)",
+      async (allowedRoles) => {
+        await expectAllowedAccessCheck({
+          account: { allowedRoles },
+          message: { userId: undefined },
+        });
+      },
+    );
   });
 
   describe("combined restrictions", () => {
@@ -306,6 +306,7 @@ describe("checkTwitchAccessControl", () => {
       };
 
       const result = await checkTwitchAccessControl({
+        accountId: "secondary",
         message,
         account,
         botUsername: "testbot",

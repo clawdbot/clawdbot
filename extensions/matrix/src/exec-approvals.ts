@@ -12,6 +12,7 @@ import { doesApprovalRequestSelectChannelAccount } from "openclaw/plugin-sdk/app
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -20,7 +21,7 @@ import { normalizeMatrixApproverId } from "./approval-ids.js";
 import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
 import type { CoreConfig } from "./types.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 function normalizeMatrixExecApproverId(value: string | number): string | undefined {
   const normalized = normalizeMatrixApproverId(value);
   return normalized === "*" ? undefined : normalized;
@@ -146,7 +147,7 @@ export function isMatrixApprovalClientEnabled(params: {
   accountId?: string | null;
   approvalKind: ChannelApprovalKind;
 }): boolean {
-  if (params.approvalKind === "exec") {
+  if (params.approvalKind === "exec" || params.approvalKind === "system-agent") {
     return isMatrixExecApprovalClientEnabled(params);
   }
   const config = resolveMatrixExecApprovalConfig(params);
@@ -168,6 +169,10 @@ export function isMatrixAnyApprovalClientEnabled(params: {
     isMatrixApprovalClientEnabled({
       ...params,
       approvalKind: "plugin",
+    }) ||
+    isMatrixApprovalClientEnabled({
+      ...params,
+      approvalKind: "system-agent",
     })
   );
 }
@@ -178,7 +183,11 @@ export function shouldHandleMatrixApprovalRequest(params: {
   approvalKind: ChannelApprovalKind;
   request: ApprovalRequest;
 }): boolean {
-  if (params.approvalKind !== "exec" && params.approvalKind !== "plugin") {
+  if (
+    params.approvalKind !== "exec" &&
+    params.approvalKind !== "plugin" &&
+    params.approvalKind !== "system-agent"
+  ) {
     return false;
   }
   if (

@@ -121,7 +121,7 @@ export function platformActions(platform: NodeJS.Platform): ComputerUseV2ActionN
   return CUA_COMMON_ACTION_NAMES.filter(
     (action) =>
       platform === "linux" || (action !== "left_mouse_down" && action !== "left_mouse_up"),
-  ) as ComputerUseV2ActionName[];
+  );
 }
 
 function boundedItems<T>(items: T[]): { items: T[]; truncated: number } {
@@ -354,6 +354,27 @@ export function projectProcesses(value: unknown): Record<string, unknown> {
   };
 }
 
+function observationImage(
+  result: CuaToolResult,
+  width: unknown,
+  height: unknown,
+): Pick<NonNullable<ComputerActResult["observation"]>, "base64" | "format" | "width" | "height"> {
+  const image = result.images.find(
+    (entry) => entry.mimeType === "image/png" || entry.mimeType === "image/jpeg",
+  );
+  const base64 = image ? canonicalizeBase64(image.dataBase64) : undefined;
+  if (image && !base64) {
+    throw new Error(
+      "COMPUTER_DRIVER_ERROR: CUA Driver returned malformed observation image base64",
+    );
+  }
+  return {
+    ...(base64 ? { base64, format: image?.mimeType === "image/jpeg" ? "jpeg" : "png" } : {}),
+    ...(typeof width === "number" && width >= 1 ? { width: Math.trunc(width) } : {}),
+    ...(typeof height === "number" && height >= 1 ? { height: Math.trunc(height) } : {}),
+  };
+}
+
 export function windowObservation(
   result: CuaToolResult,
   state: CuaFrameState,
@@ -392,20 +413,8 @@ export function windowObservation(
       },
     ];
   });
-  const image = result.images.find((entry) => entry.mimeType === "image/png");
-  const base64 = image ? canonicalizeBase64(image.dataBase64) : undefined;
-  if (image && !base64) {
-    throw new Error("COMPUTER_DRIVER_ERROR: CUA Driver returned malformed window PNG base64");
-  }
-  const width =
-    typeof structured.screenshot_width === "number" && structured.screenshot_width > 0
-      ? Math.trunc(structured.screenshot_width)
-      : undefined;
-  const height =
-    typeof structured.screenshot_height === "number" && structured.screenshot_height > 0
-      ? Math.trunc(structured.screenshot_height)
-      : undefined;
   const details: Record<string, unknown> = {
+    coordinateSpace: "image-pixels",
     ...(typeof structured.total_element_count === "number"
       ? { totalElementCount: structured.total_element_count }
       : {}),
@@ -424,9 +433,12 @@ export function windowObservation(
     ...action,
     observation: {
       kind: "window",
-      ...(base64 ? { base64, format: "png" as const } : {}),
-      ...(width ? { width } : {}),
-      ...(height ? { height } : {}),
+      // CUA zoom returns JPEG with width/height; window snapshots use screenshot_* fields.
+      ...observationImage(
+        result,
+        structured[options.fromZoom ? "width" : "screenshot_width"],
+        structured[options.fromZoom ? "height" : "screenshot_height"],
+      ),
       observationId: observation.id,
       ...(elements.length ? { elements } : {}),
     },
@@ -456,14 +468,8 @@ export function browserBinding(
     if (!parsed.success) {
       return [];
     }
-    return [
-      {
-        pageRef: issuePageRef(state, browserRef, parsed.data.tab_id),
-        ...(parsed.data.title !== undefined ? { title: parsed.data.title } : {}),
-        ...(parsed.data.url !== undefined ? { url: parsed.data.url } : {}),
-        ...(parsed.data.active !== undefined ? { active: parsed.data.active } : {}),
-      },
-    ];
+    const { tab_id: tabId, ...details } = parsed.data;
+    return [{ pageRef: issuePageRef(state, browserRef, tabId), ...details }];
   });
   const bounded = boundedItems(pages);
   return {
@@ -507,51 +513,26 @@ export function browserObservation(
     throw new Error("COMPUTER_DRIVER_ERROR: invalid browser snapshot result");
   }
   const observation = issueBrowserObservation(state, target.browserRef, target.pageRef);
-  const rawRefs = [
-    ...(Array.isArray(structured.refs)
-      ? structured.refs.map((value) => ({ value, kind: "action" }))
-      : []),
-    ...(Array.isArray(structured.content_refs)
-      ? structured.content_refs.map((value) => ({ value, kind: "content" }))
-      : []),
-  ];
+  const elements = [];
   const seen = new Set<string>();
-  const elements = rawRefs.flatMap(({ value, kind }) => {
-    const parsed = NativeBrowserRefSchema.safeParse(value);
-    if (!parsed.success || seen.has(parsed.data.ref)) {
-      return [];
+  for (const [kind, values] of [
+    ["action", structured.refs],
+    ["content", structured.content_refs],
+  ] as const) {
+    if (!Array.isArray(values)) {
+      continue;
     }
-    seen.add(parsed.data.ref);
-    return [
-      {
-        elementRef: issueBrowserElementRef(observation, parsed.data.ref),
-        kind,
-        ...(parsed.data.node !== undefined ? { node: parsed.data.node } : {}),
-        ...(parsed.data.role !== undefined ? { role: parsed.data.role } : {}),
-        ...(parsed.data.label !== undefined ? { label: parsed.data.label } : {}),
-        ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
-        ...(parsed.data.value !== undefined ? { value: parsed.data.value } : {}),
-        ...(parsed.data.states !== undefined ? { states: parsed.data.states } : {}),
-        ...(parsed.data.actions !== undefined ? { actions: parsed.data.actions } : {}),
-        ...(parsed.data.frame !== undefined ? { frame: parsed.data.frame } : {}),
-        ...(parsed.data.visibility !== undefined ? { visibility: parsed.data.visibility } : {}),
-      },
-    ];
-  });
-  const boundedElements = elements.slice(0, MAX_BROWSER_ELEMENTS);
-  const image = result.images.find((entry) => entry.mimeType === "image/png");
-  const base64 = image ? canonicalizeBase64(image.dataBase64) : undefined;
-  if (image && !base64) {
-    throw new Error("COMPUTER_DRIVER_ERROR: CUA Driver returned malformed browser PNG base64");
+    for (const value of values) {
+      const parsed = NativeBrowserRefSchema.safeParse(value);
+      if (!parsed.success || seen.has(parsed.data.ref)) {
+        continue;
+      }
+      const { ref, ...details } = parsed.data;
+      seen.add(ref);
+      elements.push({ elementRef: issueBrowserElementRef(observation, ref), kind, ...details });
+    }
   }
-  const width =
-    typeof structured.screenshot_width === "number" && structured.screenshot_width > 0
-      ? Math.trunc(structured.screenshot_width)
-      : undefined;
-  const height =
-    typeof structured.screenshot_height === "number" && structured.screenshot_height > 0
-      ? Math.trunc(structured.screenshot_height)
-      : undefined;
+  const boundedElements = elements.slice(0, MAX_BROWSER_ELEMENTS);
   const page =
     structured.page && typeof structured.page === "object" && !Array.isArray(structured.page)
       ? (structured.page as Record<string, unknown>)
@@ -560,9 +541,7 @@ export function browserObservation(
     ok: true,
     observation: {
       kind: "browser",
-      ...(base64 ? { base64, format: "png" as const } : {}),
-      ...(width ? { width } : {}),
-      ...(height ? { height } : {}),
+      ...observationImage(result, structured.screenshot_width, structured.screenshot_height),
       observationId: observation.id,
     },
     details: {

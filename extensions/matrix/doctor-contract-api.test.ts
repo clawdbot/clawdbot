@@ -24,14 +24,7 @@ import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runt
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
-import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage.js";
-import {
-  MATRIX_CREDENTIALS_MAX_ENTRIES,
-  MATRIX_CREDENTIALS_NAMESPACE,
-  matrixCredentialsStoreKey,
-  type MatrixCredentialStateRecord,
-  type MatrixStoredCredentialRecord,
-} from "./src/matrix/credentials-state.js";
+import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage-metadata.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   MATRIX_RECOVERY_KEY_FILENAME,
@@ -104,83 +97,6 @@ describe("matrix doctor contract state migrations", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("imports account credentials into SQLite before archiving the JSON", async () => {
-    const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const credentialsDir = path.join(stateDir, "credentials", "matrix");
-    const filePath = path.join(credentialsDir, "credentials-ops.json");
-    const credentials = {
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "secret-token",
-      deviceId: "DEVICE123",
-      createdAt: "2026-07-01T12:00:00.000Z",
-      lastUsedAt: "2026-07-02T12:00:00.000Z",
-    };
-    fs.mkdirSync(credentialsDir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(credentials));
-    const migration = migrationById("matrix-credentials-json-to-plugin-state");
-    const params = createMigrationParams(stateDir);
-
-    await expect(migration.detectLegacyState(params)).resolves.toEqual({
-      preview: ["Matrix credential JSON can migrate to SQLite (1 file)"],
-    });
-    const result = await migration.migrateLegacyState(params);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      "Migrated Matrix credentials for account ops to SQLite",
-      expect.stringContaining("Archived Matrix credentials legacy source"),
-    ]);
-    const store = params.context.openPluginStateKeyedStore<MatrixStoredCredentialRecord>({
-      namespace: MATRIX_CREDENTIALS_NAMESPACE,
-      maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
-    await expect(store.lookup(matrixCredentialsStoreKey("ops"))).resolves.toEqual({
-      accountId: "ops",
-      ...credentials,
-    });
-    expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
-  });
-
-  it("archives legacy credentials without restoring an explicitly cleared account", async () => {
-    const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const credentialsDir = path.join(stateDir, "credentials", "matrix");
-    const filePath = path.join(credentialsDir, "credentials-ops.json");
-    fs.mkdirSync(credentialsDir, { recursive: true });
-    fs.writeFileSync(
-      filePath,
-      JSON.stringify({
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "legacy-token",
-        createdAt: "2026-07-01T12:00:00.000Z",
-      }),
-    );
-    const params = createMigrationParams(stateDir);
-    const credentialStore = params.context.openPluginStateKeyedStore<MatrixCredentialStateRecord>({
-      namespace: MATRIX_CREDENTIALS_NAMESPACE,
-      maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
-    await credentialStore.register(matrixCredentialsStoreKey("ops"), {
-      accountId: "ops",
-      kind: "revoked",
-      revokedAt: "2026-07-02T12:00:00.000Z",
-    });
-
-    const result = await migrationById(
-      "matrix-credentials-json-to-plugin-state",
-    ).migrateLegacyState(params);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      "Archived revoked Matrix credential legacy source for account ops",
-      expect.stringContaining("Archived Matrix credentials legacy source"),
-    ]);
-    expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
-  });
-
   it("migrates legacy sync cache JSON to SQLite plugin state", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const storageRootDir = path.join(
@@ -189,7 +105,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
@@ -282,7 +198,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
@@ -291,7 +207,7 @@ describe("matrix doctor contract state migrations", () => {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accountId: "default",
-        accessTokenHash: "token-hash",
+        accessTokenHash: "0123456789abcdef",
         deviceId: "DEVICE",
         currentTokenStateClaimed: true,
       }),
@@ -351,7 +267,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
@@ -575,7 +491,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "ops",
       "matrix.example.org__bot",
-      "token-a",
+      "0123456789abcdef",
     );
     const jsonRoot = path.join(
       stateDir,
@@ -583,7 +499,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "home",
       "matrix.example.org__bot",
-      "token-b",
+      "fedcba9876543210",
     );
     fs.mkdirSync(sqliteRoot, { recursive: true });
     fs.mkdirSync(jsonRoot, { recursive: true });
@@ -785,7 +701,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "late",
       "matrix.example.org__bot",
-      "token-a",
+      "0123456789abcdef",
       "state",
       "openclaw.sqlite",
     );
@@ -801,7 +717,7 @@ describe("matrix doctor contract state migrations", () => {
   it("withholds completion after a directory read failure and imports the source on retry", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const blockedDir = path.join(stateDir, "matrix", "accounts", "home");
-    const jsonRoot = path.join(blockedDir, "matrix.example.org__bot", "token-a");
+    const jsonRoot = path.join(blockedDir, "matrix.example.org__bot", "0123456789abcdef");
     const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");
     const roomId = "!room:example.org";
     const eventId = "$found-on-retry";
@@ -887,7 +803,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "home",
       "matrix.example.org__bot",
-      "token-a",
+      "0123456789abcdef",
     );
     fs.mkdirSync(jsonRoot, { recursive: true });
     const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");
@@ -918,7 +834,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "home",
       "matrix.example.org__bot",
-      "token-a",
+      "0123456789abcdef",
     );
     fs.mkdirSync(jsonRoot, { recursive: true });
     const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");

@@ -58,6 +58,25 @@ switch (scenario) {
       errors.push("gateway.auth.password mismatch");
     }
     break;
+  case "multi-agent":
+    assertLocalWizard();
+    expectEqual("agents.ownership", cfg?.agents?.ownership, "explicit");
+    expectEqual(
+      "agents.defaults.systemAgent.agentId",
+      cfg?.agents?.defaults?.systemAgent?.agentId,
+      "main",
+    );
+    expectEqual(
+      "agents.entries.main.workspace",
+      cfg?.agents?.entries?.main?.workspace,
+      "/tmp/openclaw-main-workspace",
+    );
+    expectEqual(
+      "agents.entries.ops.workspace",
+      cfg?.agents?.entries?.ops?.workspace,
+      "/tmp/openclaw-ops-workspace",
+    );
+    break;
   case "remote-non-interactive":
     expectEqual("gateway.mode", cfg?.gateway?.mode, "remote");
     expectEqual("gateway.remote.url", cfg?.gateway?.remote?.url, "ws://gateway.local:18789");

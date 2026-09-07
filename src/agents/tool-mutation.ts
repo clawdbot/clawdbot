@@ -1,26 +1,11 @@
-/**
- * Tool mutation classification and fingerprinting.
- *
- * Identifies mutating tool calls and file targets so retry/recovery logic can reason about side effects.
- */
-import { stableStringify } from "@openclaw/normalization-core";
+/** Tool mutation and replay-safety classification. */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { sha256Hex } from "../infra/crypto-digest.js";
-import { isLikelyMutatingToolName } from "./tool-mutation-names.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
-
-export { isLikelyMutatingToolName };
-
-// File-mutation tools that can recover the same path through another tool.
-const FILE_MUTATING_TOOL_NAMES = new Set(["apply_patch", "edit", "write"]);
-
-// Args aliases that identify the file target on a file-mutating call.
-const FILE_TARGET_PATH_ARG_KEYS = ["path", "file_path", "filePath", "filepath", "file"] as const;
-const FILE_TARGET_OLDPATH_ARG_KEYS = ["oldPath", "old_path"] as const;
+import { isComputerObservationAction } from "./tools/computer-tool-shared.js";
 
 const READ_ONLY_ACTIONS = new Set([
   "get",
@@ -93,7 +78,6 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
 ]);
 
 const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
-const COMPUTER_REPLAY_SAFE_ACTIONS = new Set(["screenshot", "wait"]);
 const MOBILE_UI_REPLAY_SAFE_ACTIONS = new Set(["observe"]);
 const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
 const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
@@ -117,30 +101,9 @@ const UNSAFE_RG_FLAGS = new Set(["--hostname-bin", "--pre", "--pre-glob", "--sea
 const UNSAFE_RG_VALUE_FLAGS = ["--hostname-bin", "--pre", "--pre-glob"] as const;
 const SHELL_EXPANSION_CHARS = new Set(["$", "*", "?", "[", "]", "{", "}", "~"]);
 
-// Structured file-target identity for cross-tool same-target recovery.
-// Carried alongside `actionFingerprint` so comparison does not have to
-// re-parse the joined fingerprint string. Re-parsing was unsafe because
-// `buildToolActionFingerprint` stores raw path values in a `|`-delimited
-// string, so a path containing `|` could over-match (e.g. `/tmp/a|left` and
-// `/tmp/a|right` would both extract as `path=/tmp/a`).
-export type FileTarget = {
-  path?: string;
-  oldpath?: string;
-};
-
 type ToolMutationState = {
   mutatingAction: boolean;
   replaySafe: boolean;
-  ownerKey?: string;
-  actionFingerprint?: string;
-  fileTarget?: FileTarget;
-};
-
-type ToolActionRef = {
-  toolName: string;
-  meta?: string;
-  actionFingerprint?: string;
-  fileTarget?: FileTarget;
 };
 
 function normalizeActionName(value: unknown): string | undefined {
@@ -299,34 +262,6 @@ function isPlainReadOnlyShellCommand(command: string | undefined): boolean {
   return false;
 }
 
-function normalizeFingerprintValue(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const normalized = value.trim();
-    return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
-  }
-  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-    return normalizeLowercaseStringOrEmpty(String(value));
-  }
-  return undefined;
-}
-
-function appendFingerprintAlias(
-  parts: string[],
-  record: Record<string, unknown> | undefined,
-  label: string,
-  keys: string[],
-): boolean {
-  for (const key of keys) {
-    const value = normalizeFingerprintValue(record?.[key]);
-    if (!value) {
-      continue;
-    }
-    parts.push(`${label}=${value}`);
-    return true;
-  }
-  return false;
-}
-
 export function isMutatingToolCall(toolName: string, args: unknown): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
@@ -355,7 +290,7 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "sessions":
       return action !== "group_list";
     case "computer":
-      return action == null || !COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
+      return !isComputerObservationAction(action, record?.dialogAction);
     case "mobile_ui":
       return action == null || !MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "subagents":
@@ -408,7 +343,7 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
     case "browser":
       return action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
     case "computer":
-      return action != null && COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
+      return isComputerObservationAction(action, record?.dialogAction);
     case "mobile_ui":
       return action != null && MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "skill_workshop":
@@ -430,145 +365,14 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
   }
 }
 
-function buildToolActionFingerprint(
-  toolName: string,
-  args: unknown,
-  meta?: string,
-): string | undefined {
-  if (!isMutatingToolCall(toolName, args)) {
-    return undefined;
-  }
-  const normalizedTool = normalizeLowercaseStringOrEmpty(toolName);
-  const record = asRecord(args);
-  const action = normalizeActionName(record?.action);
-  const parts = [`tool=${normalizedTool}`];
-  if (action) {
-    parts.push(`action=${action}`);
-  }
-  let hasStableTarget = false;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "path", [
-      "path",
-      "file_path",
-      "filePath",
-      "filepath",
-      "file",
-    ]) || hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "oldpath", ["oldPath", "old_path"]) || hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "newpath", ["newPath", "new_path"]) || hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "to", ["to", "target"]) || hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "messageid", ["messageId", "message_id"]) ||
-    hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "sessionkey", ["sessionKey", "session_key"]) ||
-    hasStableTarget;
-  hasStableTarget =
-    appendFingerprintAlias(parts, record, "jobid", ["jobId", "job_id"]) || hasStableTarget;
-  hasStableTarget = appendFingerprintAlias(parts, record, "id", ["id"]) || hasStableTarget;
-  hasStableTarget = appendFingerprintAlias(parts, record, "model", ["model"]) || hasStableTarget;
-  const normalizedMeta = normalizeOptionalLowercaseString(meta?.trim().replace(/\s+/g, " "));
-  // Meta text often carries volatile details (for example "N chars").
-  // Prefer stable arg-derived keys for matching; only fall back to meta
-  // when no stable target key is available.
-  if (normalizedMeta && !hasStableTarget) {
-    parts.push(`meta=${normalizedMeta}`);
-  }
-  return parts.join("|");
-}
-
-function isFileMutatingToolName(rawName: string): boolean {
-  return FILE_MUTATING_TOOL_NAMES.has(normalizeLowercaseStringOrEmpty(rawName));
-}
-
-function readArgFingerprintValue(
-  record: Record<string, unknown> | undefined,
-  keys: readonly string[],
-): string | undefined {
-  if (!record) {
-    return undefined;
-  }
-  for (const key of keys) {
-    const normalized = normalizeFingerprintValue(record[key]);
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return undefined;
-}
-
-function extractFileTarget(toolName: string, args: unknown): FileTarget | undefined {
-  if (!isFileMutatingToolName(toolName)) {
-    return undefined;
-  }
-  const record = asRecord(args);
-  const path = readArgFingerprintValue(record, FILE_TARGET_PATH_ARG_KEYS);
-  const oldpath = readArgFingerprintValue(record, FILE_TARGET_OLDPATH_ARG_KEYS);
-  if (!path && !oldpath) {
-    return undefined;
-  }
-  return {
-    ...(path !== undefined ? { path } : {}),
-    ...(oldpath !== undefined ? { oldpath } : {}),
-  };
-}
-
-function fileTargetsEqual(a: FileTarget, b: FileTarget): boolean {
-  return (a.path ?? "") === (b.path ?? "") && (a.oldpath ?? "") === (b.oldpath ?? "");
-}
-
 export function buildToolMutationState(
   toolName: string,
   args: unknown,
-  meta?: string,
   options?: { ownerKey?: string },
 ): ToolMutationState {
-  const ownerKey = options?.ownerKey;
-  // Bind recovery to both the concrete plugin owner and exact call arguments.
-  // A different plugin or fact must never clear an unresolved durable-state failure.
-  const actionFingerprint = ownerKey
-    ? `owner=${ownerKey}|args=${sha256Hex(stableStringify(args))}`
-    : buildToolActionFingerprint(toolName, args, meta);
-  const fileTarget = extractFileTarget(toolName, args);
+  const ownerDeclaredMutation = options?.ownerKey !== undefined;
   return {
-    mutatingAction: actionFingerprint != null,
-    replaySafe: ownerKey ? false : isReplaySafeToolCall(toolName, args),
-    ...(ownerKey ? { ownerKey } : {}),
-    actionFingerprint,
-    ...(fileTarget !== undefined ? { fileTarget } : {}),
+    mutatingAction: ownerDeclaredMutation || isMutatingToolCall(toolName, args),
+    replaySafe: ownerDeclaredMutation ? false : isReplaySafeToolCall(toolName, args),
   };
-}
-
-export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {
-  if (existing.actionFingerprint != null || next.actionFingerprint != null) {
-    // For mutating flows, fail closed: only clear when both fingerprints exist
-    // and either match exactly or describe the same file-mutation target.
-    if (existing.actionFingerprint == null || next.actionFingerprint == null) {
-      return false;
-    }
-    const includesPatch = [existing.toolName, next.toolName].some(
-      (toolName) => normalizeLowercaseStringOrEmpty(toolName) === "apply_patch",
-    );
-    const sameFileTarget =
-      isFileMutatingToolName(existing.toolName) &&
-      isFileMutatingToolName(next.toolName) &&
-      existing.fileTarget !== undefined &&
-      next.fileTarget !== undefined &&
-      fileTargetsEqual(existing.fileTarget, next.fileTarget);
-    if (includesPatch) {
-      return sameFileTarget;
-    }
-    if (existing.actionFingerprint === next.actionFingerprint) {
-      return true;
-    }
-    // Cross-tool recovery: a successful file-mutation on the same `path`
-    // clears an unresolved file-mutation failure even when the tool name
-    // differs (e.g. edit→write self-heal). Compared structurally on
-    // `fileTarget` so paths containing `|` cannot over-match.
-    return sameFileTarget;
-  }
-  return existing.toolName === next.toolName && (existing.meta ?? "") === (next.meta ?? "");
 }

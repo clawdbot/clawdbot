@@ -91,10 +91,12 @@ async function runSessionSweep(params: {
     ...(now === undefined ? {} : { now: () => now }),
   });
   await service.start({ logger: { warn: vi.fn() } } as never);
+  service.onGatewayStart();
   await vi.waitFor(() => expect(readSessions).toHaveBeenCalledOnce());
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
+  service.onGatewayStop();
   await service.stop?.({ logger: { warn: vi.fn() } } as never);
 }
 
@@ -565,9 +567,11 @@ describe("Workboard gateway lifecycle sync", () => {
     const service = createWorkboardLifecycleService({ store, readSessions });
 
     await service.start(context);
+    service.onGatewayStart();
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
+    service.onGatewayStop();
     await service.stop?.(context);
 
     expect(readSessions).not.toHaveBeenCalled();
@@ -586,9 +590,11 @@ describe("Workboard gateway lifecycle sync", () => {
     const service = createWorkboardLifecycleService({ store, readSessions });
 
     await service.start(context);
+    service.onGatewayStart();
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
+    service.onGatewayStop();
     await service.stop?.(context);
 
     expect(readSessions).not.toHaveBeenCalled();
@@ -620,7 +626,9 @@ describe("Workboard gateway lifecycle sync", () => {
     const service = createWorkboardLifecycleService({ store, readSessions });
 
     await service.start(context);
+    service.onGatewayStart();
     await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
+    service.onGatewayStop();
     await service.stop?.(context);
 
     expect(readSessions).toHaveBeenCalledWith({ includeUnknown: true });
@@ -681,25 +689,147 @@ describe("Workboard gateway lifecycle sync", () => {
     const card = await store.create({ title: "Accepted without link", status: "ready" });
     const acceptedSessionKey = workboardSessionKeyForCard(card);
     const claimed = await store.claim(card.id, { ownerId: "workboard-dispatcher" });
+    const provisional = await store.update(card.id, {
+      sessionKey: acceptedSessionKey,
+      runId: "provisional-run",
+      execution: execution(acceptedSessionKey, "provisional-run"),
+    });
+    const canonicalSessionKey = `agent:worker:${acceptedSessionKey}`;
 
     expect(claimed.card).toMatchObject({
       status: "running",
-      agentId: "workboard-dispatcher",
       metadata: { claim: { ownerId: "workboard-dispatcher" } },
     });
+    expect(claimed.card.agentId).toBeUndefined();
     await runSessionSweep({
       store,
       sessions: [
         {
-          key: `agent:worker:${acceptedSessionKey}`,
+          key: canonicalSessionKey,
           status: "done",
           hasActiveRun: false,
-          updatedAt: claimed.card.updatedAt + 1,
+          updatedAt: provisional.updatedAt + 1,
         },
       ],
     });
 
-    expect((await store.get(card.id))?.status).toBe("review");
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "review",
+      sessionKey: canonicalSessionKey,
+      runId: "provisional-run",
+      execution: {
+        sessionKey: canonicalSessionKey,
+        runId: "provisional-run",
+        status: "review",
+      },
+    });
+  });
+
+  it("backfills the exact terminal run identity without duplicating its attempt", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const provisionalSessionKey = "subagent:workboard-default-terminal-backfill";
+    const canonicalSessionKey = `agent:worker:${provisionalSessionKey}`;
+    const created = await createLinkedCard(store, { sessionKey: provisionalSessionKey });
+    const provisionalRunId = `workboard:${created.id}:${created.updatedAt}`;
+    const card = await store.update(created.id, {
+      runId: provisionalRunId,
+      execution: execution(provisionalSessionKey, provisionalRunId),
+    });
+
+    await syncWorkboardSubagentEnded({
+      store,
+      event: {
+        targetSessionKey: canonicalSessionKey,
+        runId: "accepted-run",
+        endedAt: card.updatedAt + 1,
+        outcome: "ok",
+      },
+    });
+
+    const recovered = await store.get(card.id);
+    expect(recovered).toMatchObject({
+      status: "review",
+      sessionKey: canonicalSessionKey,
+      runId: "accepted-run",
+      execution: {
+        sessionKey: canonicalSessionKey,
+        runId: "accepted-run",
+        status: "review",
+      },
+    });
+    expect(recovered?.metadata?.attempts).toEqual([
+      expect.objectContaining({
+        id: "accepted-run",
+        sessionKey: canonicalSessionKey,
+        runId: "accepted-run",
+        status: "succeeded",
+      }),
+    ]);
+  });
+
+  it("does not backfill over a newer attempt after lifecycle matching", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const provisionalSessionKey = "subagent:workboard-default-match-race";
+    const created = await createLinkedCard(store, { sessionKey: provisionalSessionKey });
+    const provisionalRunId = `workboard:${created.id}:${created.updatedAt}`;
+    const card = await store.update(created.id, {
+      runId: provisionalRunId,
+      execution: execution(provisionalSessionKey, provisionalRunId),
+    });
+    const newerSessionKey = "agent:newer:subagent:workboard-default-match-race";
+    const originalSync = store.syncLifecycle.bind(store);
+    vi.spyOn(store, "syncLifecycle").mockImplementationOnce(async (id, input) => {
+      await store.update(id, {
+        sessionKey: newerSessionKey,
+        runId: "newer-run",
+        execution: execution(newerSessionKey, "newer-run"),
+      });
+      return await originalSync(id, input);
+    });
+
+    await syncWorkboardSubagentEnded({
+      store,
+      event: {
+        targetSessionKey: `agent:worker:${provisionalSessionKey}`,
+        runId: "accepted-run",
+        endedAt: card.updatedAt + 1,
+        outcome: "ok",
+      },
+    });
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "running",
+      sessionKey: newerSessionKey,
+      runId: "newer-run",
+      execution: { status: "running", sessionKey: newerSessionKey, runId: "newer-run" },
+    });
+  });
+
+  it("does not apply a delayed terminal event from an older accepted run", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:worker:subagent:workboard-default-retried";
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: "current-run",
+      execution: execution(sessionKey, "current-run"),
+    });
+
+    const updated = await syncWorkboardSubagentEnded({
+      store,
+      event: {
+        targetSessionKey: sessionKey,
+        runId: "older-run",
+        endedAt: card.updatedAt + 1,
+        outcome: "ok",
+      },
+    });
+
+    expect(updated).toBe(0);
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "running",
+      runId: "current-run",
+      execution: { runId: "current-run", status: "running" },
+    });
   });
 
   it("does not suffix-match an agentless card when configured-agent sessions are ambiguous", async () => {
@@ -742,6 +872,77 @@ describe("Workboard gateway lifecycle sync", () => {
     expect((await store.get(card.id))?.status).toBe("review");
   });
 
+  it("waits for gateway startup before beginning the lifecycle sweep", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:dashboard:startup-ready";
+    const card = await createLinkedCard(store, { status: "todo", sessionKey });
+    let gatewayReady = false;
+    const readSessions = vi.fn(async () => {
+      if (!gatewayReady) {
+        throw new Error("sessions.list unavailable during gateway startup");
+      }
+      return {
+        sessions: [{ key: sessionKey, status: "done" as const, updatedAt: card.updatedAt + 1 }],
+        complete: true,
+      };
+    });
+    const warn = vi.fn();
+    const service = createWorkboardLifecycleService({ store, readSessions });
+    const context = { logger: { warn } } as never;
+
+    await service.start(context);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(readSessions).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+
+    gatewayReady = true;
+    service.onGatewayStart();
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
+    service.onGatewayStop();
+    await service.stop?.(context);
+
+    expect(readSessions).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("begins immediately when the lifecycle service reloads after gateway startup", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:dashboard:plugin-reload";
+    const card = await createLinkedCard(store, { status: "todo", sessionKey });
+    const readSessions = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessions: [
+          { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
+        ],
+        complete: true,
+      })
+      .mockResolvedValueOnce({
+        sessions: [{ key: sessionKey, status: "done", updatedAt: card.updatedAt + 2 }],
+        complete: true,
+      });
+    const warn = vi.fn();
+    const context = { logger: { warn } } as never;
+    const original = createWorkboardLifecycleService({ store, readSessions });
+
+    await original.start(context);
+    original.onGatewayStart();
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("running"));
+    await original.stop?.(context);
+
+    const replacement = createWorkboardLifecycleService({ store, readSessions });
+    await replacement.start(context);
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
+    replacement.onGatewayStop();
+    await replacement.stop?.(context);
+
+    expect(readSessions).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("runs the bounded session reconciliation from the lifecycle-owned service interval", async () => {
     vi.useFakeTimers();
     const store = new WorkboardStore(createMemoryStore());
@@ -763,6 +964,7 @@ describe("Workboard gateway lifecycle sync", () => {
       });
     const service = createWorkboardLifecycleService({ store, readSessions });
     await service.start({ logger: { warn: vi.fn() } } as never);
+    service.onGatewayStart();
     await vi.waitFor(async () => {
       expect((await store.get(card.id))?.status).toBe("running");
     });
@@ -771,6 +973,7 @@ describe("Workboard gateway lifecycle sync", () => {
     await vi.waitFor(async () => {
       expect((await store.get(card.id))?.status).toBe("review");
     });
+    service.onGatewayStop();
     await service.stop?.({ logger: { warn: vi.fn() } } as never);
 
     expect(readSessions).toHaveBeenCalledTimes(2);

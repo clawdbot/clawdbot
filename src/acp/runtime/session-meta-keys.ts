@@ -4,14 +4,9 @@ import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.defaul
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 
 export type AcpSessionsTable = OpenClawStateKyselyDatabase["acp_sessions"];
 type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
@@ -164,42 +159,7 @@ export function selectAcpSessionRowForStoreEntry(
 export function resolveReadableAcpSessionRow(params: {
   row: AcpSessionRow | undefined;
   entry: AcpSessionEntryBinding | undefined;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
 }): AcpSessionRow | undefined {
   const { row, entry } = params;
-  if (!row || !acpSessionRowMatchesEntry(row, entry)) {
-    return undefined;
-  }
-  const legacySessionId = entry?.sessionId;
-  const lifecycleRevision = entry?.lifecycleRevision;
-  if (
-    !legacySessionId ||
-    !lifecycleRevision ||
-    row.session_id !== legacySessionId ||
-    row.session_id === lifecycleRevision
-  ) {
-    return row;
-  }
-  return runOpenClawStateWriteTransaction(
-    (database) => {
-      const current = selectAcpSessionRow(database.db, row.session_key);
-      if (!current || current.session_id === lifecycleRevision || current.session_id == null) {
-        return current;
-      }
-      if (current.session_id !== legacySessionId) {
-        return undefined;
-      }
-      executeSqliteQuerySync(
-        database.db,
-        getAcpSessionKysely(database.db)
-          .updateTable("acp_sessions")
-          .set({ session_id: lifecycleRevision })
-          .where("session_key", "=", row.session_key)
-          .where("session_id", "=", legacySessionId),
-      );
-      return { ...current, session_id: lifecycleRevision };
-    },
-    { env: params.env, path: params.databasePath },
-  );
+  return row && acpSessionRowMatchesEntry(row, entry) ? row : undefined;
 }

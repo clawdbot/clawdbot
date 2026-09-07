@@ -210,26 +210,37 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
     });
   });
 
-  it("materializes inherited entries before adding a named-account override", async () => {
-    const parsedConfig: Record<string, unknown> = {
-      channels: { demo: { allowFrom: ["dm-owner"], accounts: { alt: {} } } },
-    };
+  it.each([
+    { name: "inherited", account: {}, expected: ["dm-owner", "dm-admin"] },
+    { name: "explicit empty", account: { allowFrom: [] }, expected: ["dm-admin"] },
+    {
+      name: "stored mixed entries",
+      account: { allowFrom: [" Owner ", 42, "", "Owner", "owner", "  ", 42] },
+      expected: ["Owner", "42", "owner", "dm-admin"],
+    },
+  ])(
+    "preserves $name entries when adding a named-account override",
+    async ({ account, expected }) => {
+      const parsedConfig: Record<string, unknown> = {
+        channels: { demo: { allowFrom: ["dm-owner"], accounts: { alt: account } } },
+      };
 
-    await adapter.applyConfigEdit?.({
-      cfg: parsedConfig as OpenClawConfig,
-      parsedConfig,
-      accountId: "alt",
-      scope: "dm",
-      action: "add",
-      entry: "dm-admin",
-    });
+      await adapter.applyConfigEdit?.({
+        cfg: parsedConfig as OpenClawConfig,
+        parsedConfig,
+        accountId: "alt",
+        scope: "dm",
+        action: "add",
+        entry: "dm-admin",
+      });
 
-    expect(parsedConfig).toMatchObject({
-      channels: {
-        demo: { accounts: { alt: { allowFrom: ["dm-owner", "dm-admin"] } } },
-      },
-    });
-  });
+      expect(parsedConfig).toMatchObject({
+        channels: {
+          demo: { accounts: { alt: { allowFrom: expected } } },
+        },
+      });
+    },
+  );
 
   it("writes an empty named-account override when removing the last inherited entry", async () => {
     const parsedConfig: Record<string, unknown> = {
@@ -322,21 +333,26 @@ describe("buildLegacyDmAccountAllowlistAdapter", () => {
     });
   });
 
-  it("writes dm allowlist entries and keeps legacy cleanup behavior", () => {
-    expect(
-      adapter.applyConfigEdit?.({
-        cfg: {},
-        parsedConfig: {
-          channels: {
-            demo: {
-              accounts: {
-                alt: {
-                  dm: { allowFrom: ["owner"] },
-                },
-              },
+  it.each([
+    { stored: undefined, expected: ["Owner", "owner", "42", "member", "admin"] },
+    { stored: [" Owner ", 42], expected: ["Owner", "42", "owner", "member", "admin"] },
+  ])("merges legacy entries with $stored and cleans up the old path", ({ stored, expected }) => {
+    const parsedConfig = {
+      channels: {
+        demo: {
+          accounts: {
+            alt: {
+              allowFrom: stored,
+              dm: { allowFrom: ["Owner", "owner", "", 42, " member "] },
             },
           },
         },
+      },
+    };
+    expect(
+      adapter.applyConfigEdit?.({
+        cfg: {},
+        parsedConfig,
         accountId: "alt",
         scope: "dm",
         action: "add",
@@ -350,6 +366,10 @@ describe("buildLegacyDmAccountAllowlistAdapter", () => {
         kind: "account",
         scope: { channelId: "demo", accountId: "alt" },
       },
+    });
+    expect(parsedConfig.channels.demo.accounts.alt).toEqual({
+      allowFrom: expected,
+      dm: {},
     });
   });
 });

@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { fetchClawHubPromotion, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
 import { markPromotionSlugsNotified, recordPromotionClaim } from "../../infra/promotions-feed.js";
-import { enablePluginInConfig } from "../../plugins/enable.js";
+import { enablePluginWithCapabilityConsent } from "../../plugins/enable.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
 import {
@@ -23,6 +23,7 @@ import {
 } from "../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { createPluginCapabilityConsentPrompter } from "../../wizard/plugin-capability-consent.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { normalizeAlias } from "../models/alias-name.js";
@@ -325,14 +326,18 @@ export async function promosClaimCommand(
   const registered: string[] = [];
   const skippedAliases: string[] = [];
   const invalidAliases: string[] = [];
-  const updated = await updateConfig((cfg, context) => {
+  const updated = await updateConfig(async (cfg, context) => {
     let base = cfg;
     // The credential-reuse path skips the auth flow, which is where plugin
     // enablement normally happens. Enable (or refuse) the provider plugin here
     // so a claim never registers models the runtime cannot load under the
     // user's plugin policy. Idempotent when the auth flow already enabled it.
     if (authChoice) {
-      const enabled = enablePluginInConfig(base, authChoice.entry.pluginId);
+      const enabled = await enablePluginWithCapabilityConsent(base, authChoice.entry.pluginId, {
+        onCapabilityConsent: process.stdin.isTTY
+          ? createPluginCapabilityConsentPrompter(createClackPrompter())
+          : undefined,
+      });
       if (!enabled.enabled) {
         throw new Error(
           `The "${authChoice.entry.pluginId}" plugin is blocked by your plugin policy (${enabled.reason ?? "disabled"}); cannot claim this promotion.`,

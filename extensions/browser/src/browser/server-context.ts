@@ -8,7 +8,6 @@ import {
 } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
-import { countChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import {
@@ -17,10 +16,7 @@ import {
   toBrowserErrorResponse,
 } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import {
-  refreshResolvedBrowserConfigFromDisk,
-  resolveBrowserProfileWithHotReload,
-} from "./resolved-config-refresh.js";
+import { refreshResolvedBrowserConfigFromDisk } from "./resolved-config-refresh.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import {
   getProfileLifecycle,
@@ -129,7 +125,6 @@ function createProfileContext(
     profile,
     runtime: profileState,
     getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy),
-    ensureBrowserAvailable: rawAvailability.ensureBrowserAvailable,
     listTabs: rawTabOps.listTabs,
     openTab: rawTabOps.openTab,
   });
@@ -162,22 +157,28 @@ function createProfileContext(
     profile,
     ensureBrowserAvailable,
     ensureTabAvailable: async (targetId, options) => {
-      await ensureBrowserAvailable({ signal: options?.signal });
-      return await withLease(
-        options?.signal,
-        async (signal) =>
-          await rawSelection.ensureTabAvailable(targetId, { ...options, signal }, true),
-      );
+      if (targetId === undefined) {
+        await ensureBrowserAvailable({ signal: options?.signal });
+      }
+      return await withLease(options?.signal, async (signal) => {
+        // Explicit targets can come from history; lookup must not launch or restart a browser.
+        if (targetId !== undefined && !(await rawAvailability.isReachable(undefined, { signal }))) {
+          throw new BrowserProfileUnavailableError(
+            `Browser profile "${profile.name}" is not running. Start the browser or open a new tab, then select a current target.`,
+          );
+        }
+        return await rawSelection.ensureTabAvailable(targetId, { ...options, signal });
+      });
     },
     isHttpReachable: async (timeoutMs, callerSignal) =>
       await withLease(
         callerSignal,
         async (signal) => await rawAvailability.isHttpReachable(timeoutMs, signal),
       ),
-    isTransportAvailable: async (timeoutMs, callerSignal) =>
+    isTransportAvailable: async (timeoutMs, callerSignal, pageProbe) =>
       await withLease(
         callerSignal,
-        async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal),
+        async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal, pageProbe),
       ),
     isReachable: async (timeoutMs, options) =>
       await withLease(
@@ -228,17 +229,14 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     if (!isBrowserRuntimeRunning(current)) {
       throw new BrowserProfileUnavailableError("Browser runtime is stopping.");
     }
+    refreshResolvedBrowserConfigFromDisk({ current, refreshConfigFromDisk });
     return current;
   };
 
   const forProfile = (profileName?: string): ProfileContext => {
     const current = state();
     const name = profileName ?? current.resolved.defaultProfile;
-    const profile = resolveBrowserProfileWithHotReload({
-      current,
-      refreshConfigFromDisk,
-      name,
-    });
+    const profile = resolveProfile(current.resolved, name);
 
     if (!profile) {
       const available = Object.keys(current.resolved.profiles).join(", ");
@@ -252,10 +250,6 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
   const listProfiles = async (): Promise<ProfileStatus[]> => {
     const current = state();
-    refreshResolvedBrowserConfigFromDisk({
-      current,
-      refreshConfigFromDisk,
-    });
     const result: ProfileStatus[] = [];
 
     for (const name of listKnownProfileNames(current)) {
@@ -285,13 +279,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
               if (capabilities.usesChromeMcp) {
                 try {
-                  activeRunning = await profileCtx.isTransportAvailable(300);
-                  if (activeRunning) {
-                    activeTabCount = await countChromeMcpTabs(activeProfile.name, activeProfile, {
-                      ephemeral: true,
-                      signal,
-                    }).catch(() => 0);
-                  }
+                  activeRunning = await profileCtx.isTransportAvailable(300, signal, {
+                    onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
+                  });
                 } catch {
                   activeRunning = false;
                 }
@@ -311,11 +301,14 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
                   })
                     ? 200
                     : current.resolved.remoteCdpTimeoutMs;
-                  activeRunning = await isChromeReachable(
-                    activeProfile.cdpUrl,
-                    probeTimeoutMs,
-                    resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
-                  );
+                  activeRunning =
+                    capabilities.mode === "local-extension"
+                      ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
+                      : await isChromeReachable(
+                          activeProfile.cdpUrl,
+                          probeTimeoutMs,
+                          resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
+                        );
                   if (activeRunning) {
                     const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
                     activeTabCount = tabs.filter((tab) => tab.type === "page").length;

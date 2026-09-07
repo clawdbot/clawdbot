@@ -12,7 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-validate-app-store-ipa.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
@@ -20,6 +20,7 @@ const BUILD_COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const BUILD_TIMESTAMP = "2026-07-10T12:34:56.000Z";
 
 const tempDirs: string[] = [];
+let toolsDir: string;
 
 function bashArgs(scriptPath: string): string[] {
   return process.platform === "win32" ? [scriptPath] : ["--noprofile", "--norc", scriptPath];
@@ -314,12 +315,9 @@ async function writeValidFixture(
     "utf8",
   );
 
-  const plistBuddy = path.join(binDir, "plistbuddy");
-  writeFakePlistBuddy(plistBuddy);
-  const plutil = path.join(binDir, "plutil");
-  writeFakePlutil(plutil);
-  const unzip = path.join(binDir, "unzip");
-  writeFakeUnzip(unzip);
+  const plistBuddy = path.join(toolsDir, "plistbuddy");
+  const plutil = path.join(toolsDir, "plutil");
+  const unzip = path.join(toolsDir, "unzip");
   const codesign = path.join(binDir, "codesign");
   writeExecutable(
     codesign,
@@ -392,6 +390,20 @@ function runValidator(
 }
 
 describe("scripts/ios-validate-app-store-ipa.sh", () => {
+  beforeAll(() => {
+    // Interpreters read fixture paths from argv; signing inputs remain case-owned.
+    toolsDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-tools-"));
+    writeFakePlistBuddy(path.join(toolsDir, "plistbuddy"));
+    writeFakePlutil(path.join(toolsDir, "plutil"));
+    writeFakeUnzip(path.join(toolsDir, "unzip"));
+  });
+
+  afterAll(() => {
+    if (toolsDir) {
+      rmSync(toolsDir, { recursive: true, force: true });
+    }
+  });
+
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
@@ -401,8 +413,7 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
   it("fake plutil escapes regex-metacharacter keys before matching", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
     tempDirs.push(root);
-    const plutil = path.join(root, "plutil");
-    writeFakePlutil(plutil);
+    const plutil = path.join(toolsDir, "plutil");
     const plistPath = path.join(root, "meta.plist");
     writeFileSync(
       plistPath,

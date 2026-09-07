@@ -2,20 +2,25 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
+import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
 
+export type GatewayWsBrowserOrigin = {
+  requestHost?: string;
+  origin?: string;
+  isLocalClient?: boolean;
+};
+
 export const GATEWAY_WS_CONNECTION_KIND_PROPERTY = "__openclawConnectionKind";
 export const GATEWAY_WS_PREAUTH_BUDGET_PROPERTY = "__openclawPreauthBudget";
-export const GATEWAY_WS_WORKER_INGRESS_PROPERTY = "__openclawWorkerIngress";
 type GatewayWsConnectionKind = "gateway" | "worker";
-export type GatewayWorkerIngress = "loopback" | "public";
 export type GatewayIngressWebSocket = WebSocket & {
   [GATEWAY_WS_CONNECTION_KIND_PROPERTY]?: GatewayWsConnectionKind;
   [GATEWAY_WS_PREAUTH_BUDGET_PROPERTY]?: {
     release(clientIp: string | undefined): void;
   };
-  [GATEWAY_WS_WORKER_INGRESS_PROPERTY]?: GatewayWorkerIngress;
   __openclawPreauthBudgetClaimed?: boolean;
   __openclawPreauthBudgetKey?: string;
 };
@@ -27,6 +32,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   socket: WebSocket;
   connect: ConnectParams;
   connId: string;
+  /** Host-owned transport retirement notification; never accepted from wire params. */
+  connectionSignal?: AbortSignal;
   connectionKind?: GatewayWsConnectionKind;
   worker?: WorkerConnectionIdentity;
   isDeviceTokenAuth?: boolean;
@@ -35,9 +42,12 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
+  /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
+  personPresence?: { onlineSince: number; lastActivityAt?: number };
   authenticatedUserId?: string;
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
+  authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
@@ -46,11 +56,17 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     updatedAt: number;
   };
   clientIp?: string;
+  /** Server-attested inputs for rechecking browser-origin policy after config publication. */
+  browserOrigin?: GatewayWsBrowserOrigin;
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Authenticated Control UI admin admission; never accepted from wire params. */
+    controlUiAdmin?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
+    /** Server-attested role-policy actor; never accepted from WebSocket wire params. */
+    operatorRoleActor?: GatewayOperatorRoleActor;
   };
   canvasHostUrl?: string;
   canvasCapability?: string;

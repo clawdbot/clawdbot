@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
@@ -11,6 +15,103 @@ import {
 } from "./config-test-harness.ts";
 
 describe("config write coordinator", () => {
+  it("rebinds a retained draft to an opaque revision when the reconnect base is unchanged", async () => {
+    vi.useFakeTimers();
+    let hash = "legacy-raw-hash";
+    const raw = '{\n  "count": 1\n}\n';
+    const submissions: Array<{ raw: string; baseHash: string }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return { config: { count: 1 }, raw, hash, valid: true, issues: [] };
+      }
+      if (method === "config.set") {
+        submissions.push(params as { raw: string; baseHash: string });
+        return { hash: "opaque-next" };
+      }
+      return {};
+    });
+    const { runtimeConfig, publish } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["count"], 2);
+
+    publish(false);
+    hash = "opaque-current";
+    publish(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("opaque-current");
+    expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    expect(submissions).toEqual([{ raw: '{\n  "count": 2\n}\n', baseHash: "opaque-current" }]);
+    runtimeConfig.dispose();
+  });
+
+  it("keeps the old revision and conflicts when the reconnect base changed", async () => {
+    vi.useFakeTimers();
+    let hash = "legacy-raw-hash";
+    let raw = '{\n  "count": 1\n}\n';
+    const submissions: Array<{ raw: string; baseHash: string }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return { config: JSON.parse(raw), raw, hash, valid: true, issues: [] };
+      }
+      if (method === "config.set") {
+        const submission = params as { raw: string; baseHash: string };
+        submissions.push(submission);
+        if (submission.baseHash !== hash) {
+          throw new Error("config changed since last load; re-run config.get and retry");
+        }
+        return { hash: "opaque-next" };
+      }
+      return {};
+    });
+    const { runtimeConfig, publish } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["count"], 2);
+
+    publish(false);
+    raw = '{\n  "count": 9\n}\n';
+    hash = "opaque-current";
+    publish(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("legacy-raw-hash");
+    await expect(runtimeConfig.save()).resolves.toBe(false);
+    expect(submissions).toEqual([{ raw: '{\n  "count": 2\n}\n', baseHash: "legacy-raw-hash" }]);
+    expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
+    runtimeConfig.dispose();
+  });
+
+  it("surfaces an operator.admin reason when config mutations are out of scope", async () => {
+    const server = createConfigServerMock();
+    const { runtimeConfig, publish } = createConfigCapabilityHarness(
+      server.request as GatewayBrowserClient["request"],
+    );
+    await runtimeConfig.ensureLoaded();
+    publish(true, undefined, {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+      features: { methods: ["config.get", "config.set", "config.patch"] },
+    } as GatewayHelloOk);
+
+    await expect(
+      runtimeConfig.patch({ raw: { count: 2 }, note: "out-of-scope patch" }),
+    ).resolves.toBe(false);
+    expect(runtimeConfig.state.lastError).toBe(
+      "Configuration changes require operator.admin access.",
+    );
+    expect(server.submissions).toHaveLength(0);
+    runtimeConfig.dispose();
+  });
+
   it("debounces form edits into one config.set and marks needsApply", async () => {
     vi.useFakeTimers();
     const server = createConfigServerMock();
@@ -33,7 +134,7 @@ describe("config write coordinator", () => {
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
-    // The post-save reload rebased the clean draft onto the new hash.
+    // The acknowledgement rebased the clean draft onto the new hash.
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
     runtimeConfig.dispose();
   });
@@ -208,9 +309,9 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("skips the teardown flush when the settled flight acked without a hash", async () => {
+  it("skips the teardown flush when the pending save fails", async () => {
     vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock({ legacyAck: true });
+    const { request, submissions, firstSet } = createDeferredSetServerMock();
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],
     );
@@ -224,7 +325,7 @@ describe("config write coordinator", () => {
     // final flush; failing closed beats clobbering a foreign write.
     runtimeConfig.patchForm(["count"], 3);
     runtimeConfig.dispose();
-    firstSet.resolve({});
+    firstSet.reject(new Error("write unavailable"));
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     expect(submissions).toHaveLength(1);
   });
@@ -328,7 +429,7 @@ describe("config write coordinator", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(drained).toBe(false);
-    patchGate.resolve({});
+    patchGate.resolve({ config: { count: 5 }, hash: "hash-2" });
     await vi.advanceTimersByTimeAsync(0);
     await drainPromise;
     await expect(patchPromise).resolves.toBe(true);
@@ -914,7 +1015,7 @@ describe("config write coordinator", () => {
       if (method === "config.set" || method === "config.patch") {
         order.push(method);
         hashCounter += 1;
-        return Promise.resolve({ hash: `hash-${hashCounter}` });
+        return Promise.resolve({ config: { count: 2, other: true }, hash: `hash-${hashCounter}` });
       }
       return Promise.resolve({});
     });

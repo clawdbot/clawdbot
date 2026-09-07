@@ -1,6 +1,8 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
+import { isSystemOwnedCronPayloadKind } from "../../cron/types.js";
 import {
   parseCronCommandArgv,
   parseCronCommandEnv,
@@ -24,6 +26,8 @@ const assignIf = (
 export async function resolveCronEditPayloadDeliveryPatch(
   opts: Record<string, unknown>,
   loadExistingJob: () => Promise<CronJob>,
+  webhookUrl: string | undefined,
+  commandCwd: string | undefined,
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
@@ -33,12 +37,15 @@ export async function resolveCronEditPayloadDeliveryPatch(
   if (commandShell && commandArgv) {
     throw new Error("Pass command payload either with --command or --command-argv, not both.");
   }
+  // Raw flag presence owns the set/clear mutex even when normalization omits a blank value.
+  const hasModel = typeof opts.model === "string";
   const model = normalizeOptionalString(opts.model);
-  if (model && opts.clearModel) {
+  if (hasModel && opts.clearModel) {
     throw new Error("Use --model or --clear-model, not both");
   }
+  const hasThinking = typeof opts.thinking === "string";
   const thinking = normalizeOptionalString(opts.thinking);
-  if (thinking && opts.clearThinking) {
+  if (hasThinking && opts.clearThinking) {
     throw new Error("Use --thinking or --clear-thinking, not both");
   }
   const fallbacks = parseCronFallbacks(opts.fallbacks);
@@ -86,7 +93,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Invalid --script-tool-budget (must be a positive integer).");
   }
 
-  const hasWebhookDelivery = typeof opts.webhook === "string";
+  const hasWebhookDelivery = Boolean(webhookUrl);
   const hasDeliveryModeFlag =
     opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
   const threadId = parseCronThreadIdOption(opts.threadId);
@@ -116,11 +123,13 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Use --account or --clear-account, not both");
   }
 
+  // Unlike cwd, command stdin intentionally accepts empty and whitespace strings.
+  const hasCommandInput = typeof opts.commandInput === "string";
   const hasCommandSpecificPayloadField =
     Boolean(commandShell) ||
     Boolean(commandArgv) ||
-    typeof opts.commandCwd === "string" ||
-    typeof opts.commandInput === "string" ||
+    Boolean(commandCwd) ||
+    hasCommandInput ||
     opts.commandEnv !== undefined ||
     noOutputTimeoutSeconds !== undefined ||
     outputMaxBytes !== undefined;
@@ -145,11 +154,16 @@ export async function resolveCronEditPayloadDeliveryPatch(
   }
   let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
   if (hasTimeoutSeconds && !hasCommandSpecificPayloadField && !hasAgentTurnSpecificPayloadField) {
-    const existingKind = (await loadExistingJob()).payload.kind;
+    const existingJob = await loadExistingJob();
+    const existingKind = existingJob.payload.kind;
     if (existingKind === "script") {
       throw new Error("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
     }
-    if (existingKind === "systemEvent" || existingKind === "heartbeat") {
+    if (
+      existingKind === "systemEvent" ||
+      isSystemOwnedCronPayloadKind(existingKind) ||
+      isSystemMonitorDeclaration(existingJob.declarationKey)
+    ) {
       throw new Error(`--timeout-seconds is not supported for ${existingKind} jobs.`);
     }
     timeoutOnlyPayloadKind = existingKind;
@@ -165,7 +179,11 @@ export async function resolveCronEditPayloadDeliveryPatch(
   ) {
     // Tool grants are shared by every payload kind; a policy-only edit must
     // preserve the stored execution kind instead of creating an agent turn.
-    toolsOnlyPayloadKind = (await loadExistingJob()).payload.kind;
+    const existingJob = await loadExistingJob();
+    if (isSystemMonitorDeclaration(existingJob.declarationKey)) {
+      throw new Error("System-owned cron jobs cannot be edited by cron clients.");
+    }
+    toolsOnlyPayloadKind = existingJob.payload.kind;
   }
   const hasAgentTurnPayloadField =
     hasAgentTurnSpecificPayloadField ||
@@ -224,14 +242,9 @@ export async function resolveCronEditPayloadDeliveryPatch(
     const payload: Record<string, unknown> = { kind: "command" };
     assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
     assignIf(payload, "argv", ["sh", "-lc", commandShell], Boolean(commandShell));
-    assignIf(
-      payload,
-      "cwd",
-      normalizeOptionalString(opts.commandCwd),
-      typeof opts.commandCwd === "string",
-    );
+    assignIf(payload, "cwd", commandCwd, Boolean(commandCwd));
     assignIf(payload, "env", parseCronCommandEnv(opts.commandEnv), opts.commandEnv !== undefined);
-    assignIf(payload, "input", opts.commandInput, typeof opts.commandInput === "string");
+    assignIf(payload, "input", opts.commandInput, hasCommandInput);
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(
       payload,
@@ -272,8 +285,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
       delivery.channel = channel ? channel : undefined;
     }
     if (hasWebhookDelivery) {
-      const webhook = normalizeOptionalString(opts.webhook) ?? "";
-      delivery.to = webhook ? webhook : undefined;
+      delivery.to = webhookUrl;
     } else if (opts.clearTo) {
       delivery.to = null;
     } else if (typeof opts.to === "string") {

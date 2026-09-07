@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import { searchClawHub } from "./clawhub-search.ts";
@@ -905,7 +906,12 @@ describe("skill mutations", () => {
     });
     const client = expectDefined(state.client, "connected skill mutation client");
     const runtimeConfig = createRuntimeConfigCapability({
-      snapshot: { client, phase: "connected", sessionKey: "main" },
+      snapshot: {
+        client,
+        phase: "connected",
+        sessionKey: "main",
+        hello: gatewayHelloForMethods(["config.set"]),
+      },
       subscribe: () => () => undefined,
     });
     state.runtimeConfig = runtimeConfig;
@@ -951,7 +957,12 @@ describe("skill mutations", () => {
     });
     const client = expectDefined(state.client, "connected skill mutation client");
     const runtimeConfig = createRuntimeConfigCapability({
-      snapshot: { client, phase: "connected", sessionKey: "main" },
+      snapshot: {
+        client,
+        phase: "connected",
+        sessionKey: "main",
+        hello: gatewayHelloForMethods(["config.set"]),
+      },
       subscribe: () => () => undefined,
     });
     state.runtimeConfig = runtimeConfig;
@@ -1247,79 +1258,31 @@ describe("skill mutations", () => {
     });
   });
 
-  it("shows ClawHub trust warnings from failed skill install error details", async () => {
+  it.each([
+    [
+      "shows ClawHub trust warnings from failed skill install error details",
+      "ClawHub blocked this release; install was not started.",
+      { warning: "BLOCKED - ClawHub flagged this release as malicious" },
+    ],
+    [
+      "shows a ClawHub trust error without an acknowledgement retry",
+      "ClawHub requires acknowledgement before installing.",
+      {
+        clawhubTrustCode: "clawhub_risk_acknowledgement_required",
+        version: "1.2.3",
+        warning: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
+      },
+    ],
+  ] as const)("%s", async (_name, message, details) => {
     const { state, request } = createState();
-    const error = new Error("ClawHub blocked this release; install was not started.") as Error & {
-      details?: unknown;
-    };
-    error.details = {
-      warning: "BLOCKED - ClawHub flagged this release as malicious",
-    };
-    request.mockRejectedValue(error);
+    request.mockRejectedValue(Object.assign(new Error(message), { details }));
 
     await installFromClawHub(state, "github");
 
+    expect(request).toHaveBeenCalledOnce();
     expect(state.clawhubInstallMessage).toEqual({
       kind: "error",
-      text:
-        "ClawHub blocked this release; install was not started.\n\n" +
-        "BLOCKED - ClawHub flagged this release as malicious",
-    });
-  });
-
-  it("allows retrying acknowledgement-required ClawHub skill installs", async () => {
-    const { state, request } = createState();
-    const error = new Error("ClawHub requires acknowledgement before installing.") as Error & {
-      details?: unknown;
-    };
-    error.details = {
-      clawhubTrustCode: "clawhub_risk_acknowledgement_required",
-      version: "1.2.3",
-      warning: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-    };
-    request.mockImplementation(async (method: string) => {
-      if (method === "skills.install" && request.mock.calls.length === 1) {
-        throw error;
-      }
-      if (method === "skills.install") {
-        return { message: "Installed github@1.2.3" };
-      }
-      return {
-        workspaceDir: "/tmp/workspace",
-        managedSkillsDir: "/tmp/skills",
-        skills: [],
-      };
-    });
-
-    await installFromClawHub(state, "github");
-
-    expect(state.clawhubInstallMessage).toEqual({
-      kind: "error",
-      text:
-        "Review the ClawHub warning before installing this skill.\n\n" +
-        "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-      acknowledgeRef: "github",
-      acknowledgeVersion: "1.2.3",
-      acknowledgeLabel: "Acknowledge risk and install",
-    });
-
-    await installFromClawHub(
-      state,
-      "github",
-      true,
-      state.clawhubInstallMessage!.acknowledgeVersion,
-    );
-
-    expect(request).toHaveBeenNthCalledWith(2, "skills.install", {
-      agentId: "main",
-      source: "clawhub",
-      slug: "github",
-      version: "1.2.3",
-      acknowledgeClawHubRisk: true,
-    });
-    expect(state.clawhubInstallMessage).toEqual({
-      kind: "success",
-      text: "Installed github@1.2.3",
+      text: `${message}\n\n${details.warning}`,
     });
   });
 

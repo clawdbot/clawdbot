@@ -3,8 +3,9 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
-import { resolveCliBackendConfig } from "./cli-backends.js";
+import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store-runtime.js";
+import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
+import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
@@ -31,10 +32,8 @@ export function cliBackendAcceptsAuthProfileForwarding(params: {
 }
 
 /**
- * Resolve the profile a CLI backend may consume. Claude and Gemini use their
- * native profile identities; Gemini may additionally bridge a canonical
- * Google API key. A user-locked profile must fail closed here because falling
- * through would silently run the request as another user.
+ * Resolve native profiles and explicitly selected credentials the CLI can consume.
+ * A user-locked profile must fail closed rather than run as another user.
  */
 export function resolveCliExecutionAuthProfileId(params: {
   cliExecutionProvider: string;
@@ -45,22 +44,38 @@ export function resolveCliExecutionAuthProfileId(params: {
   loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
 }): string | undefined {
   const loadStore = params.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+  const selectedAuthProfileId = params.selected?.authProfileId?.trim();
   const store = loadStore(params.agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
     externalCliProviderIds: [params.cliExecutionProvider],
+    profileId: selectedAuthProfileId,
   });
-  const selectedAuthProfileId = params.selected?.authProfileId?.trim();
+  const nativeAuthProfileIds = resolveBundledCliBackendAuthPolicy(
+    params.cliExecutionProvider,
+  )?.nativeAuthProfileIds;
+  if (selectedAuthProfileId && nativeAuthProfileIds?.includes(selectedAuthProfileId)) {
+    return undefined;
+  }
   if (selectedAuthProfileId) {
     const credential = store.profiles[selectedAuthProfileId];
     if (credential?.provider === params.cliExecutionProvider) {
       return selectedAuthProfileId;
     }
+    // Canonical credentials require an explicit choice and the backend's registered
+    // owner. Automatic selection must not replace the CLI's native identity.
     if (
-      params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
-      credential?.provider === GOOGLE_PROVIDER_ID &&
-      credential.type === "api_key" &&
-      params.selected?.authProfileIdSource !== "auto"
+      credential &&
+      params.selected?.authProfileIdSource !== "auto" &&
+      (params.cliExecutionProvider === CLAUDE_CLI_PROVIDER_ID ||
+        (params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
+          credential.type === "api_key")) &&
+      credential.provider ===
+        resolveCliRuntimeCanonicalProvider({
+          runtime: params.cliExecutionProvider,
+          config: params.config,
+          includeSetupRegistry: true,
+        })
     ) {
       return selectedAuthProfileId;
     }
@@ -80,7 +95,11 @@ export function resolveCliExecutionAuthProfileId(params: {
     cfg: params.config,
     store,
     provider: params.cliExecutionProvider,
-  })[0];
+  }).find(
+    (profileId) =>
+      store.profiles[profileId]?.provider === params.cliExecutionProvider &&
+      !nativeAuthProfileIds?.includes(profileId),
+  );
   if (cliProfileId) {
     return cliProfileId;
   }

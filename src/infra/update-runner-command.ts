@@ -34,12 +34,14 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   const started = Date.now();
   const result = await runCommand(argv, { cwd, timeoutMs, env });
   const durationMs = Date.now() - started;
+  const stdoutTail = trimLogTail(result.stdout, MAX_LOG_CHARS);
   const stderrTail = trimLogTail(result.stderr, MAX_LOG_CHARS);
 
   progress?.onStepComplete?.({
     ...stepInfo,
     durationMs,
     exitCode: result.code,
+    stdoutTail,
     stderrTail,
     signal: result.signal,
     killed: result.killed,
@@ -52,7 +54,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     cwd,
     durationMs,
     exitCode: result.code,
-    stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
+    stdoutTail,
     stderrTail,
     signal: result.signal,
     killed: result.killed,
@@ -74,6 +76,8 @@ export function normalizeFallbackFailureReason(
       return "global-install-failed";
     case "openclaw doctor":
       return "doctor-failed";
+    case "post-install verification":
+      return "runtime-verification-failed";
     case "ui:build (post-doctor repair)":
       return "ui-build-failed";
     default:

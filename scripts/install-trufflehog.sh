@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-trufflehog_version="3.95.9"
+trufflehog_version="3.97.0"
 trufflehog_bin_dir="${OPENCLAW_TRUFFLEHOG_BIN_DIR:-/usr/local/bin}"
 
 log() {
@@ -48,8 +48,8 @@ trufflehog_arch() {
 
 trufflehog_sha256() {
   case "$1" in
-    amd64) printf '%s\n' "f6d1106b85107d79527ed7a5b98b592beadd8b770dc3c9e8c1ad99e1b2cf127e" ;;
-    arm64) printf '%s\n' "9d9c2ec4ea36a089a9c5aaafe1969d176013ddf9f44d68e8cd75291aed8c83ed" ;;
+    amd64) printf '%s\n' "62224de2f9dd7cd418800feb953760a302ed2f82a7c547fe1146a4874fb179e4" ;;
+    arm64) printf '%s\n' "f48f57e3d4343377865b1b64653f96d381d61a7792d89d026e85524732039fde" ;;
     *)
       log "unsupported TruffleHog architecture: $1"
       return 1
@@ -93,7 +93,12 @@ install_trufflehog() {
   url="https://github.com/trufflesecurity/trufflehog/releases/download/v${trufflehog_version}/${archive}"
   tmp_dir="$(mktemp -d)"
 
-  if ! curl -fsSL --retry 3 --output "$tmp_dir/$archive" "$url" ||
+  # Bound individual transfers and the retry window. curl resets --max-time for
+  # each retry, while a started retry can outlive --retry-max-time.
+  if ! curl -fsSL \
+    --connect-timeout 30 --max-time 300 \
+    --retry 3 --retry-max-time 300 \
+    --output "$tmp_dir/$archive" "$url" ||
     ! (
       cd "$tmp_dir"
       printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -

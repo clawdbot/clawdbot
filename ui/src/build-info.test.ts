@@ -30,6 +30,7 @@ describe("Control UI build info", () => {
       expect(
         controlUiBuildDiffersFrom({
           version: "2026.7.20",
+          buildId: "other",
           controlUiBuildSource: "configured",
         }),
       ).toBe(false);

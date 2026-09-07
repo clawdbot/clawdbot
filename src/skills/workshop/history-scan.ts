@@ -15,7 +15,6 @@ import {
   reconcileSkillHistoryScanProgress,
   resolveSkillHistoryScanHasMore,
 } from "./history-scan-progress.js";
-import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./history-scan-review-outcome.js";
 import { HISTORY_SCAN_SESSION_SEGMENT, runSkillHistoryScanReview } from "./history-scan-review.js";
 import {
   emptyHistoryScanResult,
@@ -36,9 +35,13 @@ import {
   HISTORY_SCAN_MAX_SESSION_CHARS,
   HISTORY_SCAN_SESSION_OVERHEAD_CHARS,
   readHistoryScanSession,
-  resolveSkillHistoryScanTranscriptBudget,
   type SkillHistoryScanBatchSession,
 } from "./history-scan-transcript.js";
+import {
+  resolveSkillWorkshopModelContextTokens,
+  resolveSkillWorkshopProjectionBudgets,
+} from "./model-context-budget.js";
+import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./review-outcome.js";
 import { getSkillProposalRunProgress } from "./service.js";
 
 type ActiveSkillHistoryScan = {
@@ -162,7 +165,8 @@ async function runSkillHistoryScanCore(
     }
     const durableProgress = await getSkillProposalRunProgress({
       runId: stored.pending.runId,
-      workspaceDir: params.workspaceDir,
+      agentId: params.agentId,
+      config: params.config,
       ...(params.env ? { env: params.env } : {}),
     });
     resumedPending = {
@@ -222,17 +226,9 @@ async function runSkillHistoryScanCore(
           )
         ).model
       : undefined;
-  const contextTokens = (() => {
-    if (!resolvedModel) {
-      return undefined;
-    }
-    const contextWindow = resolvedModel.contextWindow;
-    if (contextWindow === undefined) {
-      return resolvedModel.contextTokens;
-    }
-    return Math.min(resolvedModel.contextTokens ?? contextWindow, contextWindow);
-  })();
-  const maxTranscriptChars = resolveSkillHistoryScanTranscriptBudget(contextTokens);
+  const contextTokens = resolveSkillWorkshopModelContextTokens(resolvedModel);
+  const maxTranscriptChars =
+    resolveSkillWorkshopProjectionBudgets(contextTokens).historyTranscriptChars;
   const maxSessionTranscriptChars = Math.min(
     HISTORY_SCAN_MAX_SESSION_CHARS,
     Math.max(1, maxTranscriptChars - HISTORY_SCAN_SESSION_OVERHEAD_CHARS),

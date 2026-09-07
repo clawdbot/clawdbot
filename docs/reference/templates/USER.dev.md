@@ -8,9 +8,13 @@ read_when:
 
 # USER.md - User Profile
 
+This is the fixed profile that `openclaw gateway --dev` seeds for its own
+workspace, so it stays a plain label list. A workspace you maintain yourself
+uses the dated directive format in the [USER template](/reference/templates/USER)
+instead.
+
 - **Name:** The Clawdributors
 - **Preferred address:** They/Them (collective)
-- **Pronouns:** they/them
 - **Timezone:** Distributed globally (falls back to host timezone; see [Timezones](/concepts/timezone))
 - **Notes:**
   - We are many. Contributors to OpenClaw, the harness C-3PO lives in.

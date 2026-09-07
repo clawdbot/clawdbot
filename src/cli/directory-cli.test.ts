@@ -2,6 +2,8 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { registerDirectoryCli } from "./directory-cli.js";
 
 const runtimeState = await vi.hoisted(async () => {
@@ -12,11 +14,24 @@ const runtimeState = await vi.hoisted(async () => {
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
+  resolveCommandSecretRefsViaGateway: vi.fn(),
+  getScopedChannelsCommandSecretTargets: vi.fn(() => ({
+    targetIds: new Set(["channels.slack.botToken"]),
+    allowedPaths: new Set(["channels.slack.botToken"]),
+  })),
   applyPluginAutoEnable: vi.fn(),
   replaceConfigFile: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
   resolveMessageChannelSelection: vi.fn(),
   resolveChannelDefaultAccountId: vi.fn(),
+}));
+
+vi.mock("./command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
+}));
+
+vi.mock("./command-secret-targets.js", () => ({
+  getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -55,16 +70,8 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function firstMockArg(mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
-  const call = mockFn.mock.calls[0];
-  if (!call) {
-    throw new Error("expected mock to be called");
-  }
-  return call[0];
-}
-
 function firstRecordArg(mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
-  return requireRecord(firstMockArg(mockFn));
+  return requireRecord(mockCall(mockFn)[0]);
 }
 
 function runtimeErrors(): string[] {
@@ -77,7 +84,14 @@ describe("registerDirectoryCli", () => {
     runtimeState.runtimeLogs.length = 0;
     runtimeState.runtimeErrors.length = 0;
     mocks.loadConfig.mockReturnValue({ channels: {} });
-    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...createTestConfigSnapshot({ channels: {} }),
+      hash: "config-1",
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockImplementation(async ({ config }) => ({
+      resolvedConfig: config,
+      diagnostics: [],
+    }));
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
@@ -98,44 +112,134 @@ describe("registerDirectoryCli", () => {
   });
 
   it("installs an explicit optional directory channel on demand", async () => {
+    const tokenRef = {
+      source: "env",
+      provider: "default",
+      id: "DIRECTORY_TEST_SLACK_TOKEN",
+    } as const;
+    const sourceConfig = { channels: { slack: { botToken: tokenRef } } };
+    let runtimeConfig = {
+      ...sourceConfig,
+      messages: { responsePrefix: "runtime-default" },
+    };
+    let postWriteRuntimeConfig = runtimeConfig;
+    mocks.loadConfig.mockImplementation(() => runtimeConfig);
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...createTestConfigSnapshot(sourceConfig, runtimeConfig),
+      hash: "config-1",
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockImplementation(async ({ config }) => ({
+      resolvedConfig: {
+        ...config,
+        channels: { slack: { botToken: "resolved-directory-token" } },
+      },
+      diagnostics: [],
+    }));
     const self = vi.fn().mockResolvedValue({ id: "self-1", name: "Family Phone" });
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+    mocks.resolveInstallableChannelPlugin.mockImplementation(async ({ cfg }) => ({
       cfg: {
-        channels: {},
-        plugins: { entries: { "demo-directory": { enabled: true } } },
+        ...cfg,
+        plugins: { entries: { slack: { enabled: true } } },
       },
-      channelId: "demo-directory",
-      plugin: {
-        id: "demo-directory",
-        directory: { self },
-      },
+      channelId: "slack",
+      plugin: { id: "slack", directory: { self } },
       configChanged: true,
+      pluginInstalled: true,
+    }));
+    mocks.replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
+      postWriteRuntimeConfig = {
+        ...nextConfig,
+        messages: { responsePrefix: "runtime-default" },
+      };
+      runtimeConfig = postWriteRuntimeConfig;
     });
 
     const program = new Command().name("openclaw");
     registerDirectoryCli(program);
 
-    await program.parseAsync(["directory", "self", "--channel", "demo-directory", "--json"], {
+    await program.parseAsync(["directory", "self", "--channel", "slack", "--json"], {
       from: "user",
     });
 
     expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledTimes(1);
     const installArgs = firstRecordArg(mocks.resolveInstallableChannelPlugin);
-    expect(installArgs.rawChannel).toBe("demo-directory");
+    expect(installArgs.rawChannel).toBe("slack");
     expect(installArgs.allowInstall).toBe(true);
+    expect(installArgs.preferRegisteredPlugin).toBe(true);
+    expect(installArgs.cfg).toEqual(sourceConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
     const replaceArgs = firstRecordArg(mocks.replaceConfigFile);
     expect(replaceArgs.nextConfig).toEqual({
-      channels: {},
-      plugins: { entries: { "demo-directory": { enabled: true } } },
+      channels: { slack: { botToken: tokenRef } },
+      plugins: { entries: { slack: { enabled: true } } },
     });
+    expect(replaceArgs.nextConfig).not.toHaveProperty("messages");
     expect(replaceArgs.baseHash).toBe("config-1");
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledOnce();
+    expect(firstRecordArg(mocks.resolveCommandSecretRefsViaGateway)).toMatchObject({
+      config: postWriteRuntimeConfig,
+      commandName: "directory",
+      targetIds: new Set(["channels.slack.botToken"]),
+      allowedPaths: new Set(["channels.slack.botToken"]),
+      mode: "read_only_operational",
+    });
     expect(self).toHaveBeenCalledTimes(1);
     expect(firstRecordArg(self).accountId).toBe("default");
+    expect(firstRecordArg(self).cfg).toEqual({
+      ...postWriteRuntimeConfig,
+      channels: { slack: { botToken: "resolved-directory-token" } },
+    });
     expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
       JSON.stringify({ id: "self-1", name: "Family Phone" }, null, 2),
     );
     expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["self", ["directory", "self", "--channel", "slack", "--json"]],
+    ["peers", ["directory", "peers", "list", "--channel", "slack", "--json"]],
+    ["groups", ["directory", "groups", "list", "--channel", "slack", "--json"]],
+    [
+      "group members",
+      ["directory", "groups", "members", "--channel", "slack", "--group-id", "group-1", "--json"],
+    ],
+  ])("stops %s when canonical config validation exits", async (_label, args) => {
+    const directory = {
+      self: vi.fn().mockResolvedValue({ id: "self-1" }),
+      listPeersLive: vi.fn().mockResolvedValue([]),
+      listGroupsLive: vi.fn().mockResolvedValue([]),
+      listGroupMembers: vi.fn().mockResolvedValue([]),
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/invalid-openclaw.json",
+      exists: true,
+      valid: false,
+      sourceConfig: {},
+      runtimeConfig: {},
+      config: {},
+      issues: [{ path: "channels.slack", message: "invalid Slack config" }],
+      warnings: [],
+      legacyIssues: [],
+    });
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "slack",
+      plugin: { id: "slack", directory },
+      configured: ["slack"],
+      source: "explicit",
+    });
+    runtimeState.defaultRuntime.exit.mockImplementation(() => undefined);
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+    await program.parseAsync(args, { from: "user" });
+
+    expect(Object.values(directory).every((fn) => fn.mock.calls.length === 0)).toBe(true);
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runtimeState.defaultRuntime.log).not.toHaveBeenCalled();
+    expect(runtimeErrors()[0]).toContain("OpenClaw config is invalid");
+    expect(runtimeState.defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("uses the auto-enabled config snapshot for omitted channel selection", async () => {
@@ -144,6 +248,9 @@ describe("registerDirectoryCli", () => {
     mocks.applyPluginAutoEnable.mockReturnValue({
       config: autoEnabledConfig,
       changes: ["whatsapp"],
+    });
+    mocks.replaceConfigFile.mockImplementationOnce(async () => {
+      mocks.loadConfig.mockReturnValue(autoEnabledConfig);
     });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "whatsapp",
@@ -167,6 +274,7 @@ describe("registerDirectoryCli", () => {
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
       cfg: autoEnabledConfig,
       channel: null,
+      accountResolution: "read_only",
     });
     expect(self).toHaveBeenCalledTimes(1);
     expect(firstRecordArg(self).cfg).toBe(autoEnabledConfig);
@@ -174,6 +282,84 @@ describe("registerDirectoryCli", () => {
       nextConfig: autoEnabledConfig,
       baseHash: "config-1",
     });
+  });
+
+  it("inspects an implicit channel before resolving only that account's secrets", async () => {
+    const tokenRef = {
+      source: "env",
+      provider: "default",
+      id: "DIRECTORY_TEST_SLACK_TOKEN",
+    } as const;
+    const sourceConfig = { channels: { slack: { botToken: tokenRef } } };
+    const runtimeConfig = {
+      ...sourceConfig,
+      messages: { responsePrefix: "runtime-default" },
+    };
+    const calls: string[] = [];
+    const self = vi.fn().mockImplementation(async () => {
+      calls.push("directory");
+      return { id: "U123", name: "Slack Bot" };
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...createTestConfigSnapshot(sourceConfig, runtimeConfig),
+      hash: "config-1",
+    });
+    mocks.loadConfig.mockReturnValue(runtimeConfig);
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+    mocks.resolveMessageChannelSelection.mockImplementation(
+      async ({ accountResolution }: { accountResolution?: string }) => {
+        calls.push("selection");
+        if (accountResolution !== "read_only") {
+          throw new Error("unresolved SecretRef");
+        }
+        return {
+          channel: "slack",
+          plugin: { id: "slack", directory: { self } },
+          configured: ["slack"],
+          source: "single-configured",
+        };
+      },
+    );
+    mocks.getScopedChannelsCommandSecretTargets.mockImplementationOnce(() => {
+      calls.push("scope");
+      return {
+        targetIds: new Set(["channels.slack.botToken"]),
+        allowedPaths: new Set(["channels.slack.botToken"]),
+      };
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockImplementation(async ({ config }) => {
+      calls.push("secrets");
+      return {
+        resolvedConfig: {
+          ...config,
+          channels: { slack: { botToken: "resolved-directory-token" } },
+        },
+        diagnostics: [],
+      };
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(["directory", "self", "--json"], { from: "user" });
+
+    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
+      cfg: runtimeConfig,
+      channel: null,
+      accountResolution: "read_only",
+    });
+    expect(mocks.getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+      config: runtimeConfig,
+      channel: "slack",
+      accountId: "default",
+    });
+    expect(firstRecordArg(self).cfg).toEqual({
+      ...runtimeConfig,
+      channels: { slack: { botToken: "resolved-directory-token" } },
+    });
+    expect(calls).toEqual(["selection", "scope", "secrets", "directory"]);
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it.each([

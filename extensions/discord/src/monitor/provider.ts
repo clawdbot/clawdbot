@@ -24,6 +24,7 @@ import { GatewayCloseCodes } from "../internal/gateway.js";
 import { parseApplicationIdFromToken } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
+import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
@@ -278,6 +279,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         const probe = await probeDiscordAcpBindingHealth({
           cfg,
           sessionKey,
+          agentId: session.agentId,
           storedState: session.acp?.state,
           lastActivityAt: session.acp?.lastActivityAt,
           providerSessionRuntime: discordProviderSessionRuntime,
@@ -309,6 +311,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
+    // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+    const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
     const { commands, components, modals } = createDiscordProviderInteractionSurface({
       cfg,
       discordConfig: discordCfg,
@@ -328,7 +332,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       allowFrom,
       dmPolicy,
       runtime,
-      channelRuntime: opts.channelRuntime,
+      channelRuntime: pluginChannelRuntime,
       abortSignal: opts.abortSignal,
       createNativeCommand: discordProviderRuntime.createDiscordNativeCommand,
     });
@@ -424,7 +428,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         runtime,
         botUserId,
       });
-      const { setDiscordTranscriptsVoiceManager } = await import("../voice/transcripts-source.js");
       setDiscordTranscriptsVoiceManager({
         accountId: account.accountId,
         manager: voiceManager,
@@ -442,8 +445,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       token,
       runtime,
-      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-        .buildContext,
+      buildContext: pluginChannelRuntime?.inbound.buildContext,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
       botUserId,

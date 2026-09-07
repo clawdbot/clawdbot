@@ -10,6 +10,7 @@ export function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("cron displayName") ||
     message.includes("cron announce delivery requires an explicit channel") ||
     message.includes("cron script payload has a syntax error") ||
+    message.includes("cron trigger script has a syntax error") ||
     message.includes("cron script payload must not be empty") ||
     message.includes("cron script payloads cannot be combined") ||
     message.includes("cron script payloads are disabled") ||

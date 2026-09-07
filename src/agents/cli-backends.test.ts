@@ -11,7 +11,6 @@ import {
   listCliRuntimeModelBackendBindings,
   listCliRuntimeProviderIds,
   resolveCliBackendConfig,
-  resolveCliBackendLiveSessionRequirement,
   resolveCliBackendLiveTest,
   resolveCliRuntimeCanonicalProvider,
   resolveCliRuntimeModelBackendBinding,
@@ -43,13 +42,6 @@ const runtimeArtifact: CliBackendRuntimeArtifactPolicy = {
   packageName: "@fixture/acme-cli",
   entrypoint: "command",
 };
-const liveSessionRequirement = {
-  capability: "acme_lifecycle_v1",
-  minimumVersion: "1.2.3",
-  versionArgs: ["--version"],
-  updateCommand: "acme update",
-} as const;
-
 function createBackend(overrides: CliBackendOverrides = {}): CliBackendPlugin {
   const base = {
     id: "acme-cli",
@@ -66,7 +58,6 @@ function createBackend(overrides: CliBackendOverrides = {}): CliBackendPlugin {
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     runtimeArtifact,
-    liveSessionRequirement,
     liveTest: {
       defaultModelRef: "acme/acme-large",
       defaultImageProbe: true,
@@ -95,9 +86,8 @@ function createBooleanOwnershipBackend(ownsNativeCompaction: boolean): CliBacken
 function runtimeEntry(
   overrides: CliBackendOverrides = {},
   pluginId = "acme-plugin",
-  metadata: { builtWithOpenClawVersion?: string } = {},
 ): RuntimeBackendEntry {
-  return { ...createBackend(overrides), pluginId, ...metadata } as RuntimeBackendEntry;
+  return { ...createBackend(overrides), pluginId } as RuntimeBackendEntry;
 }
 
 function setupEntry(
@@ -147,7 +137,6 @@ describe("resolveCliBackendConfig", () => {
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
       runtimeArtifact,
-      liveSessionRequirement,
       config: {
         command: "acme",
         args: ["chat", "--json"],
@@ -162,21 +151,23 @@ describe("resolveCliBackendConfig", () => {
 
   it("preserves the plugin-owned JSONL parser through runtime resolution", () => {
     const parseJsonlEvent = vi.fn();
+    const parseJsonlLifecycleEvent = vi.fn();
     cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [runtimeEntry({ parseJsonlEvent })],
+      resolveRuntimeCliBackends: () => [
+        runtimeEntry({ parseJsonlEvent, parseJsonlLifecycleEvent }),
+      ],
       resolvePluginSetupCliBackend: () => undefined,
     });
 
     expect(requireBackend().parseJsonlEvent).toBe(parseJsonlEvent);
+    expect(requireBackend().parseJsonlLifecycleEvent).toBe(parseJsonlLifecycleEvent);
   });
 
   it("normalizes the registered adapter with agent and runtime config context", () => {
-    const normalizeConfig = vi.fn(
-      (config: CliBackendConfig): CliBackendConfig => ({
-        ...config,
-        args: [...(config.args ?? []), "--normalized"],
-      }),
-    );
+    const normalizeConfig = vi.fn((config: CliBackendConfig): CliBackendConfig => ({
+      ...config,
+      args: [...(config.args ?? []), "--normalized"],
+    }));
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [runtimeEntry({ normalizeConfig })],
       resolvePluginSetupCliBackend: () => undefined,
@@ -216,9 +207,15 @@ describe("resolveCliBackendConfig", () => {
 
   it("falls back to setup registration before runtime activation", () => {
     const parseJsonlEvent = vi.fn();
+    const resolveModelId = vi.fn(
+      ({ modelId, contextWindow }: { modelId: string; contextWindow?: string }) =>
+        contextWindow === "1m" ? `${modelId}[1m]` : modelId,
+    );
     const entry = setupEntry({
       config: { command: "setup-acme", args: ["run"] },
       parseJsonlEvent,
+      resolveModelId,
+      isolatesInstructionsWithExactTools: true,
     });
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
@@ -230,9 +227,11 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.pluginId).toBeUndefined();
     expect(resolved.config).toEqual({ command: "setup-acme", args: ["run"] });
     expect(resolved.runtimeArtifact).toEqual(runtimeArtifact);
-    expect(resolved.liveSessionRequirement).toEqual(liveSessionRequirement);
     expect(resolved.parseJsonlEvent).toBe(parseJsonlEvent);
-    expect(resolveCliBackendLiveSessionRequirement("acme-cli")).toEqual(liveSessionRequirement);
+    expect(resolved.resolveModelId?.({ modelId: "acme-large", contextWindow: "1m" })).toBe(
+      "acme-large[1m]",
+    );
+    expect(resolved.isolatesInstructionsWithExactTools).toBe(true);
   });
 
   it("returns null when no plugin owns the backend", () => {
@@ -265,6 +264,7 @@ describe("resolveCliBackendConfig", () => {
           manualCompaction,
           nativeToolMode: "selectable",
           toolAvailabilityEnforcement: "execution-args",
+          isolatesInstructionsWithExactTools: true,
           sideQuestionToolMode: "disabled",
         }),
       ],
@@ -279,32 +279,11 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.manualCompaction).toBe(manualCompaction);
     expect(resolved.nativeToolMode).toBe("selectable");
     expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
+    expect(resolved.isolatesInstructionsWithExactTools).toBe(true);
     expect(resolved.sideQuestionToolMode).toBe("disabled");
   });
 
-  it("normalizes the shipped beta selectable-hook contract to execution-args enforcement", () => {
-    const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => baseArgs);
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        runtimeEntry(
-          {
-            nativeToolMode: "selectable",
-            resolveExecutionArgs: resolveExecutionArgs as never,
-          },
-          "acme-plugin",
-          { builtWithOpenClawVersion: "2026.7.2-beta.3" },
-        ),
-      ],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
-
-    const resolved = requireBackend();
-
-    expect(resolved.resolveExecutionArgs).toBe(resolveExecutionArgs);
-    expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
-  });
-
-  it("does not infer enforcement for an unversioned selectable hook", () => {
+  it("requires explicit enforcement for a selectable hook", () => {
     const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => baseArgs);
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [
@@ -317,6 +296,7 @@ describe("resolveCliBackendConfig", () => {
     });
 
     expect(requireBackend().toolAvailabilityEnforcement).toBeUndefined();
+    expect(requireBackend().isolatesInstructionsWithExactTools).toBeUndefined();
   });
 });
 

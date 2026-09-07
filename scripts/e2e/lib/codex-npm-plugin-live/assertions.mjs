@@ -15,6 +15,7 @@ import {
   realPathMaybe,
   stateDir,
 } from "../codex-install-utils.mjs";
+import { assertCodexReleasePackageContract } from "../codex-release-package-assertions.mjs";
 
 const command = process.argv[2];
 const allowBetaCompatDiagnostics =
@@ -447,7 +448,7 @@ function findCodexPackageJson(packageName) {
   return findPackageJson(packageName, [projectRoot, codexInstallPath(), managedNpmRoot()]);
 }
 
-function assertNpmDeps() {
+function assertNpmDeps(options = {}) {
   const npmRoot = managedNpmRoot();
   const installPath = codexInstallPath();
   const pluginPackageJson = path.join(installPath, "package.json");
@@ -466,13 +467,14 @@ function assertNpmDeps() {
   if (!openAiCodexPackageJson) {
     throw new Error("missing @openai/codex dependency under .openclaw/npm");
   }
-  assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
 
-  const bin = resolveCodexBin();
-  if (!fs.existsSync(bin)) {
-    throw new Error(`missing managed Codex binary: ${bin}`);
-  }
-  assertPathInside(npmRoot, bin, "managed Codex binary");
+  assertCodexReleasePackageContract({
+    pluginPackageJson,
+    codexPackageJson: openAiCodexPackageJson,
+    packageRoots: [codexNpmProjectRoot(), installPath, npmRoot],
+    managedRoot: npmRoot,
+    recordEvidence: options.recordEvidence,
+  });
 }
 
 function resolveCodexBin() {
@@ -505,7 +507,7 @@ function resolveCodexBin() {
 }
 
 function printCodexBin() {
-  assertNpmDeps();
+  assertNpmDeps({ recordEvidence: false });
   process.stdout.write(`${resolveCodexBin()}\n`);
 }
 
@@ -662,9 +664,9 @@ function assertFollowthroughTranscript({ transcriptEvents, progressMarker, compl
         call.text !== expected[index] ||
         call.args.action !== "send" ||
         // Extended-stable candidates can predate this optional Codex control.
-        // A successful ordered completion send is valid evidence; `false` is not.
+        // Current progress sends use `false`; completion may omit it or use `true`.
         (index === 0
-          ? call.args.final !== undefined
+          ? call.args.final !== undefined && call.args.final !== false
           : call.args.final !== undefined && call.args.final !== true),
     )
   ) {
@@ -906,9 +908,11 @@ function assertAgentError() {
     : "";
   const combined = `${stdout}\n${stderr}`;
   const expectedErrors = [
+    'Agent harness runtime "codex" is unavailable. (reason=owner-plugin-not-activatable, ownerPluginId=codex)',
     'Requested agent harness "codex" is not registered',
     "Unknown model: codex/",
     'Agent harness runtime "codex" is not present in the prepared registry.',
+    'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run.',
   ];
   if (!expectedErrors.some((message) => combined.includes(message))) {
     throw new Error(`unexpected post-uninstall agent error:\nstdout=${stdout}\nstderr=${stderr}`);

@@ -1,19 +1,19 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { loadSettings } from "../../app/settings.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { SkillWorkshopRevisionAdmissionInput } from "../../app/skill-workshop-revision-admissions.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import type { SkillWorkshopProposal } from "./page-types.ts";
-import type { SkillWorkshopState } from "./proposals.ts";
-import type { SkillWorkshopPageContext } from "./source-scope.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 function findRevisionSessionRow(
   result: SessionsListResult | null,
   sessionKey: string | undefined,
 ): GatewaySessionRow | null {
   const key = sessionKey?.trim();
-  return key ? (result?.sessions.find((row) => row.key === key) ?? null) : null;
+  return key
+    ? (result?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, key)) ?? null)
+    : null;
 }
 
 function isUsableRevisionSession(row: GatewaySessionRow | null): row is GatewaySessionRow {
@@ -21,7 +21,7 @@ function isUsableRevisionSession(row: GatewaySessionRow | null): row is GatewayS
 }
 
 async function loadRevisionSessionsForAgent(
-  context: SkillWorkshopPageContext,
+  context: ApplicationContext,
   agentId: string,
 ): Promise<SessionsListResult | null> {
   const current = context.sessions.state;
@@ -31,34 +31,47 @@ async function loadRevisionSessionsForAgent(
   return context.sessions.list({ agentId });
 }
 
-export async function resolveSkillWorkshopRevisionSessionKey(
-  state: SkillWorkshopState,
-  context: SkillWorkshopPageContext,
-  proposal: SkillWorkshopProposal,
-  proposalAgentId: string,
+type SkillWorkshopRevisionTarget = {
+  sessionKey: string;
+  sessionId?: string;
+  targetAgentId: string;
+};
+
+function revisionTarget(
+  sessionKey: string,
+  targetAgentId: string,
+  row?: GatewaySessionRow | null,
+): SkillWorkshopRevisionTarget {
+  const sessionId = row?.sessionId?.trim();
+  return {
+    sessionKey,
+    targetAgentId: normalizeAgentId(row?.agentId ?? targetAgentId),
+    ...(sessionId ? { sessionId } : {}),
+  };
+}
+
+export async function resolveSkillWorkshopRevisionTarget(
+  input: SkillWorkshopRevisionAdmissionInput,
+  context: ApplicationContext,
   isCurrent: () => boolean,
-): Promise<string | null> {
+): Promise<SkillWorkshopRevisionTarget | null> {
   if (!isCurrent()) {
     return null;
   }
   const gatewayHello = context.gateway.snapshot.hello;
-  if (state.skillWorkshopUseCurrentChatForRevisions) {
-    return resolveSessionKey(loadSettings().sessionKey, gatewayHello).trim() || null;
-  }
-
-  const agentId = normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId);
+  const agentId = normalizeAgentId(input.proposalOriginAgentId ?? input.proposalAgentId);
   const sessions = await loadRevisionSessionsForAgent(context, agentId);
   if (!isCurrent()) {
     return null;
   }
-  const originRow = findRevisionSessionRow(sessions, proposal.origin?.sessionKey);
+  const originRow = findRevisionSessionRow(sessions, input.proposalOriginSessionKey);
   if (isUsableRevisionSession(originRow)) {
-    return originRow.key;
+    return revisionTarget(originRow.key, agentId, originRow);
   }
 
   const createParams = {
     agentId,
-    label: truncateUtf16Safe(`Skill Workshop: ${proposal.slug || proposal.key}`, 80),
+    label: truncateUtf16Safe(`Skill Workshop: ${input.proposalSlug || input.proposalId}`, 80),
   };
   const createAccess = readSessionMethodAccess(context.gateway.snapshot, {
     method: "sessions.create",
@@ -71,9 +84,12 @@ export async function resolveSkillWorkshopRevisionSessionKey(
     return null;
   }
   const createdKey = await context.sessions.create(createParams);
+  if (!isCurrent()) {
+    return null;
+  }
   const sessionKey = resolveSessionKey(createdKey, gatewayHello).trim();
   if (!sessionKey) {
     throw new Error(context.sessions.state.error ?? "Could not prepare a Skill Workshop thread.");
   }
-  return sessionKey;
+  return revisionTarget(sessionKey, agentId);
 }

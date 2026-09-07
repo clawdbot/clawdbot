@@ -5,16 +5,13 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("opens a git-backed agent draft from the sidebar new-session action", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, { workspaceGit: true });
 
@@ -33,13 +30,10 @@ suite.define(() => {
   });
 
   it("waits for configured inference before sending the first chat turn", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      agentModel: "openai/startup-model",
       defaultAgentId: "ops",
       deferredMethods: ["chat.startup"],
       historyMessages: [],
@@ -52,12 +46,13 @@ suite.define(() => {
         },
       ],
       sessionKey: "global",
+      sessionScope: "global",
     });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      expect(await gateway.getRequests("agents.list")).toHaveLength(0);
+      expect(await gateway.getRequests("agents.list")).toHaveLength(1);
       // chat.startup owns the initial metadata load; the old parallel
       // chat.metadata request was only a synchronization point for this test.
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
@@ -70,18 +65,6 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
       await gateway.resolveDeferred("chat.startup", {
-        agentsList: {
-          agents: [
-            {
-              id: "ops",
-              model: { primary: "openai/startup-model" },
-              name: "OpenClaw",
-            },
-          ],
-          defaultId: "ops",
-          mainKey: "main",
-          scope: "agent",
-        },
         messages: [],
         metadata: {
           commands: [
@@ -102,7 +85,7 @@ suite.define(() => {
             },
           ],
         },
-        sessionId: "control-ui-e2e-session",
+        sessionId: "session:global",
         thinkingLevel: null,
       });
 
@@ -137,9 +120,14 @@ suite.define(() => {
         sessionKey: "global",
         state: "delta",
       });
-      await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText("First token visible.", { exact: true }).waitFor({
+        timeout: 10_000,
+      });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-      await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
+      await transcript.getByText("First token visible.", { exact: true }).waitFor({
+        timeout: 10_000,
+      });
       await expect
         .poll(() => page.locator('[data-chat-model-option="openai/startup-model"]').count())
         .toBe(1);
@@ -156,7 +144,73 @@ suite.define(() => {
         metadata: (await gateway.getRequests("chat.metadata")).length,
         models: (await gateway.getRequests("models.list")).length,
       }).toEqual({ commands: 0, metadata: 0, models: 0 });
-      expect(await gateway.getRequests("agents.list")).toHaveLength(0);
+      expect(await gateway.getRequests("agents.list")).toHaveLength(1);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("paints startup history while canonical roster and metadata requests remain pending", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: "openai/hydrated-model",
+      deferredMethods: ["agents.list", "chat.metadata"],
+      methodResponses: {
+        "chat.startup": {
+          messages: [
+            {
+              content: [
+                { text: "Transcript paints while optional startup data loads", type: "text" },
+              ],
+              role: "assistant",
+            },
+          ],
+          sessionId: "session:agent:main:main",
+          thinkingLevel: null,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("agents.list");
+      await gateway.waitForRequest("chat.metadata");
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Transcript paints while optional startup data loads", { exact: true })
+        .waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("agents.list")).toHaveLength(1);
+
+      await gateway.resolveDeferred("agents.list", {
+        agents: [{ id: "main", model: { primary: "openai/hydrated-model" }, name: "OpenClaw" }],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      });
+      await gateway.resolveDeferred("chat.metadata", {
+        commands: [],
+        models: [
+          {
+            available: true,
+            id: "hydrated-model",
+            name: "Hydrated Model",
+            provider: "openai",
+          },
+        ],
+      });
+      await expect
+        .poll(() =>
+          page.locator("openclaw-chat-pane").evaluate((pane) => {
+            const state = (
+              pane as HTMLElement & { state?: { chatModelCatalog?: Array<{ id?: string }> } }
+            ).state;
+            return state?.chatModelCatalog?.map((model) => model.id);
+          }),
+        )
+        .toEqual(["hydrated-model"]);
+      expect(await gateway.getRequests("agents.list")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -1,6 +1,6 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
 import fs from "node:fs/promises";
-import { Option, type Command } from "commander";
+import type { Command } from "commander";
 import {
   buildCloudflareAccessHeaders,
   CF_ACCESS_CLIENT_ID_HEADER,
@@ -9,11 +9,12 @@ import {
 } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, mutateConfigFileWithRetry } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { loadNodeHostConfig, type NodeHostGatewayConfig } from "../node-host/config.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
@@ -33,6 +34,7 @@ import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
 type ConnectCommandOptions = {
   service?: boolean;
   ephemeral?: boolean;
+  sessionHost?: boolean;
   targetFile?: string;
   displayName?: string;
 };
@@ -40,6 +42,7 @@ type ConnectCommandOptions = {
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 
 const MAX_JOIN_PAYLOAD_BYTES = 24 * 1024;
+const MAX_TARGET_FILE_BYTES = 64 * 1024;
 const JOIN_FETCH_TIMEOUT_MS = 15_000;
 
 function parseJoinTarget(target: string): URL | null {
@@ -146,25 +149,42 @@ async function resolveConnectTarget(
   if (target) {
     return target;
   }
-  const path = targetFile?.trim();
-  if (!path) {
+  const filePath = targetFile?.trim();
+  if (!filePath) {
     throw new Error("Connect target is required.");
   }
+  let buffer: Buffer;
   try {
-    const value = (await fs.readFile(path, "utf8")).trim();
-    if (!value) {
-      throw new Error("Connect target file is empty.");
-    }
-    return value;
-  } finally {
-    await fs.rm(path, { force: true });
+    // The original fs.readFile behavior followed symlinks in the target path.
+    // Resolve intentional links before the regular-file safety check so
+    // symlinked secret-mount or one-shot target files keep working.
+    const resolvedFilePath = await fs.realpath(filePath);
+    ({ buffer } = await readRegularFile({
+      filePath: resolvedFilePath,
+      maxBytes: MAX_TARGET_FILE_BYTES,
+    }));
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not read --target-file ${filePath} (max ${MAX_TARGET_FILE_BYTES} bytes): ${cause}`,
+      { cause: error },
+    );
   }
+  const value = buffer.toString("utf8").trim();
+  if (!value) {
+    throw new Error("Connect target file is empty.");
+  }
+  await fs.rm(filePath, { force: true });
+  return value;
 }
 
 async function runConnectCommand(
   target: string | undefined,
   opts: ConnectCommandOptions,
 ): Promise<void> {
+  if (opts.ephemeral && opts.sessionHost) {
+    throw new Error("--ephemeral cannot be combined with --session-host.");
+  }
   if (opts.ephemeral && opts.service) {
     throw new Error("--ephemeral cannot be combined with --service.");
   }
@@ -202,6 +222,7 @@ async function runConnectCommand(
       : index === 0;
     return boundToAccessOrigin && cloudflareAccess ? { ...candidate, cloudflareAccess } : candidate;
   });
+  const forceWorkerRuns = opts.ephemeral === true || (opts.sessionHost === true && !opts.service);
   const nodeRunOptions = {
     gatewayHost: pair.host,
     gatewayPort: pair.port,
@@ -216,7 +237,8 @@ async function runConnectCommand(
     // Environment-managed nodes reuse their persisted device token when a provider
     // replays setup after the one-shot bootstrap credential has been consumed.
     preferGatewayBootstrapToken: opts.ephemeral !== true,
-    ...(opts.ephemeral === true ? { forceWorkerRuns: true } : {}),
+    ...(forceWorkerRuns ? { forceWorkerRuns: true } : {}),
+    ...(opts.ephemeral === true ? { ephemeral: true } : {}),
     displayName: opts.displayName,
   };
 
@@ -228,6 +250,20 @@ async function runConnectCommand(
   // The first hello stores durable device auth and the winning endpoint before
   // installation, so the service never persists the one-shot bootstrap bearer.
   await runNodeHost({ ...nodeRunOptions, stopAfterFirstConnect: true });
+  if (opts.sessionHost) {
+    await mutateConfigFileWithRetry({
+      writeOptions: {
+        auditOrigin: "cli",
+        explicitSetPaths: [["nodeHost", "workerRuns", "enabled"]],
+      },
+      mutate: (draft) => {
+        draft.nodeHost = {
+          ...draft.nodeHost,
+          workerRuns: { ...draft.nodeHost?.workerRuns, enabled: true },
+        };
+      },
+    });
+  }
   await runNodeDaemonInstall({ displayName: opts.displayName, force: true });
 }
 
@@ -238,7 +274,12 @@ export function registerConnectCli(program: Command): void {
     .argument("[target]", "oc-pair URL, setup code, or HTTPS Gateway join URL")
     .option("--service", "Install and run the node host as an OS service", false)
     .option("--ephemeral", "Run as an environment-managed disposable session host", false)
-    .addOption(new Option("--target-file <path>").hideHelp())
+    .option(
+      "--session-host",
+      "Host worker sessions (process-scoped unless installed as a service)",
+      false,
+    )
+    .option("--target-file <path>", "Read the connect target from a private file and remove it")
     .option("--display-name <name>", "Override the node display name")
     .addHelpText(
       "after",
@@ -248,6 +289,10 @@ export function registerConnectCli(program: Command): void {
           [
             "openclaw connect https://gateway.example/j/<code> --service",
             "Install the node host service.",
+          ],
+          [
+            "openclaw connect https://gateway.example/j/<code> --service --session-host",
+            "Install a worker-session host service.",
           ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/connect", "docs.openclaw.ai/cli/connect")}\n`,
     )

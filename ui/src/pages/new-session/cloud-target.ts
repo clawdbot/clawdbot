@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
@@ -8,8 +8,12 @@ import { readDraftCloudProfiles, readDraftEnvironments } from "./discovery.ts";
 
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
+  runtimeId?: string,
 ): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
-  const result = await client.request<EnvironmentsListResult>("environments.list", {});
+  const result = await client.request<EnvironmentsListResult>(
+    "environments.list",
+    runtimeId ? { runtimeId } : {},
+  );
   return {
     profiles: readDraftCloudProfiles(result?.profiles),
     environments: readDraftEnvironments(result?.environments),
@@ -22,6 +26,7 @@ type SessionMenuItemOptions = {
   icon?: unknown;
   sub?: string;
   facts?: readonly string[];
+  meter?: TemplateResult;
   checked: boolean;
   disabled?: boolean;
   title?: string;
@@ -41,18 +46,29 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
       ?disabled=${submitting || (params.disabled ?? false)}
       @click=${params.onSelect}
     >
-      ${params.icon
-        ? html`<span class="session-menu__icon" aria-hidden="true">${params.icon}</span>`
-        : nothing}
+      ${
+        params.icon
+          ? html`<span class="session-menu__icon" aria-hidden="true">${params.icon}</span>`
+          : nothing
+      }
       <span class="session-menu__text">${params.label}</span>
+      ${
+        params.facts?.length || params.meter
+          ? html`<span class="new-session-page__menu-meta">
+              ${
+                params.facts?.length
+                  ? html`<span class="new-session-page__menu-facts">
+                      ${params.facts.map(
+                        (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
+                      )}
+                    </span>`
+                  : nothing
+              }
+              ${params.meter ?? nothing}
+            </span>`
+          : nothing
+      }
       ${params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
-      ${params.facts?.length
-        ? html`<span class="new-session-page__menu-facts">
-            ${params.facts.map(
-              (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
-            )}
-          </span>`
-        : nothing}
       <span class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >
@@ -84,10 +100,12 @@ export function renderCloudProfileMenuItems(params: {
   icon?: unknown;
   disabled?: boolean;
   disabledReason?: string;
+  profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   onSelect: (profileId: string) => void;
 }) {
-  return params.profiles.map((profile) =>
-    renderSessionMenuItem(
+  return params.profiles.map((profile) => {
+    const profileDisabledReason = params.profileDisabledReason?.(profile);
+    return renderSessionMenuItem(
       {
         value: `cloud:${profile.id}`,
         label: t("newSession.cloudWorker", { profile: profile.id }),
@@ -99,16 +117,28 @@ export function renderCloudProfileMenuItems(params: {
               ? [t("newSession.environmentPersistent")]
               : undefined,
         checked: params.selectedId === profile.id,
-        disabled: params.disabled,
+        disabled: params.disabled || Boolean(profileDisabledReason),
         title:
-          params.disabled && params.disabledReason
-            ? params.disabledReason
-            : t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
+          (params.disabled ? params.disabledReason : profileDisabledReason) ??
+          t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
         onSelect: () => params.onSelect(profile.id),
       },
       params.submitting,
-    ),
-  );
+    );
+  });
+}
+
+/** Machine shape as a picker sub-line; providers may report neither, one, or both numbers. */
+function machineShapeText(machine: DraftMachineOption): string | undefined {
+  const cpu = machine.cpu === undefined ? undefined : String(machine.cpu);
+  const memory = machine.memoryGb === undefined ? undefined : String(machine.memoryGb);
+  if (cpu && memory) {
+    return t("newSession.machineShape", { cpu, memory });
+  }
+  if (cpu) {
+    return t("newSession.machineCpu", { cpu });
+  }
+  return memory ? t("newSession.machineMemory", { memory }) : undefined;
 }
 
 export function renderCloudMachineMenuItems(params: {
@@ -122,7 +152,7 @@ export function renderCloudMachineMenuItems(params: {
       {
         value: `machine:${machine.id}`,
         label: machine.label,
-        sub: machine.description,
+        sub: machineShapeText(machine),
         facts: machine.default ? [t("newSession.machineDefault")] : undefined,
         checked: params.selectedId === machine.id,
         keepOpen: true,

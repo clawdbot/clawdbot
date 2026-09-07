@@ -17,6 +17,7 @@ import {
 } from "../model-auth.js";
 import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
 import { isOpenAIProvider } from "../openai-routing.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -39,12 +40,8 @@ import {
   resolveAgentHarnessNativeToolPolicyRestricted,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "./selection.js";
-import {
-  resolveAgentHarnessPreparedAuthSupport,
-  resolveAgentHarnessPreparedRouteSupport,
-} from "./support.js";
+import { projectPreparedModelProvider } from "./support.js";
 import type { AgentHarness, AgentHarnessNativeCompactionRequest } from "./types.js";
 
 /**
@@ -54,6 +51,7 @@ import type { AgentHarness, AgentHarnessNativeCompactionRequest } from "./types.
  * can opt in through their `compact` hook.
  */
 type InternalAgentHarnessCompactionOptions = {
+  preparedModelRuntime: PreparedModelRuntimeSnapshot;
   nativeCompactionRequest?: AgentHarnessNativeCompactionRequest;
   onNativeCompactionCapabilityUsed?: () => void;
 };
@@ -89,27 +87,6 @@ function stripHarnessOwnedAuthInputs(
   return result;
 }
 
-function buildHarnessCompactionModelProvider(params: {
-  model?: Model;
-  plan?: AgentRuntimeAuthPlan;
-  attempt?: PreparedAgentRuntimeAuthAttempt;
-}): AgentHarnessPreparedModelProvider {
-  const route = params.plan?.modelRoute;
-  return {
-    api: route?.api ?? params.model?.api,
-    baseUrl: route?.baseUrl ?? params.model?.baseUrl,
-    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
-    ...(params.plan
-      ? {
-          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-            plan: params.plan,
-            source: params.attempt?.kind === "implicit" ? undefined : params.attempt?.kind,
-          }),
-        }
-      : {}),
-  };
-}
-
 async function resolveHarnessCompactApiKey(params: {
   agentDir: string;
   compactParams: CompactEmbeddedAgentSessionParams;
@@ -117,6 +94,7 @@ async function resolveHarnessCompactApiKey(params: {
   agentId: string;
   sessionKey?: string;
   pinnedHarnessId?: string;
+  preparedModelRuntime: PreparedModelRuntimeSnapshot;
 }): Promise<{
   harness: AgentHarness;
   apiKey?: string;
@@ -137,6 +115,7 @@ async function resolveHarnessCompactApiKey(params: {
       ? providedRuntimeAuthPlan
       : undefined;
   const workspaceDir = resolveUserPath(compactParams.workspaceDir);
+  const preparedStores = params.preparedModelRuntime.createStores();
   const callerRuntimeModel = compactParams.runtimeModel;
   const fallbackResolution = (
     harness: AgentHarness,
@@ -166,10 +145,10 @@ async function resolveHarnessCompactApiKey(params: {
       provider,
       modelId,
       modelProviders: attempts.map((attempt) =>
-        buildHarnessCompactionModelProvider({
+        projectPreparedModelProvider({
           model: preparedModel,
           plan: attempt.plan,
-          attempt,
+          attemptKind: attempt.kind,
         }),
       ),
       config: compactParams.config,
@@ -194,6 +173,8 @@ async function resolveHarnessCompactApiKey(params: {
     authProfileMode,
   }: Parameters<Parameters<typeof materializePreparedRuntimeModel<Model>>[0]["resolveModel"]>[0]) =>
     resolveModelAsync(provider, modelId, agentDir, config, {
+      ...preparedStores,
+      preparedModelRuntime: params.preparedModelRuntime,
       authProfileId: profileId,
       authProfileMode,
       skipAgentDiscovery: true,
@@ -206,6 +187,8 @@ async function resolveHarnessCompactApiKey(params: {
     try {
       model = (
         await resolveModelAsync(provider, modelId, agentDir, compactParams.config, {
+          ...preparedStores,
+          preparedModelRuntime: params.preparedModelRuntime,
           authProfileId:
             reusableRuntimeAuthPlan?.forwardedAuthProfileId ??
             compactParams.authProfileId?.trim() ??
@@ -225,10 +208,12 @@ async function resolveHarnessCompactApiKey(params: {
   }
   const runtimeAuthProfileStore = isOpenAIProvider(provider)
     ? ensureAuthProfileStore(agentDir, {
+        profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       })
     : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+        profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         allowKeychainPrompt: false,
       });
   const prepareRuntimeAuth = (harness: AgentHarness) =>
@@ -294,6 +279,8 @@ async function resolveHarnessCompactApiKey(params: {
       provider,
       modelId,
       config: compactParams.config,
+      workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
       model: input.model,
       forceResolve: input.forceResolve,
       rejectMismatchedModel: true,
@@ -364,7 +351,7 @@ async function resolveHarnessCompactApiKey(params: {
 /** Runs harness-provided compaction when the selected runtime supports it. */
 export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedAgentSessionParams,
-  options: InternalAgentHarnessCompactionOptions = {},
+  options: InternalAgentHarnessCompactionOptions,
 ): Promise<EmbeddedAgentCompactResult | undefined> {
   const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const pinnedHarnessId =
@@ -378,9 +365,10 @@ export async function maybeCompactAgentHarnessSession(
   }
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const runtimePolicyAgentId =
-    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+    params.sandboxAgentId ??
+    (params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
       ? undefined
-      : params.agentId;
+      : params.agentId);
   const runtimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
   const modelRoute = runtimeAuthPlan?.modelRoute;
   if (
@@ -425,7 +413,7 @@ export async function maybeCompactAgentHarnessSession(
     ? selectAgentHarnessForPreparedModelProviders({
         ...harnessSelectionParams,
         modelProviders: [
-          buildHarnessCompactionModelProvider({
+          projectPreparedModelProvider({
             model: params.runtimeModel,
             plan: runtimeAuthPlan,
           }),
@@ -479,6 +467,7 @@ export async function maybeCompactAgentHarnessSession(
     agentId: compactIdentity.agentId,
     sessionKey: runtimePolicySessionKey,
     pinnedHarnessId,
+    preparedModelRuntime: options.preparedModelRuntime,
   });
   harness = resolved.harness;
   const nativeToolPolicyRestricted = resolveNativeToolPolicyRestricted(harness);

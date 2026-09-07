@@ -1,6 +1,5 @@
 /** Full-text search over visible session transcripts. */
 import { Type } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
@@ -33,13 +32,12 @@ import {
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
 import {
-  createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
+  formatSessionToolAccessDenial,
   resolveDisplaySessionKey,
-  resolveEffectiveSessionToolsVisibility,
-  resolveSandboxedSessionToolContext,
   resolveSessionReference,
   resolveSessionToolAccess,
+  resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 
@@ -50,6 +48,8 @@ const SESSIONS_SEARCH_MAX_SESSION_KEYS = 200;
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 const SESSIONS_SEARCH_MAX_BYTES = 32 * 1024;
 const SESSIONS_SEARCH_SNIPPET_MAX_CHARS = 300;
+const SESSIONS_SEARCH_INDEXING_WARNING =
+  "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
   query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
@@ -80,6 +80,7 @@ const SessionsSearchOutputSchema = Type.Union([
         }),
       ),
       indexing: Type.Optional(Type.Literal(true)),
+      warning: Type.Optional(Type.String()),
       truncated: Type.Optional(Type.Literal(true)),
     },
     { additionalProperties: false },
@@ -368,14 +369,16 @@ export function createSessionsSearchTool(opts?: {
           max: SESSIONS_SEARCH_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
       const requestedSessionKey = readToolStringParam(params, "sessionKey");
-      const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
-        resolveSandboxedSessionToolContext({
-          cfg,
-          agentSessionKey: opts?.agentSessionKey,
-          requesterAgentId: opts?.agentId,
-          sandboxed: opts?.sandboxed,
-        });
+      const {
+        cfg,
+        mainKey,
+        alias,
+        effectiveRequesterKey,
+        mainSessionKey,
+        restrictToSpawned,
+        sessionVisibility: visibility,
+        a2aPolicy,
+      } = resolveSessionToolContext(opts);
       const requesterAgentId = resolveSessionAgentId({
         sessionKey: effectiveRequesterKey,
         config: cfg,
@@ -443,11 +446,6 @@ export function createSessionsSearchTool(opts?: {
         };
       }
 
-      const visibility = resolveEffectiveSessionToolsVisibility({
-        cfg,
-        sandboxed: opts?.sandboxed === true,
-      });
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
       const defaultAgentId = requesterAgentId;
       const rowGuard = createSessionVisibilityRowChecker({
         action: "history",
@@ -479,7 +477,13 @@ export function createSessionsSearchTool(opts?: {
           callGateway: gatewayCall,
         });
         if (!access.allowed) {
-          return jsonResult({ status: access.status, error: access.error });
+          return jsonResult({
+            status: access.status,
+            error: formatSessionToolAccessDenial(access, {
+              action: "search",
+              targetSessionKey: key,
+            }),
+          });
         }
         if (access.expectedSessionId) {
           sessionTarget.expectedSessionId = access.expectedSessionId;
@@ -600,7 +604,7 @@ export function createSessionsSearchTool(opts?: {
         ...(opts?.sessionLinkBase
           ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
           : {}),
-        ...(indexing ? { indexing: true } : {}),
+        ...(indexing ? { indexing: true, warning: SESSIONS_SEARCH_INDEXING_WARNING } : {}),
         ...(backendTruncated || visibleHits.length > limit || capped.truncated
           ? { truncated: true }
           : {}),

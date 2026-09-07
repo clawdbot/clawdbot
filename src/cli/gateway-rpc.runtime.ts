@@ -5,6 +5,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../gateway/call.js";
+import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
@@ -42,16 +43,17 @@ export async function isImplicitLocalGatewayTargetFromCliRuntime(
   return await isImplicitLocalGatewayTarget({
     config: opts.config,
     url: opts.url,
-    localPortOverride: opts.localPortOverride,
+    localPortOverride: resolveGatewayLocalPortOverride(opts),
   });
 }
 
-export async function callGatewayFromCliRuntime(
+export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCliTransportRpcOpts,
   params?: unknown,
   extra?: CallGatewayFromCliRuntimeExtra,
 ) {
+  const localPortOverride = resolveGatewayLocalPortOverride(opts);
   // Progress is disabled for JSON output so stdout stays parseable.
   const showProgress = extra?.progress ?? opts.json !== true;
   const timeoutMs =
@@ -71,7 +73,7 @@ export async function callGatewayFromCliRuntime(
       enabled: showProgress,
     },
     async () =>
-      await callGateway({
+      await callGateway<T>({
         config: opts.config,
         url: opts.url,
         token: opts.token,
@@ -87,7 +89,7 @@ export async function callGatewayFromCliRuntime(
         sharedStateMode: extra?.sharedStateMode,
         signal: extra?.signal,
         timeoutMs,
-        localPortOverride: opts.localPortOverride,
+        localPortOverride,
         clientName: extra?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
         mode: extra?.mode ?? GATEWAY_CLIENT_MODES.CLI,
       }),

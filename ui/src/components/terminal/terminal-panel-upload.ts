@@ -340,131 +340,150 @@ export function renderTerminalPanelActions(params: {
     >
       ${icons.paperclip}
     </button>
-    ${params.fullscreen
-      ? nothing
-      : html`${params.sessionPicker}${params.embedded
-          ? html`<button
-              class="rail-header__action tp-icon"
-              type="button"
-              title=${t("terminal.dockBottom")}
-              aria-label=${t("terminal.dockBottom")}
-              @click=${() => params.onDock("bottom")}
-            >
-              ${icons.panelBottomOpen}
-            </button>`
-          : html`${renderDockDestinations({
-                current: params.dock,
-                groupClass: "tp-dock-modes",
-                groupLabel: t("terminal.dockMode"),
-                destinations: [
-                  {
-                    dock: "bottom",
-                    label: t("terminal.dockBottom"),
-                    icon: icons.panelBottomOpen,
-                    className: "tp-icon",
-                  },
-                  {
-                    dock: "right",
-                    label: t("terminal.dockRight"),
-                    icon: icons.panelRightOpen,
-                    className: "tp-icon",
-                  },
-                  {
-                    dock: "main",
-                    label: t("terminal.dockMain"),
-                    icon: icons.columns2,
-                    className: "tp-icon",
-                  },
-                ],
-                onSelect: params.onDock,
-              })}
-              <button
-                class="rail-header__action tp-icon tp-open-fullscreen"
-                type="button"
-                title=${t("terminal.openFullscreen")}
-                aria-label=${t("terminal.openFullscreen")}
-                @click=${params.onOpenFullscreen}
-              >
-                ${icons.maximize}
-              </button>
-              <button
-                class="rail-header__action tp-icon"
-                type="button"
-                title=${t("terminal.hide")}
-                aria-label=${t("terminal.hide")}
-                @click=${params.onHide}
-              >
-                ${icons.x}
-              </button>`}`}
+    ${
+      params.fullscreen
+        ? nothing
+        : html`${params.sessionPicker}${
+            params.embedded
+              ? html`<button
+                  class="rail-header__action tp-icon"
+                  type="button"
+                  title=${t("terminal.dockBottom")}
+                  aria-label=${t("terminal.dockBottom")}
+                  @click=${() => params.onDock("bottom")}
+                >
+                  ${icons.panelBottomOpen}
+                </button>`
+              : html`${renderDockDestinations({
+                    current: params.dock,
+                    groupClass: "tp-dock-modes",
+                    groupLabel: t("terminal.dockMode"),
+                    destinations: [
+                      {
+                        dock: "bottom",
+                        label: t("terminal.dockBottom"),
+                        icon: icons.panelBottomOpen,
+                        className: "tp-icon",
+                      },
+                      {
+                        dock: "right",
+                        label: t("terminal.dockRight"),
+                        icon: icons.panelRightOpen,
+                        className: "tp-icon",
+                      },
+                      {
+                        dock: "main",
+                        label: t("terminal.dockMain"),
+                        icon: icons.columns2,
+                        className: "tp-icon",
+                      },
+                    ],
+                    onSelect: params.onDock,
+                  })}
+                  <button
+                    class="rail-header__action tp-icon tp-open-fullscreen"
+                    type="button"
+                    data-new-tab-action
+                    title=${t("terminal.openWindow")}
+                    aria-label=${t("terminal.openWindow")}
+                    @click=${params.onOpenFullscreen}
+                  >
+                    ${icons.maximize}
+                  </button>
+                  <button
+                    class="rail-header__action tp-icon"
+                    type="button"
+                    title=${t("terminal.hide")}
+                    aria-label=${t("terminal.hide")}
+                    @click=${params.onHide}
+                  >
+                    ${icons.x}
+                  </button>`
+          }`
+    }
   </div>`;
 }
 
 export function renderTerminalUploadLayer(upload: TerminalPanelUploadController) {
   const progress = upload.progress;
-  return html`${upload.dragActive
-    ? html`<div class="tp-drop-overlay">${t("terminal.dropFiles")}</div>`
-    : nothing}
-  ${progress
-    ? html`<div
-        class="tp-upload-card ${progress.state === "failed" ? "tp-upload-card--failed" : ""}"
-        role=${progress.state === "failed" ? "alert" : "status"}
-        aria-live=${progress.state === "failed" ? "assertive" : "polite"}
-      >
-        <div class="tp-upload-card__header">
-          <div class="tp-upload-card__copy">
-            <div class="tp-upload-card__title">
-              ${progress.state === "failed"
+  return html`${
+    upload.dragActive
+      ? html`<div class="tp-drop-overlay">${t("terminal.dropFiles")}</div>`
+      : nothing
+  }
+  ${
+    progress
+      ? html`<div
+          class="tp-upload-card ${progress.state === "failed" ? "tp-upload-card--failed" : ""}"
+          role=${progress.state === "failed" ? "alert" : "status"}
+          aria-live=${progress.state === "failed" ? "assertive" : "polite"}
+        >
+          <div class="tp-upload-card__header">
+            <div class="tp-upload-card__copy">
+              <div class="tp-upload-card__title">
+                ${
+                  progress.state === "failed"
+                    ? t("terminal.uploadFailed")
+                    : t("terminal.uploadProgress", {
+                        current: String(progress.current),
+                        total: String(progress.total),
+                      })
+                }
+              </div>
+              <div class="tp-upload-card__file">${progress.fileName}</div>
+            </div>
+            <div class="tp-upload-card__actions">
+              ${
+                progress.state === "failed" && progress.retryable
+                  ? html`<button
+                      class="tp-upload-card__action tp-upload-retry"
+                      type="button"
+                      @click=${upload.retry}
+                    >
+                      ${t("terminal.retryUpload")}
+                    </button>`
+                  : nothing
+              }
+              <button
+                class="tp-upload-card__action tp-upload-cancel"
+                type="button"
+                @click=${upload.cancel}
+              >
+                ${t("common.cancel")}
+              </button>
+            </div>
+          </div>
+          <div
+            class="tp-upload-progress"
+            role="progressbar"
+            aria-label=${
+              progress.state === "failed"
                 ? t("terminal.uploadFailed")
                 : t("terminal.uploadProgress", {
                     current: String(progress.current),
                     total: String(progress.total),
-                  })}
-            </div>
-            <div class="tp-upload-card__file">${progress.fileName}</div>
+                  })
+            }
+            aria-valuemin="0"
+            aria-valuemax=${String(progress.total)}
+            aria-valuenow=${String(progress.completed)}
+          >
+            <span
+              class="tp-upload-progress__fill"
+              style=${`width:${(progress.completed / progress.total) * 100}%`}
+            ></span>
+            ${
+              progress.state === "uploading"
+                ? html`<span class="tp-upload-progress__activity"></span>`
+                : nothing
+            }
           </div>
-          <div class="tp-upload-card__actions">
-            ${progress.state === "failed" && progress.retryable
-              ? html`<button
-                  class="tp-upload-card__action tp-upload-retry"
-                  type="button"
-                  @click=${upload.retry}
-                >
-                  ${t("terminal.retryUpload")}
-                </button>`
-              : nothing}
-            <button
-              class="tp-upload-card__action tp-upload-cancel"
-              type="button"
-              @click=${upload.cancel}
-            >
-              ${t("common.cancel")}
-            </button>
-          </div>
-        </div>
-        <div
-          class="tp-upload-progress"
-          role="progressbar"
-          aria-label=${progress.state === "failed"
-            ? t("terminal.uploadFailed")
-            : t("terminal.uploadProgress", {
-                current: String(progress.current),
-                total: String(progress.total),
-              })}
-          aria-valuemin="0"
-          aria-valuemax=${String(progress.total)}
-          aria-valuenow=${String(progress.completed)}
-        >
-          <span
-            class="tp-upload-progress__fill"
-            style=${`width:${(progress.completed / progress.total) * 100}%`}
-          ></span>
-          ${progress.state === "uploading"
-            ? html`<span class="tp-upload-progress__activity"></span>`
-            : nothing}
-        </div>
-        ${progress.error
-          ? html`<div class="tp-upload-card__error">${progress.error}</div>`
-          : nothing}
-      </div>`
-    : nothing}`;
+          ${
+            progress.error
+              ? html`<div class="tp-upload-card__error">${progress.error}</div>`
+              : nothing
+          }
+        </div>`
+      : nothing
+  }`;
 }

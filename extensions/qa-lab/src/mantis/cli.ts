@@ -1,22 +1,10 @@
-// Qa Lab plugin module implements cli behavior.
 import type { Command } from "commander";
 import { createLazyCliRuntimeLoader } from "../live-transports/shared/live-transport-cli.js";
 import type { MantisDesktopBrowserSmokeOptions } from "./desktop-browser-smoke.runtime.js";
 import type { MantisDiscordSmokeOptions } from "./discord-smoke.runtime.js";
 import type { MantisBeforeAfterOptions } from "./run.runtime.js";
-import type {
-  MantisSlackDesktopHydrateMode,
-  MantisSlackDesktopSmokeOptions,
-} from "./slack-desktop-smoke.runtime.js";
-import type {
-  MantisTelegramDesktopBuilderOptions,
-  MantisTelegramDesktopHydrateMode,
-} from "./telegram-desktop-builder.runtime.js";
-import type {
-  MantisVisualDriverOptions,
-  MantisVisualTaskOptions,
-  MantisVisualTaskVisionMode,
-} from "./visual-task.runtime.js";
+import type { MantisSlackDesktopSmokeOptions } from "./slack-desktop-smoke.runtime.js";
+import type { MantisVisualDriverOptions, MantisVisualTaskOptions } from "./visual-task.runtime.js";
 
 type MantisCliRuntime = typeof import("./cli.runtime.js");
 
@@ -24,165 +12,49 @@ const loadMantisCliRuntime = createLazyCliRuntimeLoader<MantisCliRuntime>(
   () => import("./cli.runtime.js"),
 );
 
-async function runDiscordSmoke(opts: MantisDiscordSmokeOptions) {
-  const runtime = await loadMantisCliRuntime();
-  await runtime.runMantisDiscordSmokeCommand(opts);
-}
+type MantisDiscordSmokeCommanderOptions = Omit<
+  MantisDiscordSmokeOptions,
+  "env" | "now" | "redactPublicMetadata" | "token"
+>;
 
-async function runBeforeAfter(opts: MantisBeforeAfterOptions) {
-  const runtime = await loadMantisCliRuntime();
-  await runtime.runMantisBeforeAfterCommand(opts);
-}
+type MantisBeforeAfterCommanderOptions = Omit<
+  MantisBeforeAfterOptions,
+  "allowFailures" | "commandRunner" | "fastMode" | "now"
+> & { fast?: boolean };
 
-async function runDesktopBrowserSmoke(opts: MantisDesktopBrowserSmokeOptions) {
-  const runtime = await loadMantisCliRuntime();
-  await runtime.runMantisDesktopBrowserSmokeCommand(opts);
-}
-
-async function runSlackDesktopSmoke(opts: MantisSlackDesktopSmokeOptions) {
-  const runtime = await loadMantisCliRuntime();
-  await runtime.runMantisSlackDesktopSmokeCommand(opts);
-}
-
-async function runTelegramDesktopBuilder(opts: MantisTelegramDesktopBuilderOptions) {
-  const runtime = await loadMantisCliRuntime();
-  await runtime.runMantisTelegramDesktopBuilderCommand(opts);
-}
-
-async function runVisualDriver(opts: MantisVisualDriverOptions) {
-  const runtime = await loadMantisCliRuntime();
-  await runtime.runMantisVisualDriverCommand(opts);
-}
-
-async function runVisualTask(opts: MantisVisualTaskOptions) {
-  const runtime = await loadMantisCliRuntime();
-  await runtime.runMantisVisualTaskCommand(opts);
-}
-
-type MantisDiscordSmokeCommanderOptions = {
-  channelId?: string;
-  guildId?: string;
-  message?: string;
-  outputDir?: string;
-  repoRoot?: string;
-  skipPost?: boolean;
-  tokenFile?: string;
-  tokenFileEnv?: string;
-  tokenEnv?: string;
-};
-
-type MantisBeforeAfterCommanderOptions = {
-  baseline?: string;
-  candidate?: string;
-  credentialRole?: string;
-  credentialSource?: string;
-  fast?: boolean;
-  outputDir?: string;
-  providerMode?: string;
-  repoRoot?: string;
-  scenario?: string;
-  skipBuild?: boolean;
-  skipInstall?: boolean;
-  transport?: string;
-};
-
-type MantisDesktopBrowserSmokeCommanderOptions = {
-  browserProfileArchiveEnv?: string;
-  browserProfileDir?: string;
-  browserUrl?: string;
+type MantisDesktopBrowserSmokeCommanderOptions = Omit<
+  MantisDesktopBrowserSmokeOptions,
+  "commandRunner" | "env" | "now" | "videoDurationSeconds"
+> & {
   class?: string;
-  crabboxBin?: string;
-  htmlFile?: string;
-  idleTimeout?: string;
-  keepLease?: boolean;
-  leaseId?: string;
-  machineClass?: string;
-  outputDir?: string;
-  provider?: string;
-  repoRoot?: string;
-  ttl?: string;
   videoDuration?: string;
 };
 
-type MantisSlackDesktopSmokeCommanderOptions = {
+type MantisSlackDesktopSmokeCommanderOptions = Omit<
+  MantisSlackDesktopSmokeOptions,
+  "alternateModel" | "commandRunner" | "env" | "fastMode" | "now" | "primaryModel" | "scenarioIds"
+> & {
   altModel?: string;
-  approvalCheckpoints?: boolean;
   class?: string;
-  crabboxBin?: string;
-  credentialRole?: string;
-  credentialSource?: string;
   fast?: boolean;
-  freshPr?: string;
-  gatewaySetup?: boolean;
-  hydrateMode?: MantisSlackDesktopHydrateMode;
-  idleTimeout?: string;
-  keepLease?: boolean;
-  leaseId?: string;
-  machineClass?: string;
-  market?: string;
   model?: string;
-  outputDir?: string;
-  provider?: string;
-  providerMode?: string;
-  repoRoot?: string;
   scenario?: string[];
-  slackChannelId?: string;
-  slackUrl?: string;
-  ttl?: string;
 };
 
-type MantisTelegramDesktopBuilderCommanderOptions = {
+type MantisVisualTaskCommanderOptions = Omit<
+  MantisVisualTaskOptions,
+  "commandRunner" | "env" | "now" | "settleMs" | "visionTimeoutMs"
+> & {
   class?: string;
-  crabboxBin?: string;
-  credentialRole?: string;
-  credentialSource?: string;
-  gatewaySetup?: boolean;
-  hydrateMode?: MantisTelegramDesktopHydrateMode;
-  idleTimeout?: string;
-  keepLease?: boolean;
-  leaseId?: string;
-  machineClass?: string;
-  outputDir?: string;
-  provider?: string;
-  repoRoot?: string;
-  telegramProfileArchiveEnv?: string;
-  telegramProfileDir?: string;
-  ttl?: string;
-};
-
-type MantisVisualTaskCommanderOptions = {
-  browserUrl?: string;
-  class?: string;
-  crabboxBin?: string;
-  duration?: string;
-  expectText?: string;
-  idleTimeout?: string;
-  keepLease?: boolean;
-  leaseId?: string;
-  machineClass?: string;
-  outputDir?: string;
-  provider?: string;
-  repoRoot?: string;
   settleMs?: string;
-  ttl?: string;
-  visionMode?: MantisVisualTaskVisionMode;
-  visionModel?: string;
-  visionPrompt?: string;
   visionTimeoutMs?: string;
 };
 
-type MantisVisualDriverCommanderOptions = {
-  browserUrl?: string;
-  crabboxBin?: string;
-  expectText?: string;
-  leaseId?: string;
-  outputDir?: string;
-  provider?: string;
-  repoRoot?: string;
+type MantisVisualDriverCommanderOptions = Omit<
+  MantisVisualDriverOptions,
+  "commandRunner" | "env" | "settleMs" | "visionTimeoutMs"
+> & {
   settleMs?: string;
-  visionMode?: MantisVisualTaskVisionMode;
-  visionModel?: string;
-  visionPrompt?: string;
   visionTimeoutMs?: string;
 };
 
@@ -222,7 +94,7 @@ export function registerMantisCli(qa: Command) {
     .option("--skip-install", "Skip pnpm install in baseline/candidate worktrees", false)
     .option("--skip-build", "Skip pnpm build in baseline/candidate worktrees", false)
     .action(async (opts: MantisBeforeAfterCommanderOptions) => {
-      await runBeforeAfter({
+      const options = {
         baseline: opts.baseline,
         candidate: opts.candidate,
         credentialRole: opts.credentialRole,
@@ -235,7 +107,9 @@ export function registerMantisCli(qa: Command) {
         skipBuild: opts.skipBuild,
         skipInstall: opts.skipInstall,
         transport: opts.transport,
-      });
+      };
+      const runtime = await loadMantisCliRuntime();
+      await runtime.runMantisBeforeAfterCommand(options);
     });
 
   mantis
@@ -251,7 +125,7 @@ export function registerMantisCli(qa: Command) {
     .option("--message <text>", "Smoke message to post")
     .option("--skip-post", "Only check Discord API visibility; do not post or react", false)
     .action(async (opts: MantisDiscordSmokeCommanderOptions) => {
-      await runDiscordSmoke({
+      const options = {
         channelId: opts.channelId,
         guildId: opts.guildId,
         message: opts.message,
@@ -261,7 +135,9 @@ export function registerMantisCli(qa: Command) {
         tokenFile: opts.tokenFile,
         tokenFileEnv: opts.tokenFileEnv,
         tokenEnv: opts.tokenEnv,
-      });
+      };
+      const runtime = await loadMantisCliRuntime();
+      await runtime.runMantisDiscordSmokeCommand(options);
     });
 
   mantis
@@ -291,7 +167,7 @@ export function registerMantisCli(qa: Command) {
     .option("--video-duration <seconds>", "Visible desktop recording duration in seconds")
     .option("--keep-lease", "Keep a lease created by this run after a passing smoke")
     .action(async (opts: MantisDesktopBrowserSmokeCommanderOptions) => {
-      await runDesktopBrowserSmoke({
+      const options = {
         browserProfileArchiveEnv: opts.browserProfileArchiveEnv,
         browserProfileDir: opts.browserProfileDir,
         browserUrl: opts.browserUrl,
@@ -306,7 +182,9 @@ export function registerMantisCli(qa: Command) {
         repoRoot: opts.repoRoot,
         ttl: opts.ttl,
         videoDurationSeconds: parseOptionalInteger(opts.videoDuration, "--video-duration"),
-      });
+      };
+      const runtime = await loadMantisCliRuntime();
+      await runtime.runMantisDesktopBrowserSmokeCommand(options);
     });
 
   mantis
@@ -351,7 +229,7 @@ export function registerMantisCli(qa: Command) {
       if (opts.approvalCheckpoints && opts.gatewaySetup) {
         throw new Error("--approval-checkpoints cannot be used with --gateway-setup.");
       }
-      await runSlackDesktopSmoke({
+      const options = {
         alternateModel: opts.altModel,
         approvalCheckpoints: opts.approvalCheckpoints,
         crabboxBin: opts.crabboxBin,
@@ -375,55 +253,9 @@ export function registerMantisCli(qa: Command) {
         slackChannelId: opts.slackChannelId,
         slackUrl: opts.slackUrl,
         ttl: opts.ttl,
-      });
-    });
-
-  mantis
-    .command("telegram-desktop-builder")
-    .description(
-      "Lease or reuse a Crabbox VNC desktop, install Telegram Desktop, configure OpenClaw Telegram with a bot token, and capture screenshot/video artifacts",
-    )
-    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .option("--output-dir <path>", "Mantis Telegram desktop builder artifact directory")
-    .option("--crabbox-bin <path>", "Crabbox binary path")
-    .option("--provider <provider>", "Crabbox provider")
-    .option("--machine-class <class>", "Crabbox machine class")
-    .option("--class <class>", "Alias for --machine-class")
-    .option("--lease-id <id>", "Reuse an existing Crabbox lease")
-    .option("--idle-timeout <duration>", "Crabbox idle timeout")
-    .option("--ttl <duration>", "Crabbox maximum lease lifetime")
-    .option("--keep-lease", "Keep a lease created by this run after a passing builder run")
-    .option("--no-keep-lease", "Stop a lease created by this run after a passing builder run")
-    .option("--no-gateway-setup", "Install Telegram Desktop only; do not configure OpenClaw")
-    .option("--credential-source <source>", "Credential source for Telegram setup: env or convex")
-    .option("--credential-role <role>", "Credential role for convex auth")
-    .option("--hydrate-mode <mode>", "Remote hydrate mode: source or prehydrated")
-    .option(
-      "--telegram-profile-archive-env <name>",
-      "Env var containing a base64 .tgz Telegram Desktop profile archive",
-    )
-    .option(
-      "--telegram-profile-dir <remote-path>",
-      "Remote Telegram Desktop profile dir restored before app launch",
-    )
-    .action(async (opts: MantisTelegramDesktopBuilderCommanderOptions) => {
-      await runTelegramDesktopBuilder({
-        crabboxBin: opts.crabboxBin,
-        credentialRole: opts.credentialRole,
-        credentialSource: opts.credentialSource,
-        gatewaySetup: opts.gatewaySetup,
-        hydrateMode: opts.hydrateMode,
-        idleTimeout: opts.idleTimeout,
-        keepLease: opts.keepLease,
-        leaseId: opts.leaseId,
-        machineClass: opts.machineClass ?? opts.class,
-        outputDir: opts.outputDir,
-        provider: opts.provider,
-        repoRoot: opts.repoRoot,
-        telegramProfileArchiveEnv: opts.telegramProfileArchiveEnv,
-        telegramProfileDir: opts.telegramProfileDir,
-        ttl: opts.ttl,
-      });
+      };
+      const runtime = await loadMantisCliRuntime();
+      await runtime.runMantisSlackDesktopSmokeCommand(options);
     });
 
   mantis
@@ -450,7 +282,7 @@ export function registerMantisCli(qa: Command) {
     .option("--vision-timeout-ms <ms>", "Image understanding timeout in milliseconds")
     .option("--expect-text <text>", "Case-insensitive text expected in the vision output")
     .action(async (opts: MantisVisualTaskCommanderOptions) => {
-      await runVisualTask({
+      const options = {
         browserUrl: opts.browserUrl,
         crabboxBin: opts.crabboxBin,
         duration: opts.duration,
@@ -468,7 +300,9 @@ export function registerMantisCli(qa: Command) {
         visionModel: opts.visionModel,
         visionPrompt: opts.visionPrompt,
         visionTimeoutMs: parseOptionalInteger(opts.visionTimeoutMs, "--vision-timeout-ms"),
-      });
+      };
+      const runtime = await loadMantisCliRuntime();
+      await runtime.runMantisVisualTaskCommand(options);
     });
 
   mantis
@@ -489,7 +323,7 @@ export function registerMantisCli(qa: Command) {
     .option("--vision-timeout-ms <ms>", "Image understanding timeout in milliseconds")
     .option("--expect-text <text>", "Case-insensitive text expected in the vision output")
     .action(async (opts: MantisVisualDriverCommanderOptions) => {
-      await runVisualDriver({
+      const options = {
         browserUrl: opts.browserUrl,
         crabboxBin: opts.crabboxBin,
         expectText: opts.expectText,
@@ -502,6 +336,8 @@ export function registerMantisCli(qa: Command) {
         visionModel: opts.visionModel,
         visionPrompt: opts.visionPrompt,
         visionTimeoutMs: parseOptionalInteger(opts.visionTimeoutMs, "--vision-timeout-ms"),
-      });
+      };
+      const runtime = await loadMantisCliRuntime();
+      await runtime.runMantisVisualDriverCommand(options);
     });
 }

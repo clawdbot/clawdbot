@@ -114,6 +114,12 @@ function mount(
       vi.fn(),
       vi.fn(),
       vi.fn(),
+      {
+        weight: errors.contextWeight,
+        loading: false,
+        status: status(),
+      },
+      vi.fn(),
       errors.contextExpanded ?? false,
       errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),
@@ -146,7 +152,9 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(
       [...container.querySelectorAll(".ts-axis-label")].map((label) => label.textContent),
     ).toEqual(expect.arrayContaining(["utc-time", "utc-time"]));
-    expect(container.querySelector(".ts-bar title")?.textContent).toContain("utc-date-time");
+    expect(container.querySelector(".ts-bar")?.getAttribute("data-tooltip")).toContain(
+      "utc-date-time",
+    );
   });
 
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
@@ -185,32 +193,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
       localYear.mockRestore();
       localMonth.mockRestore();
       localDay.mockRestore();
-    }
-  });
-
-  it("ends a local range at the next calendar midnight after a skipped midnight", () => {
-    const previousTimeZone = process.env.TZ;
-    process.env.TZ = "America/Santiago";
-    try {
-      const container = mount(
-        [
-          point({ timestamp: new Date(2026, 8, 6, 1).getTime() }),
-          point({ timestamp: new Date(2026, 8, 6, 12).getTime() }),
-          point({ timestamp: new Date(2026, 8, 7, 0, 30).getTime() }),
-        ],
-        null,
-        null,
-        "total",
-        { startDate: "2026-09-06", endDate: "2026-09-06", timeZone: "local" },
-      );
-
-      expect(container.querySelectorAll(".ts-bar")).toHaveLength(2);
-    } finally {
-      if (previousTimeZone === undefined) {
-        delete process.env.TZ;
-      } else {
-        process.env.TZ = previousTimeZone;
-      }
     }
   });
 
@@ -376,6 +358,15 @@ describe("renderSessionDetailPanel filtered usage", () => {
           injectedChars: 30,
           truncated: false,
         },
+        {
+          name: "AGENTS.md",
+          path: "/AGENTS.md",
+          missing: false,
+          rawChars: 100,
+          injectionStatus: "native_unverified",
+          injectedChars: null,
+          truncated: null,
+        },
       ],
     };
     const onToggleContextExpanded = vi.fn();
@@ -397,7 +388,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     const cards = [...container.querySelectorAll(".context-breakdown-card")];
     expect(
       cards.map((card) => card.querySelector(".context-breakdown-title")?.textContent?.trim()),
-    ).toEqual(["Skills (5)", "Tools (2)", "Files (2)"]);
+    ).toEqual(["Skills (5)", "Tools (2)", "Files (3)"]);
     expect(
       [...(cards[0]?.querySelectorAll(".context-breakdown-item .mono") ?? [])].map(
         (entry) => entry.textContent,
@@ -406,7 +397,13 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(cards[1]?.querySelector(".context-breakdown-item .mono")?.textContent).toBe(
       "larger-tool",
     );
-    expect(cards[2]?.querySelector(".context-breakdown-item .mono")?.textContent).toBe("large.md");
+    const fileEntries = [...(cards[2]?.querySelectorAll(".context-breakdown-item") ?? [])];
+    expect(fileEntries.map((entry) => entry.querySelector(".mono")?.textContent)).toEqual([
+      "large.md",
+      "small.md",
+      "AGENTS.md",
+    ]);
+    expect(fileEntries[2]?.querySelector(".muted")?.textContent).toBe("unknown");
     expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
     container.querySelector<HTMLButtonElement>(".context-breakdown-header button")?.click();
     expect(onToggleContextExpanded).toHaveBeenCalledOnce();

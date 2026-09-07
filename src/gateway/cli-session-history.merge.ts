@@ -1,31 +1,92 @@
 // Imported CLI history merge helpers.
 // Deduplicates external history messages against local OpenClaw transcripts.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  hashCliImageTurnEntryId,
+  readCliImageTurnContext,
+} from "../agents/cli-image-turn-correlation.js";
+import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
-function extractComparableText(message: unknown): string | undefined {
+type ComparableHistoryMessage = {
+  message: unknown;
+  order: number;
+  externalIdentityKey?: string;
+  hasCliImageMentions: boolean;
+  cliImageTurnKey?: string;
+  role?: string;
+  text?: string;
+  timestamp?: number;
+};
+
+type TimestampSummary = {
+  hasMissingTimestamp: boolean;
+  buckets: Map<number, { min: number; max: number }>;
+};
+
+type RoleTextIndex = Map<string, Map<string, TimestampSummary>>;
+
+// Claude records CLI-injected @cache-path suffixes as user text. Keep the
+// stored content intact; this normalized view is only for proving a redundant
+// imported row against the local turn that owns the durable media facts.
+function stripTrailingCliImageMentions(text: string): {
+  text: string;
+  stripped: boolean;
+} {
+  const lines = text.split("\n");
+  let end = lines.length;
+  while (end > 0) {
+    const line = lines[end - 1]?.trim() ?? "";
+    if (!line.startsWith("@") || !isOpenClawCliImageCachePath(line.slice(1))) {
+      break;
+    }
+    end -= 1;
+  }
+  return end === lines.length
+    ? { text, stripped: false }
+    : { text: lines.slice(0, end).join("\n").trimEnd(), stripped: true };
+}
+
+function isClaudeCliImportedUserMessage(message: unknown, role: string | undefined): boolean {
+  if (role !== "user") {
+    return false;
+  }
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  return normalizeOptionalString(meta?.importedFrom) === "claude-cli";
+}
+
+function extractComparableText(
+  message: unknown,
+  role: string | undefined,
+): {
+  hasCliImageMentions: boolean;
+  cliImageTurnKey?: string;
+  text?: string;
+} {
   if (!message || typeof message !== "object") {
-    return undefined;
+    return { hasCliImageMentions: false };
   }
   const record = message as { role?: unknown; text?: unknown; content?: unknown };
-  const role = readStringValue(record.role);
   const parts: string[] = [];
   const text = readStringValue(record.text);
   if (text !== undefined) {
     parts.push(text);
   }
-  const content = readStringValue(record.content);
+  const rawContent = record.content;
+  const content = readStringValue(rawContent);
   if (content !== undefined) {
     parts.push(content);
-  } else if (Array.isArray(record.content)) {
-    for (const block of record.content) {
+  } else if (Array.isArray(rawContent)) {
+    for (const block of rawContent) {
       if (block && typeof block === "object" && "text" in block) {
         const blockText = readStringValue(block.text);
         if (blockText !== undefined) {
@@ -35,110 +96,152 @@ function extractComparableText(message: unknown): string | undefined {
     }
   }
   if (parts.length === 0) {
-    return undefined;
+    return { hasCliImageMentions: false };
   }
   const joined = parts.join("\n").trim();
   if (!joined) {
-    return undefined;
+    return { hasCliImageMentions: false };
   }
+  const stripResult = isClaudeCliImportedUserMessage(message, role)
+    ? stripTrailingCliImageMentions(joined)
+    : { text: joined, stripped: false };
   const visible = stripInlineDirectiveTagsForDisplay(
-    role === "user" ? stripInboundMetadata(joined) : joined,
+    role === "user" ? stripInboundMetadata(stripResult.text) : stripResult.text,
   ).text;
   const normalized = visible.replace(/\s+/g, " ").trim();
-  return normalized || undefined;
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
+  return {
+    hasCliImageMentions: stripResult.stripped,
+    ...(stripResult.stripped && isClaudeCliImportedUserMessage(message, role)
+      ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
+      : {}),
+    ...(normalized ? { text: normalized } : {}),
+  };
 }
 
-function resolveComparableTimestamp(message: unknown): number | undefined {
+function prepareComparableMessage(
+  message: unknown,
+  order: number,
+  externalIdentityKey: string | undefined,
+): ComparableHistoryMessage {
   if (!message || typeof message !== "object") {
-    return undefined;
+    return { message, order, hasCliImageMentions: false };
   }
-  return asFiniteNumber((message as { timestamp?: unknown }).timestamp);
-}
-
-function resolveComparableRole(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  return readStringValue((message as { role?: unknown }).role);
+  const record = message as { role?: unknown; timestamp?: unknown };
+  const role = readStringValue(record.role);
+  const comparableText = extractComparableText(message, role);
+  return {
+    message,
+    order,
+    externalIdentityKey,
+    hasCliImageMentions: comparableText.hasCliImageMentions,
+    ...(comparableText.cliImageTurnKey ? { cliImageTurnKey: comparableText.cliImageTurnKey } : {}),
+    role,
+    text: comparableText.text,
+    timestamp: asFiniteNumber(record.timestamp),
+  };
 }
 
 // External identity survives text edits, so it is the strongest match signal
 // for imported messages from Claude CLI or similar external histories.
-type ImportedExternalIdentity = {
-  externalId: string;
-  importedFrom?: string;
-  cliSessionId?: string;
-};
-
-function resolveImportedExternalIdentity(message: unknown): ImportedExternalIdentity | undefined {
+function resolveImportedExternalIdentityKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  const meta =
-    "__openclaw" in message &&
-    (message as { __openclaw?: unknown })["__openclaw"] &&
-    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object"
-      ? ((message as { __openclaw?: Record<string, unknown> })["__openclaw"] ?? {})
-      : undefined;
-  const externalId = normalizeOptionalString(meta?.externalId);
+  const rawMeta = (message as { __openclaw?: unknown })["__openclaw"];
+  if (!rawMeta || typeof rawMeta !== "object") {
+    return undefined;
+  }
+  const externalId = normalizeOptionalString((rawMeta as { externalId?: unknown }).externalId);
   return externalId
-    ? {
+    ? JSON.stringify([
         externalId,
-        importedFrom: normalizeOptionalString(meta?.importedFrom),
-        cliSessionId: normalizeOptionalString(meta?.cliSessionId),
-      }
+        normalizeOptionalString((rawMeta as { importedFrom?: unknown }).importedFrom),
+        normalizeOptionalString((rawMeta as { cliSessionId?: unknown }).cliSessionId),
+      ])
     : undefined;
 }
 
-function hasSameExternalIdentity(existing: unknown, imported: unknown): boolean | undefined {
-  const importedIdentity = resolveImportedExternalIdentity(imported);
-  const existingIdentity = resolveImportedExternalIdentity(existing);
-  if (!importedIdentity || !existingIdentity) {
-    return undefined;
+function addTimestampToSummary(summary: TimestampSummary, timestamp: number | undefined): void {
+  if (timestamp === undefined) {
+    summary.hasMissingTimestamp = true;
+    return;
   }
+  const bucketKey = Math.floor(timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
+  const bucket = summary.buckets.get(bucketKey);
+  if (bucket) {
+    bucket.min = Math.min(bucket.min, timestamp);
+    bucket.max = Math.max(bucket.max, timestamp);
+  } else {
+    summary.buckets.set(bucketKey, { min: timestamp, max: timestamp });
+  }
+}
+
+function summaryHasTimestampMatch(
+  summary: TimestampSummary | undefined,
+  timestamp: number | undefined,
+): boolean {
+  if (!summary || timestamp === undefined) {
+    return false;
+  }
+  const bucketKey = Math.floor(timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
+  if (summary.buckets.has(bucketKey)) {
+    return true;
+  }
+  const previous = summary.buckets.get(bucketKey - 1);
+  if (previous && previous.max >= timestamp - DEDUPE_TIMESTAMP_WINDOW_MS) {
+    return true;
+  }
+  const next = summary.buckets.get(bucketKey + 1);
+  return next !== undefined && next.min <= timestamp + DEDUPE_TIMESTAMP_WINDOW_MS;
+}
+
+function summaryMatchesTimestamp(
+  summary: TimestampSummary | undefined,
+  timestamp: number | undefined,
+): boolean {
   return (
-    importedIdentity.externalId === existingIdentity.externalId &&
-    importedIdentity.importedFrom === existingIdentity.importedFrom &&
-    importedIdentity.cliSessionId === existingIdentity.cliSessionId
+    Boolean(summary && (timestamp === undefined || summary.hasMissingTimestamp)) ||
+    summaryHasTimestampMatch(summary, timestamp)
   );
 }
 
-function isEquivalentImportedMessage(existing: unknown, imported: unknown): boolean {
-  // Text is a fallback only when either message lacks authoritative source identity.
-  const sameExternalIdentity = hasSameExternalIdentity(existing, imported);
-  if (sameExternalIdentity !== undefined) {
-    return sameExternalIdentity;
+function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): void {
+  if (!entry.role || !entry.text) {
+    return;
   }
-
-  const existingRole = resolveComparableRole(existing);
-  const importedRole = resolveComparableRole(imported);
-  if (!existingRole || existingRole !== importedRole) {
-    return false;
+  let byText = index.get(entry.role);
+  if (!byText) {
+    byText = new Map();
+    index.set(entry.role, byText);
   }
-
-  const existingText = extractComparableText(existing);
-  const importedText = extractComparableText(imported);
-  if (!existingText || !importedText || existingText !== importedText) {
-    return false;
+  let summary = byText.get(entry.text);
+  if (!summary) {
+    summary = { hasMissingTimestamp: false, buckets: new Map() };
+    byText.set(entry.text, summary);
   }
-
-  const existingTimestamp = resolveComparableTimestamp(existing);
-  const importedTimestamp = resolveComparableTimestamp(imported);
-  if (existingTimestamp === undefined || importedTimestamp === undefined) {
-    return true;
-  }
-
-  return Math.abs(existingTimestamp - importedTimestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS;
+  addTimestampToSummary(summary, entry.timestamp);
 }
 
-function compareHistoryMessages(
-  a: { message: unknown; order: number },
-  b: { message: unknown; order: number },
-): number {
-  const aTimestamp = resolveComparableTimestamp(a.message);
-  const bTimestamp = resolveComparableTimestamp(b.message);
-  if (aTimestamp !== undefined && bTimestamp !== undefined && aTimestamp !== bTimestamp) {
-    return aTimestamp - bTimestamp;
+function hasRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): boolean {
+  if (!entry.role || !entry.text) {
+    return false;
+  }
+  return summaryMatchesTimestamp(index.get(entry.role)?.get(entry.text), entry.timestamp);
+}
+
+function hasLocalImageMediaFacts(entry: ComparableHistoryMessage): boolean {
+  if (entry.role !== "user") {
+    return false;
+  }
+  const message = asOptionalRecord(entry.message);
+  return message ? (readPersistedMediaFacts(message) ?? []).some(isImageMediaFact) : false;
+}
+
+function compareHistoryMessages(a: ComparableHistoryMessage, b: ComparableHistoryMessage): number {
+  if (a.timestamp !== undefined && b.timestamp !== undefined && a.timestamp !== b.timestamp) {
+    return a.timestamp - b.timestamp;
   }
   return a.order - b.order;
 }
@@ -151,13 +254,56 @@ export function mergeImportedChatHistoryMessages(params: {
   if (params.importedMessages.length === 0) {
     return params.localMessages;
   }
-  const merged = params.localMessages.map((message, index) => ({ message, order: index }));
-  let nextOrder = merged.length;
-  for (const imported of params.importedMessages) {
-    if (merged.some((existing) => isEquivalentImportedMessage(existing.message, imported))) {
+  const merged = params.localMessages.map((message, order) =>
+    prepareComparableMessage(message, order, resolveImportedExternalIdentityKey(message)),
+  );
+  const exactExternalIdentityIndex = new Set<string>();
+  const allMessageRoleTextIndex: RoleTextIndex = new Map();
+  const identitylessRoleTextIndex: RoleTextIndex = new Map();
+  const localImageMediaCounts = new Map<string, number>();
+  const indexEntry = (entry: ComparableHistoryMessage) => {
+    if (entry.externalIdentityKey) {
+      exactExternalIdentityIndex.add(entry.externalIdentityKey);
+    } else {
+      addRoleTextCandidate(identitylessRoleTextIndex, entry);
+    }
+    addRoleTextCandidate(allMessageRoleTextIndex, entry);
+  };
+  for (const entry of merged) {
+    indexEntry(entry);
+    if (!hasLocalImageMediaFacts(entry)) {
       continue;
     }
-    merged.push({ message: imported, order: nextOrder });
+    const localMeta = asOptionalRecord(asOptionalRecord(entry.message)?.["__openclaw"]);
+    const localEntryId = normalizeOptionalString(localMeta?.id);
+    const turnKey = localEntryId ? hashCliImageTurnEntryId(localEntryId) : entry.cliImageTurnKey;
+    if (turnKey) {
+      localImageMediaCounts.set(turnKey, (localImageMediaCounts.get(turnKey) ?? 0) + 1);
+    }
+  }
+  let nextOrder = merged.length;
+  for (const message of params.importedMessages) {
+    const externalIdentityKey = resolveImportedExternalIdentityKey(message);
+    if (externalIdentityKey && exactExternalIdentityIndex.has(externalIdentityKey)) {
+      continue;
+    }
+    const imported = prepareComparableMessage(message, nextOrder, externalIdentityKey);
+    const turnKey = imported.hasCliImageMentions ? imported.cliImageTurnKey : undefined;
+    const matches = turnKey ? localImageMediaCounts.get(turnKey) : undefined;
+    if (turnKey && matches) {
+      // Each local image turn suppresses one import. Counts preserve repeated
+      // keys without retaining or shifting rows that matching never inspects.
+      localImageMediaCounts.set(turnKey, matches - 1);
+      continue;
+    }
+    const duplicate = imported.externalIdentityKey
+      ? hasRoleTextCandidate(identitylessRoleTextIndex, imported)
+      : hasRoleTextCandidate(allMessageRoleTextIndex, imported);
+    if (!imported.hasCliImageMentions && duplicate) {
+      continue;
+    }
+    merged.push(imported);
+    indexEntry(imported);
     nextOrder += 1;
   }
   merged.sort(compareHistoryMessages);

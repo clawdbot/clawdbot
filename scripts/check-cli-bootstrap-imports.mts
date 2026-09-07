@@ -4,17 +4,20 @@
 import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parse, type Node as AcornNode } from "acorn";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
 const WORKER_DEPLOY_ENTRYPOINTS = [
   `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
   `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+  `dist/worker/${WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH}`,
 ] as const;
 const DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES = 70 * 1024;
 const GATEWAY_RUN_CHUNK_MARKER_SETS = [
@@ -28,7 +31,8 @@ const GATEWAY_RUN_FORBIDDEN_STATIC_IMPORTS = [
   "process-respawn",
   "restart-sentinel",
   "server-close",
-  "server-reload-handlers",
+  "server-reload-hot",
+  "server-reload-managed",
 ];
 const STATIC_IMPORT_RE =
   /\b(?:import|export)\s+(?:(?:[^'"()]*?\s+from\s+)|)["'](?<specifier>[^"']+)["']/gu;
@@ -36,15 +40,13 @@ const STATIC_IMPORT_RE =
 type CliBootstrapCheckParams = {
   rootDir?: string;
   entrypoints?: string[];
+  workerDeployEntrypoints?: readonly string[];
   distDir?: string;
   gatewayRunChunkMaxBytes?: number;
+  legacyGatewayChunkDiscovery?: boolean;
   fs?: typeof fs;
   logger?: { error(message: string): void };
 };
-
-function isMainModule() {
-  return process.argv[1] ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
-}
 
 function isBuiltinSpecifier(specifier: string) {
   return specifier.startsWith("node:") || module.isBuiltin(specifier);
@@ -274,7 +276,7 @@ function listJsFiles(dirPath: string, fsImpl: typeof fs = fs): string[] {
       files.push(...listJsFiles(fullPath, fsImpl));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith(".js")) {
+    if (entry.isFile() && /\.m?js$/u.test(entry.name)) {
       files.push(fullPath);
     }
   }
@@ -289,21 +291,33 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
   const fsImpl = params.fs ?? fs;
   const distDir = path.resolve(rootDir, params.distDir ?? "dist");
   const maxBytes = params.gatewayRunChunkMaxBytes ?? DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES;
-  const chunks = [];
+  let chunks: Array<{ filePath: string; source: string }> = [];
+  if (params.legacyGatewayChunkDiscovery) {
+    // Current release tooling also qualifies frozen targets predating build-owned locators.
+    // Only that explicit caller may retain the historical full-tree discovery contract.
 
-  for (const filePath of listJsFiles(distDir, fsImpl)) {
-    let source;
-    try {
-      source = fsImpl.readFileSync(filePath, "utf8");
-    } catch {
-      continue;
+    for (const filePath of listJsFiles(distDir, fsImpl)) {
+      let source;
+      try {
+        source = fsImpl.readFileSync(filePath, "utf8");
+      } catch {
+        continue;
+      }
+      if (
+        GATEWAY_RUN_CHUNK_MARKER_SETS.some((markers) =>
+          markers.every((marker) => source.includes(marker)),
+        )
+      ) {
+        chunks.push({ filePath, source });
+      }
     }
-    if (
-      GATEWAY_RUN_CHUNK_MARKER_SETS.some((markers) =>
-        markers.every((marker) => source.includes(marker)),
-      )
-    ) {
-      chunks.push({ filePath, source });
+  } else {
+    try {
+      chunks = readGatewayRunChunks(distDir, fsImpl);
+    } catch (error) {
+      return [
+        `CLI bootstrap import guard could not read gateway run chunk metadata: ${error instanceof Error ? error.message : String(error)}. Run pnpm build first.`,
+      ];
     }
   }
 
@@ -356,10 +370,10 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
 export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParams = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const entrypoints = WORKER_DEPLOY_ENTRYPOINTS.map((entrypoint) =>
-    path.resolve(rootDir, entrypoint),
+  const entrypoints = (params.workerDeployEntrypoints ?? WORKER_DEPLOY_ENTRYPOINTS).map(
+    (entrypoint) => path.resolve(rootDir, entrypoint),
   );
-  const artifactDir = path.dirname(entrypoints[0]!);
+  const artifactDir = path.resolve(rootDir, "dist/worker");
   const artifactNames = new Set(
     entrypoints.flatMap((entrypoint) => {
       const name = path.basename(entrypoint);
@@ -403,7 +417,10 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
         );
       }
     }
-  } catch {
+  } catch (error) {
+    if (entrypoints.length === 0 && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
     errors.push(
       `Worker deploy artifact directory ${path.relative(rootDir, artifactDir)} is unreadable.`,
     );
@@ -449,7 +466,7 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
   throw new Error("CLI bootstrap static graph imports external packages.");
 }
 
-if (isMainModule()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     checkCliBootstrapExternalImports();
     console.log("CLI bootstrap import guard passed.");

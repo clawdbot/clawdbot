@@ -67,6 +67,7 @@ export async function installBundledPluginSource(params: {
   warning?: string;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
+  beforePersistentApply?: () => void;
 }): Promise<{ pluginId: string; warnings: string[] }> {
   // Bundled plugins with required config are recorded but not enabled until config validates.
   const existingEntry = params.snapshot.config.plugins?.entries?.[params.bundledSource.pluginId];
@@ -90,6 +91,7 @@ export async function installBundledPluginSource(params: {
     Boolean(warning),
   );
   await persistPluginInstall({
+    ...params,
     snapshot: {
       ...params.snapshot,
       config: configBase,
@@ -102,9 +104,7 @@ export async function installBundledPluginSource(params: {
       installPath: params.bundledSource.localPath,
     },
     enable: shouldEnable,
-    invalidateRuntimeCache: params.invalidateRuntimeCache,
     ...(warnings.length > 0 ? { warningMessage: warnings.join("\n") } : {}),
-    runtime: params.runtime,
   });
   return { pluginId: params.bundledSource.pluginId, warnings };
 }

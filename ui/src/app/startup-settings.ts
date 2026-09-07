@@ -1,12 +1,19 @@
+import {
+  normalizeGatewayClientId,
+  normalizeGatewayClientMode,
+} from "@openclaw/gateway-protocol/client-info";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 // Control UI startup settings resolve native auth handoff and URL parameters.
 import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
   type ControlUiBootstrapProfileHint,
-} from "../../../src/gateway/control-ui-contract.js";
+} from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
-import type { UiSettings } from "./settings.ts";
+import { resolveGatewayCredentialsForUrlEdit, type UiSettings } from "./settings.ts";
 
 type ApplicationStartupLocation = {
   pathname: string;
@@ -18,7 +25,20 @@ type NativeControlAuth = {
   gatewayUrl?: string | null;
   token?: string | null;
   password?: string | null;
+  client?: {
+    id?: string | null;
+    mode?: string | null;
+    platform?: string | null;
+    deviceFamily?: string | null;
+    instanceId?: string | null;
+    scopes?: unknown;
+  } | null;
 };
+
+type NativeGatewayClientOptions = Pick<
+  GatewayBrowserClientOptions,
+  "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+>;
 
 type ApplicationStartupSettings = {
   settings: UiSettings;
@@ -28,6 +48,7 @@ type ApplicationStartupSettings = {
   pendingBootstrapToken: string | null;
   pendingBootstrapProfile: ControlUiBootstrapProfileHint | null;
   queryTokenUsed: boolean;
+  nativeClient: NativeGatewayClientOptions | null;
   location: ApplicationStartupLocation;
   changed: boolean;
 };
@@ -36,6 +57,27 @@ declare global {
   interface Window {
     __OPENCLAW_NATIVE_CONTROL_AUTH__?: NativeControlAuth;
   }
+}
+
+export function normalizeLegacyTerminalViewLocation(
+  location: ApplicationStartupLocation,
+  basePath: string,
+): ApplicationStartupLocation {
+  const applicationRoot = basePath ? `${basePath}/` : "/";
+  if (location.pathname !== applicationRoot) {
+    return location;
+  }
+  const searchParams = new URLSearchParams(location.search);
+  if (searchParams.get("view") !== "terminal") {
+    return location;
+  }
+  searchParams.delete("view");
+  const search = searchParams.toString();
+  return {
+    pathname: buildControlUiFocusPath({ kind: "terminal" }, basePath),
+    search: search ? `?${search}` : "",
+    hash: location.hash,
+  };
 }
 
 export function resolveApplicationStartupSettings(
@@ -50,6 +92,7 @@ export function resolveApplicationStartupSettings(
   let pendingBootstrapToken: string | null = null;
   let pendingBootstrapProfile: ControlUiBootstrapProfileHint | null = null;
   let queryTokenUsed = false;
+  let nativeClient: NativeGatewayClientOptions | null = null;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
     const entries = Object.entries(patch) as Array<
@@ -74,9 +117,40 @@ export function resolveApplicationStartupSettings(
     const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
     const token = normalizeOptionalString(nativeAuth.token);
     const nativePassword = normalizeOptionalString(nativeAuth.password);
+    const credentials = gatewayUrl
+      ? resolveGatewayCredentialsForUrlEdit(settings.gatewayUrl, gatewayUrl, {
+          token: settings.token,
+          password: "",
+        })
+      : null;
+    const client = nativeAuth.client;
+    const clientName = normalizeGatewayClientId(normalizeOptionalString(client?.id));
+    const mode = normalizeGatewayClientMode(normalizeOptionalString(client?.mode));
+    const platform = normalizeOptionalString(client?.platform);
+    const deviceFamily = normalizeOptionalString(client?.deviceFamily);
+    const instanceId = normalizeOptionalString(client?.instanceId);
+    const scopes = Array.isArray(client?.scopes)
+      ? uniqueStrings(client.scopes.flatMap((scope) => normalizeOptionalString(scope) ?? []))
+      : [];
+    if (clientName && mode && platform && deviceFamily && scopes.length > 0) {
+      nativeClient = {
+        clientName,
+        mode,
+        platform,
+        deviceFamily,
+        ...(instanceId ? { instanceId } : {}),
+        scopes,
+      };
+    }
     updateSettings({
       ...(gatewayUrl ? { gatewayUrl } : {}),
-      ...(token ? { token } : {}),
+      // An explicit null retires shared-owner auth for the native browser sign-in
+      // route; an omitted token still preserves the selected Gateway's credentials.
+      ...(nativeAuth.token === null || token
+        ? { token: token ?? "" }
+        : credentials
+          ? { token: credentials.token }
+          : {}),
     });
     if (nativePassword) {
       password = nativePassword;
@@ -92,6 +166,7 @@ export function resolveApplicationStartupSettings(
       pendingBootstrapToken,
       pendingBootstrapProfile,
       queryTokenUsed,
+      nativeClient,
       location,
       changed,
     };
@@ -197,6 +272,7 @@ export function resolveApplicationStartupSettings(
     pendingBootstrapToken,
     pendingBootstrapProfile,
     queryTokenUsed,
+    nativeClient,
     location: shouldCleanUrl
       ? {
           pathname: url.pathname,

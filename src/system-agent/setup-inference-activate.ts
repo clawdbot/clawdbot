@@ -1,37 +1,42 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
 } from "../agents/cli-credentials.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
-import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { createMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../utils.js";
+import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
+import {
+  WizardCancelledError,
+  WizardNavigationError,
+  type WizardProgress,
+} from "../wizard/prompts.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
+import { loadSetupInferencePluginGeneration } from "./revalidate-inference-owner.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
+  createSetupInferenceCandidateStager,
   persistActivatedSetupInference,
   type SetupInferenceActivationPersistenceState,
 } from "./setup-inference-activate-persist.js";
 import {
-  AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT,
   type ActivateSetupInferenceParams,
   type ActivateSetupInferenceResult,
   SetupInferenceActivationIndeterminateError,
@@ -39,24 +44,35 @@ import {
   SetupInferenceCancelledError,
   SetupInferenceOwnerDriftError,
   invalidSetupConfigError,
+  redactSetupInferenceError,
   resolveSetupInferenceWorkspace,
   throwIfSetupInferenceCancelled,
 } from "./setup-inference-core.js";
-import { revalidateStableSetupInferenceOwner } from "./setup-inference-owner.js";
+import {
+  revalidateStableSetupInferenceOwner,
+  validateSetupInferenceOwnerEvidence,
+} from "./setup-inference-owner.js";
 import {
   cleanupSetupInferenceTempDir,
   persistManualAuthProfiles,
-  reloadCodexRegistryAfterActivation,
+  restoreSetupPluginMetadata,
   retainUnownedCodexInstall,
-  runSetupInferenceTest,
 } from "./setup-inference-persist.js";
 import {
   configureCodexCliPreparedAuth,
+  parseRef,
   projectSetupTargetModelMetadata,
   resolveSetupAgentRuntimeId,
 } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
+import {
+  applySetupNativeSessionCatalogPreference,
+  requiresSetupNativeSessionCatalogConsent,
+  listSetupNativeSessionCatalogs,
+  resolveSetupNativeSessionCatalogPreference,
+} from "./setup-native-session-catalogs.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   type SystemAgentOwnerPluginArtifactSnapshot,
@@ -71,7 +87,12 @@ import {
 export async function activateSetupInference(
   params: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
-  const codexCliApiKey = resolveCodexCliSetupApiKey(params);
+  const codexCliApiKey =
+    params.kind === "codex-cli"
+      ? (params.deps?.readCodexCliActiveApiKey ?? readCodexCliActiveApiKey)({
+          allowKeychainPrompt: true,
+        })
+      : null;
   try {
     const result = await activateSetupInferenceUnredacted(params, codexCliApiKey ?? undefined);
     if (result.ok) {
@@ -91,6 +112,12 @@ export async function activateSetupInference(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const redacted = await redactSetupInferenceError(message, params.apiKey, codexCliApiKey?.key);
+    if (error instanceof WizardCancelledError) {
+      throw new WizardCancelledError(redacted);
+    }
+    if (error instanceof WizardNavigationError) {
+      throw new WizardNavigationError(error.direction);
+    }
     if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
       return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
     }
@@ -113,6 +140,12 @@ async function activateSetupInferenceUnredacted(
   codexCliApiKey?: CodexCliApiKeyCredential,
 ): Promise<ActivateSetupInferenceResult> {
   const deps = params.deps ?? {};
+  const beforePersistentEffect = async () => {
+    throwIfSetupInferenceCancelled(params);
+    await params.beforePersistentEffect?.();
+    throwIfSetupInferenceCancelled(params);
+  };
+  const resolveRouteMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot;
   const readSnapshot =
     deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
   const snapshot = await readSnapshot();
@@ -125,15 +158,10 @@ async function activateSetupInferenceUnredacted(
   // The source snapshot includes raw compatibility migrations for comparison,
   // while the writer still projects changes back onto the untouched authored bytes.
   const sourceCfg: OpenClawConfig = snapshot.sourceConfig ?? snapshot.config;
-  const routeAgentId = resolveSystemAgentTargetAgentId(cfg, params.agentId);
+  const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
   const workspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace)
-    : (
-        await resolveSetupInferenceWorkspace({
-          configExists: snapshot.exists,
-          configValid: snapshot.valid,
-        })
-      ).workspace;
+    : resolveSetupInferenceWorkspace(snapshot);
 
   const tempDir = await (
     deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
@@ -141,11 +169,13 @@ async function activateSetupInferenceUnredacted(
   const testAgentDir = path.join(tempDir, "agent");
   let pendingCodexInstall: PluginInstallRecord | undefined;
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
-  let codexRegistryNeedsReload = false;
-  let codexRegistryReloaded = false;
-  let codexProbePluginRegistry: PluginRegistry | undefined;
+  let codexMetadataNeedsRestore = false;
+  let verificationProgress: WizardProgress | undefined;
+  let probePluginGeneration: ReturnType<typeof loadSetupInferencePluginGeneration> | undefined;
+  const withProbePluginGeneration = <T>(run: () => T): T =>
+    probePluginGeneration ? withPluginRuntimeGenerationScope(probePluginGeneration, run) : run();
   try {
-    const plan = await buildTestPlan({
+    const builtPlan = await buildTestPlan({
       kind: params.kind,
       ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
       ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
@@ -156,30 +186,60 @@ async function activateSetupInferenceUnredacted(
       pluginWorkspaceDir: workspace,
       agentDir: testAgentDir,
       runtime: params.runtime,
+      beforePersistentEffect,
       ...(params.prompter ? { prompter: params.prompter } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.isCancelled ? { isCancelled: params.isCancelled } : {}),
       ...(params.kind === "provider-auth"
-        ? { isRemoteProviderAuth: params.surface === "gateway" }
+        ? { isRemoteProviderAuth: params.isRemoteProviderAuth ?? params.surface === "gateway" }
         : {}),
       ...(codexCliApiKey ? { codexCliApiKey } : {}),
       deps,
       routeAgentId,
     });
-    if ("error" in plan) {
+    if ("error" in builtPlan) {
       return {
         ok: false,
-        status: plan.status ?? "unavailable",
-        error: plan.error,
+        status: builtPlan.status ?? "unavailable",
+        error: builtPlan.error,
+      };
+    }
+    let plan = builtPlan;
+    const catalogConsentRequired = requiresSetupNativeSessionCatalogConsent({
+      configExists: snapshot.exists,
+      config: sourceCfg,
+      catalogs: listSetupNativeSessionCatalogs({ config: sourceCfg, workspaceDir: workspace }),
+    });
+    const catalogPreference = resolveSetupNativeSessionCatalogPreference({
+      consentRequired: catalogConsentRequired,
+      ...(params.nativeSessionCatalogsEnabled !== undefined
+        ? { requested: params.nativeSessionCatalogsEnabled }
+        : {}),
+    });
+    if (catalogPreference !== undefined) {
+      const preferenceConfig = applySetupNativeSessionCatalogPreference({
+        config: plan.config,
+        enabled: catalogPreference,
+        workspaceDir: workspace,
+      });
+      plan = {
+        ...plan,
+        config: preferenceConfig,
+        manualAuth: {
+          profiles: plan.manualAuth?.profiles ?? [],
+          sourceConfigBase: sourceCfg,
+          configPatch: createMergePatch(cfg, preferenceConfig),
+          ...(plan.manualAuth?.pluginId ? { pluginId: plan.manualAuth.pluginId } : {}),
+        },
       };
     }
 
     const hasPreparedAuthProfiles = (plan.manualAuth?.profiles.length ?? 0) > 0;
     let testPlan = plan;
     if (plan.persistModelRef) {
-      const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
+      const agentRuntimeId = plan.selectedAgentRuntimeId ?? resolveSetupAgentRuntimeId(params.kind);
       const stagedConfig = await applySystemAgentModelSelection({
-        config: plan.config,
+        config: testPlan.config,
         model: plan.persistModelRef,
         ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
@@ -188,149 +248,225 @@ async function activateSetupInferenceUnredacted(
       testPlan = {
         ...plan,
         config: stagedConfig,
-        routeAgentId: resolveSystemAgentTargetAgentId(stagedConfig, params.agentId),
+        routeAgentId: resolveAmbientOwnerAgentId(stagedConfig, params.agentId),
       };
     }
 
     let codexPluginPatch: unknown;
     if (params.kind === "codex-cli") {
-      const { stripPendingPluginInstallRecords } =
-        await import("../plugins/install-record-commit.js");
-      // This explicit Codex CLI choice owns its runtime independently of the
-      // user's existing OpenAI provider route (which may use a custom base URL).
-      const codexInstallBase = stripPendingPluginInstallRecords(testPlan.config);
-      const enabledCodexBase = enablePluginInConfig(
-        normalizePluginTargetConfig(codexInstallBase, "codex"),
-        "codex",
-      );
-      if (!enabledCodexBase.enabled) {
-        return {
-          ok: false,
-          status: "unavailable",
-          error: `Could not enable the Codex runtime plugin: ${enabledCodexBase.reason ?? "plugin disabled"}.`,
-        };
-      }
-      const ensureCodex =
-        deps.ensureCodexRuntimePlugin ??
-        (await import("../commands/codex-runtime-plugin-install.js"))
-          .ensureCodexRuntimePluginForModelSelection;
-      const ensured = await ensureCodex({
-        cfg: enabledCodexBase.config,
-        model: plan.modelRef,
-        agentId: testPlan.routeAgentId,
-        prompter: createQuickstartNotePrompter(params.runtime),
-        runtime: params.runtime,
-        workspaceDir: tempDir,
-      });
-      if (!ensured.installed) {
-        return {
-          ok: false,
-          status: ensured.status === "timed_out" ? "timeout" : "unavailable",
-          error:
-            ensured.status === "timed_out"
-              ? "Codex runtime plugin installation timed out. Try again."
-              : ensured.reason
-                ? `Could not enable the Codex runtime plugin: ${ensured.reason}.`
-                : "Could not install the Codex runtime plugin. Try again once the plugin is available.",
-        };
-      }
-      codexRegistryNeedsReload = true;
-      pendingCodexInstall = ensured.cfg.plugins?.installs?.codex;
-      if (pendingCodexInstall) {
-        // The managed package exists before inference can run. Mark this
-        // generation retained now so a process exit cannot strand unowned bytes.
-        const codexInstallRetained = await retainUnownedCodexInstall({
-          record: pendingCodexInstall,
-          verifyOwnership: false,
-          deps,
-        });
-        if (!codexInstallRetained) {
-          return {
-            ok: false,
-            status: "unavailable",
-            error:
-              "Could not retain the staged Codex runtime safely. No inference route was changed; retry after checking the plugin storage directory.",
-          };
-        }
-      }
-      const normalizedCodexConfig = normalizePluginTargetConfig(ensured.cfg, "codex");
-      const enabledCodex = enablePluginInConfig(
-        configureCodexCliPreparedAuth(normalizedCodexConfig),
-        "codex",
-      );
-      if (!enabledCodex.enabled) {
-        return {
-          ok: false,
-          status: "unavailable",
-          error: `Could not enable the Codex runtime plugin: ${enabledCodex.reason ?? "plugin disabled"}.`,
-        };
-      }
-      // Discovery needs the just-installed package record during the probe, but
-      // install ownership remains transient until inference succeeds.
-      const stagedCodexConfig = enabledCodex.config;
-      codexPluginPatch = createMergePatch(
-        codexInstallBase,
-        stripPendingPluginInstallRecords(stagedCodexConfig),
-      );
-      testPlan = {
-        ...testPlan,
-        config: stagedCodexConfig,
-      };
-
-      // The Gateway registry predates a runtime installed by this request.
-      // Retain the refreshed generation for both owner capture and the live probe.
-      const refreshPluginRegistry =
-        deps.refreshPluginRegistryAfterConfigMutation ??
-        (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
-      let registryRefreshWarning: string | undefined;
-      await refreshPluginRegistry({
-        config: testPlan.config,
-        reason: "source-changed",
-        workspaceDir: workspace,
-        policyPluginIds: ["codex"],
-        traceCommand: "openclaw-setup-probe",
-        logger: { warn: (message) => (registryRefreshWarning = message) },
-      });
-      try {
-        codexProbePluginRegistry = loadAgentRuntimePluginRegistryHandle({
-          config: testPlan.config,
-          workspaceDir: tempDir,
-          selections: [
+      // Keep the reviewed package stable until its prepared registry handle is captured.
+      const preparationFailure = await withPluginLifecycleLease(
+        { signal: params.signal },
+        async (): Promise<ActivateSetupInferenceResult | undefined> => {
+          const { stripPendingPluginInstallRecords } =
+            await import("../plugins/install-record-commit.js");
+          // This explicit Codex CLI choice owns its runtime independently of the
+          // user's existing OpenAI provider route (which may use a custom base URL).
+          const codexInstallBase = stripPendingPluginInstallRecords(testPlan.config);
+          const enabledCodexBase = await enablePluginWithCapabilityConsent(
+            normalizePluginTargetConfig(codexInstallBase, "codex"),
+            "codex",
             {
-              provider: testPlan.provider,
-              modelId: testPlan.model,
-              runtime: "codex",
-              agentId: testPlan.routeAgentId,
+              workspaceDir: workspace,
+              onCapabilityConsent: params.prompter
+                ? createPluginCapabilityConsentPrompter(params.prompter)
+                : undefined,
+              beforePersistentEffect,
             },
-          ],
-        });
-        if (!codexProbePluginRegistry) {
-          throw new Error("The Codex runtime plugin registry is unavailable.");
-        }
-      } catch (error) {
-        const loadError = `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`;
-        return {
-          ok: false,
-          status: "unavailable",
-          error: registryRefreshWarning ? `${registryRefreshWarning} ${loadError}` : loadError,
-        };
+          );
+          if (!enabledCodexBase.enabled) {
+            return {
+              ok: false,
+              status: "unavailable",
+              error: `Could not enable the Codex runtime plugin: ${enabledCodexBase.reason ?? "plugin disabled"}.`,
+            };
+          }
+          const ensureCodex =
+            deps.ensureCodexRuntimePlugin ??
+            (await import("../commands/codex-runtime-plugin-install.js"))
+              .ensureCodexRuntimePluginForModelSelection;
+          const ensured = await ensureCodex({
+            cfg: enabledCodexBase.config,
+            model: plan.modelRef,
+            agentId: testPlan.routeAgentId,
+            prompter: params.prompter ?? createQuickstartNotePrompter(params.runtime),
+            runtime: params.runtime,
+            workspaceDir: tempDir,
+            reviewOfficialArtifacts: true,
+            beforePersistentEffect,
+          });
+          if (!ensured.ok) {
+            return {
+              ok: false,
+              status: ensured.status === "timed_out" ? "timeout" : "unavailable",
+              error: ensured.message,
+            };
+          }
+          codexMetadataNeedsRestore = true;
+          pendingCodexInstall = ensured.cfg.plugins?.installs?.codex;
+          if (pendingCodexInstall) {
+            // The managed package exists before inference can run. Mark this
+            // generation retained now so a process exit cannot strand unowned bytes.
+            const codexInstallRetained = await retainUnownedCodexInstall({
+              record: pendingCodexInstall,
+              verifyOwnership: false,
+              deps,
+            });
+            if (!codexInstallRetained) {
+              return {
+                ok: false,
+                status: "unavailable",
+                error:
+                  "Could not retain the staged Codex runtime safely. No inference route was changed; retry after checking the plugin storage directory.",
+              };
+            }
+          }
+          const normalizedCodexConfig = normalizePluginTargetConfig(ensured.cfg, "codex");
+          const preparedAuth = configureCodexCliPreparedAuth(
+            normalizedCodexConfig,
+            codexCliApiKey ? "agent" : "user",
+          );
+          if (!preparedAuth.ok) {
+            return { ok: false, status: "unavailable", error: preparedAuth.error };
+          }
+          const enabledCodex = enablePluginInConfig(preparedAuth.value, "codex");
+          if (!enabledCodex.enabled) {
+            return {
+              ok: false,
+              status: "unavailable",
+              error: `Could not enable the Codex runtime plugin: ${enabledCodex.reason ?? "plugin disabled"}.`,
+            };
+          }
+          // Discovery needs the just-installed package record during the probe, but
+          // install ownership remains transient until inference succeeds.
+          const stagedCodexConfig = enabledCodex.config;
+          codexPluginPatch = createMergePatch(
+            codexInstallBase,
+            stripPendingPluginInstallRecords(stagedCodexConfig),
+          );
+          testPlan = {
+            ...testPlan,
+            config: stagedCodexConfig,
+          };
+
+          // The installed package belongs to this probe's generation; the running
+          // Gateway keeps its startup inventory until the persisted change restarts it.
+          const refreshPluginRegistry =
+            deps.refreshPluginRegistryAfterConfigMutation ??
+            (await import("../plugins/registry-refresh.js"))
+              .refreshPluginRegistryAfterConfigMutation;
+          let registryRefreshWarning: string | undefined;
+          await refreshPluginRegistry({
+            config: testPlan.config,
+            reason: "source-changed",
+            ...(testPlan.config.plugins?.installs
+              ? { installRecords: testPlan.config.plugins.installs }
+              : {}),
+            workspaceDir: workspace,
+            policyPluginIds: ["codex"],
+            traceCommand: "openclaw-setup-probe",
+            logger: { warn: (message) => (registryRefreshWarning = message) },
+          });
+          try {
+            probePluginGeneration = loadSetupInferencePluginGeneration({
+              config: testPlan.config,
+              workspaceDir: workspace,
+              selection: {
+                provider: testPlan.provider,
+                modelId: testPlan.model,
+                runtime: "codex",
+                agentId: testPlan.routeAgentId,
+              },
+              resolvePluginMetadataSnapshot: resolveRouteMetadata,
+            });
+          } catch (error) {
+            const loadError = `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`;
+            return {
+              ok: false,
+              status: "unavailable",
+              error: registryRefreshWarning ? `${registryRefreshWarning} ${loadError}` : loadError,
+            };
+          }
+          return undefined;
+        },
+      );
+      if (preparationFailure) {
+        return preparationFailure;
       }
     }
+    if (catalogPreference !== undefined) {
+      // A managed runtime can add its manifest after the first setup snapshot.
+      // Re-resolve declarations before the probe so a newly installed catalog
+      // receives the same explicit fresh-install preference.
+      const preferenceConfig = applySetupNativeSessionCatalogPreference({
+        config: testPlan.config,
+        enabled: catalogPreference,
+        workspaceDir: workspace,
+      });
+      testPlan = { ...testPlan, config: preferenceConfig };
+      plan = {
+        ...plan,
+        config: preferenceConfig,
+        manualAuth: {
+          profiles: plan.manualAuth?.profiles ?? [],
+          sourceConfigBase: sourceCfg,
+          configPatch: createMergePatch(cfg, preferenceConfig),
+          ...(plan.manualAuth?.pluginId ? { pluginId: plan.manualAuth.pluginId } : {}),
+        },
+      };
+    }
+    if (
+      !probePluginGeneration &&
+      plan.pendingPluginInstalls &&
+      Object.keys(plan.pendingPluginInstalls).length > 0
+    ) {
+      await withPluginLifecycleLease({ signal: params.signal }, async () => {
+        probePluginGeneration = loadSetupInferencePluginGeneration({
+          config: testPlan.config,
+          workspaceDir: workspace,
+          selection: {
+            provider: parseRef(testPlan.modelRef).provider,
+            modelId: testPlan.model,
+            runtime:
+              testPlan.runner === "cli"
+                ? testPlan.provider
+                : (testPlan.selectedAgentRuntimeId ??
+                  testPlan.agentHarnessRuntimeOverride ??
+                  "openclaw"),
+            agentId: testPlan.routeAgentId,
+          },
+          pendingPluginInstalls: plan.pendingPluginInstalls,
+          resolvePluginMetadataSnapshot: resolveRouteMetadata,
+        });
+      });
+    }
     const metadataWorkspaceDir = getActivePluginRegistryWorkspaceDirFromState();
-    // Manifest inventory is process-stable for one activation attempt. A plugin
-    // install is the lifecycle boundary: bypass the old process snapshot after refresh.
-    const resolveRouteMetadata =
-      deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot;
-    const routeMetadataSnapshot = resolveRouteMetadata({
-      config: testPlan.config,
-      env: process.env,
-      ...(metadataWorkspaceDir ? { workspaceDir: metadataWorkspaceDir } : {}),
-      ...(codexRegistryNeedsReload ? { allowCurrent: false } : {}),
-    });
+    const routeMetadataSnapshot =
+      probePluginGeneration?.metadataSnapshot ??
+      resolveRouteMetadata({
+        config: testPlan.config,
+        env: process.env,
+        ...(metadataWorkspaceDir ? { workspaceDir: metadataWorkspaceDir } : {}),
+      });
     const routeDeps = { pluginMetadataPlugins: routeMetadataSnapshot.plugins };
     const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
-    const baselineRoute = await projectInferenceRoute(cfg, requestedAgentId, routeDeps);
-    const verifiedRoute = await projectInferenceRoute(testPlan.config, requestedAgentId, routeDeps);
+    const agentRuntimeId = plan.selectedAgentRuntimeId ?? resolveSetupAgentRuntimeId(params.kind);
+    const stageCandidate = await createSetupInferenceCandidateStager({
+      plan,
+      ...(requestedAgentId ? { targetAgentId: requestedAgentId } : {}),
+      ...(agentRuntimeId ? { agentRuntimeId } : {}),
+      codexPluginPatch,
+      pendingCodexInstall,
+      ...(deps.enablePluginInConfig ? { enablePlugin: deps.enablePluginInConfig } : {}),
+    });
+    const verifiedSourceConfig = stageCandidate(sourceCfg, sourceCfg);
+    const baselineRoute = await projectInferenceRoute(cfg, requestedAgentId, routeDeps, sourceCfg);
+    const verifiedRoute = await projectInferenceRoute(
+      testPlan.config,
+      requestedAgentId,
+      routeDeps,
+      verifiedSourceConfig,
+    );
     const stagedRoute = verifiedRoute.route;
     const stagedExecutionRoute = await resolveSystemAgentConfiguredRouteFromConfig(
       testPlan.config,
@@ -343,7 +479,7 @@ async function activateSetupInferenceUnredacted(
       stagedRoute.runner !== testPlan.runner ||
       stagedRoute.provider !== testPlan.provider ||
       stagedRoute.model !== testPlan.model ||
-      stagedRoute.modelLabel !== plan.modelRef ||
+      stagedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
       (plan.authProfileId && stagedRoute.authProfileId !== plan.authProfileId)
     ) {
       return {
@@ -363,24 +499,18 @@ async function activateSetupInferenceUnredacted(
       stagedRoute.modelLabel,
       requestedAgentId,
     );
-    // OpenClaw executes through the reserved agent id but reuses the default
-    // route's agent directory. Only a submitted key stays in the isolated store.
-    if (testPlan.runner === "embedded" && stagedRoute.runner === "embedded") {
-      testPlan = {
-        ...testPlan,
-        executionConfig: stagedExecutionRoute.runConfig,
-        agentDir: hasPreparedAuthProfiles ? testAgentDir : stagedRoute.agentDir,
-        ...(stagedRoute.agentHarnessRuntimeOverride
-          ? { agentHarnessRuntimeOverride: stagedRoute.agentHarnessRuntimeOverride }
-          : {}),
-      };
-    } else {
-      testPlan = {
-        ...testPlan,
-        executionConfig: stagedExecutionRoute.runConfig,
-        ...(!hasPreparedAuthProfiles ? { agentDir: stagedRoute.agentDir } : {}),
-      };
-    }
+    // Prepared credentials stay in the isolated test store; existing routes use
+    // the default agent's store while execution keeps the reserved agent id.
+    testPlan = {
+      ...testPlan,
+      executionConfig: stagedExecutionRoute.runConfig,
+      agentDir: hasPreparedAuthProfiles ? testAgentDir : stagedRoute.agentDir,
+      ...(testPlan.runner === "embedded" &&
+      stagedRoute.runner === "embedded" &&
+      stagedRoute.agentHarnessRuntimeOverride
+        ? { agentHarnessRuntimeOverride: stagedRoute.agentHarnessRuntimeOverride }
+        : {}),
+    };
 
     if (hasPreparedAuthProfiles && plan.manualAuth) {
       const staged = await persistManualAuthProfiles({
@@ -400,7 +530,7 @@ async function activateSetupInferenceUnredacted(
 
     let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot;
     try {
-      stagedOwnerPluginArtifacts = withPluginRuntimeRegistryScope(codexProbePluginRegistry, () =>
+      stagedOwnerPluginArtifacts = withProbePluginGeneration(() =>
         (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
           config: stagedExecutionRoute.runConfig,
           executionRoute: stagedExecutionRoute,
@@ -416,12 +546,14 @@ async function activateSetupInferenceUnredacted(
       };
     }
 
+    params.onPreparationComplete?.();
     if (params.signal?.aborted || params.isCancelled?.()) {
       return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
     }
     let test: Awaited<ReturnType<typeof runSetupInferenceTest>>;
+    verificationProgress = params.prompter?.progress("Testing your AI connection…");
     try {
-      test = await withPluginRuntimeRegistryScope(codexProbePluginRegistry, () =>
+      test = await withProbePluginGeneration(() =>
         runSetupInferenceTest({
           plan: testPlan,
           tempDir,
@@ -430,6 +562,7 @@ async function activateSetupInferenceUnredacted(
           // already exist in the isolated store and every other route stays read-only.
           authProfileStateMode: "read-only",
           requireExecutionOwner: true,
+          verifyAgentTools: true,
           ...(params.signal ? { signal: params.signal } : {}),
         }),
       );
@@ -441,8 +574,11 @@ async function activateSetupInferenceUnredacted(
       throw error;
     }
     if (!test.ok) {
-      return test;
+      // Finalization below can still supersede this rejection. Plugin preparation
+      // may persist, but no model or credential promotion has been attempted.
+      return { ...test, disposition: "rejected-before-promotion" };
     }
+    verificationProgress?.update("Finishing AI setup…");
     if (plan.authProfileId && test.auth.authProfileId !== plan.authProfileId) {
       return {
         ok: false,
@@ -451,74 +587,20 @@ async function activateSetupInferenceUnredacted(
       };
     }
 
-    const autoLocalModelLeanUpdate = applyAutoLocalModelLean({
-      config: sourceCfg,
-      providerId: testPlan.provider,
-      modelRef: plan.modelRef,
-    });
     const needsPersistence =
       plan.persistModelRef !== undefined ||
       plan.manualAuth !== undefined ||
       codexPluginPatch !== undefined ||
-      pendingCodexInstall !== undefined ||
-      autoLocalModelLeanUpdate.changed;
-    if (
-      !test.auth.authFingerprint &&
-      (!test.auth.runtimeOwnerFingerprint ||
-        !test.auth.runtimeOwnerKind ||
-        !test.auth.runtimeOwnerId?.trim())
-    ) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse. No model or credential route was saved.",
-      };
+      pendingCodexInstall !== undefined;
+    const ownerEvidenceFailure = validateSetupInferenceOwnerEvidence({
+      runner: testPlan.runner,
+      configuredHarnessId: testPlan.agentHarnessRuntimeOverride,
+      auth: test.auth,
+    });
+    if (ownerEvidenceFailure) {
+      return ownerEvidenceFailure;
     }
-    if (
-      testPlan.runner === "cli" &&
-      (!test.auth.runtimeArtifactFingerprint || !test.auth.runtimeArtifactId?.trim())
-    ) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its CLI executable/package artifact could not be safely reused. No model or credential route was saved.",
-      };
-    }
-    if (testPlan.runner === "embedded") {
-      const successfulHarnessId = test.auth.agentHarnessId?.trim();
-      const configuredHarnessId = testPlan.agentHarnessRuntimeOverride?.trim();
-      if (
-        !successfulHarnessId ||
-        (configuredHarnessId !== undefined &&
-          configuredHarnessId !== "auto" &&
-          successfulHarnessId !== configuredHarnessId)
-      ) {
-        return {
-          ok: false,
-          status: "unknown",
-          error:
-            "Inference succeeded, but its exact agent harness could not be safely reused. No model or credential route was saved.",
-        };
-      }
-      if (
-        successfulHarnessId !== "openclaw" &&
-        (test.auth.runtimeOwnerKind !== "plugin-harness" ||
-          test.auth.runtimeOwnerId?.trim() !== successfulHarnessId ||
-          !test.auth.runtimeArtifactFingerprint ||
-          !test.auth.runtimeArtifactId?.trim())
-      ) {
-        return {
-          ok: false,
-          status: "unknown",
-          error:
-            "Inference succeeded, but its agent harness artifact could not be safely reused. No model or credential route was saved.",
-        };
-      }
-    }
-    let committedConfig: OpenClawConfig | undefined;
-    let autoLocalModelLeanApplied = false;
+    let gatewayRestartRequired = false;
     if (!needsPersistence) {
       const latestSnapshot = await readSnapshot();
       const latestRuntime =
@@ -526,7 +608,12 @@ async function activateSetupInferenceUnredacted(
           ? (latestSnapshot.runtimeConfig ?? latestSnapshot.config)
           : undefined;
       const latestRoute = latestRuntime
-        ? await projectInferenceRoute(latestRuntime, requestedAgentId, routeDeps)
+        ? await projectInferenceRoute(
+            latestRuntime,
+            requestedAgentId,
+            routeDeps,
+            latestSnapshot.sourceConfig,
+          )
         : undefined;
       if (!latestRoute || !sameDefaultInferenceRoute(latestRoute, verifiedRoute)) {
         return {
@@ -560,17 +647,16 @@ async function activateSetupInferenceUnredacted(
     }
     if (needsPersistence) {
       const persistenceState: SetupInferenceActivationPersistenceState = {
-        committedConfig,
-        autoLocalModelLeanApplied,
         codexInstallOwnership,
+        gatewayRestartRequired,
       };
       const persistenceFailure = await persistActivatedSetupInference({
         params,
         deps,
         plan,
-        testPlan,
+        stageCandidate,
+        ...(requestedAgentId ? { targetAgentId: requestedAgentId } : {}),
         test,
-        codexPluginPatch,
         pendingCodexInstall,
         cfg,
         sourceCfg,
@@ -589,27 +675,9 @@ async function activateSetupInferenceUnredacted(
       if (persistenceFailure) {
         return persistenceFailure;
       }
-      ({ committedConfig, autoLocalModelLeanApplied, codexInstallOwnership } = persistenceState);
+      ({ codexInstallOwnership, gatewayRestartRequired } = persistenceState);
     }
-    if (codexRegistryNeedsReload && committedConfig) {
-      codexRegistryReloaded = await reloadCodexRegistryAfterActivation({
-        readSnapshot,
-        workspaceDir: workspace,
-        deps,
-      });
-      if (!codexRegistryReloaded) {
-        throw new SetupInferenceActivationIndeterminateError(
-          "Inference activation committed, but the active plugin registry could not be reloaded. Restart the Gateway before using Codex inference.",
-        );
-      }
-    }
-    const announceAutoLocalModelLean =
-      autoLocalModelLeanApplied &&
-      committedConfig?.agents?.defaults?.experimental?.localModelLean === true;
-    let lines = [
-      `Inference verified: ${plan.modelRef}`,
-      ...(announceAutoLocalModelLean ? [AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT] : []),
-    ];
+    let lines = [`Inference verified: ${plan.modelRef}`];
     if (params.surface === "gateway" && params.recordSetupAudit !== false) {
       const after = await readSnapshot().catch(() => null);
       try {
@@ -634,8 +702,12 @@ async function activateSetupInferenceUnredacted(
       modelRef: plan.modelRef,
       latencyMs: test.latencyMs,
       lines,
+      ...(params.surface === "gateway" && gatewayRestartRequired
+        ? { gatewayRestartRequired: true as const }
+        : {}),
     };
   } finally {
+    verificationProgress?.stop();
     let codexCleanupError: SetupInferenceActivationIndeterminateError | undefined;
     if (pendingCodexInstall && codexInstallOwnership !== "owned") {
       // Reassert after probing: a partial install-index commit may have cleared
@@ -651,19 +723,10 @@ async function activateSetupInferenceUnredacted(
         );
       }
     }
-    if (codexRegistryNeedsReload && !codexRegistryReloaded) {
-      // The probe loaded discovery against staged config. Restore the live
-      // registry from the latest persisted config before another request runs.
-      codexRegistryReloaded = await reloadCodexRegistryAfterActivation({
-        readSnapshot,
-        workspaceDir: workspace,
-        deps,
-      });
-      if (!codexRegistryReloaded) {
-        codexCleanupError = new SetupInferenceActivationIndeterminateError(
-          "Inference activation could not restore the active plugin registry after its Codex probe. Restart the Gateway before retrying.",
-        );
-      }
+    if (codexMetadataNeedsRestore) {
+      // The probe owns a private registry. Restore only its staged metadata;
+      // Gateway reload owns runtime replacement and the prepared auth generation.
+      await restoreSetupPluginMetadata({ readSnapshot, workspaceDir: workspace, deps });
     }
     await cleanupSetupInferenceTempDir({ tempDir, deps, runtime: params.runtime });
     if (codexCleanupError) {
@@ -671,31 +734,4 @@ async function activateSetupInferenceUnredacted(
       throw codexCleanupError;
     }
   }
-}
-
-function resolveCodexCliSetupApiKey(
-  params: ActivateSetupInferenceParams,
-): CodexCliApiKeyCredential | null {
-  if (params.kind !== "codex-cli") {
-    return null;
-  }
-  const reader = params.deps?.readCodexCliActiveApiKey ?? readCodexCliActiveApiKey;
-  return reader({ allowKeychainPrompt: true });
-}
-
-export async function redactSetupInferenceError(
-  message: string,
-  ...apiKeys: Array<string | undefined>
-): Promise<string> {
-  const secrets = new Set(
-    apiKeys
-      .flatMap((apiKey) => [apiKey, apiKey?.trim()])
-      .filter((value): value is string => Boolean(value)),
-  );
-  let redacted = message;
-  for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
-    redacted = redacted.split(secret).join("[redacted]");
-  }
-  const { redactToolPayloadText } = await import("../logging/redact.js");
-  return redactToolPayloadText(redacted);
 }

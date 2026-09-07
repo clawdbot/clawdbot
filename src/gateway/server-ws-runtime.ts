@@ -21,6 +21,8 @@ export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
   attachGatewayWsConnectionHandler({
     wss: params.wss,
     clients: params.clients,
+    connectionWork: params.connectionWork,
+    bootId: params.bootId,
     preauthConnectionBudget: params.preauthConnectionBudget,
     port: params.port,
     gatewayHost: params.gatewayHost,
@@ -33,6 +35,7 @@ export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
     nodeReapprovalCoordinator: params.nodeReapprovalCoordinator,
     preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs,
     isStartupPending: params.isStartupPending,
+    isPendingWorkerNodeSetup: params.isPendingWorkerNodeSetup,
     gatewayMethods: params.gatewayMethods,
     events: params.events,
     refreshHealthSnapshot: params.context.refreshHealthSnapshot,

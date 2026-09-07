@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isPathInside } from "./path-guards.js";
 import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
@@ -58,8 +59,12 @@ export function createSqliteTerminalOpenLatch(options: {
     clear: (pathname: string): void => {
       failures.delete(path.resolve(pathname));
     },
-    clearAll: (): void => {
-      failures.clear();
+    clearAll: (rootPath?: string): void => {
+      for (const pathname of failures.keys()) {
+        if (rootPath === undefined || isPathInside(rootPath, pathname)) {
+          failures.delete(pathname);
+        }
+      }
     },
   };
 }

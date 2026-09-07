@@ -21,7 +21,7 @@ import {
 export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
-  render: (data: TData | undefined) => unknown;
+  render: (data: TData | undefined, loaderPending: boolean) => unknown;
   renderOwnerKey?: (
     match: Pick<RouteMatch<string, unknown, TData>, "data" | "location">,
     settled: Pick<RouteMatch<string, unknown, TData>, "data" | "location"> | undefined,
@@ -156,7 +156,9 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
       : null;
   }
   const renderedPage = () =>
-    measureRoutedRender(routeId, () => routeModule.render(renderedMatch.data));
+    measureRoutedRender(routeId, () =>
+      routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader"),
+    );
   return renderedMatch.error
     ? renderError<TRouteId, TLoadContext, TModule, TData>(
         router,
@@ -226,14 +228,12 @@ class OpenClawRouterOutlet<
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   override render() {
-    if (!this.router) {
+    const router = this.router;
+    if (!router) {
       return nothing;
     }
     const snapshot = this.outlet.snapshot;
     const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
-    const rendered = renderRouterOutlet(this.router, snapshot, renderedMatch, {
-      retryContext: this.retryContext,
-    });
     const routeKey = renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty";
     const routeModule = renderedMatch?.module;
     const declaredOwnerKey =
@@ -245,9 +245,15 @@ class OpenClawRouterOutlet<
       explicitOwnerKey !== undefined &&
       renderedMatch?.status === "pending" &&
       renderedMatch.data === undefined;
-    return this.mcpAppUnmountGate.render(explicitOwnerKey ?? routeKey, rendered, () => [this], {
-      retainRenderedValue: retainCurrent,
-    });
+    return this.mcpAppUnmountGate.render(
+      explicitOwnerKey ?? routeKey,
+      () =>
+        renderRouterOutlet(router, snapshot, renderedMatch, {
+          retryContext: this.retryContext,
+        }),
+      () => [this],
+      { retainRenderedValue: retainCurrent },
+    );
   }
 }
 

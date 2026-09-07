@@ -3,6 +3,7 @@
  *
  * Keeps tool factories, renderers, and callers aligned on typed payload and metadata shapes.
  */
+import { Type, type Static } from "typebox";
 import type { Edit } from "./edit-diff.js";
 import type { TruncationResult } from "./truncate.js";
 
@@ -45,8 +46,10 @@ export interface FindToolInput {
   limit?: number;
 }
 
+// Keep one text payload; duplicate truncation content can exceed Code Mode value bounds.
 export interface FindToolDetails {
-  truncation?: TruncationResult;
+  content: string;
+  truncation?: Omit<TruncationResult, "content">;
   resultLimitReached?: number;
 }
 
@@ -61,7 +64,8 @@ export interface GrepToolInput {
 }
 
 export interface GrepToolDetails {
-  truncation?: TruncationResult;
+  content: string;
+  truncation?: Omit<TruncationResult, "content">;
   matchLimitReached?: number;
   linesTruncated?: boolean;
 }
@@ -69,20 +73,45 @@ export interface GrepToolDetails {
 export interface LsToolInput {
   path?: string;
   limit?: number;
+  after?: string;
 }
 
 export interface LsToolDetails {
-  truncation?: TruncationResult;
-  entryLimitReached?: number;
+  content: string;
+  nextAfter?: string;
 }
 
 export interface ReadToolInput {
   path: string;
   offset?: number;
   limit?: number;
+  cursor?: number;
+  optional?: true;
 }
 
 export type ReadToolTruncationDetails = Omit<TruncationResult, "content">;
+
+const readContinuationFields = {
+  offset: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+};
+
+export const ReadToolContinuationSchema = Type.Union([
+  Type.Object(
+    { kind: Type.Literal("line"), ...readContinuationFields },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("cursor"),
+      ...readContinuationFields,
+      cursor: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
+export type ReadToolContinuation = Static<typeof ReadToolContinuationSchema>;
 
 export type ReadToolDetails =
   | { kind: "text"; content: string }
@@ -91,6 +120,7 @@ export type ReadToolDetails =
       kind: "truncated";
       content: string;
       truncation: ReadToolTruncationDetails;
+      continuation: ReadToolContinuation;
     }
   | {
       kind: "not_found";

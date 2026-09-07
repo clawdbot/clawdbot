@@ -2,9 +2,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { isActiveTask, partitionTasks } from "../../../lib/tasks/data.ts";
+import { partitionTasks } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { renderTaskRow } from "./chat-background-task-row.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
@@ -17,7 +18,6 @@ export function renderBackgroundTasksToggle(
   }
   const expanded = !backgroundTasks.collapsed;
   const label = t(expanded ? "chat.backgroundTasks.collapse" : "chat.backgroundTasks.show");
-  const activeCount = backgroundTasks.tasks?.filter(isActiveTask).length ?? 0;
   return html`<openclaw-tooltip .content=${label}>
     <button
       class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
@@ -27,9 +27,13 @@ export function renderBackgroundTasksToggle(
       @click=${backgroundTasks.onToggleCollapsed}
     >
       ${icons.listChecks}
-      ${!expanded && activeCount > 0
-        ? html`<span class="chat-tasks-toggle__badge" aria-hidden="true">${activeCount}</span>`
-        : nothing}
+      ${
+        !expanded && backgroundTasks.activeCount > 0
+          ? html`<span class="chat-tasks-toggle__badge" aria-hidden="true"
+              >${backgroundTasks.activeCount}</span
+            >`
+          : nothing
+      }
     </button>
   </openclaw-tooltip>`;
 }
@@ -81,81 +85,97 @@ export function renderBackgroundTasksRail(
       class="chat-tasks-rail"
       aria-label=${t("chat.backgroundTasks.label")}
     >
-      ${options.embedded
-        ? nothing
-        : html`<div class="rail-header chat-tasks-rail__header">
-            <div class="rail-header__copy chat-tasks-rail__title">
-              <span class="rail-header__eyebrow chat-tasks-rail__eyebrow"
-                >${backgroundTasks.sessionKey}</span
-              >
-              <strong class="rail-header__title">${t("chat.backgroundTasks.title")}</strong>
-            </div>
-            <div class="rail-header__actions chat-tasks-rail__actions">
-              <openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
-                <button
-                  class="rail-header__action chat-tasks-rail__refresh"
-                  type="button"
-                  aria-label=${t("chat.backgroundTasks.refresh")}
-                  ?disabled=${backgroundTasks.loading || !backgroundTasks.connected}
-                  @click=${backgroundTasks.onRefresh}
+      ${
+        options.embedded
+          ? nothing
+          : html`<div class="rail-header chat-tasks-rail__header">
+              <div class="rail-header__copy chat-tasks-rail__title">
+                <span class="rail-header__eyebrow chat-tasks-rail__eyebrow"
+                  >${backgroundTasks.sessionKey}</span
                 >
-                  ${icons.refresh}
-                </button>
-              </openclaw-tooltip>
-              ${collapseButton}
-            </div>
-          </div>`}
-      ${!backgroundTasks.connected
-        ? html`<div class="chat-tasks-rail__state">${t("tasksPage.disconnected")}</div>`
-        : nothing}
-      ${backgroundTasks.error
-        ? html`<div class="chat-tasks-rail__state chat-tasks-rail__state--error">
-            ${backgroundTasks.error}
-          </div>`
-        : nothing}
-      ${backgroundTasks.loading && !loaded
-        ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.loading")}</div>`
-        : nothing}
-      ${empty
-        ? renderPanelEmptyState({
-            icon: icons.listChecks,
-            heading: t("chat.sidePanel.tasks"),
-            description: t("chat.sidePanel.tasksEmpty"),
-          })
-        : nothing}
+                <strong class="rail-header__title">${t("chat.backgroundTasks.title")}</strong>
+              </div>
+              <div class="rail-header__actions chat-tasks-rail__actions">
+                <openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
+                  <button
+                    class="rail-header__action chat-tasks-rail__refresh"
+                    type="button"
+                    aria-label=${t("chat.backgroundTasks.refresh")}
+                    ?disabled=${backgroundTasks.loading || !backgroundTasks.connected}
+                    @click=${backgroundTasks.onRefresh}
+                  >
+                    ${icons.refresh}
+                  </button>
+                </openclaw-tooltip>
+                ${collapseButton}
+              </div>
+            </div>`
+      }
+      ${
+        !backgroundTasks.connected
+          ? html`<div class="chat-tasks-rail__state">${t("tasksPage.disconnected")}</div>`
+          : nothing
+      }
+      ${
+        backgroundTasks.error
+          ? html`<div class="chat-tasks-rail__state chat-tasks-rail__state--error" role="alert">
+              ${backgroundTasks.error}
+            </div>`
+          : nothing
+      }
+      ${
+        backgroundTasks.loading && !loaded
+          ? renderPanelLoadingSkeleton("tasks", t("chat.backgroundTasks.loading"))
+          : nothing
+      }
+      ${
+        empty
+          ? renderPanelEmptyState({
+              icon: icons.listChecks,
+              heading: t("chat.sidePanel.tasks"),
+              description: t("chat.sidePanel.tasksEmpty"),
+            })
+          : nothing
+      }
       <div class="chat-tasks-rail__scroll chat-tasks-rail__scroll--split" ?hidden=${empty}>
-        ${active.length > 0
-          ? html`
-              <section class="chat-tasks-rail__section" data-tasks-section="running">
-                <div class="chat-tasks-rail__section-title">
-                  ${t("chat.backgroundTasks.running", { count: String(active.length) })}
-                </div>
-                ${renderTaskRows(active, backgroundTasks)}
-              </section>
-            `
-          : nothing}
-        ${recent.length > 0
-          ? html`
-              <section class="chat-tasks-rail__section" data-tasks-section="finished">
-                <button
-                  class="chat-tasks-rail__section-toggle"
-                  type="button"
-                  aria-expanded=${String(!backgroundTasks.finishedCollapsed)}
-                  @click=${backgroundTasks.onToggleFinished}
-                >
-                  <span class="chat-tasks-rail__section-title">
-                    ${t("chat.backgroundTasks.finished", { count: String(recent.length) })}
-                  </span>
-                  <span class="chat-tasks-rail__section-chevron" aria-hidden="true">
-                    ${backgroundTasks.finishedCollapsed ? icons.chevronRight : icons.chevronDown}
-                  </span>
-                </button>
-                ${backgroundTasks.finishedCollapsed
-                  ? nothing
-                  : renderTaskRows(recent, backgroundTasks)}
-              </section>
-            `
-          : nothing}
+        ${
+          active.length > 0
+            ? html`
+                <section class="chat-tasks-rail__section" data-tasks-section="running">
+                  <div class="chat-tasks-rail__section-title">
+                    ${t("chat.backgroundTasks.running", { count: String(active.length) })}
+                  </div>
+                  ${renderTaskRows(active, backgroundTasks)}
+                </section>
+              `
+            : nothing
+        }
+        ${
+          recent.length > 0
+            ? html`
+                <section class="chat-tasks-rail__section" data-tasks-section="finished">
+                  <button
+                    class="chat-tasks-rail__section-toggle"
+                    type="button"
+                    aria-expanded=${String(!backgroundTasks.finishedCollapsed)}
+                    @click=${backgroundTasks.onToggleFinished}
+                  >
+                    <span class="chat-tasks-rail__section-title">
+                      ${t("chat.backgroundTasks.finished", { count: String(recent.length) })}
+                    </span>
+                    <span class="chat-tasks-rail__section-chevron" aria-hidden="true">
+                      ${backgroundTasks.finishedCollapsed ? icons.chevronRight : icons.chevronDown}
+                    </span>
+                  </button>
+                  ${
+                    backgroundTasks.finishedCollapsed
+                      ? nothing
+                      : renderTaskRows(recent, backgroundTasks)
+                  }
+                </section>
+              `
+            : nothing
+        }
       </div>
     </aside>
   `;

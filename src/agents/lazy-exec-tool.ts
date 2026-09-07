@@ -2,12 +2,16 @@ import { resolveExecCommandHighlighting } from "../config/exec-command-highlight
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
+import {
+  getInstallationTarget,
+  withInstallationTarget,
+} from "../infra/installation-target-context.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
-import { execSchema } from "./bash-tools.schemas.js";
+import { execCompletionSchema, execSchema } from "./bash-tools.schemas.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -27,6 +31,8 @@ export function createLazyExecTool(
   defaults?: ExecToolDefaults,
   presentation?: LazyExecToolPresentation,
 ): AnyAgentTool {
+  // Native tool callbacks can arrive outside the scope that constructed this lazy tool.
+  const installationTarget = getInstallationTarget();
   let loadedTool: LoadedExecTool | undefined;
   let loadingTool: Promise<LoadedExecTool> | undefined;
   const loadTool = () => {
@@ -34,7 +40,7 @@ export function createLazyExecTool(
       return Promise.resolve(loadedTool);
     }
     loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
-      loadedTool = createExecTool(defaults);
+      loadedTool = withInstallationTarget(installationTarget, () => createExecTool(defaults));
       return loadedTool;
     });
     return loadingTool;
@@ -50,10 +56,16 @@ export function createLazyExecTool(
         describeExecTool({
           agentId: defaults?.agentId,
           hasCronTool: defaults?.hasCronTool === true,
+          hasProcessTool: defaults?.processToolAvailabilityRef?.value,
         })
       );
     },
-    parameters: presentation?.parameters ?? execSchema,
+    get parameters() {
+      return (
+        presentation?.parameters ??
+        (defaults?.processToolAvailabilityRef?.value === false ? execCompletionSchema : execSchema)
+      );
+    },
     prepareBeforeToolCallParams: async (...args) =>
       (await loadTool()).prepareBeforeToolCallParams?.(...args) ?? args[0],
     finalizeBeforeToolCallParams: (params, preparedParams) =>

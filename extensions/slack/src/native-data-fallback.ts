@@ -1,5 +1,5 @@
 import type { Block, KnownBlock } from "@slack/web-api";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { renderSlackBlockFallbackText } from "./blocks-fallback.js";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
@@ -33,37 +33,15 @@ type OrderedFallbackBlock = {
   continuesText?: boolean;
 };
 
-function sliceSlackTextChunk(text: string, start: number, limit: number): string {
-  return (
-    sliceUtf16Safe(text, start, Math.min(text.length, start + limit)) ||
-    Array.from(text.slice(start))[0] ||
-    ""
-  );
-}
-
 export function chunkSlackTextAtHardLimit(
   text: string,
   limit = SLACK_MESSAGE_TEXT_HARD_LIMIT,
 ): string[] {
+  if (!text) {
+    return [];
+  }
   const effectiveLimit = Math.max(1, Math.floor(limit));
-  const chunks: string[] = [];
-  let offset = 0;
-  while (offset < text.length) {
-    const chunk = sliceSlackTextChunk(text, offset, effectiveLimit);
-    if (!chunk) {
-      throw new Error("Slack plain-text fallback chunking made no progress.");
-    }
-    chunks.push(chunk);
-    offset += chunk.length;
-  }
-  return chunks;
-}
-
-function fitsSlackTextLimit(text: string, limit: number): boolean {
-  if (text.length <= limit) {
-    return true;
-  }
-  return sliceSlackTextChunk(text, 0, limit).length === text.length;
+  return chunkTextForOutbound(text, effectiveLimit, { preserveWhitespace: true });
 }
 
 function buildPlainTextBlocks(text: string, textLimit: number): OrderedFallbackBlock[] {
@@ -136,13 +114,15 @@ function buildOrderedBlockMessages(entries: readonly OrderedFallbackBlock[], tex
   for (const entry of entries) {
     const separator = text && entry.text && !entry.continuesText ? "\n\n" : "";
     const nextText = entry.text ? `${text}${separator}${entry.text}` : text;
-    if (blocks.length >= SLACK_MAX_BLOCKS || !fitsSlackTextLimit(nextText, textLimit)) {
+    if (blocks.length >= SLACK_MAX_BLOCKS || nextText.length > textLimit) {
       flush();
     }
     const freshSeparator = text && entry.text && !entry.continuesText ? "\n\n" : "";
     const freshText = entry.text ? `${text}${freshSeparator}${entry.text}` : text;
-    if (!fitsSlackTextLimit(freshText, textLimit)) {
-      throw new Error("One Slack fallback block exceeds the resolved message text limit.");
+    // A valid native section can have ten 2,000-character fields. Keep it intact
+    // even when its accessibility text exceeds the preferred batching limit.
+    if (freshText.length > SLACK_MESSAGE_TEXT_HARD_LIMIT) {
+      throw new Error("One Slack fallback block exceeds the message text hard limit.");
     }
     blocks.push(entry.block);
     text = freshText;

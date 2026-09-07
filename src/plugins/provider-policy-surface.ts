@@ -6,8 +6,8 @@ import type {
   ProviderNormalizeModelCatalogIdContext,
   ProviderResponseModelEquivalenceContext,
   ProviderResolveModelRoutesContext,
+  ProviderToolSearchPolicyContext,
 } from "../plugin-sdk/provider-model-types.js";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
@@ -34,6 +34,21 @@ type ProviderProjectConfiguredModelRowContext = {
   model: ProviderRuntimeModel;
 };
 
+type ProviderProjectRealtimeVoicePublicConfigContext = {
+  providerConfig: Record<string, unknown>;
+  config: Record<string, unknown>;
+};
+
+export type RealtimeVoicePublicClientHints = {
+  modelSource?: "gateway";
+  gatewayRelaySupported?: boolean;
+};
+
+export type RealtimeVoicePublicProjection = {
+  config: Record<string, unknown>;
+  clientHints?: RealtimeVoicePublicClientHints;
+};
+
 type EmbeddingProviderSetupInspection = {
   provider: string;
   reason: string;
@@ -50,6 +65,7 @@ export type InspectEmbeddingProviderSetup = (params: {
 
 /** Provider policy hooks supported by bundled and trusted official plugins. */
 export type ProviderPolicySurface = {
+  deprecatedProfileIds?: readonly string[];
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
     ctx: ProviderApplyConfigDefaultsContext,
@@ -58,6 +74,8 @@ export type ProviderPolicySurface = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
+  /** Prefer compact tool discovery, or veto a managed-service default for a hosted route. */
+  resolveToolSearchMode?: (ctx: ProviderToolSearchPolicyContext) => "tools" | false | undefined;
   resolveModelRoutes?: (
     ctx: ProviderResolveModelRoutesContext,
   ) => ProviderModelRouteResolution | null | undefined;
@@ -75,19 +93,17 @@ export type BundledProviderPolicySurface = ProviderPolicySurface & {
   projectConfiguredModelRow?: (
     ctx: ProviderProjectConfiguredModelRowContext,
   ) => ProviderRuntimeModel | null | undefined;
+  projectRealtimeVoicePublicProjection?: (
+    ctx: ProviderProjectRealtimeVoicePublicConfigContext,
+  ) => RealtimeVoicePublicProjection | null | undefined;
 };
-
-const bundledProviderPolicySurfaceByPluginId = new Map<
-  string,
-  BundledProviderPolicySurface | null
->();
-const externalProviderPolicySurfaceByPluginId = new Map<string, ProviderPolicySurface | null>();
 
 const PROVIDER_POLICY_HOOK_KEYS = [
   "normalizeConfig",
   "applyConfigDefaults",
   "resolveConfigApiKey",
   "resolveThinkingProfile",
+  "resolveToolSearchMode",
   "resolveModelRoutes",
   "normalizeModelCatalogId",
   "isResponseModelEquivalent",
@@ -96,6 +112,12 @@ const PROVIDER_POLICY_HOOK_KEYS = [
 
 function extractProviderPolicySurface(mod: Record<string, unknown>): ProviderPolicySurface | null {
   const surface: ProviderPolicySurface = {};
+  if (
+    Array.isArray(mod.deprecatedProfileIds) &&
+    mod.deprecatedProfileIds.every((value) => typeof value === "string")
+  ) {
+    surface.deprecatedProfileIds = mod.deprecatedProfileIds;
+  }
   for (const key of PROVIDER_POLICY_HOOK_KEYS) {
     const hook = mod[key];
     if (typeof hook === "function") {
@@ -113,26 +135,24 @@ function extractBundledProviderPolicySurface(
     surface.projectConfiguredModelRow =
       mod.projectConfiguredModelRow as BundledProviderPolicySurface["projectConfiguredModelRow"];
   }
+  if (typeof mod.projectRealtimeVoicePublicProjection === "function") {
+    Object.assign(surface, {
+      projectRealtimeVoicePublicProjection: mod.projectRealtimeVoicePublicProjection,
+    });
+  }
   return Object.keys(surface).length > 0 ? surface : null;
 }
 
-function resolveCachedProviderPolicySurface<T extends ProviderPolicySurface>(params: {
-  cache: Map<string, T | null>;
-  cacheKey: string;
+function resolveProviderPolicySurface<T extends ProviderPolicySurface>(params: {
   loadModule: (artifactBasename: string) => Record<string, unknown>;
   missingSurfacePrefix: string;
   extractSurface: (mod: Record<string, unknown>) => T | null;
 }): T | null {
-  const cached = params.cache.get(params.cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
   for (const artifactBasename of PROVIDER_POLICY_ARTIFACT_CANDIDATES) {
     try {
       const mod = params.loadModule(artifactBasename);
       const surface = params.extractSurface(mod);
       if (surface) {
-        params.cache.set(params.cacheKey, surface);
         return surface;
       }
     } catch (error) {
@@ -142,7 +162,6 @@ function resolveCachedProviderPolicySurface<T extends ProviderPolicySurface>(par
       throw error;
     }
   }
-  params.cache.set(params.cacheKey, null);
   return null;
 }
 
@@ -161,9 +180,7 @@ export function resolveDirectBundledProviderPolicySurface(
   ) {
     return null;
   }
-  return resolveCachedProviderPolicySurface({
-    cache: bundledProviderPolicySurfaceByPluginId,
-    cacheKey: `${resolveBundledPluginsDir() ?? ""}\0${pluginId}`,
+  return resolveProviderPolicySurface({
     loadModule: (artifactBasename) =>
       loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
         dirName: pluginId,
@@ -183,9 +200,7 @@ export function resolveTrustedExternalProviderPolicySurface(params: {
   if (params.trustedOfficialInstall !== true) {
     return null;
   }
-  return resolveCachedProviderPolicySurface({
-    cache: externalProviderPolicySurfaceByPluginId,
-    cacheKey: `${params.pluginRoot}\0${params.pluginId}`,
+  return resolveProviderPolicySurface({
     loadModule: (artifactBasename) =>
       loadPluginPublicArtifactModuleSync<Record<string, unknown>>({
         pluginRoot: params.pluginRoot,

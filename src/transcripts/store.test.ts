@@ -36,6 +36,60 @@ function session(
 }
 
 describe("TranscriptsStore", () => {
+  it.each([undefined, null, "invalid", "generated", "supplied"])(
+    "retains the admitted ID origin %s across updates, reopen, and Doctor restoration",
+    async (origin) => {
+      const { store } = createStore();
+      const target = {
+        ...session(),
+        metadata: {
+          agentId: "original",
+          ...(origin === undefined ? {} : { sessionIdOrigin: origin }),
+        },
+      };
+      await store.writeSession(target);
+      await store.appendUtteranceForSession(target, { text: "Saved history" });
+      closeOpenClawStateDatabaseForTest();
+      for (const metadata of [undefined, { sessionIdOrigin: "generated", agentId: "updated" }]) {
+        await store.writeSession({ ...target, metadata, stoppedAt: "2026-07-01T10:01:00.000Z" });
+        const stored = await store.readSession(target.sessionId);
+        expect(stored?.metadata?.sessionIdOrigin).toEqual(origin);
+        expect(Object.hasOwn(stored?.metadata ?? {}, "sessionIdOrigin")).toBe(origin !== undefined);
+        expect(stored?.metadata?.agentId).toBe(metadata?.agentId);
+        expect(await store.readUtterancesForSession(target)).toMatchObject([
+          { text: "Saved history" },
+        ]);
+      }
+      const canonical = await store.readSession(target.sessionId);
+      const exported = await store.materializeSessionArtifacts(target, "all");
+      const restoredState = tempDirs.make("transcript-origin-restore-");
+      fs.mkdirSync(path.join(restoredState, "transcripts", "2026-07-01"), { recursive: true });
+      fs.cpSync(
+        exported.sessionDir,
+        path.join(restoredState, "transcripts", "2026-07-01", target.sessionId),
+        { recursive: true },
+      );
+      closeOpenClawStateDatabaseForTest();
+      const { detectLegacyMeetingTranscripts, migrateLegacyMeetingTranscripts } =
+        await import("../infra/state-migrations.meeting-transcripts.js");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: restoredState };
+      const migrated = await migrateLegacyMeetingTranscripts({
+        detected: detectLegacyMeetingTranscripts({
+          stateDir: restoredState,
+          doctorOnlyStateMigrations: true,
+        }),
+        stateDir: restoredState,
+        env,
+      });
+      expect(migrated.warnings).toEqual([]);
+      const restored = new TranscriptsStore(path.join(restoredState, "transcripts"), { env });
+      expect(await restored.readSession(target.sessionId)).toEqual(canonical);
+      expect(await restored.readUtterancesForSession(target)).toMatchObject([
+        { text: "Saved history" },
+      ]);
+    },
+  );
+
   it("encodes portable slugs for Windows-reserved and trailing-dot IDs", () => {
     expect(safeTranscriptPathSegment("CON")).toBe("%43%4F%4E");
     expect(safeTranscriptPathSegment("foo.")).toBe("%66%6F%6F%2E");
@@ -95,17 +149,54 @@ describe("TranscriptsStore", () => {
     ]);
   });
 
-  it("requires date-qualified selectors for repeated ids", async () => {
-    const { store } = createStore();
-    await store.writeSession(session("standup", "2026-07-01T10:00:00.000Z"));
-    await store.writeSession(session("standup", "2026-07-02T10:00:00.000Z"));
+  it.each(["standup", "2026-07-03/raw-id"])(
+    "requires dated selectors for repeated %s",
+    async (id) => {
+      const { store } = createStore();
+      await store.writeSession(session(id, "2026-07-01T10:00:00.000Z"));
+      await store.writeSession(session(id, "2026-07-02T10:00:00.000Z"));
 
-    await expect(store.readSession("standup")).rejects.toThrow(
-      "multiple transcripts sessions match standup",
-    );
-    await expect(store.readSession("2026-07-01/standup")).resolves.toMatchObject({
-      startedAt: "2026-07-01T10:00:00.000Z",
-    });
+      await expect(store.readSession(id)).rejects.toThrow("multiple transcripts sessions match");
+      await expect(store.readSession(`2026-07-01/${id}`)).resolves.toMatchObject({
+        startedAt: "2026-07-01T10:00:00.000Z",
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "prioritizes qualified targets regardless of insertion order %s",
+    async (reverse) => {
+      const { store } = createStore();
+      const raw = session("2026-07-03/raw-id", "2026-07-04T10:00:00.000Z");
+      const qualified = session("raw-id", "2026-07-03T10:00:00.000Z");
+      for (const target of reverse ? [qualified, raw] : [raw, qualified]) {
+        await store.writeSession(target);
+      }
+      closeOpenClawStateDatabaseForTest();
+      await expect(store.readSession(raw.sessionId)).resolves.toEqual(qualified);
+      await expect(store.readSession("2026-07-04/2026-07-03-raw-id")).resolves.toEqual(raw);
+      await expect(store.readSession(`2026-07-04/${raw.sessionId}`)).resolves.toEqual(raw);
+    },
+  );
+
+  it("reads literal date-prefixed raw IDs and shipped date/raw suffixes", async () => {
+    const { store } = createStore();
+    const raw = session("2026-07-03/raw-id");
+    const punctuated = session("notes: room/one");
+    for (const target of [raw, punctuated]) {
+      await store.writeSession(target);
+      await expect(store.readSession(target.sessionId)).resolves.toEqual(target);
+      await expect(store.readSession(`2026-07-01/${target.sessionId}`)).resolves.toEqual(target);
+      await expect(store.readSession(`2026-07-02/${target.sessionId}`)).resolves.toBeUndefined();
+    }
+    await expect(store.readSession("2026-07-01/notes: Room/one")).resolves.toBeUndefined();
+  });
+
+  it("does not reinterpret legacy export ownership as a raw ID lookup", async () => {
+    const { store } = createStore();
+    await store.writeSession(session(".", "2026-07-01T10:00:00.000Z"));
+    await store.writeSession(session(".", "2026-07-02T10:00:00.000Z"));
+    await expect(store.writeSession(session(".."))).resolves.toBeUndefined();
   });
 
   it("matches bare selector slugs literally and case-sensitively", async () => {
@@ -263,9 +354,9 @@ describe("TranscriptsStore", () => {
     const artifacts = await store.materializeSessionArtifacts(target, "transcript");
     fs.appendFileSync(artifacts.transcriptPath, '{"text":"external edit"}\n');
 
-    await expect(store.updateStopped(target.sessionId, "2026-07-01T11:00:00.000Z")).resolves.toBe(
-      undefined,
-    );
+    await expect(
+      store.writeSession({ ...target, stoppedAt: "2026-07-01T11:00:00.000Z" }),
+    ).resolves.toBeUndefined();
     await expect(store.readSession(target.sessionId)).resolves.toMatchObject({
       stoppedAt: "2026-07-01T11:00:00.000Z",
     });

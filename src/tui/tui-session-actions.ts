@@ -3,6 +3,8 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -21,7 +23,6 @@ import {
 } from "./tui-formatters.js";
 import { readTuiSessionUserMessage } from "./tui-session-events.js";
 import {
-  clearTuiSessionModeOverrides,
   sessionInfoUiEquals,
   type SessionInfoDefaults,
   type SessionInfoEntry,
@@ -49,7 +50,7 @@ type SessionActionContext = {
   agentNames: Map<string, string>;
   initialSessionInput: string;
   initialSessionAgentId: string | null;
-  resolveSessionSelection: (raw?: string) => { key: string; agentId: string };
+  resolveSessionSelection: (raw?: string, agentId?: string) => { key: string; agentId: string };
   updateHeader: () => void;
   updateFooter: () => void;
   updateAutocompleteProvider: () => void;
@@ -86,6 +87,40 @@ export function createSessionActions(context: SessionActionContext) {
     sessionKey: state.currentSessionKey,
     agentId: state.currentAgentId,
   });
+
+  const applySessionSelection = (nextSelection: { key: string; agentId: string }) => {
+    const previousSelection = captureSessionSelection();
+    if (
+      nextSelection.agentId === previousSelection.agentId &&
+      agentSessionKeysMatchByRequestKey(nextSelection.key, previousSelection.sessionKey)
+    ) {
+      return false;
+    }
+
+    // Retire the previous session's runs before history can adopt a new
+    // in-flight owner; otherwise its completion can promote an old run.
+    invalidateRunOwnership?.();
+    reduceTuiSessionProjection(state, {
+      type: "sessionReset",
+      scope: readTuiSessionProjectionScope(state),
+    });
+    state.currentAgentId = nextSelection.agentId;
+    state.currentSessionKey = nextSelection.key;
+    state.activeChatRunId = null;
+    submit.clearPendingSubmit(state);
+    setActivityStatus("idle");
+    state.currentSessionId = null;
+    state.sessionInfo = {};
+    lastSessionDefaults = null;
+    state.historyLoaded = false;
+    // Live prompt identities belong to the old selection, not its pending successor.
+    chatLog.clearAll();
+    clearLocalRunIds?.();
+    btw.clear();
+    updateHeader();
+    updateFooter();
+    return true;
+  };
 
   const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
     state.currentAgentId === selection.agentId &&
@@ -133,18 +168,22 @@ export function createSessionActions(context: SessionActionContext) {
       }
       state.initialSessionApplied = true;
     } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
-      state.currentAgentId =
+      const nextAgentId =
         state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
+      if (nextAgentId !== state.currentAgentId) {
+        applySessionSelection(resolveSessionSelection(undefined, nextAgentId));
+        return;
+      }
     }
     updateHeader();
     updateFooter();
   };
 
-  const refreshAgents = () =>
+  const refreshAgents = (ownsRefresh: () => boolean = () => true) =>
     refreshTuiAgentList({
       load: () => client.listAgents(),
-      apply: applyAgentsResult,
-      reportError: (message) => chatLog.addSystem(`agents list failed: ${message}`),
+      apply: (result) => ownsRefresh() && applyAgentsResult(result),
+      reportError: (error) => ownsRefresh() && chatLog.addSystem(`agents list failed: ${error}`),
     });
 
   const updateAgentFromSessionKey = (key: string) => {
@@ -296,8 +335,11 @@ export function createSessionActions(context: SessionActionContext) {
   const runRefreshSessionInfo = async () => {
     const selection = captureSessionSelection();
     const historyGeneration = historyLoadGeneration;
+    const sessionGeneration = state.sessionGeneration ?? 0;
     const isCurrentRefresh = () =>
-      historyGeneration === historyLoadGeneration && isCurrentSessionSelection(selection);
+      historyGeneration === historyLoadGeneration &&
+      sessionGeneration === (state.sessionGeneration ?? 0) &&
+      isCurrentSessionSelection(selection);
     try {
       const resolveListAgentId = () => {
         if (selection.sessionKey === "global") {
@@ -412,9 +454,12 @@ export function createSessionActions(context: SessionActionContext) {
     // History rebuilds mutate shared UI state after multiple awaits. Only the
     // latest request may render, or a slow reload can replace a newer selection.
     const generation = ++historyLoadGeneration;
+    const sessionGeneration = state.sessionGeneration ?? 0;
     const selection = captureSessionSelection();
     const isCurrentLoad = () =>
-      generation === historyLoadGeneration && isCurrentSessionSelection(selection);
+      generation === historyLoadGeneration &&
+      (state.sessionGeneration ?? 0) === sessionGeneration &&
+      isCurrentSessionSelection(selection);
     try {
       const history = await client.loadHistory({
         sessionKey: selection.sessionKey,
@@ -427,7 +472,10 @@ export function createSessionActions(context: SessionActionContext) {
       const record = history as {
         messages?: unknown[];
         sessionId?: string;
-        sessionInfo?: SessionInfoEntry;
+        sessionInfo?: SessionInfoEntry &
+          Partial<Pick<SessionEntry, "abortedLastRun" | "lastRunError" | "status">> & {
+            activeRunIds?: unknown;
+          };
         defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
         fastMode?: FastMode;
@@ -507,10 +555,7 @@ export function createSessionActions(context: SessionActionContext) {
             if (entry.pending && entry.pendingRunId) {
               chatLog.addPendingUser(entry.pendingRunId, text);
             } else if (entry.live && liveUserMessage) {
-              chatLog.addLiveUser(text, {
-                messageId: liveUserMessage.messageId,
-                ...(liveUserMessage.runId ? { runId: liveUserMessage.runId } : {}),
-              });
+              chatLog.addLiveUser(text, liveUserMessage);
             } else if (liveUserMessage) {
               chatLog.addUser(text, { messageId: liveUserMessage.messageId });
             } else {
@@ -533,44 +578,34 @@ export function createSessionActions(context: SessionActionContext) {
           const toolName = formatPrimitiveString(message.toolName, "tool");
           const component = chatLog.startTool(toolCallId, toolName, {});
           component.setResult(
-            {
-              content: Array.isArray(message.content)
-                ? (message.content as Record<string, unknown>[])
-                : [],
-              details:
-                typeof message.details === "object" && message.details
-                  ? (message.details as Record<string, unknown>)
-                  : undefined,
-            },
+            state.sessionInfo.verboseLevel === "full"
+              ? {
+                  content: Array.isArray(message.content)
+                    ? (message.content as Record<string, unknown>[])
+                    : [],
+                  details:
+                    typeof message.details === "object" && message.details
+                      ? (message.details as Record<string, unknown>)
+                      : undefined,
+                }
+              : { content: [] },
             { isError: Boolean(message.isError) },
           );
         }
       }
       submit.reconcilePendingSubmitHistory(
         state,
-        projection.entries.flatMap((entry) =>
-          !entry.pending &&
-          entry.identity?.role === "user" &&
-          entry.identity.runId !== null &&
-          pendingRunIds.has(entry.identity.runId)
-            ? [entry.identity.runId]
-            : [],
-        ),
+        projection.entries.flatMap((entry) => {
+          const sendId = entry.identity?.sendId;
+          return !entry.pending && sendId && pendingRunIds.has(sendId) ? [sendId] : [];
+        }),
       );
-      // Restore a run still streaming for this session+agent that the gateway
-      // reports as in-flight. Its live deltas were delivered to a per-agent key
-      // we stopped watching after switching away, so the persisted history above
-      // does not contain it; render the partial and re-adopt the run so further
-      // deltas (now that this session is active again) continue it.
       const inFlightRunId = formatPrimitiveString(record.inFlightRun?.runId, "");
       const inFlightText = formatPrimitiveString(record.inFlightRun?.text, "");
       if (inFlightRunId) {
-        // Render any buffered partial (embedded runtimes); Codex has none mid-run.
         if (inFlightText) {
           chatLog.updateAssistant(inFlightText, inFlightRunId);
         }
-        // Adopt the run regardless so its status shows `streaming` (not idle) and
-        // its completion is handled here instead of an unowned error path.
         state.activeChatRunId = inFlightRunId;
         setActivityStatus("streaming");
       }
@@ -582,57 +617,38 @@ export function createSessionActions(context: SessionActionContext) {
       }
       void rememberSessionKey?.(state.currentSessionKey);
       tui.requestRender(true);
-      return { loaded: true, inFlightRunId: inFlightRunId || null };
+      const status = sessionInfo?.status;
+      const runOutcome = inFlightRunId
+        ? ({ state: "active", runId: inFlightRunId } as const)
+        : status === "failed" || status === "timeout"
+          ? ({
+              state: "failed",
+              errorMessage: sessionInfo?.lastRunError ?? `session run ${status}`,
+            } as const)
+          : status === "killed" || sessionInfo?.abortedLastRun === true
+            ? ({ state: "interrupted" } as const)
+            : ({ state: "completed" } as const);
+      const activeRunIds = sessionInfo?.activeRunIds;
+      return {
+        loaded: true,
+        runOutcome,
+        ...(Array.isArray(activeRunIds) && activeRunIds.every((id) => typeof id === "string")
+          ? { activeRunIds }
+          : {}),
+      };
     } catch (err) {
-      if (!isCurrentLoad()) {
-        return { loaded: false };
+      if (isCurrentLoad() && !isAbortError(err)) {
+        chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
+        tui.requestRender(true);
       }
-      chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
-      tui.requestRender(true);
       return { loaded: false };
     }
   };
 
-  const setSession = async (rawKey: string) => {
-    const previousSelection = captureSessionSelection();
-    const nextSelection = resolveSessionSelection(rawKey);
-    const nextKey = nextSelection.key;
-    const selectionChanged = !(
-      nextSelection.agentId === previousSelection.agentId &&
-      agentSessionKeysMatchByRequestKey(nextKey, previousSelection.sessionKey)
-    );
-    if (selectionChanged) {
-      // Retire the previous session's runs before history can adopt a new
-      // in-flight owner; otherwise its completion can promote an old run.
-      invalidateRunOwnership?.();
-      reduceTuiSessionProjection(state, {
-        type: "sessionReset",
-        scope: readTuiSessionProjectionScope(state),
-      });
+  const setSession = async (rawKey: string, agentId?: string) => {
+    if (applySessionSelection(resolveSessionSelection(rawKey, agentId)) || !state.historyLoaded) {
+      await loadHistory();
     }
-    state.currentAgentId = nextSelection.agentId;
-    state.currentSessionKey = nextKey;
-    state.activeChatRunId = null;
-    submit.clearPendingSubmit(state);
-    setActivityStatus("idle");
-    if (selectionChanged) {
-      state.currentSessionId = null;
-      clearTuiSessionModeOverrides(state.sessionInfo);
-    }
-    // Session keys can move backwards in updatedAt ordering; drop previous session freshness
-    // so refresh data for the newly selected session isn't rejected as stale.
-    state.sessionInfo.updatedAt = null;
-    state.historyLoaded = false;
-    if (selectionChanged) {
-      // Live prompt identities belong to the old selection, not its pending successor.
-      chatLog.clearAll();
-    }
-    chatLog.clearPendingUsers();
-    clearLocalRunIds?.();
-    btw.clear();
-    updateHeader();
-    updateFooter();
-    await loadHistory();
   };
 
   const abortActive = async (params?: { preferActive?: boolean }) => {
@@ -647,8 +663,14 @@ export function createSessionActions(context: SessionActionContext) {
       return;
     }
     const selection = captureSessionSelection();
+    const sessionId = state.currentSessionId;
+    const sessionGeneration = state.sessionGeneration ?? 0;
     const pendingRunId = submit.getPendingSubmitAcceptedRunId(state);
     const activeRunId = state.activeChatRunId;
+    const isCurrentAbort = () =>
+      isCurrentSessionSelection(selection) &&
+      (state.sessionGeneration ?? 0) === sessionGeneration &&
+      (sessionId === null || state.currentSessionId === sessionId);
     const dropPendingRun = (runId: string) => {
       reduceTuiSessionProjection(state, {
         type: "sendFailed",
@@ -665,7 +687,7 @@ export function createSessionActions(context: SessionActionContext) {
         sessionKey: selection.sessionKey,
         ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
       });
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrentAbort()) {
         return;
       }
       if (!result.aborted) {
@@ -692,7 +714,7 @@ export function createSessionActions(context: SessionActionContext) {
       }
       setActivityStatus("aborted");
     } catch (err) {
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrentAbort()) {
         return;
       }
       chatLog.addSystem(`abort failed: ${formatTuiErrorMessage(err)}`);

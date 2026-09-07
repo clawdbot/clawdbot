@@ -1,12 +1,13 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
-import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import {
+  handleChatAbortRequest,
+  handleChatAbortRequestWithLifecycle,
+} from "./chat-abort-handler.js";
 import {
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
-import { chatHandlers } from "./chat.js";
 
 export type AbortResponsePayload = { aborted?: boolean; runIds?: string[] };
 type AbortRespond = Awaited<ReturnType<typeof invokeChatAbortHandler>>;
@@ -40,7 +41,7 @@ export async function invokeAbort({
               onAuthorizedAfterQueuedAbort,
               excludeRunIds,
             })
-        : expectDefined(chatHandlers["chat.abort"], 'chatHandlers["chat.abort"] test invariant'),
+        : handleChatAbortRequest,
     context,
     request: {
       sessionKey,

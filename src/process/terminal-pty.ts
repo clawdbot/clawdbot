@@ -6,7 +6,7 @@ import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
-import { signalProcessTree } from "./kill-tree.js";
+import { signalPtySessionTree } from "./kill-tree.js";
 import {
   readPtyTerminalName,
   resolvePtyTerminalName,
@@ -19,7 +19,7 @@ import {
 } from "./windows-command.js";
 
 /** Live PTY handle shared by gateway terminals and node-host commands. */
-type TerminalPtyHandle = {
+export type TerminalPtyHandle = {
   pid: number;
   write(data: string): void;
   resize(cols: number, rows: number): void;
@@ -49,9 +49,8 @@ function resolveTerminalPtyInvocation(params: {
   file: string;
   args: string[];
   platform?: NodeJS.Platform;
-  comSpec?: string;
   env: NodeJS.ProcessEnv;
-}): { file: string; args: string[] } {
+}): { file: string; args: string[] | string } {
   const platform = params.platform ?? process.platform;
   if (!isWindowsBatchCommand(params.file, platform)) {
     return { file: params.file, args: params.args };
@@ -73,31 +72,39 @@ function resolveTerminalPtyInvocation(params: {
     return { file: invocation.command, args: invocation.argv };
   }
   return {
-    file: params.comSpec?.trim() || resolveTrustedWindowsCmdExe(platform),
-    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.file, params.args)],
+    file:
+      resolveEnvironmentValue(params.env, "COMSPEC")?.trim() ||
+      resolveTrustedWindowsCmdExe(platform),
+    // node-pty preserves string tails verbatim; arrays would escape the prepared cmd quotes again.
+    args: `/d /s /c ${buildWindowsCmdExeCommandLine(params.file, params.args)}`,
   };
 }
 
-export async function spawnTerminalPty(params: {
+export type TerminalPtySpawnParams = {
   file: string;
   args: string[];
   cwd?: string;
   env: Record<string, string>;
   cols: number;
   rows: number;
-}): Promise<TerminalPtyHandle> {
+};
+
+export async function spawnTerminalPty(params: TerminalPtySpawnParams): Promise<TerminalPtyHandle> {
+  if (process.versions.bun && process.platform !== "win32") {
+    // Bun closes node-pty's nonblocking tty.ReadStream on EAGAIN, hanging up the child.
+    const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
+    return await spawnNodeTerminalPty(params);
+  }
   const { spawn } = await import("@lydell/node-pty");
   const env = { ...params.env };
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
   const terminalName = resolvePtyTerminalName(readPtyTerminalName(env, process.platform));
   setPtyTerminalName({ env, name: terminalName, platform: process.platform });
-  const comSpec = resolveEnvironmentValue(env, "COMSPEC");
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
     args: params.args,
     env,
-    ...(comSpec ? { comSpec } : {}),
   });
   const pty = spawn(invocation.file, invocation.args, {
     name: terminalName,
@@ -132,7 +139,7 @@ function killPtyTree(pty: Pick<IPty, "pid" | "kill">, signal?: string): void {
     if ((sig === "SIGKILL" || sig === "SIGTERM") && typeof pty.pid === "number" && pty.pid > 0) {
       // forkpty creates a new session/process group; retain descendant cleanup
       // after the shell exits and only its group remains.
-      signalProcessTree(pty.pid, sig, { detached: true });
+      signalPtySessionTree(pty.pid, sig);
     } else if (process.platform === "win32") {
       pty.kill();
     } else {

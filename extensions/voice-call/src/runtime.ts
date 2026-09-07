@@ -1,5 +1,5 @@
 // Voice Call plugin module implements runtime behavior.
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
@@ -8,7 +8,6 @@ import {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -19,6 +18,7 @@ import {
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
+  resolveVoiceCallStreamExposurePaths,
   resolveTwilioAuthToken,
   resolveVoiceCallConfig,
   validateProviderConfig,
@@ -27,8 +27,9 @@ import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
+import { resolveVoiceCallRealtimeTools } from "./realtime-call-control.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
-import { resolveCallAgentId } from "./resolve-call-agent-id.js";
+import { resolveCallAgentId, resolveVoiceCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
@@ -307,10 +308,7 @@ export async function createVoiceCallRuntime(params: {
 
   const cfg = fullConfig ?? (coreConfig as OpenClawConfig);
   const unresolvedConfig = resolveVoiceCallConfig(rawConfig);
-  const configuredAgentId = unresolvedConfig.agentId
-    ? normalizeAgentId(unresolvedConfig.agentId)
-    : resolveDefaultAgentId(cfg);
-  const config = { ...unresolvedConfig, agentId: configuredAgentId };
+  const config = { ...unresolvedConfig, agentId: resolveVoiceCallAgentId(unresolvedConfig, cfg) };
 
   if (!config.enabled) {
     throw new Error("Voice call disabled. Enable the plugin entry in config.");
@@ -351,10 +349,7 @@ export async function createVoiceCallRuntime(params: {
     });
     const realtimeConfig = {
       ...config.realtime,
-      tools: resolveRealtimeVoiceAgentConsultTools(
-        config.realtime.toolPolicy,
-        config.realtime.tools,
-      ),
+      tools: resolveVoiceCallRealtimeTools(config.realtime.toolPolicy, config.realtime.tools),
     };
     const resolveCallRegistration = (call: CallRecord) => {
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
@@ -376,9 +371,9 @@ export async function createVoiceCallRuntime(params: {
     const realtimeHandler = new RealtimeCallHandler(
       realtimeConfig,
       manager,
-      provider,
       resolveCallRegistration,
       config.serve.path,
+      webhookServer.getStreamDisconnectLifecycle(),
       cfg,
     );
     if (config.realtime.toolPolicy !== "none") {
@@ -484,7 +479,12 @@ export async function createVoiceCallRuntime(params: {
         const nextTunnelResult = await startTunnel({
           provider: config.tunnel.provider,
           port: config.serve.port,
+          tailscalePort: config.tailscale.port,
           path: config.serve.path,
+          streamPaths: resolveVoiceCallStreamExposurePaths(config, {
+            publicWebhookPath: config.serve.path,
+            localWebhookPath: config.serve.path,
+          }),
           ngrokAuthToken: config.tunnel.ngrokAuthToken,
           ngrokDomain: config.tunnel.ngrokDomain,
         });

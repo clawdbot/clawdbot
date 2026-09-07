@@ -36,14 +36,25 @@ export type SessionSystemPromptReport = {
     // persisted transcript prompt; consumers add it on top of transcript sums.
     modelOnlyPromptChars?: number;
   };
-  injectedWorkspaceFiles: Array<{
-    name: string;
-    path: string;
-    missing: boolean;
-    rawChars: number;
-    injectedChars: number;
-    truncated: boolean;
-  }>;
+  injectedWorkspaceFiles: Array<
+    {
+      name: string;
+      path: string;
+      missing: boolean;
+      rawChars: number;
+    } & (
+      | {
+          injectionStatus?: "verified";
+          injectedChars: number;
+          truncated: boolean;
+        }
+      | {
+          injectionStatus: "native_unverified";
+          injectedChars: null;
+          truncated: null;
+        }
+    )
+  >;
   skills: {
     promptChars: number;
     hash?: string;

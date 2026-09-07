@@ -10,23 +10,11 @@ actor RemoteTunnelManager {
         let generation: UInt64
     }
 
-    private enum CreateJoinResult {
+    private enum RouteLookupResult {
         case none
-        case replacedMismatchedCreate(UInt64)
+        case retired(UInt64)
         case staleConfiguration
         case route(Route)
-    }
-
-    private enum ActiveRouteLookupResult {
-        case none
-        case retiredActive(UInt64)
-        case staleConfiguration
-        case route(Route)
-    }
-
-    private struct EnsureStepResolution {
-        let route: Route?
-        let lifecycleGeneration: UInt64
     }
 
     private struct ActiveTunnel {
@@ -42,31 +30,29 @@ actor RemoteTunnelManager {
         configuration: RemotePortTunnel.Configuration,
         lifecycleGeneration: UInt64,
         task: Task<RemotePortTunnel, Error>)?
+    private var retirementInFlight: (token: UUID, task: Task<Void, Never>)?
     private var tunnelGeneration: UInt64 = 0
     private var lifecycleGeneration: UInt64 = 0
-    private var restartInFlight = false
+    private var isShutDown = false
     private var lastRestartAt: Date?
     private let restartBackoffSeconds: TimeInterval = 2.0
 
     func controlTunnelRouteIfRunning() async -> Route? {
+        guard !self.isShutDown, self.retirementInFlight == nil else { return nil }
         guard let configuration = try? RemotePortTunnel.configuration(
             remotePort: GatewayEnvironment.gatewayPort())
         else {
-            self.lifecycleGeneration &+= 1
-            self.createInFlight?.task.cancel()
-            self.createInFlight = nil
-            let tunnel = self.controlTunnel?.tunnel
-            self.controlTunnel = nil
-            if tunnel != nil {
-                self.tunnelGeneration &+= 1
-            }
-            await tunnel?.terminate()
+            self.beginRetirement()
+            await self.waitForRetirement()
             return nil
         }
-        switch await self.lookupControlTunnelRoute(configuration: configuration) {
+        switch await self.lookupControlTunnelRoute(
+            configuration: configuration,
+            lifecycleGeneration: self.lifecycleGeneration)
+        {
         case let .route(route):
             return route
-        case .none, .retiredActive, .staleConfiguration:
+        case .none, .retired, .staleConfiguration:
             return nil
         }
     }
@@ -77,40 +63,29 @@ actor RemoteTunnelManager {
 
     private func lookupControlTunnelRoute(
         configuration: RemotePortTunnel.Configuration,
-        requireCurrentConfiguration: Bool = false) async -> ActiveRouteLookupResult
+        lifecycleGeneration: UInt64) async -> RouteLookupResult
     {
-        if requireCurrentConfiguration {
-            guard let currentConfiguration = try? RemotePortTunnel.configuration(
-                remotePort: GatewayEnvironment.gatewayPort()),
-                Self.isCurrentConfiguration(
-                    requested: configuration,
-                    current: currentConfiguration)
-            else {
-                return .staleConfiguration
-            }
-        }
-        if self.restartInFlight {
-            self.logger.info("control tunnel restart in flight; skipping reuse check")
-            return .none
+        await self.waitForRetirement()
+        guard self.lifecycleGeneration == lifecycleGeneration else { return .none }
+        guard let currentConfiguration = try? RemotePortTunnel.configuration(
+            remotePort: GatewayEnvironment.gatewayPort()),
+            Self.isCurrentConfiguration(requested: configuration, current: currentConfiguration)
+        else {
+            return .staleConfiguration
         }
         if let active = controlTunnel {
             guard Self.canReuse(active.configuration, for: configuration) else {
                 self.logger.info("configured SSH route changed; replacing control tunnel")
-                self.lifecycleGeneration &+= 1
-                let replacementGeneration = self.lifecycleGeneration
-                self.controlTunnel = nil
-                self.tunnelGeneration &+= 1
-                await active.tunnel.terminate()
-                return .retiredActive(replacementGeneration)
+                let replacementGeneration = self.beginRetirement()
+                await self.waitForRetirement()
+                return .retired(replacementGeneration)
             }
             guard active.tunnel.isRunning,
                   let local = active.tunnel.localPort
             else {
-                self.lifecycleGeneration &+= 1
-                let replacementGeneration = self.lifecycleGeneration
-                self.controlTunnel = nil
-                self.tunnelGeneration &+= 1
-                return .retiredActive(replacementGeneration)
+                let replacementGeneration = self.beginRetirement()
+                await self.waitForRetirement()
+                return .retired(replacementGeneration)
             }
             let pid = active.tunnel.processIdentifier
             let isListening = await PortGuardian.shared.isListening(port: Int(local), pid: pid)
@@ -121,19 +96,19 @@ actor RemoteTunnelManager {
                   current.configuration == active.configuration,
                   current.route == active.route
             else { return .none }
+            if (try? RemotePortTunnel.configuration(remotePort: GatewayEnvironment.gatewayPort())) != configuration {
+                return .staleConfiguration
+            }
             if isListening {
                 self.logger.info("reusing active SSH tunnel localPort=\(local, privacy: .public)")
                 return .route(current.route)
             }
             self.logger.error(
                 "active SSH tunnel on port \(local, privacy: .public) is not listening; restarting")
-            self.lifecycleGeneration &+= 1
-            let replacementGeneration = self.lifecycleGeneration
-            self.controlTunnel = nil
-            self.tunnelGeneration &+= 1
-            self.beginRestart()
-            await active.tunnel.terminate()
-            return .retiredActive(replacementGeneration)
+            let replacementGeneration = self.beginRetirement()
+            self.lastRestartAt = Date()
+            await self.waitForRetirement()
+            return .retired(replacementGeneration)
         }
         return .none
     }
@@ -152,59 +127,32 @@ actor RemoteTunnelManager {
         requested == current
     }
 
-    private func resolveActiveLookup(
-        _ result: ActiveRouteLookupResult,
-        lifecycleGeneration: UInt64) async throws -> EnsureStepResolution
+    private func resolveLookup(
+        _ result: RouteLookupResult,
+        lifecycleGeneration: UInt64) async throws -> Route?
     {
+        try Task.checkCancellation()
         switch result {
         case let .route(route):
-            return EnsureStepResolution(route: route, lifecycleGeneration: lifecycleGeneration)
-        case let .retiredActive(replacementGeneration):
+            guard self.lifecycleGeneration == lifecycleGeneration else { throw CancellationError() }
+            return route
+        case let .retired(replacementGeneration):
             guard self.lifecycleGeneration == replacementGeneration else {
                 throw CancellationError()
             }
-            return EnsureStepResolution(route: nil, lifecycleGeneration: replacementGeneration)
+            // Another caller may have installed the replacement during retirement.
+            return try await self.ensureControlTunnelRoute(lifecycleGeneration: replacementGeneration)
         case .staleConfiguration:
-            try Task.checkCancellation()
             guard self.lifecycleGeneration == lifecycleGeneration else {
                 throw CancellationError()
             }
-            let route = try await self.ensureControlTunnelRoute(
+            return try await self.ensureControlTunnelRoute(
                 lifecycleGeneration: lifecycleGeneration)
-            return EnsureStepResolution(route: route, lifecycleGeneration: lifecycleGeneration)
         case .none:
             guard self.lifecycleGeneration == lifecycleGeneration else {
                 throw CancellationError()
             }
-            return EnsureStepResolution(route: nil, lifecycleGeneration: lifecycleGeneration)
-        }
-    }
-
-    private func resolveCreateJoin(
-        _ result: CreateJoinResult,
-        lifecycleGeneration: UInt64) async throws -> EnsureStepResolution
-    {
-        switch result {
-        case let .route(route):
-            return EnsureStepResolution(route: route, lifecycleGeneration: lifecycleGeneration)
-        case let .replacedMismatchedCreate(replacementGeneration):
-            guard self.lifecycleGeneration == replacementGeneration else {
-                throw CancellationError()
-            }
-            return EnsureStepResolution(route: nil, lifecycleGeneration: replacementGeneration)
-        case .staleConfiguration:
-            try Task.checkCancellation()
-            guard self.lifecycleGeneration == lifecycleGeneration else {
-                throw CancellationError()
-            }
-            let route = try await self.ensureControlTunnelRoute(
-                lifecycleGeneration: lifecycleGeneration)
-            return EnsureStepResolution(route: route, lifecycleGeneration: lifecycleGeneration)
-        case .none:
-            guard self.lifecycleGeneration == lifecycleGeneration else {
-                throw CancellationError()
-            }
-            return EnsureStepResolution(route: nil, lifecycleGeneration: lifecycleGeneration)
+            return nil
         }
     }
 
@@ -215,120 +163,89 @@ actor RemoteTunnelManager {
     }
 
     func ensureControlTunnelRoute() async throws -> Route {
-        try await self.ensureControlTunnelRoute(
+        guard !self.isShutDown else { throw CancellationError() }
+        return try await self.ensureControlTunnelRoute(
             lifecycleGeneration: self.lifecycleGeneration)
     }
 
     private func ensureControlTunnelRoute(
-        lifecycleGeneration initialLifecycleGeneration: UInt64) async throws -> Route
+        lifecycleGeneration: UInt64) async throws -> Route
     {
-        var lifecycleGeneration = initialLifecycleGeneration
-        try Task.checkCancellation()
-        guard self.lifecycleGeneration == lifecycleGeneration else {
-            throw CancellationError()
-        }
-
-        let configuration = try RemotePortTunnel.configuration(
-            remotePort: GatewayEnvironment.gatewayPort())
-        let identitySet = !configuration.identity.isEmpty
-        self.logger.info(
-            "ensure SSH tunnel target=\(configuration.target.host, privacy: .public) " +
-                "identitySet=\(identitySet, privacy: .public)")
-
-        var resolution = try await self.resolveActiveLookup(
-            self.lookupControlTunnelRoute(
-                configuration: configuration,
-                requireCurrentConfiguration: true),
-            lifecycleGeneration: lifecycleGeneration)
-        if let route = resolution.route {
-            return route
-        }
-        lifecycleGeneration = resolution.lifecycleGeneration
-
-        var joinResult = try await self.joinCreateInFlight(configuration: configuration)
-        resolution = try await self.resolveCreateJoin(
-            joinResult,
-            lifecycleGeneration: lifecycleGeneration)
-        if let route = resolution.route {
-            return route
-        }
-        lifecycleGeneration = resolution.lifecycleGeneration
-
-        try await self.waitForRestartBackoffIfNeeded()
-        try Task.checkCancellation()
-        guard self.lifecycleGeneration == lifecycleGeneration else {
-            throw CancellationError()
-        }
-
-        // The backoff suspends this actor. Another caller may have installed or
-        // started the canonical tunnel while we slept, so join it instead of
-        // launching a duplicate SSH process.
-        resolution = try await self.resolveActiveLookup(
-            self.lookupControlTunnelRoute(
-                configuration: configuration,
-                requireCurrentConfiguration: true),
-            lifecycleGeneration: lifecycleGeneration)
-        if let route = resolution.route {
-            return route
-        }
-        lifecycleGeneration = resolution.lifecycleGeneration
-
-        joinResult = try await self.joinCreateInFlight(configuration: configuration)
-        resolution = try await self.resolveCreateJoin(
-            joinResult,
-            lifecycleGeneration: lifecycleGeneration)
-        if let route = resolution.route {
-            return route
-        }
-        lifecycleGeneration = resolution.lifecycleGeneration
-        try Task.checkCancellation()
-        guard self.lifecycleGeneration == lifecycleGeneration else {
-            throw CancellationError()
-        }
-
-        let currentConfiguration = try RemotePortTunnel.configuration(
-            remotePort: GatewayEnvironment.gatewayPort())
-        guard currentConfiguration == configuration else {
+        var waitedForBackoff = false
+        while true {
+            try Task.checkCancellation()
             guard self.lifecycleGeneration == lifecycleGeneration else {
                 throw CancellationError()
             }
-            return try await self.ensureControlTunnelRoute(
+            let configuration = try RemotePortTunnel.configuration(
+                remotePort: GatewayEnvironment.gatewayPort())
+            if let route = try await self.resolveLookup(
+                self.lookupControlTunnelRoute(
+                    configuration: configuration,
+                    lifecycleGeneration: lifecycleGeneration),
                 lifecycleGeneration: lifecycleGeneration)
-        }
-
-        let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
-        let token = UUID()
-        let task = Task {
-            try await RemotePortTunnel.create(
-                configuration: configuration,
-                preferredLocalPort: desiredPort,
-                allowRandomLocalPort: true)
-        }
-        self.createInFlight = (
-            token: token,
-            configuration: configuration,
-            lifecycleGeneration: lifecycleGeneration,
-            task: task)
-        let tunnel: RemotePortTunnel
-        do {
-            tunnel = try await task.value
-        } catch {
-            if self.createInFlight?.token == token {
-                self.createInFlight = nil
+            {
+                return route
             }
-            throw error
+            if let route = try await self.resolveLookup(
+                self.joinCreateInFlight(
+                    configuration: configuration,
+                    lifecycleGeneration: lifecycleGeneration),
+                lifecycleGeneration: lifecycleGeneration)
+            {
+                return route
+            }
+            if !waitedForBackoff {
+                try await self.waitForRestartBackoffIfNeeded()
+                waitedForBackoff = true
+                continue
+            }
+
+            // Every suspension can admit another owner. Check all slots and the
+            // current configuration in the same actor turn that claims creation.
+            try Task.checkCancellation()
+            guard self.lifecycleGeneration == lifecycleGeneration else { throw CancellationError() }
+            let currentConfiguration = try RemotePortTunnel.configuration(
+                remotePort: GatewayEnvironment.gatewayPort())
+            guard self.retirementInFlight == nil, self.controlTunnel == nil,
+                  self.createInFlight == nil, currentConfiguration == configuration
+            else { continue }
+
+            let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
+            let token = UUID()
+            let task = Task {
+                try await RemotePortTunnel.create(
+                    configuration: configuration,
+                    preferredLocalPort: desiredPort,
+                    allowRandomLocalPort: true)
+            }
+            self.createInFlight = (
+                token: token,
+                configuration: configuration,
+                lifecycleGeneration: lifecycleGeneration,
+                task: task)
+            let tunnel: RemotePortTunnel
+            do {
+                tunnel = try await task.value
+            } catch {
+                if self.createInFlight?.token == token { self.createInFlight = nil }
+                throw error
+            }
+            return try await self.installCreatedTunnel(
+                tunnel,
+                token: token,
+                configuration: configuration,
+                lifecycleGeneration: lifecycleGeneration,
+                fallbackPort: desiredPort)
         }
-        return try await self.installCreatedTunnel(
-            tunnel,
-            token: token,
-            configuration: configuration,
-            lifecycleGeneration: lifecycleGeneration,
-            fallbackPort: desiredPort)
     }
 
     private func joinCreateInFlight(
-        configuration: RemotePortTunnel.Configuration) async throws -> CreateJoinResult
+        configuration: RemotePortTunnel.Configuration,
+        lifecycleGeneration: UInt64) async throws -> RouteLookupResult
     {
+        await self.waitForRetirement()
+        guard self.lifecycleGeneration == lifecycleGeneration else { throw CancellationError() }
         guard let create = createInFlight else { return .none }
         guard create.configuration == configuration else {
             let currentConfiguration = try RemotePortTunnel.configuration(
@@ -342,11 +259,9 @@ actor RemoteTunnelManager {
 
             // A suspended create owns the prior SSH route. It must not become
             // the loopback endpoint for the replacement Gateway.
-            self.lifecycleGeneration &+= 1
-            let replacementGeneration = self.lifecycleGeneration
-            create.task.cancel()
-            self.createInFlight = nil
-            return .replacedMismatchedCreate(replacementGeneration)
+            let replacementGeneration = self.beginRetirement()
+            await self.waitForRetirement()
+            return .retired(replacementGeneration)
         }
 
         self.logger.info("control tunnel create in flight; joining")
@@ -367,6 +282,37 @@ actor RemoteTunnelManager {
             fallbackPort: UInt16(GatewayEnvironment.gatewayPort())))
     }
 
+    @discardableResult
+    private func beginRetirement() -> UInt64 {
+        self.lifecycleGeneration &+= 1
+        let active = self.controlTunnel?.tunnel
+        let create = self.createInFlight?.task
+        guard active != nil || create != nil else { return self.lifecycleGeneration }
+        self.controlTunnel = nil
+        self.createInFlight = nil
+        self.tunnelGeneration &+= 1
+        create?.cancel()
+
+        // Publish cleanup ownership before suspending the actor. Reentrant ensures
+        // must join this barrier before reserving the ledger for a replacement.
+        let previous = self.retirementInFlight?.task
+        self.retirementInFlight = (UUID(), Task {
+            await previous?.value
+            if let tunnel = try? await create?.value { await tunnel.terminate() }
+            await active?.terminate()
+        })
+        return self.lifecycleGeneration
+    }
+
+    private func waitForRetirement() async {
+        while let retirement = self.retirementInFlight {
+            await retirement.task.value
+            if self.retirementInFlight?.token == retirement.token {
+                self.retirementInFlight = nil
+            }
+        }
+    }
+
     private func installCreatedTunnel(
         _ tunnel: RemotePortTunnel,
         token: UUID,
@@ -375,14 +321,14 @@ actor RemoteTunnelManager {
         fallbackPort: UInt16) async throws -> Route
     {
         guard self.lifecycleGeneration == lifecycleGeneration else {
-            await tunnel.terminate()
+            await self.waitForRetirement()
             throw CancellationError()
         }
         if let active = controlTunnel, active.tunnel === tunnel {
             return active.route
         }
         guard self.createInFlight?.token == token else {
-            await tunnel.terminate()
+            await self.waitForRetirement()
             throw CancellationError()
         }
         let currentConfiguration: RemotePortTunnel.Configuration
@@ -390,16 +336,13 @@ actor RemoteTunnelManager {
             currentConfiguration = try RemotePortTunnel.configuration(
                 remotePort: GatewayEnvironment.gatewayPort())
         } catch {
-            self.lifecycleGeneration &+= 1
-            self.createInFlight = nil
-            await tunnel.terminate()
+            self.beginRetirement()
+            await self.waitForRetirement()
             throw error
         }
         guard currentConfiguration == configuration else {
-            self.lifecycleGeneration &+= 1
-            let replacementGeneration = self.lifecycleGeneration
-            self.createInFlight = nil
-            await tunnel.terminate()
+            let replacementGeneration = self.beginRetirement()
+            await self.waitForRetirement()
             try Task.checkCancellation()
             guard self.lifecycleGeneration == replacementGeneration else {
                 throw CancellationError()
@@ -415,23 +358,23 @@ actor RemoteTunnelManager {
             tunnel: tunnel,
             configuration: configuration,
             route: route)
-        self.endRestart()
         self.logger.info(
             "ssh tunnel ready localPort=\(resolvedPort, privacy: .public) " +
                 "generation=\(route.generation, privacy: .public)")
         return route
     }
 
+    func shutdown() async {
+        // Quit closes admission permanently; reconnect and mode changes still use stopAll.
+        self.isShutDown = true
+        await self.stopAll()
+    }
+
     func stopAll() async {
         // Invalidate every captured route before terminating processes. Delayed
         // health checks and create completions cannot resurrect this epoch.
-        self.lifecycleGeneration &+= 1
-        self.tunnelGeneration &+= 1
-        self.createInFlight?.task.cancel()
-        self.createInFlight = nil
-        let tunnel = self.controlTunnel?.tunnel
-        self.controlTunnel = nil
-        await tunnel?.terminate()
+        self.beginRetirement()
+        await self.waitForRetirement()
     }
 
     #if DEBUG
@@ -456,25 +399,6 @@ actor RemoteTunnelManager {
         try await self.waitForRestartBackoff(seconds: seconds, sleep: sleep)
     }
     #endif
-
-    private func beginRestart() {
-        guard !self.restartInFlight else { return }
-        self.restartInFlight = true
-        self.lastRestartAt = Date()
-        self.logger.info("control tunnel restart started")
-        Task { [weak self] in
-            guard let self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(self.restartBackoffSeconds * 1_000_000_000))
-            await self.endRestart()
-        }
-    }
-
-    private func endRestart() {
-        if self.restartInFlight {
-            self.restartInFlight = false
-            self.logger.info("control tunnel restart finished")
-        }
-    }
 
     private func waitForRestartBackoffIfNeeded() async throws {
         guard let last = lastRestartAt else { return }

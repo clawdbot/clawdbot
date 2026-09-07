@@ -1,30 +1,16 @@
-// Imessage plugin module implements persisted echo cache behavior.
-import { createHash } from "node:crypto";
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageRuntime } from "../runtime.js";
+import {
+  IMESSAGE_SENT_ECHOES_TTL_MS,
+  IMESSAGE_SENT_ECHOES_NAMESPACE,
+  IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
+  resolveIMessageSentEchoEntryKey,
+  resolveIMessageEchoMediaKey,
+  type PersistedEchoEntry,
+} from "../state-contract.js";
 import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
-
-type PersistedEchoEntry = {
-  scope: string;
-  text?: string;
-  media?: MediaPlaceholderTextFact;
-  messageId?: string;
-  timestamp: number;
-  expiresAt?: number;
-  pending?: true;
-};
-
-// 12h comfortably outlives the inbound replay guard window
-// (IMESSAGE_INBOUND_DEDUPE_TTL_MS) so an own-outbound row that imsg re-emits
-// after a bridge reconnect is still recognized as the agent's own echo rather
-// than re-ingested as an external send. A shorter window would let own rows
-// fall out of the dedupe set before a reconnect burst replays the messages
-// around them.
-export const IMESSAGE_SENT_ECHOES_TTL_MS = 12 * 60 * 60 * 1000;
-export const IMESSAGE_SENT_ECHOES_NAMESPACE = "imessage.sent-echoes";
-export const IMESSAGE_SENT_ECHOES_MAX_ENTRIES = 256;
 
 type PersistedEchoStore = PluginStateSyncKeyedStore<PersistedEchoEntry>;
 
@@ -56,33 +42,6 @@ function reportFailure(scope: string, err: unknown): void {
   }
   persistenceFailureLogged = true;
   logVerbose(`imessage echo-cache: ${scope} disabled after first failure: ${String(err)}`);
-}
-
-export function resolveIMessageSentEchoEntryKey(entry: PersistedEchoEntry): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        entry.scope,
-        entry.text ?? "",
-        resolveIMessageEchoMediaKey(entry.media) ?? "",
-        entry.messageId ?? "",
-        entry.timestamp,
-      ]),
-    )
-    .digest("hex")
-    .slice(0, 32);
-}
-
-export function resolveIMessageEchoMediaKey(
-  media: MediaPlaceholderTextFact | null | undefined,
-): string | undefined {
-  const contentType = media?.contentType?.trim().toLowerCase() || undefined;
-  const kind = media?.kind && media.kind !== "unknown" ? media.kind : undefined;
-  if (kind) {
-    return `kind:${kind}`;
-  }
-  const normalizedContentType = contentType?.split(";", 1)[0]?.trim();
-  return normalizedContentType ? `mime:${normalizedContentType}` : undefined;
 }
 
 function normalizeMedia(

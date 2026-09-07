@@ -1,9 +1,14 @@
 // Control UI tests cover shared Settings control styling through the mocked Gateway.
 import { Buffer } from "node:buffer";
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,12 +20,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "settings-controls",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("settings-controls");
+  }
+});
 
 async function resolvedBackground(page: Page, value: string): Promise<string> {
   return page.evaluate((background) => {
@@ -95,19 +100,146 @@ async function captureBrowserSettingProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
-  });
+  if (page.video()) {
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-desktop.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
+    });
+  }
   await page.setViewportSize({ height: 844, width: 390 });
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
-  });
+  if (page.video()) {
+    await waitForControlUiProofSurface(page.locator(".shell.shell--mobile-nav"), [
+      section.locator(".settings-row").first(),
+    ]);
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-narrow.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
+    });
+  }
 }
 
 suite.define(() => {
+  it("keeps selected segmented options distinct in forced colors", async () => {
+    const cases = [
+      {
+        colorScheme: "dark" as const,
+        config: { ui: { prefs: { themeMode: "dark" } } },
+        featureMethods: undefined,
+        route: "settings/appearance",
+        selected: "Dark",
+        unselected: "Light",
+      },
+      {
+        colorScheme: "light" as const,
+        config: { update: { auto: { enabled: true }, channel: "beta" } },
+        featureMethods: ["config.get", "config.set", "config.apply", "update.run"],
+        route: "settings/updates",
+        selected: "Beta",
+        unselected: "Stable",
+      },
+    ];
+
+    for (const scenario of cases) {
+      await suite.withPage(
+        {
+          colorScheme: scenario.colorScheme,
+          forcedColors: "active",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 1280 },
+        },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            featureMethods: scenario.featureMethods,
+            methodResponses: {
+              "config.get": {
+                config: scenario.config,
+                hash: `forced-colors-${scenario.route}`,
+                issues: [],
+                raw: JSON.stringify(scenario.config),
+                runtimeConfig: scenario.config,
+                valid: true,
+              },
+            },
+            operatorScopes: ["operator.read", "operator.admin"],
+          });
+
+          const response = await page.goto(`${suite.server.baseUrl}${scenario.route}`);
+          expect(response?.status()).toBe(200);
+          expect(await page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(
+            true,
+          );
+
+          const selected = page.getByRole("radio", { name: scenario.selected, exact: true });
+          const unselected = page.getByRole("radio", { name: scenario.unselected, exact: true });
+          await selected.waitFor();
+          expect(await selected.getAttribute("aria-checked")).toBe("true");
+          expect(await unselected.getAttribute("aria-checked")).toBe("false");
+          if (captureUiProofEnabled) {
+            await selected
+              .locator(
+                "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' settings-row ')][1]",
+              )
+              .screenshot({
+                animations: "disabled",
+                path: path.join(
+                  uiProofArtifactDir,
+                  `segmented-forced-colors-${scenario.colorScheme}.png`,
+                ),
+              });
+          }
+          expect(
+            await selected.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                textDecorationLine: style.textDecorationLine,
+                textDecorationThickness: style.textDecorationThickness,
+              };
+            }),
+          ).toEqual({ textDecorationLine: "underline", textDecorationThickness: "2px" });
+          expect(
+            await unselected.evaluate((element) => getComputedStyle(element).textDecorationLine),
+          ).toBe("none");
+
+          await selected.focus();
+          expect(await selected.evaluate((element) => element.matches(":focus-visible"))).toBe(
+            true,
+          );
+          expect(
+            await selected.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                outlineOffset: style.outlineOffset,
+                outlineStyle: style.outlineStyle,
+                outlineWidth: style.outlineWidth,
+                textDecorationLine: style.textDecorationLine,
+              };
+            }),
+          ).toEqual({
+            outlineOffset: "2px",
+            outlineStyle: "solid",
+            outlineWidth: "2px",
+            textDecorationLine: "underline",
+          });
+        },
+      );
+    }
+  });
+
   it("keeps checked switches on the scene accent on the security page", async () => {
     await suite.withPage(
       {
@@ -149,7 +281,6 @@ suite.define(() => {
         ).toBe(await resolvedBackground(page, "var(--accent)"));
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.locator(".content-header").screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-settings-view.png"),
@@ -198,9 +329,6 @@ suite.define(() => {
 
   for (const host of ["browser", "app"] as const) {
     it(`routes links to the Control UI browser in a ${host}-hosted UI`, async () => {
-      if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
-      }
       await suite.withPage(
         {
           colorScheme: "dark",
@@ -218,7 +346,11 @@ suite.define(() => {
               const messages: unknown[] = [];
               const appWindow = window as Window & {
                 openclawNativeLinkMessages?: unknown[];
-                webkit?: unknown;
+                webkit?: {
+                  messageHandlers?: {
+                    openclawLink?: { postMessage: (message: unknown) => void };
+                  };
+                };
               };
               appWindow.openclawNativeLinkMessages = messages;
               appWindow.webkit = {
@@ -235,6 +367,7 @@ suite.define(() => {
               "chat.startup",
               "config.apply",
               "config.patch",
+              "config.schema",
               "config.set",
             ],
             methodResponses: {
@@ -388,10 +521,12 @@ suite.define(() => {
           ).toBe(true);
           await browserPanel.getByText("Example", { exact: true }).first().waitFor();
           await expect
-            .poll(
-              async () => (await browserPanel.textContent())?.includes("Loading page...") ?? true,
+            .poll(() =>
+              browserPanel
+                .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="browser"]')
+                .count(),
             )
-            .toBe(false);
+            .toBe(0);
           expect(await browserPanel.textContent()).not.toContain("Browser request failed");
 
           if (host === "app") {

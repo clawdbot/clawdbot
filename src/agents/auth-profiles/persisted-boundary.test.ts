@@ -16,9 +16,56 @@ import {
   mergeAuthProfileStores,
 } from "./persisted.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
+import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 describe("persisted auth profile boundary", () => {
+  it.each([
+    {
+      name: "token-expired classification with auth reason",
+      cooldownReason: "auth",
+      cooldownClassification: "wham_token_expired",
+      expectedClassification: "wham_token_expired",
+    },
+    {
+      name: "dead-account classification with permanent-auth reason",
+      cooldownReason: "auth_permanent",
+      cooldownClassification: "wham_account_dead",
+      expectedClassification: "wham_account_dead",
+    },
+    {
+      name: "classification mismatched with its canonical reason",
+      cooldownReason: "rate_limit",
+      cooldownClassification: "wham_account_dead",
+      expectedClassification: undefined,
+    },
+    {
+      name: "classification missing its canonical reason",
+      cooldownReason: undefined,
+      cooldownClassification: "wham_token_expired",
+      expectedClassification: undefined,
+    },
+  ] as const)("normalizes $name", (testCase) => {
+    const state = {
+      usageStats: {
+        "openai:default": {
+          cooldownUntil: 1_900_000_000_000,
+          cooldownReason: testCase.cooldownReason,
+          cooldownClassification: testCase.cooldownClassification,
+        },
+      },
+    };
+    const normalizedStats = [
+      coerceAuthProfileState(state).usageStats?.["openai:default"],
+      buildPersistedAuthProfileState(state)?.usageStats?.["openai:default"],
+    ];
+
+    for (const stats of normalizedStats) {
+      expect(stats?.cooldownReason).toBe(testCase.cooldownReason);
+      expect(stats?.cooldownClassification).toBe(testCase.expectedClassification);
+    }
+  });
+
   it("normalizes malformed persisted credentials and state before runtime use", () => {
     const store = coercePersistedAuthProfileStore({
       version: "not-a-version",
@@ -62,6 +109,17 @@ describe("persisted auth profile boundary", () => {
             provider: "openai",
             id: "not-a-secret-id",
           },
+        },
+        "xai:oauth": {
+          type: "oauth",
+          provider: "xai",
+          access: "synthetic-xai-access",
+          refresh: "synthetic-xai-refresh",
+          expires: 1_900_000_000_000,
+          tokenEndpoint: "https://auth.x.ai/oauth2/token",
+          deviceAuthorizationEndpoint: ["wrong"],
+          issuer: "https://auth.x.ai",
+          authFlow: "device-code",
         },
         "broken:array": [],
       },
@@ -119,6 +177,16 @@ describe("persisted auth profile boundary", () => {
           refresh: "refresh-token",
           expires: 0,
         },
+        "xai:oauth": {
+          type: "oauth",
+          provider: "xai",
+          access: "synthetic-xai-access",
+          refresh: "synthetic-xai-refresh",
+          expires: 1_900_000_000_000,
+          tokenEndpoint: "https://auth.x.ai/oauth2/token",
+          issuer: "https://auth.x.ai",
+          authFlow: "device-code",
+        },
       },
       order: {
         openai: ["openai:default"],
@@ -137,6 +205,7 @@ describe("persisted auth profile boundary", () => {
     expect(store?.profiles["broken:array"]).toBeUndefined();
     expect(store?.profiles["openai:default"]).not.toHaveProperty("copyToAgents");
     expect(store?.profiles["openai:oauth"]).not.toHaveProperty("oauthRef");
+    expect(store?.profiles["xai:oauth"]).not.toHaveProperty("deviceAuthorizationEndpoint");
   });
 
   it("lets authoritative runtime external metadata remove stale base profiles", () => {

@@ -1,22 +1,15 @@
-import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
-import { listAgentIds } from "../agents/agent-scope.js";
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
 import type { CliDeps } from "../cli/deps.types.js";
-import {
-  tryGetLegacyDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { CronService } from "../cron/service.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
-import { getChildLogger } from "../logging/logger.js";
+import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -59,6 +52,7 @@ const unavailableCron: GatewayCronServiceContract = {
   remove: async () => cronUnavailable(),
   removeStaleJobFamily: async () => cronUnavailable(),
   removeAgentJobsTransactional: async () => cronUnavailable(),
+  quiesceJobs: async () => cronUnavailable(),
   run: async () => cronUnavailable(),
   enqueueRun: async () => cronUnavailable(),
   getJob: () => undefined,
@@ -76,35 +70,8 @@ function createLocalGatewayRequestContext(
   const logGateway = createSubsystemLogger("gateway/local");
   const cron: GatewayCronServiceContract = {
     ...unavailableCron,
-    removeAgentJobsTransactional: async (agentId, commit) => {
-      const cfg = params.getRuntimeConfig();
-      const storePath = resolveCronJobsStorePath();
-      const service = new CronService({
-        storePath,
-        cronEnabled: cfg.cron?.enabled !== false,
-        cronConfig: cfg.cron,
-        log: getChildLogger({ module: "cron", storeKey: storePath }),
-        defaultAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
-        legacyDefaultAgentId: tryGetLegacyDefaultAgentId(cfg),
-        resolveDefaultAgentId: () =>
-          tryResolveLegacyCompatibilityAgentId(params.getRuntimeConfig()),
-        isAgentAvailable: (id) =>
-          !isAgentDeletionBlocked(id) &&
-          listAgentIds(params.getRuntimeConfig()).some(
-            (configuredId) => normalizeAgentId(configuredId) === id,
-          ),
-        enqueueSystemEvent: () => false,
-        requestHeartbeat: () => {},
-        runIsolatedAgentJob: async () => {
-          throw new Error("Cron execution is unavailable in local embedded agent gateway context.");
-        },
-      });
-      try {
-        return await service.removeAgentJobsTransactional(agentId, commit);
-      } finally {
-        service.stop();
-      }
-    },
+    removeAgentJobsTransactional: async (agentId, commit) =>
+      await withLocalAgentCronJobsRemoved(agentId, params.getRuntimeConfig, commit),
   };
   const sessionEvents = new Set<string>();
   const chatRunState = createChatRunState();
@@ -123,11 +90,16 @@ function createLocalGatewayRequestContext(
         getConfig: params.getRuntimeConfig,
       }),
   });
-  return {
+  const context: GatewayRequestContext = {
+    localEmbedded: true,
+    trackExecution: trackAsyncWork,
     deps: params.deps,
+    configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    // Embedded calls have no running Gateway application owner.
+    isConfigReloadSettled: () => false,
     notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
@@ -202,6 +174,12 @@ function createLocalGatewayRequestContext(
     broadcastVoiceWakeRoutingChanged: () => {},
     unavailableGatewayMethods: new Set(),
   };
+  context.createAgentTurnFacade = async (principal) => {
+    const { createInternalAgentTurnFacade } =
+      await import("./agent-turn/internal-facade.runtime.js");
+    return createInternalAgentTurnFacade({ ...principal, getContext: () => context });
+  };
+  return context;
 }
 
 /** Runs code inside a local gateway request scope unless an outer scope already exists. */
@@ -210,14 +188,18 @@ export function withLocalGatewayRequestScope<T>(
   run: () => T,
 ): T {
   const existing = getPluginRuntimeGatewayRequestScope();
-  if (existing?.context) {
+  if (existing?.context || existing?.resolveGatewayContext) {
     return run();
   }
   const context = createLocalGatewayRequestContext(params);
+  // Session admission retains the instance binding after dropping request context.
+  const resolveGatewayContext = () => context;
+  context.resolveGatewayContext = resolveGatewayContext;
   return withPluginRuntimeGatewayRequestScope(
     {
       ...existing,
       context,
+      resolveGatewayContext,
       isWebchatConnect: existing?.isWebchatConnect ?? (() => false),
     },
     run,

@@ -100,8 +100,14 @@ export async function removeSandboxContainer(containerName: string): Promise<voi
   const registry = await readRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
   if (entry) {
-    const manager = getSandboxBackendManager(entry.backendId ?? "docker");
-    await manager?.removeRuntime({
+    const backendId = entry.backendId ?? "docker";
+    const manager = getSandboxBackendManager(backendId);
+    if (!manager) {
+      throw new Error(
+        `Sandbox backend "${backendId}" is unavailable; enable its plugin before removing this runtime.`,
+      );
+    }
+    await manager.removeRuntime({
       entry,
       config,
       agentId: resolveSandboxAgentId(entry.sessionKey),

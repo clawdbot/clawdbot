@@ -5,27 +5,19 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretRef } from "../../config/types.secrets.js";
+import type { OAuthCredentialMetadata } from "./credential-schema.js";
 import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
 
 /** Provider identifier recorded on auth profile credentials. */
 export type OAuthProvider = string;
 
 /** Refreshable OAuth credential fields persisted for provider auth profiles. */
-export type OAuthCredentials = {
+export type OAuthCredentials = OAuthCredentialMetadata & {
   access: string;
   refresh: string;
   expires: number;
   provider?: OAuthProvider;
   email?: string;
-  enterpriseUrl?: string;
-  projectId?: string;
-  accountId?: string;
-  chatgptPlanType?: string;
-  /** Non-secret subscription plan captured from external CLI logins (e.g. "max"). */
-  subscriptionType?: string;
-  /** Non-secret rate-limit tier captured from external CLI logins (e.g. "default_max_20x"). */
-  rateLimitTier?: string;
-  idToken?: string;
 };
 
 /** API-key credential with optional secret reference indirection. */
@@ -65,7 +57,6 @@ export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
   provider: string;
   oauthRef?: LegacyOAuthRef;
-  clientId?: string;
   /**
    * OAuth refresh tokens are not portable by default. Provider-owned flows may
    * set this only when copying refresh material across agents is known safe.
@@ -94,6 +85,9 @@ export type AuthProfileFailureReason =
   | "unclassified"
   | "unknown";
 
+/** Optional host diagnostic attached to a canonical cooldown reason. */
+export type AuthProfileCooldownClassification = "wham_token_expired" | "wham_account_dead";
+
 /** Profile-wide blocked reason reported by provider usage probes. */
 export type AuthProfileBlockedReason = "subscription_limit";
 /** Source that marked a profile as blocked. */
@@ -109,6 +103,7 @@ export type ProfileUsageStats = {
   blockedScope?: "model";
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
+  cooldownClassification?: AuthProfileCooldownClassification;
   cooldownModel?: string;
   disabledUntil?: number;
   disabledReason?: AuthProfileFailureReason;

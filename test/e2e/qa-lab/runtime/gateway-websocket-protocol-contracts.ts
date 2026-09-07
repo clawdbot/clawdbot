@@ -8,8 +8,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, type RawData } from "ws";
 import {
   QA_EVIDENCE_FILENAME,
-  startQaGatewayChild,
+  createQaGatewayChild,
   type QaEvidenceSummaryJson,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_IDS,
@@ -28,6 +29,7 @@ import {
   TICK_INTERVAL_MS,
 } from "../../../../src/gateway/server-constants.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.ts";
 
 const SCENARIO_ID = "gateway-websocket-protocol-contracts";
@@ -512,12 +514,13 @@ function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawC
 
 async function runProof(options: ProducerOptions): Promise<string> {
   const fixture = await createFixturePlugin();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let primaryClient: RawGatewayClient | undefined;
   let proofError: Error | undefined;
   let details = "";
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
@@ -547,7 +550,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
   } finally {
     await closeClient(primaryClient as RawGatewayClient).catch(() => undefined);
     const tempRoot = gateway?.tempRoot;
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await fixture.cleanup();
     if (!proofError && tempRoot && existsSync(tempRoot)) {
       proofError = new Error(`Gateway temp root was not cleaned up: ${tempRoot}`);

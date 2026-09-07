@@ -1,23 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
-  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  addSessionMember,
-  listSessionMembers,
-} from "../../config/sessions/session-sharing-store.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
-import { sessionLog } from "./sessions-shared.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 afterEach(() => {
@@ -88,7 +78,7 @@ async function invokePatchSession(
 }
 
 describe("sessions.patch archive attribution", () => {
-  it("stamps the transition actor, audits each transition, and preserves the first archiver", async () => {
+  it("stamps the transition actor without adding transcript events and preserves the first archiver", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:archive-attribution";
       const sessionId = "session-archive-attribution";
@@ -124,33 +114,11 @@ describe("sessions.patch archive attribution", () => {
       expect(restored?.archivedAt).toBeUndefined();
       expect(restored?.archivedBy).toBeUndefined();
 
-      const noteContents = (
-        await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey })
-      ).flatMap((event) => {
-        if (!event || typeof event !== "object" || !("message" in event)) {
-          return [];
-        }
-        const message = event.message;
-        if (
-          !message ||
-          typeof message !== "object" ||
-          !("customType" in message) ||
-          message.customType !== "openclaw.system-note" ||
-          !("content" in message) ||
-          typeof message.content !== "string"
-        ) {
-          return [];
-        }
-        return [message.content];
-      });
-      expect(noteContents).toEqual([
-        "System note: archived by Ada",
-        "System note: unarchived by Bob",
-      ]);
+      expect(await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey })).toEqual([]);
     });
   });
 
-  it("does not fabricate attribution or an actor-stamped audit for an unidentified client", async () => {
+  it("does not fabricate attribution or transcript events for an unidentified client", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:solo-archive";
       const sessionId = "session-solo-archive";
@@ -198,91 +166,6 @@ describe("sessions.patch archive attribution", () => {
         archivedAt: expect.any(Number),
         archivedBy: { type: "human", id: "profile-ada" },
       });
-    });
-  });
-
-  it("keeps an alias archive when its best-effort audit note fails", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const canonicalKey = "agent:main:alias-archive";
-      const aliasKey = "alias-archive";
-      const memberId = "profile-member";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: canonicalKey },
-        {
-          sessionId: "session-canonical-before-archive",
-          updatedAt: 1,
-          label: "canonical",
-        },
-      );
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: aliasKey },
-        {
-          sessionId: "session-alias-before-archive",
-          updatedAt: 2,
-          label: "alias",
-        },
-      );
-      const memberScope = { agentId: "main", sessionKey: canonicalKey };
-      addSessionMember(memberScope, {
-        identityId: memberId,
-        addedBy: "profile-owner",
-        addedAt: 123,
-      });
-      expect(listSessionMembers(memberScope)).toEqual([
-        { identityId: memberId, addedBy: "profile-owner", addedAt: 123 },
-      ]);
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const readCandidateState = () => ({
-        entries: listSessionEntriesCore({ agentId: "main" })
-          .filter(({ sessionKey }) => sessionKey === canonicalKey || sessionKey === aliasKey)
-          .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey)),
-        members: listSessionMembers(memberScope),
-      });
-      const readTotalChanges = () =>
-        (
-          database.db.prepare("SELECT total_changes() AS value").get() as {
-            value: number;
-          }
-        ).value;
-      let stateAtFailure: ReturnType<typeof readCandidateState> | undefined;
-      let changesAtFailure: number | undefined;
-      const append = vi
-        .spyOn(SessionManager, "appendMessageToTranscript")
-        .mockImplementationOnce(() => {
-          stateAtFailure = readCandidateState();
-          changesAtFailure = readTotalChanges();
-          throw new Error("audit unavailable");
-        });
-      const warn = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
-
-      try {
-        const responses = await invokePatchSession(
-          {
-            key: aliasKey,
-            archived: true,
-            expectedSessionId: "session-alias-before-archive",
-          },
-          client("profile-ada", "Ada"),
-        );
-        expect(responses).toHaveLength(1);
-        expect(responses[0]?.[0]).toBe(true);
-        expect(warn).toHaveBeenCalledWith(
-          expect.stringContaining(
-            `sessions.patch: archived audit note failed for ${canonicalKey}; archive kept: audit unavailable`,
-          ),
-        );
-      } finally {
-        append.mockRestore();
-        warn.mockRestore();
-      }
-
-      expect(loadGatewaySessionRow(canonicalKey, { agentId: "main" })).toMatchObject({
-        archived: true,
-        archivedAt: expect.any(Number),
-        archivedBy: { type: "human", id: "profile-ada" },
-      });
-      expect(readCandidateState()).toEqual(stateAtFailure);
-      expect(readTotalChanges()).toBe(changesAtFailure);
     });
   });
 });

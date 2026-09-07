@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { describe, expect, it } from "vitest";
-import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
+import { resolveFileWithinRoot } from "./file-resolver.js";
 
 type ResolvedFile = NonNullable<Awaited<ReturnType<typeof resolveFileWithinRoot>>>;
 
@@ -26,11 +26,6 @@ function expectResolvedFile(
 }
 
 describe("resolveFileWithinRoot", () => {
-  it("normalizes URL paths", () => {
-    expect(normalizeUrlPath("/nested/../file.txt")).toBe("/file.txt");
-    expect(normalizeUrlPath("plain.txt")).toBe("/plain.txt");
-  });
-
   it("opens directory index files through the fs-safe root", async () => {
     await withCanvasTemp("openclaw-canvas-resolver-", async (root) => {
       await fs.mkdir(path.join(root, "docs"), { recursive: true });

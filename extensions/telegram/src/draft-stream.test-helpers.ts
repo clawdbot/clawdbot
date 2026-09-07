@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import type { TelegramDraftPreview, TelegramDraftStream } from "./draft-stream.js";
 
 type TelegramDraftMessageSnapshot = NonNullable<
-  ReturnType<NonNullable<TelegramDraftStream["currentMessageSnapshot"]>>
+  ReturnType<TelegramDraftStream["currentMessageSnapshot"]>
 >;
 
 type TestDraftStream = {
@@ -18,11 +18,8 @@ type TestDraftStream = {
   clear: ReturnType<typeof vi.fn<() => Promise<void>>>;
   stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
   discard: ReturnType<typeof vi.fn<() => Promise<void>>>;
-  finalizeToPreview: ReturnType<
-    typeof vi.fn<(preview: TelegramDraftPreview) => Promise<number | undefined>>
-  >;
   forceNewMessage: ReturnType<typeof vi.fn<() => void>>;
-  rotateToNewMessageDeferringDelete: ReturnType<typeof vi.fn<() => number | undefined>>;
+  rotateToNewMessageDeferringDelete: ReturnType<typeof vi.fn<() => void>>;
   sendMayHaveLanded: ReturnType<typeof vi.fn<() => boolean>>;
   remainingFinalContent: ReturnType<typeof vi.fn<() => TelegramDraftMessageSnapshot | undefined>>;
   hasConsumedReplyTarget: ReturnType<typeof vi.fn<() => boolean>>;
@@ -88,14 +85,6 @@ export function createTestDraftStream(params?: {
       }
       await params?.onDiscard?.();
     }),
-    finalizeToPreview: vi.fn().mockImplementation(async (preview: TelegramDraftPreview) => {
-      if (messageId == null) {
-        return undefined;
-      }
-      lastDeliveredText = preview.text.trimEnd();
-      stopped = true;
-      return messageId;
-    }),
     forceNewMessage: vi.fn().mockImplementation(() => {
       stopped = false;
       if (params?.clearMessageIdOnForceNew) {
@@ -105,13 +94,11 @@ export function createTestDraftStream(params?: {
     rotateToNewMessageDeferringDelete: vi.fn().mockImplementation(() => {
       // Mirror forceNewMessage's message-id handling (a sequenced harness swaps
       // ids on the next send; the fixed harness keeps its id unless configured
-      // otherwise) so the rewind semantics match; return the superseded id.
-      const superseded = messageId;
+      // otherwise) so the rewind semantics match.
       stopped = false;
       if (params?.clearMessageIdOnForceNew) {
         messageId = undefined;
       }
-      return superseded;
     }),
     sendMayHaveLanded: vi.fn().mockReturnValue(false),
     remainingFinalContent: vi.fn().mockReturnValue(params?.remainingFinalContent),
@@ -160,20 +147,11 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
     clear: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockResolvedValue(undefined),
     discard: vi.fn().mockResolvedValue(undefined),
-    finalizeToPreview: vi.fn().mockImplementation(async (preview: TelegramDraftPreview) => {
-      if (activeMessageId == null) {
-        return undefined;
-      }
-      lastDeliveredText = preview.text.trimEnd();
-      return activeMessageId;
-    }),
     forceNewMessage: vi.fn().mockImplementation(() => {
       activeMessageId = undefined;
     }),
     rotateToNewMessageDeferringDelete: vi.fn().mockImplementation(() => {
-      const superseded = activeMessageId;
       activeMessageId = undefined;
-      return superseded;
     }),
     sendMayHaveLanded: vi.fn().mockReturnValue(false),
     remainingFinalContent: vi.fn().mockReturnValue(undefined),

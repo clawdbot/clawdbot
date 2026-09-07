@@ -1,6 +1,5 @@
 // Builds provider-aware auth-choice options and grouped onboarding menus.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSetupFlowContributions } from "../flows/provider-flow.js";
 import {
@@ -72,20 +71,25 @@ function resolveProviderChoiceOptions(params?: {
   );
 }
 
-/** Format all currently available auth-choice values for CLI help/validation. */
+/**
+ * Format every accepted `--auth-choice` value for CLI help and validation.
+ *
+ * This is the single owner of that set: help text, onboard preflight, and the
+ * non-interactive dispatcher all render it, so an advertised value is always an
+ * accepted one. Deprecated aliases stay out; `auth-choice-legacy.ts` normalizes
+ * them before any surface sees them.
+ */
 export function formatAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
-  includeLegacyAliases?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   const values = [
     ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
-    ...resolveProviderSetupFlowContributions({
-      ...params,
-      scope: "text-inference",
-    }).map((contribution) => contribution.option.value),
+    ...resolveProviderSetupFlowContributions({ ...params, scope: "all" }).map(
+      (contribution) => contribution.option.value,
+    ),
   ];
 
   return uniqueStrings(values).join("|");
@@ -93,14 +97,12 @@ export function formatAuthChoiceChoicesForCli(params?: {
 
 /** Build flat auth-choice options from core choices plus provider setup flows. */
 function buildAuthChoiceOptions(params: {
-  store: AuthProfileStore;
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
-  void params.store;
   const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
   for (const option of CORE_AUTH_CHOICE_OPTIONS) {
     optionByValue.set(option.value, option);
@@ -128,7 +130,6 @@ function buildAuthChoiceOptions(params: {
 
 /** Build grouped auth choices, filtering manual-only methods by default. */
 export function buildAuthChoiceGroups(params: {
-  store: AuthProfileStore;
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
   config?: OpenClawConfig;

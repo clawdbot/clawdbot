@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -17,6 +17,34 @@ afterEach(() => {
 });
 
 describe("Claw add legacy plan resume", () => {
+  it("records a failed config commit only after persistence resolves", async () => {
+    const root = tempDirs.make("openclaw-claw-add-commit-failure-");
+    const env = stateEnv(root);
+    const { plan } = await makeProvenancePlan(root, {
+      schemaVersion: 1,
+      agent: { id: "worker" },
+    });
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      commitConfig: async (transform) => {
+        transform({});
+        throw new Error("config unavailable after transform");
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      workspaceCreated: false,
+      configCommitted: false,
+      installRecord: { status: "partial" },
+      error: { code: "config_commit_failed", message: "config unavailable after transform" },
+    });
+    await expect(access(plan.agent.workspace)).rejects.toThrow();
+    expect(readClawInstallRecord("worker", { env })?.status).toBe("partial");
+  });
+
   it("replaces committed legacy config before upgrading v1 plan identity", async () => {
     const root = tempDirs.make("openclaw-claw-add-v1-resume-");
     const env = stateEnv(root);

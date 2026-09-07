@@ -9,6 +9,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
 import {
   BUILD_STAMP_FILE,
   writeBuildStamp,
@@ -445,79 +446,6 @@ function runCheckedCommand(command: string, args: string[]) {
     return;
   }
   throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? "unknown"}`);
-}
-
-function parsePsCpuTimeMs(timeText: string): number | null {
-  const [maybeDays, clockText] = timeText.includes("-") ? timeText.split("-", 2) : ["0", timeText];
-  const days = Number(maybeDays);
-  const parts = clockText!.split(":");
-  if (!Number.isFinite(days) || parts.length < 2 || parts.length > 3) {
-    return null;
-  }
-  const seconds = Number(parts.at(-1));
-  const minutes = Number(parts.at(-2));
-  const hours = parts.length === 3 ? Number(parts[0]) : 0;
-  if (![seconds, minutes, hours].every(Number.isFinite)) {
-    return null;
-  }
-  return Math.round(((days * 24 + hours) * 60 * 60 + minutes * 60 + seconds) * 1000);
-}
-
-function readProcessTreeCpuMs(rootPid: number): number | null {
-  if (!Number.isInteger(rootPid) || rootPid <= 0) {
-    return null;
-  }
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-
-  const rows: Array<{ pid: number; ppid: number; cpuMs: number }> = [];
-  for (const line of result.stdout.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/);
-    if (!match) {
-      continue;
-    }
-    const pid = Number(match[1]);
-    const ppid = Number(match[2]);
-    const cpuMs = parsePsCpuTimeMs(match[3]!);
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs == null) {
-      continue;
-    }
-    rows.push({ pid, ppid, cpuMs });
-  }
-
-  const childrenByParent = new Map<number, number[]>();
-  const cpuByPid = new Map<number, number>();
-  for (const row of rows) {
-    cpuByPid.set(row.pid, row.cpuMs);
-    const children = childrenByParent.get(row.ppid) ?? [];
-    children.push(row.pid);
-    childrenByParent.set(row.ppid, children);
-  }
-  if (!cpuByPid.has(rootPid)) {
-    return null;
-  }
-
-  let totalCpuMs = 0;
-  const seen = new Set<number>();
-  const stack = [rootPid];
-  while (stack.length > 0) {
-    const pid = stack.pop();
-    if (!pid || seen.has(pid)) {
-      continue;
-    }
-    seen.add(pid);
-    totalCpuMs += cpuByPid.get(pid) ?? 0;
-    for (const childPid of childrenByParent.get(pid) ?? []) {
-      stack.push(childPid);
-    }
-  }
-  return totalCpuMs;
 }
 
 /**
@@ -980,6 +908,9 @@ export function writeBuildAndRuntimePostBuildStamps(params: { cwd?: string } = {
   writeRuntimePostBuildStamp({ cwd });
 }
 
+export function calculateDistRuntimeByteGrowth(beforeBytes: number, afterBytes: number): number {
+  return afterBytes - beforeBytes;
+}
 /**
  * Collects pass/fail findings for the bounded gateway watch regression run.
  */
@@ -987,6 +918,7 @@ export function collectGatewayWatchFindings(params: {
   cpuMs: number;
   distRuntimeByteGrowth: number;
   distRuntimeFileGrowth: number;
+  removedPaths: number;
   options: Pick<
     WatchOptions,
     "cpuFailMs" | "cpuWarnMs" | "distRuntimeByteGrowthMax" | "distRuntimeFileGrowthMax" | "windowMs"
@@ -999,6 +931,7 @@ export function collectGatewayWatchFindings(params: {
     cpuMs,
     distRuntimeByteGrowth,
     distRuntimeFileGrowth,
+    removedPaths,
     options,
     watchBuildReason,
     watchResult,
@@ -1032,6 +965,13 @@ export function collectGatewayWatchFindings(params: {
     failures.push(
       "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window",
     );
+  } else if (watchTriggeredBuild) {
+    failures.push(
+      `gateway:watch unexpectedly rebuilt prebuilt artifacts (${watchBuildReason ?? "unknown reason"})`,
+    );
+  }
+  if (removedPaths > 0) {
+    failures.push(`gateway:watch removed ${removedPaths} prebuilt artifact paths`);
   }
   if (distRuntimeFileGrowth > options.distRuntimeFileGrowthMax) {
     failures.push(
@@ -1111,16 +1051,13 @@ async function main() {
     writeBuildAndRuntimePostBuildStamps();
     preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
   }
-  if (
-    preflightBuildRequirement.shouldBuild &&
-    preflightBuildRequirement.reason === "dirty_watched_tree"
-  ) {
+  if (preflightBuildRequirement.shouldBuild) {
     const summary = {
       windowMs: options.windowMs,
       invalidated: true,
       invalidationReason: preflightBuildRequirement.reason,
       invalidationMessage:
-        "gateway-watch-regression cannot run on a dirty watched tree because run-node will intentionally rebuild during the watch window.",
+        "gateway-watch-regression requires a complete, current prebuilt artifact set; run-node would rebuild during the watch window.",
     };
     fs.writeFileSync(
       path.join(options.outputDir, "summary.json"),
@@ -1128,7 +1065,7 @@ async function main() {
     );
     console.log(JSON.stringify(summary, null, 2));
     fail(
-      "gateway-watch-regression invalid local run: dirty watched source tree would force a rebuild inside the watch window",
+      `gateway-watch-regression invalid local run: ${preflightBuildRequirement.reason} would force a rebuild inside the watch window`,
     );
     process.exit(1);
   }
@@ -1148,10 +1085,10 @@ async function main() {
     entry.startsWith("dist-runtime/"),
   ).length;
   const distRuntimeFileGrowth = distRuntimeAddedPaths;
-  const distRuntimeByteGrowth =
-    distRuntimeAddedPaths === 0
-      ? 0
-      : post.distRuntime.apparentBytes - pre.distRuntime.apparentBytes;
+  const distRuntimeByteGrowth = calculateDistRuntimeByteGrowth(
+    pre.distRuntime.apparentBytes,
+    post.distRuntime.apparentBytes,
+  );
   const totalCpuMs = Math.round(
     (watchResult.timing.userSeconds + watchResult.timing.sysSeconds) * 1000,
   );
@@ -1176,7 +1113,9 @@ async function main() {
     distRuntimeByteGrowthMax: options.distRuntimeByteGrowthMax,
     distRuntimeAddedPaths,
     addedPaths: diff.added.length,
-    removedPaths: diff.removed.length,
+    // A previously absent tree becoming present removes only the snapshot's
+    // diagnostic sentinel, not an artifact (for example during metadata sync).
+    removedPaths: diff.removed.filter((entry) => !entry.endsWith(" (missing)")).length,
     watchExit: watchResult.exit,
     spawnError: watchResult.spawnError,
     stdoutPath: watchResult.stdoutPath,
@@ -1195,6 +1134,7 @@ async function main() {
     cpuMs,
     distRuntimeByteGrowth,
     distRuntimeFileGrowth,
+    removedPaths: summary.removedPaths,
     options,
     watchBuildReason,
     watchResult,

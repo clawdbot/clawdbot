@@ -119,6 +119,26 @@ Current-conversation binds do not require child-thread creation. They require an
 
 See [Configuration Reference](/gateway/configuration-reference).
 
+## Repair existing bare-session histories
+
+ACPX isolates bare session names by OpenClaw owner. If a session reports
+`SESSION_OWNER_MIGRATION_REQUIRED`, stop the Gateway and run
+`openclaw doctor --fix`, then restart. Doctor uses the same service workspace
+as the Gateway; ACPX's default state directory is `<service workspace>/state`.
+
+The repair requires one current, unambiguous canonical owner claim with matching
+backend identifiers. It preserves the raw history, event-log references, upstream
+session IDs, timestamps, options, and usage. Persistent record names move to an
+owner-qualified resource; existing oneshot physical IDs and histories remain intact.
+Ambiguous, stale, conflicting, unreadable, or live records remain in place with a
+diagnostic. Resolve the reported evidence problem before retrying; resetting the
+session does not bypass this repair.
+
+This is an offline, crash-recoverable migration with atomic destination-file
+publication. Files and SQLite are not one atomic transaction. Interrupted repairs
+can be rerun: Doctor checks the existing destination and canonical claim before
+finishing the metadata update and archiving the old persistent record.
+
 ## Plugin setup for acpx backend
 
 Packaged installs use the official `@openclaw/acpx` runtime plugin for ACP.
@@ -161,8 +181,10 @@ Then verify backend health:
 
 The `acpx` plugin embeds the ACP runtime directly (no separate `acpx` binary or
 version to configure). By default it registers the embedded backend during
-Gateway startup and waits for a startup probe before the gateway `ready`
-signal. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
+Gateway startup and waits for one health probe before the gateway `ready`
+signal. That probe also supplies failure diagnostics and is bounded by
+`plugins.entries.acpx.config.timeoutSeconds`; an unhealthy result does not
+launch a second probe. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
 `OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1` only for scripts or environments that
 intentionally keep the startup probe disabled. Run `/acp doctor` for an explicit
 on-demand probe.
@@ -190,8 +212,13 @@ or flag value should remain one argv token:
 }
 ```
 
-- `agents.<id>.command` is the executable or existing command string for that ACP agent.
-- `agents.<id>.args` is optional. Each array item is shell-quoted before OpenClaw passes it through the current acpx command-string registry.
+- `agents.<id>.command` is the executable or existing command string for that ACP agent. An existing absolute executable path stays one argument even when it contains spaces.
+- `agents.<id>.args` is optional. Each item is passed unchanged, including empty strings, spaces, quotes, and backslashes. Do not add shell quoting inside the array.
+
+On Windows, put the executable path in `command` and its flags in `args`.
+Quote relative executable paths containing spaces when using a command string.
+Generated adapter wrappers also use argv arrays. Reconnecting an unchanged
+session preserves its saved command representation and conversation history.
 
 See [Plugins](/tools/plugin).
 
@@ -283,7 +310,10 @@ Restart the gateway after changing this value.
 
 ## Permission configuration
 
-ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:
+ACP sessions run without an interactive TTY for file-write and shell-exec
+permission prompts. This does not disable ACP form or URL elicitation during a
+channel-delivered turn: those requests use transient Gateway questions instead.
+The acpx plugin provides two config keys that control harness permissions:
 
 These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
 

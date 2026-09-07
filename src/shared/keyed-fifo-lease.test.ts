@@ -100,6 +100,28 @@ describe("keyed FIFO leases", () => {
     third.release();
   });
 
+  it("releases an idle key independently when a mixed lease exits before its predecessor", async () => {
+    const registry = createRegistry();
+    const older = registry.reserve(["busy"])!;
+    const mixed = registry.reserve(["idle", "busy"])!;
+    const idle = registry.reserve(["idle"])!;
+    const busy = registry.reserve(["busy"])!;
+    let busyReady = false;
+    const busyWait = busy.wait().then((ready) => {
+      busyReady = ready;
+    });
+
+    mixed.release();
+    await expect(idle.wait()).resolves.toBe(true);
+    expect(busyReady).toBe(false);
+    idle.release();
+
+    older.release();
+    await busyWait;
+    expect(busyReady).toBe(true);
+    busy.release();
+  });
+
   it("shares reservations across duplicate runtime chunks", async () => {
     const key = TEST_KEY;
     keysToDelete.add(key);

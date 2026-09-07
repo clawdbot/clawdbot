@@ -1,6 +1,6 @@
 // Docker image tests cover sandbox image inspection and actionable setup errors
 // without invoking a real Docker daemon.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 
@@ -101,7 +101,7 @@ let podmanSandboxEngine: typeof import("./docker.js").PODMAN_SANDBOX_ENGINE;
 let resolvePodmanSandboxRuntimeInfo: typeof import("./docker.js").resolvePodmanSandboxRuntimeInfo;
 let validateSandboxContainerEngineTarget: typeof import("./docker.js").validateSandboxContainerEngineTarget;
 
-async function loadFreshDockerModuleForTest() {
+beforeAll(async () => {
   vi.resetModules();
   vi.doMock("../../process/exec.js", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../process/exec.js")>()),
@@ -112,16 +112,28 @@ async function loadFreshDockerModuleForTest() {
   resolvePodmanSandboxRuntimeInfo = dockerModule.resolvePodmanSandboxRuntimeInfo;
   validateSandboxContainerEngineTarget = dockerModule.validateSandboxContainerEngineTarget;
   podmanSandboxEngine = dockerModule.PODMAN_SANDBOX_ENGINE;
-}
+});
+
+beforeEach(() => {
+  // Hoisted fault state survives module resets and must not reach the next case.
+  spawnState.calls.length = 0;
+  spawnState.imageExists = true;
+  spawnState.inspectError = "";
+  spawnState.infoAvailable.docker = false;
+  spawnState.infoAvailable.podman = false;
+  spawnState.podmanConnections = "[]\n";
+  spawnState.podmanInfo = "true\tfalse\t\t5.0.0\n";
+  spawnState.podmanMachines = "[]\n";
+  spawnState.lastOptions = undefined;
+  spawnState.executionError = undefined;
+  spawnState.transportFailure = false;
+  spawnState.transportExitCode = 0;
+  spawnState.plainExitWithoutStderr = false;
+});
 
 describe("resolvePodmanSandboxRuntimeInfo", () => {
-  beforeEach(async () => {
-    spawnState.calls.length = 0;
+  beforeEach(() => {
     spawnState.infoAvailable.podman = true;
-    spawnState.podmanConnections = "[]\n";
-    spawnState.podmanInfo = "true\tfalse\t\t5.0.0\n";
-    spawnState.podmanMachines = "[]\n";
-    await loadFreshDockerModuleForTest();
   });
 
   it("rejects an arbitrary remote Podman connection", async () => {
@@ -376,18 +388,6 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
 });
 
 describe("ensureDockerImage", () => {
-  beforeEach(async () => {
-    spawnState.calls.length = 0;
-    spawnState.imageExists = true;
-    spawnState.inspectError = "";
-    spawnState.lastOptions = undefined;
-    spawnState.executionError = undefined;
-    spawnState.transportFailure = false;
-    spawnState.transportExitCode = 0;
-    spawnState.plainExitWithoutStderr = false;
-    await loadFreshDockerModuleForTest();
-  });
-
   it("returns when the configured image already exists", async () => {
     await ensureDockerImage(DEFAULT_SANDBOX_IMAGE);
 
@@ -474,17 +474,6 @@ describe("ensureDockerImage", () => {
 });
 
 describe("execDockerRaw", () => {
-  beforeEach(async () => {
-    spawnState.calls.length = 0;
-    spawnState.imageExists = true;
-    spawnState.inspectError = "";
-    spawnState.lastOptions = undefined;
-    spawnState.executionError = undefined;
-    spawnState.transportFailure = false;
-    spawnState.transportExitCode = 0;
-    await loadFreshDockerModuleForTest();
-  });
-
   it("preserves canonical wrapper execution errors", async () => {
     spawnState.executionError = new Error("docker execution failed");
 

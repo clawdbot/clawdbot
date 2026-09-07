@@ -77,17 +77,29 @@ internal class VoiceNoteRecorderController(
   private var elapsedJob: Job? = null
   private var ownsMic = false
 
+  // Permission callbacks can outlive cancellation; only the current owner may start capture.
+  private var pendingStart: Any? = null
+
   suspend fun start(id: String = UUID.randomUUID().toString()): Boolean {
-    synchronized(lock) {
-      if (_state.value !is VoiceNoteRecorderState.Idle && _state.value !is VoiceNoteRecorderState.Failure) return false
-    }
-    if (!requestPermission()) {
-      fail("Microphone permission is required to record a voice note.")
-      return false
-    }
+    val operation =
+      synchronized(lock) {
+        if (pendingStart != null) return false
+        if (_state.value !is VoiceNoteRecorderState.Idle && _state.value !is VoiceNoteRecorderState.Failure) return false
+        Any().also { pendingStart = it }
+      }
+    val permitted =
+      try {
+        requestPermission()
+      } catch (error: Throwable) {
+        synchronized(lock) { if (pendingStart === operation) pendingStart = null }
+        throw error
+      }
 
     return synchronized(lock) {
-      if (_state.value !is VoiceNoteRecorderState.Idle && _state.value !is VoiceNoteRecorderState.Failure) {
+      if (pendingStart !== operation) return@synchronized false
+      pendingStart = null
+      if (!permitted) {
+        failLocked("Microphone permission is required to record a voice note.")
         return@synchronized false
       }
       if (!acquireMic()) {
@@ -180,6 +192,7 @@ internal class VoiceNoteRecorderController(
 
   fun cancel() {
     synchronized(lock) {
+      pendingStart = null
       elapsedJob?.cancel()
       elapsedJob = null
       if (_state.value is VoiceNoteRecorderState.Recording) {
@@ -225,10 +238,6 @@ internal class VoiceNoteRecorderController(
           delay(100L)
         }
       }
-  }
-
-  private fun fail(message: String) {
-    synchronized(lock) { failLocked(message) }
   }
 
   private fun failLocked(message: String) {

@@ -1,10 +1,6 @@
 // Audit Seams tests cover audit seams script behavior.
 import { describe, expect, it } from "vitest";
-import {
-  HELP_TEXT,
-  describeSeamKinds,
-  determineSeamTestStatus,
-} from "../../scripts/audit-seams.mts";
+import { describeSeamKinds, determineSeamTestStatus } from "../../scripts/audit-seams.mts";
 
 describe("audit-seams cron seam classification", () => {
   it("detects cron agent handoff and outbound delivery boundaries", () => {
@@ -134,7 +130,7 @@ describe("audit-seams subagent seam classification", () => {
   });
 });
 
-describe("audit-seams status/help", () => {
+describe("audit-seams status", () => {
   it("keeps cron seam statuses conservative when nearby tests exist", () => {
     expect(
       determineSeamTestStatus(
@@ -164,12 +160,5 @@ describe("audit-seams status/help", () => {
       reason:
         "Nearby tests exist (best match: direct-import), but this inventory does not prove cross-layer seam coverage end to end.",
     });
-  });
-
-  it("documents cron and subagent seam coverage in help text", () => {
-    expect(HELP_TEXT).toContain("cron orchestration seams");
-    expect(HELP_TEXT).toContain("subagent seams");
-    expect(HELP_TEXT).toContain("announce delivery");
-    expect(HELP_TEXT).toContain("parent streaming");
   });
 });

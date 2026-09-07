@@ -86,6 +86,9 @@ export const SessionSchema = z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),
         pruneAfter: PositiveDurationSchema.optional(),
+        archiveDashboardAfter: z
+          .union([PositiveDurationSchema, z.literal(false), z.literal(0)])
+          .optional(),
         maxEntries: z.number().int().positive().optional(),
         preserveRecent: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
         resetArchiveRetention: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
@@ -149,7 +152,6 @@ export const MessagesSchema = z
       })
       .strict()
       .optional(),
-    suppressToolErrors: z.boolean().optional(),
   })
   .strict()
   .optional();

@@ -10,26 +10,22 @@ function quoteShellArg(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-/** Reconstructs the current OpenClaw CLI invocation with extra args. */
-export function buildCurrentOpenClawCliArgv(args: string[]): string[] {
-  const invocation = resolveCurrentOpenClawCliInvocation(args);
-  return [invocation.command, ...invocation.args];
-}
-
-/** Clears test-runner env inherited by harness-hosted gateways before spawning the CLI. */
-export function buildCurrentOpenClawCliExecEnv(
+/** Prepares one CLI command and its source context before exec approval or dispatch. */
+export function buildCurrentOpenClawCliExecRequest(
+  args: string[],
   env: NodeJS.ProcessEnv = process.env,
-): Record<string, string> | undefined {
-  const overrides: Record<string, string> = {};
+) {
+  const invocation = resolveCurrentOpenClawCliInvocation(args);
+  const argv = [invocation.command, ...invocation.args];
+  const overrides: Record<string, string> = { ...invocation.env };
   for (const key of Object.keys(env)) {
     if (key === "VITEST" || TEST_RUNNER_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
       overrides[key] = "";
     }
   }
-  return Object.keys(overrides).length > 0 ? overrides : undefined;
-}
-
-/** Builds a shell-quoted command string for rerunning the current OpenClaw CLI. */
-export function buildCurrentOpenClawCliCommand(args: string[]): string {
-  return buildCurrentOpenClawCliArgv(args).map(quoteShellArg).join(" ");
+  return {
+    argv,
+    command: argv.map(quoteShellArg).join(" "),
+    env: Object.keys(overrides).length > 0 ? overrides : undefined,
+  };
 }

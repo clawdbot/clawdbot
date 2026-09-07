@@ -19,7 +19,7 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
   invalidRequest: teamsMeetingsInvalidRequest,
   resolveTimeoutMs: (input, fallback) =>
     MeetingPlatformAdapter.resolveProbeTimeoutMs(input, fallback, teamsMeetingsInvalidRequest),
-  shouldWaitForListening: (session) => Boolean(session.chrome?.launched),
+  shouldWaitForListening: ({ chrome }) => Boolean(chrome?.launched || chrome?.browserTab?.targetId),
   talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
 });
 

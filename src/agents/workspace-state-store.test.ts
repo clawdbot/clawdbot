@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -14,13 +15,18 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
+  readWorkspaceFileCache,
+  retireWorkspaceFileCache,
+  writeWorkspaceFileCache,
+} from "./workspace-file-cache.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
+import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
   deleteWorkspaceState,
   mergeWorkspaceSetupState,
   prepareWorkspaceStateDeletion,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
-  resolveWorkspaceStateIdentity,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
 } from "./workspace-state-store.js";
 
@@ -34,6 +40,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (testState) {
+    retireWorkspaceFileCache(testState.workspaceDir);
+  }
   closeOpenClawStateDatabaseForTest();
   await testState?.cleanup();
   testState = undefined;
@@ -54,8 +63,10 @@ function insertPersistedAttestationHash(filename: string, sha256: string): void 
   const identity = resolveWorkspaceStateIdentity(workspaceDir());
   const db = openOpenClawStateDatabase().db;
   db.prepare(
-    "INSERT INTO workspace_attestations (workspace_key, attested_at_ms, updated_at_ms) VALUES (?, 1, 1)",
-  ).run(identity.workspaceKey);
+    `INSERT INTO workspace_setup_state (
+      workspace_key, workspace_path, attested_at_ms, attestation_updated_at_ms
+    ) VALUES (?, ?, 1, 1)`,
+  ).run(identity.workspaceKey, identity.workspacePath);
   db.prepare(
     "INSERT INTO workspace_generated_bootstrap_hashes (workspace_key, filename, sha256) VALUES (?, ?, ?)",
   ).run(identity.workspaceKey, filename, sha256);
@@ -189,7 +200,11 @@ describe("workspace state store", () => {
       nowMs: 4_000,
     });
 
-    const attestation = readWorkspaceStateSnapshot(dir).attestation;
+    const snapshot = readWorkspaceStateSnapshot(dir);
+    // Attestation-only rows carry NULL setup columns: recording hashes before
+    // any setup write must not fabricate setup state.
+    expect(snapshot.setupExists).toBe(false);
+    const attestation = snapshot.attestation;
     expect(attestation?.attestedAtMs).toBe(3_000);
     expect([...attestation!.generatedHashes.entries()]).toStrictEqual([
       ["SOUL.md", "c".repeat(64)],
@@ -234,12 +249,15 @@ describe("workspace state store", () => {
     expect(readWorkspaceStateSnapshot(dir).attestation?.attestedAtMs).toBe(100_000);
   });
 
-  it("preserves recent setup-only state for a vanished workspace", () => {
+  it("preserves recent setup-only state and cached content for a vanished workspace", () => {
     const dir = workspaceDir();
+    const filePath = path.join(dir, "AGENTS.md");
     mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+    writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
 
     expect(clearExpiredWorkspaceStateForVanishedWorkspace(dir, 2_000)).toBe(false);
     expect(readWorkspaceStateSnapshot(dir).setupExists).toBe(true);
+    expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
   });
 
   it("keeps symlink aliases on one identity after the workspace target vanishes", () => {
@@ -358,20 +376,110 @@ describe("workspace state store", () => {
     expect(staleAlias).toBeUndefined();
   });
 
-  it("deletes canonical state through a missing persisted alias", () => {
-    const dir = workspaceDir();
+  it.each([
+    { cleanup: "delete", name: "plain" },
+    { cleanup: "delete", name: "cafe\u0301" },
+    { cleanup: "expire", name: "plain" },
+    { cleanup: "expire", name: "cafe\u0301" },
+  ])("$cleanup retires cached content through a missing alias ($name)", ({ cleanup, name }) => {
+    const dir = path.join(workspaceDir(), name);
+    fs.mkdirSync(dir);
+    const canonicalDir = fs.realpathSync(dir);
     const alias = testState!.path("workspace-link");
+    const filePath = path.join(canonicalDir, "AGENTS.md");
     fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
     mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+    writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
     fs.unlinkSync(alias);
 
-    deleteState(alias);
+    if (cleanup === "delete") {
+      deleteState(alias);
+    } else {
+      expect(clearExpiredWorkspaceStateForVanishedWorkspace(alias, 86_401_001)).toBe(true);
+    }
 
+    expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
     expect(readWorkspaceStateSnapshot(dir).setupExists).toBe(false);
     const aliases = openOpenClawStateDatabase()
       .db.prepare("SELECT alias_key FROM workspace_path_aliases")
       .all();
     expect(aliases).toEqual([]);
+  });
+
+  it.each(["delete", "expire"])("keeps cached files when %s fails", (cleanup) => {
+    const dir = workspaceDir();
+    const alias = testState!.path("workspace-link");
+    const filePath = path.join(dir, "AGENTS.md");
+    fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+    mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+    writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
+    const deletion = prepareWorkspaceStateDeletion(alias);
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE workspace_path_aliases SET alias_path = ? WHERE alias_path = ?")
+      .run(`${alias}-mismatch`, alias);
+
+    try {
+      expect(() => {
+        if (cleanup === "delete") {
+          deleteWorkspaceState(deletion);
+        } else {
+          clearExpiredWorkspaceStateForVanishedWorkspace(alias, 86_401_001);
+        }
+      }).toThrow(/alias key collision/u);
+      expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
+    } finally {
+      retireWorkspaceFileCache(dir);
+    }
+  });
+
+  it.each(["delete", "expire"])(
+    "retires %s cache entries only after the outer commit",
+    (cleanup) => {
+      const dir = workspaceDir();
+      const filePath = path.join(dir, "AGENTS.md");
+      mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+      writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
+      const remove = () => {
+        if (cleanup === "delete") {
+          deleteState(dir);
+        } else {
+          expect(clearExpiredWorkspaceStateForVanishedWorkspace(dir, 86_401_001)).toBe(true);
+        }
+      };
+
+      expect(() =>
+        runOpenClawStateWriteTransaction(() => {
+          remove();
+          expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
+          throw new Error("rollback cleanup");
+        }),
+      ).toThrow("rollback cleanup");
+      expect(readWorkspaceStateSnapshot(dir).setupExists).toBe(true);
+      expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
+
+      runOpenClawStateWriteTransaction(() => {
+        remove();
+        expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
+      });
+      expect(readWorkspaceStateSnapshot(dir).setupExists).toBe(false);
+      expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
+    },
+  );
+
+  it("retires canonical cached files after deleting through an alias", () => {
+    const dir = workspaceDir();
+    const alias = testState!.path("workspace-link");
+    const filePath = path.join(dir, "AGENTS.md");
+    fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+    mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+    writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
+    const deletion = prepareWorkspaceStateDeletion(alias);
+    fs.unlinkSync(alias);
+
+    deleteWorkspaceState(deletion);
+
+    expect(readWorkspaceStateSnapshot(dir).setupExists).toBe(false);
+    expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
   });
 
   it("clears expired setup-only state for a vanished workspace", () => {
@@ -429,6 +537,8 @@ describe("workspace state store", () => {
 
   it("does not recreate a missing database during delete-only cleanup", () => {
     const dir = workspaceDir();
+    const filePath = path.join(dir, "AGENTS.md");
+    writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
     const databasePath = resolveOpenClawStateSqlitePath();
     closeOpenClawStateDatabaseForTest();
     fs.rmSync(path.dirname(databasePath), { recursive: true, force: true });
@@ -437,6 +547,7 @@ describe("workspace state store", () => {
 
     expect(fs.existsSync(databasePath)).toBe(false);
     expect(fs.existsSync(path.dirname(databasePath))).toBe(false);
+    expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
   });
 
   it("deletes migration receipts owned by the workspace", () => {

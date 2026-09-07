@@ -17,6 +17,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
@@ -203,6 +204,9 @@ internal fun OpenClawWearApp(
   val messageLabel = stringResource(R.string.message)
   val messageTitle = stringResource(R.string.message_agent)
   val sendLabel = stringResource(R.string.send)
+  val sessionSearchTitle = stringResource(R.string.search_sessions_title)
+  val modelSearchTitle = stringResource(R.string.search_models_title)
+  val searchLabel = stringResource(R.string.search)
 
   fun submitMessage(rawMessage: String) {
     val message = rawMessage.trim()
@@ -254,6 +258,42 @@ internal fun OpenClawWearApp(
         interaction = WearInteractionState.READY
       }
     }
+  val sessionSearchLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      val query =
+        result.data
+          ?.let(RemoteInput::getResultsFromIntent)
+          ?.getCharSequence(REMOTE_INPUT_KEY)
+          ?.toString()
+      if (result.resultCode == Activity.RESULT_OK && !query.isNullOrBlank()) {
+        viewModel.searchSessions(query)
+      }
+    }
+  val modelSearchLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      val query =
+        result.data
+          ?.let(RemoteInput::getResultsFromIntent)
+          ?.getCharSequence(REMOTE_INPUT_KEY)
+          ?.toString()
+      if (result.resultCode == Activity.RESULT_OK && !query.isNullOrBlank()) {
+        viewModel.searchModels(query)
+      }
+    }
+
+  fun launchSearchInput(
+    title: String,
+    launcher: ActivityResultLauncher<Intent>,
+  ) {
+    val remoteInput = RemoteInput.Builder(REMOTE_INPUT_KEY).setLabel(searchLabel).build()
+    val intent =
+      RemoteInputIntentHelper.createActionRemoteInputIntent().also { inputIntent ->
+        RemoteInputIntentHelper.putRemoteInputsExtra(inputIntent, listOf(remoteInput))
+        RemoteInputIntentHelper.putTitleExtra(inputIntent, title)
+        RemoteInputIntentHelper.putConfirmLabelExtra(inputIntent, searchLabel)
+      }
+    launcher.launch(intent)
+  }
 
   fun startRealtimeTalk() {
     speaker.stop()
@@ -466,15 +506,23 @@ internal fun OpenClawWearApp(
           viewModel.selectAgent(agentId)
         },
         onSelectSession = { sessionKey ->
-          state.sessions.firstOrNull { it.key == sessionKey }?.let { session ->
+          (
+            state.sessionSearchResults.firstOrNull { it.key == sessionKey }
+              ?: state.sessions.firstOrNull { it.key == sessionKey }
+          )?.let { session ->
             leaveConversationContext()
             viewModel.openSession(session)
           }
         },
+        onSearchSessions = { launchSearchInput(sessionSearchTitle, sessionSearchLauncher) },
+        onLoadMoreSessionSearch = viewModel::loadMoreSessionSearch,
+        onClearSessionSearch = viewModel::clearSessionSearch,
         onSelectModel = { modelRef ->
           leaveConversationContext()
           viewModel.selectModel(modelRef)
         },
+        onSearchModels = { launchSearchInput(modelSearchTitle, modelSearchLauncher) },
+        onClearModelSearch = viewModel::clearModelSearch,
         onAgentPulseVisibilityChanged = viewModel::setAgentPulseVisible,
         onAgentPulseRefresh = viewModel::refreshAgentPulse,
         onRefresh = viewModel::refresh,

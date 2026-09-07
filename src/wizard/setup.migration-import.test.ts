@@ -3,12 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { listSetupMigrationOptions } from "./setup.migration-import.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { WizardPrompter } from "./prompts.js";
+import { listSetupMigrationOptions, runSetupMigrationImport } from "./setup.migration-import.js";
 import {
   assertFreshSetupMigrationTarget,
   buildSetupMigrationTargetSnapshot,
   inspectSetupMigrationFreshness,
-  preserveSetupMigrationSecurityAcknowledgement,
+  preserveSetupMigrationOnboardingConsents,
 } from "./setup.migration-snapshot.js";
 
 async function writeFile(filePath: string, content: string) {
@@ -30,11 +33,12 @@ describe("setup migration import freshness", () => {
     expect(result).toEqual({ fresh: true, reasons: [] });
   });
 
-  it("allows the first-launch security acknowledgement before import", async () => {
+  it("allows first-launch security and telemetry consent before import", async () => {
     const root = tempRoots.make("openclaw-setup-migration-");
     const result = await inspectSetupMigrationFreshness({
       baseConfig: {
         wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
+        telemetry: { enabled: true, consentedAt: "2026-06-30T00:00:00.000Z" },
       },
       stateDir: path.join(root, "state"),
       workspaceDir: path.join(root, "workspace"),
@@ -79,13 +83,19 @@ describe("setup migration import freshness", () => {
     ).not.toBe(initial);
   });
 
-  it("preserves the first-launch acknowledgement across the lock-time config reread", () => {
+  it("preserves first-launch consent choices across the lock-time config reread", () => {
     expect(
-      preserveSetupMigrationSecurityAcknowledgement(
+      preserveSetupMigrationOnboardingConsents(
         {},
-        { wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" } },
+        {
+          wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
+          telemetry: { enabled: false, consentedAt: "2026-06-30T00:00:00.000Z" },
+        },
       ),
-    ).toEqual({ wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" } });
+    ).toEqual({
+      wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
+      telemetry: { enabled: false, consentedAt: "2026-06-30T00:00:00.000Z" },
+    });
   });
 
   it("rejects other wizard config during import freshness checks", async () => {
@@ -144,12 +154,12 @@ describe("setup migration import options", () => {
     });
   });
 
-  it("offers bundled manifest migration providers before plugin activation", () => {
+  it("lists bundled providers for the nested migration source picker", () => {
     expect(initialOptions).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ providerId: "codex", label: "Codex" }),
-        expect.objectContaining({ providerId: "claude", label: "Claude" }),
-        expect.objectContaining({ providerId: "hermes", label: "Hermes" }),
+        expect.objectContaining({ providerId: "codex", label: "Import from Codex" }),
+        expect.objectContaining({ providerId: "claude", label: "Import from Claude" }),
+        expect.objectContaining({ providerId: "hermes", label: "Import from Hermes" }),
       ]),
     );
   });
@@ -173,5 +183,27 @@ describe("setup migration import options", () => {
         process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundled;
       }
     }
+  });
+});
+
+describe("setup migration import provider selection", () => {
+  function runImportWith(importFrom: string) {
+    return runSetupMigrationImport({
+      opts: { importFrom } as OnboardOptions,
+      baseConfig: {},
+      detections: [],
+      prompter: {} as WizardPrompter,
+      runtime: { log: () => {}, error: () => {}, exit: () => {} } as unknown as RuntimeEnv,
+      readConfigFile: async () => ({}),
+      commitConfigFile: async (config) => config,
+    });
+  }
+
+  it("names the available providers when --import-from does not match one", async () => {
+    // The bundled ids come from the same listing the picker renders, so assert the shape and one
+    // known bundled id rather than pinning the full set, which grows with every bundled provider.
+    await expect(runImportWith("bogus")).rejects.toThrow(
+      /^Unknown migration provider "bogus"\. Available providers: .*codex.*\. Run .*openclaw migrate list.* to see the current list\.$/,
+    );
   });
 });

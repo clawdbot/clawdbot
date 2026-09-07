@@ -60,8 +60,8 @@ enum DebugActions {
         }
     }
 
-    static func sendTestNotification() async {
-        _ = await NotificationManager().send(title: "OpenClaw", body: "Test notification", sound: nil)
+    static func sendTestNotification() async -> TestNotificationOutcome {
+        await TestNotificationAction.send()
     }
 
     static func sendDebugVoice() async -> Result<String, DebugActionError> {
@@ -108,7 +108,6 @@ enum DebugActions {
                 }
 
             case .unconfigured:
-                await GatewayConnection.shared.shutdown()
                 await ControlChannel.shared.disconnect()
             }
         }
@@ -175,21 +174,16 @@ enum DebugActions {
     static func restartApp() {
         let url = Bundle.main.bundleURL
         let task = Process()
-        // Relaunch shortly after this instance exits so we get a true restart even in debug.
-        task.launchPath = "/bin/sh"
-        if let profile = AppProfile.current.name {
-            task.arguments = [
-                "-c",
-                "sleep 0.2; open -n --env OPENCLAW_PROFILE=\"$2\" \"$1\"",
-                "_",
-                url.path,
-                profile,
-            ]
-        } else {
-            task.arguments = ["-c", "sleep 0.2; open -n \"$1\"", "_", url.path]
-        }
+        // The replacement must wait until cleanup releases this profile's instance lock.
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = [
+            "-c",
+            "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.1; done; shift; exec /usr/bin/open -n \"$@\"",
+            "openclaw-restart",
+            String(ProcessInfo.processInfo.processIdentifier),
+        ] + (AppProfile.current.name.map { ["--env", "OPENCLAW_PROFILE=\($0)"] } ?? []) + [url.path]
         try? task.run()
-        NSApp.terminate(nil)
+        AppDelegate.requestTermination()
     }
 
     @MainActor
@@ -271,7 +265,27 @@ enum DebugActions {
                 commands: ["system.run", "system.notify"],
                 isRepair: false,
                 previouslyPaired: false,
-                requestedAt: now.addingTimeInterval(-45)),
+                requestedAt: now.addingTimeInterval(-45),
+                requiredApproveScopes: ["operator.pairing", "operator.admin"]),
+            PairingApprovalCenter.Card(
+                kind: .node,
+                requestId: "demo-admin-node",
+                subjectId: "demo-admin-node",
+                displayName: "Browser node",
+                platform: "linux",
+                deviceFamily: nil,
+                modelIdentifier: nil,
+                version: nil,
+                coreVersion: nil,
+                remoteIp: "192.0.2.43",
+                role: nil,
+                scopes: [],
+                caps: ["browser", "file"],
+                commands: ["browser.proxy", "fs.listDir", "terminal.upload", "system.execApprovals.get"],
+                isRepair: false,
+                previouslyPaired: false,
+                requestedAt: now,
+                requiredApproveScopes: ["operator.pairing", "operator.admin"]),
             PairingApprovalCenter.Card(
                 kind: .device,
                 requestId: "demo-device-1",

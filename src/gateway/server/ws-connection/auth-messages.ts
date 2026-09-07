@@ -12,14 +12,18 @@ import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "../../ingress-attribution.js"
  */
 export type AuthProvidedKind = "token" | "bootstrap-token" | "device-token" | "password" | "none";
 
+const SETUP_CODE_REJECTED_MESSAGE =
+  "unauthorized: setup code invalid, expired, revoked, or already used (create a new code; review `openclaw devices list`)";
+
 /** Formats a client-specific auth failure message without exposing secret values. */
 export function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
   authProvided: AuthProvidedKind;
   reason?: string;
   client?: { id?: string | null; mode?: string | null };
+  isLocalClient?: boolean;
 }): string {
-  const { authMode, authProvided, reason, client } = params;
+  const { authMode, authProvided, reason, client, isLocalClient } = params;
   const isCli = isGatewayCliClient(client);
   const isControlUi = isOperatorUiClient(client);
   const isWebchat = isWebchatClient(client);
@@ -29,13 +33,19 @@ export function formatGatewayAuthFailureMessage(params: {
   const uiHint = "open the dashboard URL and paste the token in Control UI settings";
   const missingUiTokenHint =
     "paste in Control UI settings or openclaw doctor --generate-gateway-token; restart";
+  // Local CLI clients share this gateway's config and have no gateway.remote
+  // block; pointing them at gateway.remote.* would be a dead end.
   const tokenHint = isCli
-    ? "set gateway.remote.token to match gateway.auth.token"
+    ? isLocalClient
+      ? "use this gateway's gateway.auth.token or pair the device"
+      : "set gateway.remote.token to match gateway.auth.token"
     : isControlUi || isWebchat
       ? uiHint
       : "provide gateway auth token";
   const passwordHint = isCli
-    ? "set gateway.remote.password to match gateway.auth.password"
+    ? isLocalClient
+      ? "use this gateway's gateway.auth.password"
+      : "set gateway.remote.password to match gateway.auth.password"
     : isControlUi || isWebchat
       ? "enter the password in Control UI settings"
       : "provide gateway auth password";
@@ -53,7 +63,7 @@ export function formatGatewayAuthFailureMessage(params: {
     case "password_missing_config":
       return "unauthorized: gateway password not configured on gateway (set gateway.auth.password)";
     case "bootstrap_token_invalid":
-      return "unauthorized: bootstrap token invalid or expired (scan a fresh setup code)";
+      return SETUP_CODE_REJECTED_MESSAGE;
     case "tailscale_user_missing":
       return "unauthorized: tailscale identity missing (use Tailscale Serve auth or gateway token/password)";
     case "tailscale_proxy_missing":
@@ -81,7 +91,7 @@ export function formatGatewayAuthFailureMessage(params: {
     return "unauthorized: device token rejected (pair/repair this device, or provide gateway token)";
   }
   if (authProvided === "bootstrap-token") {
-    return "unauthorized: bootstrap token invalid or expired (scan a fresh setup code)";
+    return SETUP_CODE_REJECTED_MESSAGE;
   }
   if (authMode === "password" && authProvided === "none") {
     return `unauthorized: gateway password missing (${passwordHint})`;

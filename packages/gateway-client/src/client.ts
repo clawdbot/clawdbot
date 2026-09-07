@@ -18,16 +18,13 @@ import {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-protocol/version";
-import { WebSocket } from "ws";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isSensitiveUrlQueryParamName,
   normalizeTlsFingerprint,
   normalizeGatewayErrorText,
 } from "./client-address-utils.js";
-import {
-  buildCloudflareAccessHeaders,
-  type CloudflareAccessCredentials,
-} from "./cloudflare-access.js";
 import {
   buildGatewayConnectAuth,
   type GatewayConnectAuthSelection,
@@ -61,6 +58,7 @@ import {
   isGatewayLoopbackHost,
   resolveGatewayWebSocketTransport,
 } from "./websocket-transport.js";
+import { WebSocket } from "./websocket.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -207,6 +205,7 @@ export type GatewayClientCloseInfo = {
 };
 
 export { GatewayClientRequestError } from "./request-error.js";
+export { isGatewayProtocolResponseError } from "./protocol-request.js";
 
 export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTimeoutError {
   constructor(params: { method: string; timeoutMs: number; requestSent: boolean }) {
@@ -241,8 +240,8 @@ export function isGatewayConnectAssemblyError(value: unknown): value is Error {
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
   origin?: string;
-  /** Closed Cloudflare Access service-token pair for this configured Gateway origin. */
-  cloudflareAccess?: CloudflareAccessCredentials;
+  /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
+  edgeAuthHeaders?: Readonly<Record<string, string>>;
   connectChallengeTimeoutMs?: number;
   /**
    * Server-side pre-auth handshake budget. Config-derived local clients use
@@ -267,6 +266,7 @@ export type GatewayClientOptions = {
   clientBuildId?: string;
   platform?: string;
   deviceFamily?: string;
+  modelIdentifier?: string;
   mode?: GatewayClientMode;
   role?: string;
   scopes?: string[];
@@ -433,6 +433,8 @@ export class GatewayClient {
       },
       notifyStoppedClose: true,
       onConnectError: (error) => this.notifyConnectError(error),
+      onReconnectStopped: (error) =>
+        this.notifyReconnectPaused({ code: 1008, reason: error.message, detailCode: null }),
       onParseError: (error) =>
         this.logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(error)}`),
       onEvent: (event) => this.opts.onEvent?.(event),
@@ -501,9 +503,14 @@ export class GatewayClient {
 
   private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
-    if (this.opts.cloudflareAccess && new URL(url).protocol !== "wss:") {
+    const configuredEdgeAuthHeaders = this.opts.edgeAuthHeaders;
+    const edgeAuthHeaders =
+      configuredEdgeAuthHeaders && Object.keys(configuredEdgeAuthHeaders).length > 0
+        ? configuredEdgeAuthHeaders
+        : undefined;
+    if (edgeAuthHeaders && new URL(url).protocol !== "wss:") {
       throw new GatewayWebSocketTransportConfigurationError(
-        "Cloudflare Access credentials require a wss:// Gateway URL",
+        "edge auth headers require a wss:// Gateway URL",
       );
     }
     // Block plaintext before device-token lookup. Credentials may be loaded from
@@ -523,10 +530,10 @@ export class GatewayClient {
         maxPayload: 25 * 1024 * 1024,
         handshakeTimeout: handshakeTimeoutMs,
         ...(this.opts.origin ? { origin: this.opts.origin } : {}),
-        ...(this.opts.cloudflareAccess
+        ...(edgeAuthHeaders
           ? {
               followRedirects: false,
-              headers: buildCloudflareAccessHeaders(this.opts.cloudflareAccess),
+              headers: edgeAuthHeaders,
             }
           : {}),
       },
@@ -555,14 +562,8 @@ export class GatewayClient {
     this.transportValidated = false;
     let upgradeError: GatewayClientRequestError | undefined;
     ws.on("open", () => {
-      handlers.open();
-      const tlsError = transport.validateSocket(ws);
-      if (tlsError) {
-        handlers.error(tlsError);
-        ws.close(1008, tlsError.message);
-        return;
-      }
       this.transportValidated = true;
+      handlers.open();
     });
     ws.on("message", (data) => handlers.message(rawDataToString(data)));
     ws.on("close", (code, reason) => {
@@ -576,6 +577,20 @@ export class GatewayClient {
     ws.on("unexpected-response", (request: ClientRequest, response: IncomingMessage) => {
       void readUpgradeErrorBody(response).then((body) => {
         const statusCode = response.statusCode;
+        let gatewayError: { type?: unknown; message?: unknown } | undefined;
+        try {
+          const parsed: unknown = JSON.parse(body);
+          const parsedError = isRecord(parsed) ? parsed.error : undefined;
+          gatewayError = isRecord(parsedError) ? parsedError : undefined;
+        } catch {
+          // Plain-text and truncated rejections remain visible in the original error message.
+        }
+        const rawLocation = response.headers.location;
+        const location = rawLocation
+          ? redactSensitiveUrlLikeString(
+              Array.isArray(rawLocation) ? (rawLocation[0] ?? "") : rawLocation,
+            )
+          : undefined;
         const message = `gateway rejected websocket upgrade (HTTP ${statusCode ?? "unknown"})${body ? `: ${body}` : ""}`;
         upgradeError = new GatewayClientRequestError({
           code: "UNAVAILABLE",
@@ -584,6 +599,15 @@ export class GatewayClient {
           details: {
             reason: "websocket-upgrade-rejected",
             ...(statusCode === undefined ? {} : { httpStatus: statusCode }),
+            ...(location ? { location } : {}),
+            ...(typeof gatewayError?.type === "string"
+              ? {
+                  gatewayErrorType: gatewayError.type,
+                  ...(typeof gatewayError.message === "string"
+                    ? { gatewayErrorMessage: gatewayError.message }
+                    : {}),
+                }
+              : {}),
           },
         });
         handlers.error(upgradeError);
@@ -785,6 +809,7 @@ export class GatewayClient {
           buildId: this.opts.clientBuildId,
           platform,
           deviceFamily,
+          modelIdentifier: useLegacyNodeProtocolEnvelope ? undefined : this.opts.modelIdentifier,
           mode: clientMode,
           instanceId: this.opts.instanceId,
         },
@@ -983,6 +1008,7 @@ export class GatewayClient {
       this.logDebug("gateway rejected protocol v4; retrying node host with protocol v3");
       return { closeCode: 1008, closeReason: "connect retry" };
     }
+    this.nodeProtocolTransitionPending = false;
     const role = this.opts.role ?? "operator";
     const detailCode =
       error instanceof GatewayClientRequestError ? readConnectErrorDetailCode(error.details) : null;
@@ -1108,6 +1134,7 @@ export class GatewayClient {
         details,
         deviceTokenRetryPending: this.pendingDeviceTokenRetry,
         tokenMismatchIsTerminal: true,
+        protocolMismatchIsTerminal: !this.nodeProtocolTransitionPending,
         clientVersionMismatchIsTerminal: true,
       })
     ) {
