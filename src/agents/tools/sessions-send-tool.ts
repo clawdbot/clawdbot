@@ -499,6 +499,8 @@ export function createSessionsSendTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  /** Backend-selected owner for the target key; never sourced from model arguments. */
+  targetAgentId?: string;
   /** Backend-derived target incarnation; never sourced from model arguments. */
   expectedTargetSessionId?: string;
   /** Backend-owned downstream operation id; never sourced from model arguments. */
@@ -683,7 +685,8 @@ export function createSessionsSendTool(opts?: {
         : await resolveSessionReference({
             action: "send",
             sessionKey,
-            keyAgentId: requesterAgentId,
+            keyAgentId: opts?.targetAgentId ?? requesterAgentId,
+            agentId: opts?.targetAgentId,
             alias,
             mainKey,
             requesterInternalKey: effectiveRequesterKey,
@@ -728,9 +731,9 @@ export function createSessionsSendTool(opts?: {
           sessionKey: unresolvedDisplayKey,
         });
       }
-      // Normalize sessionKey/sessionId input into a canonical session key.
+      // Exact-incarnation callers need the canonical key for follow-up sends.
       const resolvedKey = visibleSession.key;
-      const displayKey = visibleSession.displayKey;
+      const displayKey = opts?.expectedTargetSessionId ? resolvedKey : visibleSession.displayKey;
       const resolvedKeyAgentId = parseAgentSessionKey(resolvedKey)?.agentId;
       const isLiteralLegacyKeyInput =
         !labelParam && sessionKeyParam !== undefined && !resolvedSession.resolvedViaSessionId;

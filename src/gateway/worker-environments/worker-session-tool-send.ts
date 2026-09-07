@@ -28,7 +28,10 @@ export async function executeWorkerSessionSend(operation: {
         requestedSessionKey: operation.request.sessionKey,
       });
       if (
+        target.agentId !== operation.target.agentId ||
+        target.sessionKey !== operation.target.sessionKey ||
         target.sessionId !== operation.target.sessionId ||
+        target.topologyParent?.agentId !== operation.target.topologyParent?.agentId ||
         target.topologyParent?.sessionKey !== operation.target.topologyParent?.sessionKey ||
         target.topologyParent?.sessionId !== operation.target.topologyParent?.sessionId
       ) {
@@ -38,7 +41,9 @@ export async function executeWorkerSessionSend(operation: {
     assertCurrentTarget();
     const tool = createSessionsSendTool({
       agentSessionKey: operation.source.sessionKey,
+      agentId: operation.source.agentId,
       agentChannel: sessionDeliveryChannel(operation.source.entry),
+      targetAgentId: operation.target.agentId,
       expectedTargetSessionId: operation.target.sessionId,
       idempotencyKey: operation.idempotencyKey,
       config,
@@ -77,6 +82,7 @@ export async function executeWorkerSessionSend(operation: {
   // that third incarnation through target admission and the message effect.
   return await runWithScopedSessionAccess({
     cfg: config,
+    agentId: topologyParent.agentId,
     expectedSessionId: topologyParent.sessionId,
     targetSessionKey: topologyParent.sessionKey,
     ...(operation.signal ? { signal: operation.signal } : {}),

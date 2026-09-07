@@ -81,6 +81,7 @@ describe("worker session tool send delivery", () => {
     expect(scopedSessionAccess).toHaveBeenCalledOnce();
     expect(scopedSessionAccess).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: SOURCE.agentId,
         expectedSessionId: PARENT.sessionId,
         targetSessionKey: PARENT.sessionKey,
       }),
@@ -89,7 +90,9 @@ describe("worker session tool send delivery", () => {
       expect.objectContaining({
         args: expect.objectContaining({ sessionKey: TARGET.sessionKey }),
         options: expect.objectContaining({
+          agentId: SOURCE.agentId,
           agentChannel: "telegram",
+          targetAgentId: TARGET.agentId,
           expectedTargetSessionId: TARGET.sessionId,
           idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
         }),
