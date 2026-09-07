@@ -1688,9 +1688,7 @@ export function setActiveEmbeddedRun(
     completionClaim.lifecycleGeneration === incomingLifecycleGeneration
   ) {
     completionClaim.promoted = true;
-    completionClaim.settleRegistration(
-      toolAuthority ? { toolAuthoritySource: toolAuthority.source } : {},
-    );
+    completionClaim.settleRegistration(toolAuthority ? { toolAuthority } : undefined);
   } else if (completionClaim) {
     revokeCompletionClaim(sessionId);
   }

@@ -378,13 +378,17 @@ export function createTalkClientAgentConsultRunner(params: {
         if (!isOwnerCurrent(owner, identity.sessionId)) {
           throw new Error("The active Talk consult is no longer current");
         }
-        return prepareTalkClientControlAuthority({
+        const overlay = prepareTalkClientControlAuthority({
           config: params.config,
           sessionTarget: params.sessionTarget,
           authority,
-          source: registration.toolAuthoritySource,
+          source: registration.toolAuthority.source,
           agentRuntime: getAgentRuntime(),
         });
+        if (!registration.toolAuthority.project(overlay)) {
+          throw new Error("The active Talk consult caller authority no longer matches");
+        }
+        return overlay;
       },
       text: prompt,
       mode: "steer",

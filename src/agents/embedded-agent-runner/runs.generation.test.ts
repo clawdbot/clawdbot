@@ -155,7 +155,22 @@ describe("embedded run registry lifecycle generations", () => {
       () => setActiveEmbeddedRun("claim-session", handle, "agent:main:main"),
     );
 
-    await expect(prepared.registered).resolves.toEqual({ toolAuthoritySource: "reply" });
+    await expect(prepared.registered).resolves.toEqual({
+      toolAuthority: expect.objectContaining({ source: "reply" }),
+    });
+    expect(prepared.claimCompletion()).toBe(true);
+  });
+
+  it("does not publish completion steering readiness without a tool authority binding", async () => {
+    const handle = createRunHandle({
+      queueMessage: vi.fn(async () => {}),
+      runId: "claim-run",
+    });
+    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
+
+    setActiveEmbeddedRun("claim-session", handle);
+
+    await expect(prepared.registered).resolves.toBeUndefined();
     expect(prepared.claimCompletion()).toBe(true);
   });
 

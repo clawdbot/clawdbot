@@ -197,7 +197,18 @@ describe("Talk client agent consult admission", () => {
       mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
         const handle = createEmbeddedRunHandle({ runId: "run-talk" });
         params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
-        setActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "researcher",
+            sessionKey: "agent:researcher:talk",
+            embeddedRunToolAuthorityBinding: () => ({
+              source: "attempt",
+              project: () => "authority",
+              assertActive: () => {},
+            }),
+          },
+          () => setActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk"),
+        );
         await core.promise;
         clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
         return { text: "done" };
@@ -263,6 +274,7 @@ describe("Talk client agent consult admission", () => {
     });
     const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
     const handle = createEmbeddedRunHandle({ runId: "run-talk" });
+    const projectToolAuthority = vi.fn(() => "authority");
     mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
       params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
       announced.resolve();
@@ -273,7 +285,7 @@ describe("Talk client agent consult admission", () => {
           sessionKey: "agent:researcher:talk",
           embeddedRunToolAuthorityBinding: () => ({
             source: "reply",
-            project: () => "authority",
+            project: projectToolAuthority,
             assertActive: () => {},
           }),
         },
@@ -323,9 +335,9 @@ describe("Talk client agent consult admission", () => {
           mode: "steer",
         }),
       );
-      expect(controlParams?.getToolAuthorityOverlay?.()).toEqual(
-        runner.getToolAuthorityOverlay(authority, "reply"),
-      );
+      const expectedOverlay = runner.getToolAuthorityOverlay(authority, "reply");
+      expect(controlParams?.getToolAuthorityOverlay?.()).toEqual(expectedOverlay);
+      expect(projectToolAuthority).toHaveBeenCalledWith(expectedOverlay);
     } finally {
       publish.resolve();
       finish.resolve();

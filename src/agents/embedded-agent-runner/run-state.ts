@@ -117,7 +117,7 @@ export type EmbeddedRunRegistration = {
 };
 
 export type EmbeddedRunCompletionRegistration = {
-  toolAuthoritySource?: "reply" | "attempt";
+  toolAuthority: NonNullable<EmbeddedRunRegistration["toolAuthority"]>;
 };
 
 export type EmbeddedRunCompletionClaim = {
