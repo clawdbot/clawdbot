@@ -5,7 +5,7 @@ import type {
 import type { ControlUiMockGateway } from "../ui/src/test-helpers/control-ui-e2e.ts";
 
 // Serialized into the preview page; runtime dependencies must stay inside this function.
-function installControlUiPreview(): void {
+function installControlUiPreview(newAgentWelcome: string): void {
   const previewWindow = window as Window & {
     __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string };
     openclawControlUiE2eGateway?: ControlUiMockGateway;
@@ -104,13 +104,15 @@ function installControlUiPreview(): void {
       : {
           sessionId,
           reply:
-            "Hi — I’m OpenClaw, your system caretaker.\n\nAsk me about setup, channels, or recent changes.",
+            input.welcomeVariant === "new-agent"
+              ? newAgentWelcome
+              : "Hi — I’m OpenClaw, your system caretaker.\n\nAsk me about setup, channels, or recent changes.",
           action: "none",
         };
     window.setTimeout(() => respond(response), message === undefined ? 0 : 600);
   });
 }
 
-export function createControlUiPreviewInitScript(): string {
-  return `(() => { const __name = (target) => target; (${installControlUiPreview.toString()})(); })();`;
+export function createControlUiPreviewInitScript(newAgentWelcome: string): string {
+  return `(() => { const __name = (target) => target; (${installControlUiPreview.toString()})(${JSON.stringify(newAgentWelcome)}); })();`;
 }

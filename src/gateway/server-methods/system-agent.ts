@@ -488,7 +488,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             welcome = onboardingWelcome.text;
             welcomeQuestion = onboardingWelcome.question;
           } else if (params.welcomeVariant === "new-agent") {
-            welcome = buildNewAgentWelcome({ engine });
+            welcome = await buildNewAgentWelcome({ engine });
           } else {
             const overview = await engine.loadOverview();
             const facts = loadSystemAgentGreetingFacts();

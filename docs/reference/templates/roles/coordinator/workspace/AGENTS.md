@@ -1,4 +1,4 @@
-# Coordinator operating program
+# Chief of staff operating program
 
 ## Scope and trigger
 

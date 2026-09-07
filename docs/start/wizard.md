@@ -142,10 +142,10 @@ changes.
 ## Choose one agent or a team
 
 When guided onboarding creates the first agent, choose **One agent** (the
-default) or **A small team: a coordinator plus specialists**. The team choice
-uses the same preset as `openclaw agents team create`: a coordinator, researcher,
+default) or **A small team: a chief of staff plus specialists**. The team choice
+uses the same preset as `openclaw agents team create`: a chief of staff (`coordinator`), researcher,
 writer, and reviewer with separate workspaces, completed identities, and written
-role contracts. The coordinator delegates suitable tasks and verifies specialist
+role contracts. The chief of staff delegates suitable tasks and verifies specialist
 results before reporting to you.
 
 Select the team directly in an interactive or non-interactive run with `--team`:

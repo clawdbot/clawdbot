@@ -95,6 +95,8 @@ type CreateAgentParams = {
   beforePersistentApply?: () => void;
   /** Prepare guided staged state at the last reversible edge before config publication. */
   prepareConfigCommit?: () => Promise<ConfigCommitRollback | void>;
+  /** Observe published config before post-commit bookkeeping that may still fail. */
+  onCommitted?: (result: CreateAgentSuccess & { config: OpenClawConfig }) => void;
   provenance?: { createdVia: AgentCreatedVia; creatorAgentId?: string };
 };
 
@@ -508,6 +510,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       // Successful publication owns completion of tombstone/provenance bookkeeping,
       // even after delegated authority closes; it must not roll staged state back.
       configCommitRollback = undefined;
+      const result = {
+        ...committed.result!,
+        config: committed.nextConfig,
+        ...(typeof committed.persistedHash === "string"
+          ? { configHash: committed.persistedHash }
+          : {}),
+      };
+      params.onCommitted?.(result);
       if (
         deletion?.cleanupCompleted &&
         !tombstoneClaimed &&
@@ -516,17 +526,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       ) {
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
       }
-      const result = committed.result!;
       if (result.status === "created") {
         recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
       }
-      return {
-        ...result,
-        config: committed.nextConfig,
-        ...(typeof committed.persistedHash === "string"
-          ? { configHash: committed.persistedHash }
-          : {}),
-      };
+      return result;
     });
   } catch (error) {
     if (configCommitRollback) {

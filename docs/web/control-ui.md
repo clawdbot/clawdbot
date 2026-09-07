@@ -25,6 +25,15 @@ While the initial connection or a route loads, shimmer placeholders reserve the 
 
 Closed Terminal, Browser, Desktop, and Home/Ask OpenClaw panels initialize when you open them rather than during initial navigation. Panels saved as open still restore after a reload.
 
+Choose **New agent** in the sidebar or Agents home to open the custodian chat.
+It recommends a chief of staff, researcher, writer, reviewer, or a small team
+with all four. Reply with a choice, or describe custom work and a name. Role
+choices use the same [role templates](/cli/agents#role-templates) as the CLI;
+creation waits for operator approval. Created agents appear in Agents home and
+the agent switcher.
+If team creation stops partway through, the custodian reports the retained
+agents so you can inspect them before creating the missing members.
+
 ## Quick open (local)
 
 If the Gateway is running on the same computer, open [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/)).
