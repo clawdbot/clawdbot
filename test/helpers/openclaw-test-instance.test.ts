@@ -17,7 +17,6 @@ import {
   runManagedCommand,
   terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { hasErrnoCode } from "../../src/infra/errno.js";
 import { resolveMaxOutputBytes } from "../../src/process/exec-output.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
@@ -1284,7 +1283,7 @@ describe("openclaw test instance", () => {
   );
 
   it.each([true, false])(
-    "joins Windows gateway closure before retry cleanup (inherited pipes=%s)",
+    "does not target an exited Windows gateway (inherited pipes=%s)",
     async (inheritedPipes) => {
       const stdout = new PassThrough();
       const stderr = new PassThrough();
@@ -1310,31 +1309,25 @@ describe("openclaw test instance", () => {
         setImmediate(closePipes);
       }
 
-      await expect(
-        testing.stopGatewayProcess(child, Date.now() + 500, 250, {
-          forceWindowsTree: true,
-          platform: "win32",
-          runTaskkill,
-        }),
-      ).resolves.toBe(true);
-
-      if (inheritedPipes) {
-        expect(runTaskkill).toHaveBeenCalledOnce();
-        expect(runTaskkill).toHaveBeenCalledWith(
-          resolveWindowsTaskkillPath(),
-          ["/PID", "12345", "/T", "/F"],
-          {
-            killSignal: "SIGKILL",
-            stdio: "ignore",
-            timeout: 10_000,
-          },
-        );
-      } else {
+      try {
+        await expect(
+          testing.stopGatewayProcess(child, Date.now() + 500, 250, {
+            forceWindowsTree: true,
+            platform: "win32",
+            runTaskkill,
+          }),
+        ).resolves.toBe(!inheritedPipes);
         expect(runTaskkill).not.toHaveBeenCalled();
+        expect(kill).not.toHaveBeenCalled();
+        expect(stdout.closed).toBe(!inheritedPipes);
+        expect(stderr.closed).toBe(!inheritedPipes);
+      } finally {
+        const closed = Promise.all(
+          [stdout, stderr].map((pipe) => (pipe.closed ? Promise.resolve() : once(pipe, "close"))),
+        );
+        closePipes();
+        await closed;
       }
-      expect(kill).not.toHaveBeenCalled();
-      expect(stdout.closed).toBe(true);
-      expect(stderr.closed).toBe(true);
     },
   );
 
@@ -1405,7 +1398,9 @@ describe("openclaw test instance", () => {
       );
       expect(stopped).toBe(scenario.stopped);
       const threw = scenario.label === "taskkill exception";
-      expect(runTaskkill).toHaveBeenCalledTimes(scenario.taskkillStatus === 0 || threw ? 1 : 2);
+      expect(runTaskkill).toHaveBeenCalledTimes(
+        exitedLeader ? 0 : scenario.taskkillStatus === 0 || threw ? 1 : 2,
+      );
       if (!scenario.closePipes) {
         expect(stderr.closed).toBe(false);
       }
@@ -1421,10 +1416,12 @@ describe("openclaw test instance", () => {
           stopLog[0]!.slice(prefix.length),
         );
         const attempt = { force: false, elapsedMs: expect.any(Number) };
-        const taskkill: Record<string, unknown>[] = threw
-          ? [{ ...attempt, threw: true, errorCode: "EACCES" }]
-          : [{ ...attempt, status: scenario.taskkillStatus, signal: null }];
-        if (!heldPipe && !threw) {
+        const taskkill: Record<string, unknown>[] = exitedLeader
+          ? []
+          : threw
+            ? [{ ...attempt, threw: true, errorCode: "EACCES" }]
+            : [{ ...attempt, status: scenario.taskkillStatus, signal: null }];
+        if (!exitedLeader && !heldPipe && !threw) {
           taskkill.push({
             ...attempt,
             force: true,
