@@ -1,5 +1,6 @@
 // Plugins authoring command tests cover plugin authoring command output and file generation.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -638,7 +639,6 @@ describe("plugin authoring commands", () => {
       toolName: "deleted_cwd_echo",
     });
     const originalCwd = process.cwd();
-    const originalWriteFileSync = fs.writeFileSync.bind(fs);
     let cwdRemoved = false;
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
@@ -647,14 +647,16 @@ describe("plugin authoring commands", () => {
       }
       return originalCwd;
     });
-    const writeFileSync = vi
-      .spyOn(fs, "writeFileSync")
-      .mockImplementation((file, data, options) => {
-        originalWriteFileSync(file, data, options);
-        if (file === packagePath) {
-          cwdRemoved = true;
-        }
-      });
+    // The package.json write is staged through an atomic temp file, so hook the
+    // temp open instead of the final path.
+    const realOpen = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode as never);
+      if (String(file).startsWith(tmpDir) && String(file).endsWith(".tmp")) {
+        cwdRemoved = true;
+      }
+      return handle;
+    });
 
     try {
       await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
@@ -662,10 +664,59 @@ describe("plugin authoring commands", () => {
       expect(fs.existsSync(path.join(tmpDir, "openclaw.plugin.json"))).toBe(true);
       expect(log).toHaveBeenCalledWith(`Wrote ${path.join(tmpDir, "openclaw.plugin.json")}`);
       expect(log).toHaveBeenCalledWith(`Updated ${packagePath}`);
+      expect(cwdRemoved).toBe(true);
     } finally {
-      writeFileSync.mockRestore();
+      openSpy.mockRestore();
       cwd.mockRestore();
       log.mockRestore();
+      fs.rmSync(tmpDir, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps the original package.json intact when the build write fails mid-flight", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-build-write-fail-"));
+    const packagePath = path.join(tmpDir, "package.json");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-build-write-fail",
+      pluginId: "build-write-fail",
+      toolName: "build_write_fail_echo",
+    });
+    const originalPackage = fs.readFileSync(packagePath, "utf8");
+    const originalMode = fs.statSync(packagePath).mode & 0o777;
+
+    // Fail the staged package.json write halfway through, as a full disk does.
+    // fs-safe writes via fs.promises.writeFile(handle, content), so track the
+    // staged temp handle at open time and fail its writeFile.
+    const stagedHandles = new Set<unknown>();
+    const realOpen = fsp.open.bind(fsp);
+    const realWriteFile = fsp.writeFile.bind(fsp);
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode as never);
+      if (String(file).startsWith(tmpDir) && String(file).endsWith(".tmp")) {
+        stagedHandles.add(handle);
+      }
+      return handle;
+    });
+    const writeSpy = vi.spyOn(fsp, "writeFile").mockImplementation(async (file, data, options) => {
+      if (stagedHandles.has(file)) {
+        const text = typeof data === "string" ? data : Buffer.from(data as Uint8Array);
+        await realWriteFile(file as never, text.slice(0, 16), options as never);
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      }
+      return realWriteFile(file as never, data as never, options as never);
+    });
+
+    try {
+      await expect(
+        runPluginsBuildCommand({ root: tmpDir, entry: entryPath }),
+      ).rejects.toMatchObject({ code: "ENOSPC" });
+      expect(fs.readFileSync(packagePath, "utf8")).toBe(originalPackage);
+      expect(fs.statSync(packagePath).mode & 0o777).toBe(originalMode);
+      expect(fs.readdirSync(tmpDir).filter((entry) => entry.includes(".tmp"))).toEqual([]);
+    } finally {
+      writeSpy.mockRestore();
+      openSpy.mockRestore();
       fs.rmSync(tmpDir, { force: true, recursive: true });
     }
   });
