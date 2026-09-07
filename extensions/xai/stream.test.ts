@@ -11,7 +11,6 @@ import {
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
-import { XAI_GROK_OAUTH_BASE_URL } from "./provider-catalog.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import {
@@ -756,7 +755,7 @@ describe("xai stream wrappers", () => {
   });
 
   it.each([
-    ["Grok OAuth proxy", XAI_GROK_OAUTH_BASE_URL],
+    ["Grok OAuth proxy", "https://cli-chat-proxy.grok.com/v1"],
     ["custom endpoint", "https://proxy.example/v1"],
   ])("counts every function output before replaying sparse images for %s", (_label, baseUrl) => {
     const callIds = ["a", "b", "c", "d"].map((suffix) => `${"x".repeat(64)}${suffix}`);
