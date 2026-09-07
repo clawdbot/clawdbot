@@ -27,14 +27,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const GuestPromise = Promise;
   const promiseOutput = "[Unawaited Promise: use await or Promise.all(...) before emitting or returning values.]";
 
-  function outputReplacer(_key, value) {
-    return value instanceof GuestPromise ? promiseOutput : value;
-  }
-
   function safe(value, diagnosePromises = false) {
     if (value === undefined) return null;
     try {
-      return JSON.parse(JSON.stringify(value, diagnosePromises ? outputReplacer : undefined));
+      return JSON.parse(JSON.stringify(diagnosePromises ? serializeOutputValue(value) : value));
     } catch {
       if (value instanceof Error) {
         return { name: value.name, message: value.message };
@@ -272,24 +268,26 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   }
   // Final values may nest handles (Promise.all of searches, keyed maps); an
   // unserialized handle dumps as null and the model never learns the tool name.
-  function serializeCatalogHandles(value, seen = new Set()) {
+  function serializeOutputValue(value, seen = new Map()) {
     if (value instanceof GuestPromise) return promiseOutput;
     const metadata = callableMetadata.get(value);
     if (metadata) return metadata;
-    if (value === null || typeof value !== "object" || seen.has(value)) return value;
+    if (value === null || typeof value !== "object") return value;
+    if (seen.has(value)) return seen.get(value);
     const proto = Object.getPrototypeOf(value);
-    if (!Array.isArray(value) && proto !== Object.prototype && proto !== null) return value;
-    seen.add(value);
-    try {
-      if (Array.isArray(value)) return value.map((entry) => serializeCatalogHandles(entry, seen));
-      const plain = {};
-      for (const [key, entry] of Object.entries(value)) {
-        plain[key] = serializeCatalogHandles(entry, seen);
-      }
-      return plain;
-    } finally {
-      seen.delete(value);
+    const isError = value instanceof Error;
+    if (!isError && !Array.isArray(value) && proto !== Object.prototype && proto !== null) return value;
+    const plain = Array.isArray(value) ? new Array(value.length) : isError ? { name: value.name, message: value.message } : {};
+    // Project before JSON.stringify can invoke Error.toJSON, and preserve graph
+    // identity so cyclic custom fields use the ordinary bounded JSON fallback.
+    seen.set(value, plain);
+    for (const key of Object.keys(value)) {
+      if (isError && key === "toJSON") continue;
+      Object.defineProperty(plain, key, {
+        value: serializeOutputValue(value[key], seen), enumerable: true, configurable: true, writable: true,
+      });
     }
+    return plain;
   }
   const catalog = Object.freeze({
     search: async (query, options) => {
@@ -344,7 +342,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
-    __openclawSerializeCatalogHandles: { value: serializeCatalogHandles },
+    __openclawSerializeCatalogHandles: { value: serializeOutputValue },
     __openclawTakeOutput: { value: () => output.splice(0) },
     __openclawTrackRejection: {
       value: (promise, reason, handled) => {

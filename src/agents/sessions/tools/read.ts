@@ -482,7 +482,7 @@ export function createReadToolDefinition(
             }
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
-            let truncated: Parameters<typeof createReadToolDetails>[1];
+            let textDetails: Parameters<typeof createReadToolDetails>[1];
             const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
             const nonVisionImageNote =
               modelHasVision === false
@@ -570,44 +570,45 @@ export function createReadToolDefinition(
                 const endLine = startLine + selectedLines.length;
                 selectedLines[0] = firstLine.slice(cursor);
                 const userLimitedLines = limit === undefined ? undefined : endLine - startLine;
+                let selectedContent = selectedLines.join("\n");
+                if (endLine === totalFileLines && textContent.endsWith("\n")) {
+                  selectedContent += "\n";
+                }
+                const noteBytes = note ? Buffer.byteLength(`${note}\n`, "utf8") : 0;
+                const page = createBoundedReadTextPage({
+                  content: selectedContent,
+                  startLine: startLineDisplay,
+                  endLine,
+                  totalLines: totalFileLines,
+                  cursor,
+                  limit: userLimitedLines,
+                  maxBytes,
+                  modelBudget: options?.modelBudget,
+                  prefix: note ? `${note}\n` : undefined,
+                  pageMaxBytes: Math.min(DEFAULT_MAX_BYTES, maxBytes) - noteBytes,
+                  adaptive: options?.maxBytes !== undefined,
+                });
+                outputText = page.text;
+                textDetails = page.details;
                 if (selectedLines.every((line) => line.length === 0)) {
                   const selectedLineCount = selectedLines.length;
                   const subject =
                     startLine === 0 && endLine === totalFileLines ? "File" : "Selected range";
                   outputText = `${subject} contains ${selectedLineCount} blank line${selectedLineCount === 1 ? "" : "s"}.`;
-                  if (userLimitedLines !== undefined && endLine < totalFileLines) {
-                    const remaining = totalFileLines - endLine;
-                    outputText += `\n\n[${remaining} more line${remaining === 1 ? "" : "s"} in file. Use offset=${endLine + 1} to continue.]`;
-                  }
-                } else {
-                  let selectedContent = selectedLines.join("\n");
-                  if (endLine === totalFileLines && textContent.endsWith("\n")) {
-                    selectedContent += "\n";
-                  }
-                  const noteBytes = note ? Buffer.byteLength(`${note}\n`, "utf8") : 0;
-                  const page = createBoundedReadTextPage({
-                    content: selectedContent,
-                    startLine: startLineDisplay,
-                    endLine,
-                    totalLines: totalFileLines,
-                    cursor,
-                    limit: userLimitedLines,
-                    maxBytes,
-                    modelBudget: options?.modelBudget,
-                    prefix: note ? `${note}\n` : undefined,
-                    pageMaxBytes: Math.min(DEFAULT_MAX_BYTES, maxBytes) - noteBytes,
-                    adaptive: options?.maxBytes !== undefined,
-                  });
-                  outputText = page.content;
-                  if (page.kind === "truncated") {
-                    truncated = page;
+                  if (textDetails.kind === "truncated") {
+                    outputText += page.text.slice(textDetails.content.length);
                   }
                 }
               }
-              if (selectedLines.length === 1 && truncated === undefined) {
+              if (selectedLines.length === 1 && textDetails?.kind !== "truncated") {
                 // A singleton join can retain the decoded file. Copy only the bounded result,
                 // preserving UTF-16 code units from custom decoders, including lone surrogates.
                 outputText = Buffer.from(outputText, "utf16le").toString("utf16le");
+                if (textDetails) {
+                  textDetails.content = Buffer.from(textDetails.content, "utf16le").toString(
+                    "utf16le",
+                  );
+                }
               }
               content = [{ type: "text", text: outputText }];
             }
@@ -623,7 +624,7 @@ export function createReadToolDefinition(
               return;
             }
             signal?.removeEventListener("abort", onAbort);
-            resolve({ content, details: createReadToolDetails(content, truncated) });
+            resolve({ content, details: createReadToolDetails(content, textDetails) });
           } catch (error: unknown) {
             signal?.removeEventListener("abort", onAbort);
             if (!aborted) {
