@@ -3,6 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: vi.fn(actual.execFile),
+    execFileSync: vi.fn(actual.execFileSync),
+  };
+});
+
 import {
   createPrivateSqliteDirectory,
   createPrivateSqliteTempDirectorySync,
@@ -11,22 +21,19 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe.runIf(process.platform === "win32")("private SQLite directory creation on Windows", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => vi.clearAllMocks());
 
   it("creates protected directories without spawning PowerShell or a compiler", async () => {
     const root = tempDirs.make("openclaw-sqlite-private-directory-");
     const asyncPath = path.join(root, "private 测试");
-    const asyncSpawn = vi.spyOn(childProcess, "execFile");
-    const syncSpawn = vi.spyOn(childProcess, "execFileSync");
     await createPrivateSqliteDirectory(asyncPath);
     const syncPath = createPrivateSqliteTempDirectorySync(root, "sync-");
-    expect(asyncSpawn).not.toHaveBeenCalled();
-    expect(syncSpawn).not.toHaveBeenCalled();
-    vi.restoreAllMocks();
+    expect(childProcess.execFile).not.toHaveBeenCalled();
+    expect(childProcess.execFileSync).not.toHaveBeenCalled();
 
     for (const directory of [asyncPath, syncPath]) {
       const script = [
-        `$acl = Get-Acl -LiteralPath '${directory.replaceAll("'", "''")}'`,
+        `$acl = [IO.Directory]::GetAccessControl('${directory.replaceAll("'", "''")}')`,
         "$user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
         "$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))",
         "@{ protected = $acl.AreAccessRulesProtected; owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value; user = $user; rules = @($rules | ForEach-Object { @{ sid = $_.IdentityReference.Value; rights = [int]$_.FileSystemRights; inheritance = [int]$_.InheritanceFlags; inherited = $_.IsInherited; allow = [int]$_.AccessControlType } }) } | ConvertTo-Json -Depth 4 -Compress",

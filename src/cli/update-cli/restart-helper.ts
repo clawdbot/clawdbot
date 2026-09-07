@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
-import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -17,7 +16,11 @@ import {
   resolveGatewayRestartLogPath,
   shellEscapeRestartLogValue,
 } from "../../daemon/restart-logs.js";
-import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
+import {
+  buildHiddenLauncherScript,
+  encodeWindowsLauncherScript,
+} from "../../daemon/schtasks-layout.js";
+import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "../../process/exec-spawn.js";
 
 /**
@@ -262,11 +265,15 @@ set "status=%ERRORLEVEL%"
 REM PowerShell can exit zero for malformed or incomplete stdin without running it.
 findstr /x /c:"OPENCLAW_RESTART_COMPLETE" "%~dpn0.out" >nul 2>&1
 if errorlevel 1 set "status=1"
+REM This dedicated cmd process must exit instead of returning to a deleted batch file.
+(
 del "%~dpn0.out" >nul 2>&1
 del "%~dpn0.ps1" >nul 2>&1
+del "%~f0.vbs" >nul 2>&1
 del "%~f0" >nul 2>&1
 rmdir "%OPENCLAW_RESTART_SCRIPT_DIR%" >nul 2>&1
-exit /b %status%
+exit %status%
+)
 `;
       scriptContent = `
 # Wait briefly to ensure file locks are released after update.
@@ -710,6 +717,14 @@ exit $status
           mode: 0o700,
           flag: "wx",
         });
+        await fs.writeFile(
+          `${scriptPath}.vbs`,
+          encodeWindowsLauncherScript({
+            format: "vbs",
+            content: buildHiddenLauncherScript({ scriptPath }),
+          }),
+          { mode: 0o700, flag: "wx" },
+        );
       }
       await fs.writeFile(scriptPath, windowsWrapper ?? scriptContent, { mode: 0o755, flag: "wx" });
     } catch (error) {
@@ -726,8 +741,10 @@ exit $status
 /** Observe native acceptance separately from the caller's subsequent health check. */
 export async function runRestartScript(scriptPath: string, timeoutMs: number): Promise<boolean> {
   const isWindows = process.platform === "win32";
-  const file = isWindows ? getWindowsCmdExePath() : "/bin/sh";
-  const args = isWindows ? ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)] : [scriptPath];
+  // WScript supplies the hidden console that PowerShell stdin needs while the
+  // outer helper remains detached from the updater's lifetime.
+  const file = isWindows ? getWindowsSystem32ExePath("wscript.exe") : "/bin/sh";
+  const args = isWindows ? ["//B", "//Nologo", `${scriptPath}.vbs`] : [scriptPath];
 
   try {
     await spawnCommand([file, ...args], {
