@@ -95,7 +95,7 @@ async function safeReadDir(dir: string): Promise<Dirent[]> {
   }
 }
 
-async function readMemoryDir(dir: string): Promise<Dirent[]> {
+export async function readMemoryDir(dir: string): Promise<Dirent[]> {
   try {
     return await fs.readdir(dir, { withFileTypes: true });
   } catch (error) {

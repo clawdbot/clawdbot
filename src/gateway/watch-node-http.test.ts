@@ -1,9 +1,4 @@
-import {
-  request as httpRequest,
-  type ClientRequest,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import { request as httpRequest, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -20,20 +15,34 @@ import {
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
-  signDevicePayload,
 } from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import {
+  approveBootstrapDevicePairing,
+  approveDevicePairing,
+} from "../infra/device-pairing-approval.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
 import { withDevicePairingLock } from "../infra/device-pairing-state.js";
 import { loadDevicePairSetupCompletionRecord } from "../infra/device-pairing-store.js";
-import { revokeDeviceToken } from "../infra/device-pairing-tokens.js";
+import { revokeDeviceToken, verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
-import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import {
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  type DeviceBootstrapProfile,
+} from "../shared/device-bootstrap-profile.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
-import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { serializeEventPayload } from "./node-registry.js";
-import { startWatchNodeHttpRuntime } from "./watch-node-http.test-helpers.js";
+import {
+  connectWatchNode,
+  makeConnectParams,
+  readJson,
+  startPartialJsonRequest,
+  startWatchNodeHttpRuntime,
+  waitForLastConnectedMetadata,
+} from "./watch-node-http.test-helpers.js";
 
 const tempDirs = createTrackedTempDirs();
 const servers: Server[] = [];
@@ -47,70 +56,11 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-function makeConnectParams(params: {
-  identity: ReturnType<typeof loadOrCreateDeviceIdentity>;
-  nonce: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  client?: Partial<ConnectParams["client"]>;
-  caps?: string[];
-  commands?: string[];
-  permissions?: ConnectParams["permissions"];
-  minProtocol?: number;
-  maxProtocol?: number;
-  signedAt?: number;
-}): ConnectParams {
-  const publicKey = publicKeyRawBase64UrlFromPem(params.identity.publicKeyPem);
-  const auth = params.deviceToken
-    ? { deviceToken: params.deviceToken }
-    : { bootstrapToken: params.bootstrapToken };
-  const signedAt = params.signedAt ?? Date.now();
-  const client: ConnectParams["client"] = {
-    id: GATEWAY_CLIENT_IDS.WATCHOS_APP,
-    displayName: "Test Watch",
-    version: "1.0.0",
-    platform: "watchOS 11.5.0",
-    deviceFamily: "Apple Watch",
-    mode: GATEWAY_CLIENT_MODES.NODE,
-    instanceId: "watch-test",
-    ...params.client,
-  };
-  const scopes: string[] = [];
-  const signaturePayload = buildDeviceAuthPayloadV3({
-    deviceId: params.identity.deviceId,
-    clientId: client.id,
-    clientMode: client.mode,
-    role: "node",
-    scopes,
-    signedAtMs: signedAt,
-    token: params.deviceToken ?? params.bootstrapToken ?? null,
-    nonce: params.nonce,
-    platform: client.platform,
-    deviceFamily: client.deviceFamily,
-  });
-  return {
-    minProtocol: params.minProtocol ?? PROTOCOL_VERSION,
-    maxProtocol: params.maxProtocol ?? PROTOCOL_VERSION,
-    client,
-    caps: params.caps ?? [],
-    commands: params.commands ?? ["device.info", "device.status", "system.notify"],
-    permissions: params.permissions ?? { notifications: true },
-    role: "node",
-    scopes,
-    auth,
-    device: {
-      id: params.identity.deviceId,
-      publicKey,
-      signature: signDevicePayload(params.identity.privateKeyPem, signaturePayload),
-      signedAt,
-      nonce: params.nonce,
-    },
-  } as ConnectParams;
-}
-
 async function createWatchNodeFixture(
   prefix: string,
-  options?: Parameters<typeof startWatchNodeHttpRuntime>[2],
+  options?: Parameters<typeof startWatchNodeHttpRuntime>[2] & {
+    bootstrapProfile?: DeviceBootstrapProfile;
+  },
 ) {
   const baseDir = await tempDirs.make(prefix);
   const identity = loadOrCreateDeviceIdentity({
@@ -118,7 +68,7 @@ async function createWatchNodeFixture(
   });
   const issued = await issueDevicePairSetupBootstrapToken({
     baseDir,
-    profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    profile: options?.bootstrapProfile ?? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   });
   return {
     baseDir,
@@ -126,74 +76,6 @@ async function createWatchNodeFixture(
     issued,
     ...(await startWatchNodeHttpRuntime(baseDir, servers, options)),
   };
-}
-
-async function readJson(response: Response): Promise<Record<string, unknown>> {
-  return (await response.json()) as Record<string, unknown>;
-}
-
-async function connectWatchNode(params: {
-  baseUrl: string;
-  identity: ReturnType<typeof loadOrCreateDeviceIdentity>;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  commands?: string[];
-  permissions?: ConnectParams["permissions"];
-}): Promise<Response> {
-  const challenge = await readJson(await fetch(`${params.baseUrl}/challenge`));
-  return await fetch(`${params.baseUrl}/connect`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(
-      makeConnectParams({
-        identity: params.identity,
-        nonce: String(challenge.nonce),
-        signedAt: Number(challenge.ts),
-        bootstrapToken: params.bootstrapToken,
-        deviceToken: params.deviceToken,
-        commands: params.commands,
-        permissions: params.permissions,
-      }),
-    ),
-  });
-}
-
-function startPartialJsonRequest(params: { url: string; authorization: string }): {
-  request: ClientRequest;
-  response: Promise<{ statusCode: number; body: string }>;
-} {
-  let request!: ClientRequest;
-  const response = new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
-    request = httpRequest(
-      params.url,
-      {
-        method: "POST",
-        headers: {
-          authorization: params.authorization,
-          "content-type": "application/json",
-        },
-      },
-      (result) => {
-        const chunks: Buffer[] = [];
-        result.on("data", (chunk: Buffer) => chunks.push(chunk));
-        result.once("end", () => {
-          resolve({
-            statusCode: result.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString("utf8"),
-          });
-        });
-      },
-    );
-    request.once("error", reject);
-  });
-  return { request, response };
-}
-
-async function waitForLastConnectedMetadata(baseDir: string, nodeId: string): Promise<void> {
-  await vi.waitFor(async () => {
-    const paired = (await listNodePairing(baseDir)).paired.find((entry) => entry.nodeId === nodeId);
-    expect(paired?.lastConnectedAtMs).toEqual(expect.any(Number));
-  });
 }
 
 describe("watch node HTTP transport", () => {
@@ -839,6 +721,105 @@ describe("watch node HTTP transport", () => {
     fixture.runtime.close();
   });
 
+  it.each([
+    { name: "new Watch", existingProfile: undefined },
+    { name: "node-only Watch", existingProfile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE },
+    { name: "broader operator", existingProfile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE },
+  ])("hands off only Talk access for a $name voice setup", async ({ existingProfile }) => {
+    const fixture = await createWatchNodeFixture("openclaw-watch-node-voice-", {
+      bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const { baseDir, identity, issued, baseUrl, runtime } = fixture;
+    if (existingProfile) {
+      const pairing = await requestDevicePairing(
+        {
+          deviceId: identity.deviceId,
+          publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+          platform: "watchOS 11.5.0",
+          deviceFamily: "Apple Watch",
+          clientId: GATEWAY_CLIENT_IDS.WATCHOS_APP,
+          clientMode: GATEWAY_CLIENT_MODES.NODE,
+          role: "node",
+          roles: existingProfile.roles,
+          scopes: existingProfile.scopes,
+        },
+        baseDir,
+      );
+      const approved = await approveBootstrapDevicePairing(
+        pairing.request.requestId,
+        existingProfile,
+        baseDir,
+      );
+      expect(approved?.status).toBe("approved");
+    }
+
+    const response = await connectWatchNode({ baseUrl, identity, bootstrapToken: issued.token });
+    expect(response.status).toBe(200);
+    const connected = await readJson(response);
+    await fixture.connectHandled;
+    expect(connected.deviceTokens).toEqual([
+      {
+        deviceToken: expect.any(String),
+        role: "operator",
+        scopes: ["operator.read", "operator.talk"],
+        issuedAtMs: expect.any(Number),
+      },
+    ]);
+    const operatorToken = (connected.deviceTokens as { deviceToken: string }[])[0]!.deviceToken;
+    await expect(
+      verifyDeviceToken({
+        deviceId: identity.deviceId,
+        token: operatorToken,
+        role: "operator",
+        scopes: ["operator.read", "operator.talk"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    for (const scope of ["operator.admin", "operator.write", "operator.talk.secrets"]) {
+      await expect(
+        verifyDeviceToken({
+          deviceId: identity.deviceId,
+          token: operatorToken,
+          role: "operator",
+          scopes: [scope],
+          baseDir,
+        }),
+      ).resolves.toMatchObject({ ok: false, reason: "scope-mismatch" });
+    }
+    const paired = await getPairedDevice(identity.deviceId, baseDir);
+    expect(paired?.roles).toEqual(["node", "operator"]);
+    expect(paired?.approvedScopes).toEqual(["operator.read", "operator.talk"]);
+    expect(loadDevicePairSetupCompletionRecord(issued.setupId, Date.now(), baseDir)).toMatchObject({
+      access: "limited",
+      deliveryState: "confirmed",
+    });
+
+    const reconnect = await connectWatchNode({
+      baseUrl,
+      identity,
+      deviceToken: String(connected.deviceToken),
+    });
+    expect(reconnect.status).toBe(200);
+    expect((await readJson(reconnect)).deviceTokens).toBeUndefined();
+    const replay = await connectWatchNode({ baseUrl, identity, bootstrapToken: issued.token });
+    expect(replay.status).toBe(401);
+    runtime.close();
+  });
+
+  it.each([
+    { name: "limited mobile", profile: PAIRING_SETUP_BOOTSTRAP_PROFILE },
+    { name: "full mobile", profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE },
+  ])("does not accept a $name grant over Watch HTTP", async ({ profile }) => {
+    const { baseDir, identity, issued, baseUrl, runtime } = await createWatchNodeFixture(
+      "openclaw-watch-node-profile-boundary-",
+      { bootstrapProfile: profile },
+    );
+    const response = await connectWatchNode({ baseUrl, identity, bootstrapToken: issued.token });
+    expect(response.status).toBe(401);
+    expect(await getPairedDevice(identity.deviceId, baseDir)).toBeNull();
+    runtime.close();
+  });
+
   it("restores only declared approved commands after a denied reconnect and accepts an invoke result", async () => {
     const options: Parameters<typeof startWatchNodeHttpRuntime>[2] = { config: {} };
     const {
@@ -865,6 +846,7 @@ describe("watch node HTTP transport", () => {
     await connectHandled;
     expect(connected.sessionToken).toEqual(expect.any(String));
     expect(connected.deviceToken).toEqual(expect.any(String));
+    expect(connected.deviceTokens).toBeUndefined();
     expect(nodeRegistry.get(identity.deviceId)?.commands).toEqual(["device.info", "device.status"]);
     expect(broadcasts.map((entry) => entry.event)).toContain("device.pair.resolved");
     expect(broadcasts.map((entry) => entry.event)).toContain("node.pair.resolved");

@@ -8,7 +8,8 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createResolvedModelPatch,
   createModelCatalog,
@@ -18,8 +19,8 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-executor.ts";
 
-function createTestSessionCapability(client: GatewayBrowserClient): SessionCapability {
-  const sessions = createSessionCapability({
+function createCommandSessionCapability(client: GatewayBrowserClient): SessionCapability {
+  const sessions = createTestSessionCapability({
     snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
@@ -56,7 +57,7 @@ function executeSlashCommand(
     ...rest
   } = context;
   return executeSlashCommandImpl(client, sessionKey, commandName, args, {
-    sessions: createTestSessionCapability(client),
+    sessions: createCommandSessionCapability(client),
     ...rest,
     sessionAccessSnapshot,
   });
@@ -140,7 +141,7 @@ describe("executeSlashCommand directives", () => {
     });
     const client = createTestGatewayClient(request);
     const snapshot = { client, phase: "connected" as const, hello: sessionMutationGatewayHello() };
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot,
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
@@ -200,7 +201,7 @@ describe("executeSlashCommand directives", () => {
       );
     const ownsModelOverride = vi.fn(() => true);
     const sessions = {
-      ...createTestSessionCapability(client),
+      ...createCommandSessionCapability(client),
       patch,
     } as SessionCapability;
 

@@ -1,17 +1,17 @@
-import {
-  extractErrorCode,
-  formatErrorMessage,
-  readErrorName,
-  toErrorObject,
-} from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceGatewayControl,
+} from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
-  type RealtimeVoiceAgentConsultRunner,
-  type RealtimeVoiceGatewayControl,
-} from "openclaw/plugin-sdk/realtime-voice";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+  extractErrorCode,
+  readErrorName,
+  toErrorObject,
+  rawDataToString,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { RawData } from "ws";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   buildOpenAIQuicksilverDelegationPrompt,
   type OpenAIQuicksilverTranscriptEntry,
@@ -47,7 +47,10 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   signal: AbortSignal;
 };
 
-function shortFailureReason(error: unknown): string {
+function shortFailureReason(
+  error: unknown,
+  formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
+): string {
   return formatErrorMessage(error).replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
 }
 
@@ -72,7 +75,10 @@ export class OpenAIQuicksilverDelegationController {
   private stopped = false;
   private transcript: OpenAIQuicksilverTranscriptEntry[] = [];
 
-  constructor(private readonly options: OpenAIQuicksilverDelegationControllerOptions) {
+  constructor(
+    private readonly options: OpenAIQuicksilverDelegationControllerOptions,
+    private readonly formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
+  ) {
     if (options.signal.aborted) {
       this.onSessionAbort();
     } else {
@@ -293,7 +299,7 @@ export class OpenAIQuicksilverDelegationController {
         return;
       }
       this.options.logger.warn(
-        `OpenAI GPT-Live delegation consult failed: ${shortFailureReason(error)}`,
+        `OpenAI GPT-Live delegation consult failed: ${shortFailureReason(error, this.formatErrorMessage)}`,
       );
       text = CONSULT_FAILURE_TEXT;
     }

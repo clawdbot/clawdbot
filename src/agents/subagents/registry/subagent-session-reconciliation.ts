@@ -8,7 +8,7 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
-  type SessionEntry,
+  type InternalSessionEntry as SessionEntry,
 } from "../../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
@@ -86,10 +86,9 @@ export function loadSubagentSessionEntry(params: {
   let store = params.storeCache?.get(storePath);
   if (!store) {
     store = Object.fromEntries(
-      listSessionEntriesReadOnly({ storePath, clone: false }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
+      listSessionEntriesReadOnly({ storePath, clone: false, projection: "list" }).map(
+        ({ sessionKey, entry }) => [sessionKey, entry],
+      ),
     );
     params.storeCache?.set(storePath, store);
   }
@@ -140,6 +139,7 @@ export function resolveSubagentRunOrphanReason(params: {
     if (
       params.includeStaleUnended === true &&
       sessionEntry.abortedLastRun !== true &&
+      params.entry.execution.status !== "interrupted" &&
       isStaleUnendedSubagentRun(params.entry, params.now)
     ) {
       return "stale-unended-run";
@@ -246,14 +246,14 @@ export function resolveSubagentSessionCompletion(params: {
  *
  * This is the only liveness re-observation available without a live agent run
  * context: the session store is written by the child itself, so a terminal
- * status there is authoritative stop evidence and a `running` status is
- * authoritative evidence that the child is still alive. Callers relying on that
+ * status there is stop evidence. A nonterminal status does not establish
+ * liveness, but leaves the stop unconfirmed. Callers relying on that
  * must not first overwrite the entry with their own derived status.
  *
  * Returns what the child's own record says:
  * - `settled` — terminal there, so the stop is observed and this completion has
  *   been submitted through the ordinary lifecycle path.
- * - `live` — the entry exists and is still running. Terminal effects must not
+ * - `live` — the entry carries no fresh terminal evidence. Terminal effects must not
  *   run against it.
  * - `absent` — no usable session entry, so there is nothing to reconcile from.
  *   This is the absence of evidence, not evidence of a stop: the entry is

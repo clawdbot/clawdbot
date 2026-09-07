@@ -39,9 +39,15 @@ type SubagentRunReadSqliteRow = Pick<
   generation: number | null;
   outcome_status: string | null;
   outcome_timeout_disposition: string | null;
+  outcome_disposition: string | null;
+  wait_expiry_observed_at: number | null;
   delivery_status: string | null;
   delivery_suspended_at: number | null;
   requester_agent_id: string | null;
+  collect: number | null;
+  group_id: string | null;
+  swarm_requester_session_key: string | null;
+  collector_status: NonNullable<SubagentRunRecord["collectorCompletion"]>["status"] | null;
 };
 type CanonicalSubagentRunRecord = SubagentRunRecord &
   Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
@@ -133,6 +139,19 @@ export function upsertSubagentRunRowInDatabase(
       .onConflict((conflict) =>
         conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
       ),
+  );
+}
+
+/** Deletes one run on the exact supplied shared-state handle. */
+export function deleteSubagentRunRowInDatabase(
+  database: OpenClawStateDatabase,
+  runId: string,
+): void {
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
+      .deleteFrom("subagent_runs")
+      .where("run_id", "=", runId),
   );
 }
 
@@ -253,6 +272,14 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         "requester_session_key",
         "created_at",
         subagentPayloadJsonValue<string | null>("$.model").as("model"),
+        subagentPayloadJsonValue<number | null>("$.collect").as("collect"),
+        subagentPayloadJsonValue<string | null>("$.groupId").as("group_id"),
+        subagentPayloadJsonValue<string | null>("$.swarmRequesterSessionKey").as(
+          "swarm_requester_session_key",
+        ),
+        subagentPayloadJsonValue<string | null>("$.collectorCompletion.status").as(
+          "collector_status",
+        ),
         subagentPayloadJsonValue<number | null>("$.runTimeoutSeconds").as("run_timeout_seconds"),
         subagentPayloadJsonValue<SubagentRunRecord["execution"]["status"]>("$.execution.status").as(
           "execution_status",
@@ -267,6 +294,12 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         subagentPayloadJsonValue<number | null>("$.cleanupCompletedAt").as("cleanup_completed_at"),
         subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
         subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
+        subagentPayloadJsonValue<string | null>("$.execution.outcome.disposition").as(
+          "outcome_disposition",
+        ),
+        subagentPayloadJsonValue<number | null>("$.waitExpiryObservedAt").as(
+          "wait_expiry_observed_at",
+        ),
         // Read straight out of the retained payload like every column above it,
         // so the lean session-list projection reports the same liveness the full
         // record does. Dropping it here made a cross-process reader see a
@@ -302,6 +335,12 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
     row.outcome_status === "unknown"
       ? row.outcome_status
       : undefined;
+  const disposition =
+    row.outcome_disposition === "still-running" ||
+    row.outcome_disposition === "exited" ||
+    row.outcome_disposition === "killed"
+      ? row.outcome_disposition
+      : undefined;
   const timeoutDisposition =
     outcomeStatus === "timeout" &&
     (row.outcome_timeout_disposition === "child-stopped" ||
@@ -320,6 +359,10 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       controllerSessionKey: row.controller_session_key?.trim() || undefined,
       requesterSessionKey,
       requesterAgentId: row.requester_agent_id?.trim() || undefined,
+      collect: row.collect === 1 ? true : undefined,
+      groupId: row.group_id || undefined,
+      swarmRequesterSessionKey: row.swarm_requester_session_key || undefined,
+      collectorCompletion: row.collector_status ? { status: row.collector_status } : undefined,
       model: row.model || undefined,
       generation: normalizeFiniteNumber(row.generation),
       createdAt: row.created_at,
@@ -331,11 +374,13 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
           ? {
               outcome: {
                 status: outcomeStatus,
+                ...(disposition ? { disposition } : {}),
                 ...(timeoutDisposition ? { timeoutDisposition } : {}),
               },
             }
           : {}),
       },
+      waitExpiryObservedAt: normalizeFiniteNumber(row.wait_expiry_observed_at),
       sessionStartedAt: normalizeFiniteNumber(row.session_started_at),
       accumulatedRuntimeMs: normalizeFiniteNumber(row.accumulated_runtime_ms),
       runTimeoutSeconds: normalizeFiniteNumber(row.run_timeout_seconds),

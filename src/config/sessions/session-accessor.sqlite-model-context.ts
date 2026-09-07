@@ -23,6 +23,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
   projectModelContextEventSql,
   projectModelContextNavigationSql,
@@ -32,6 +33,7 @@ import {
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
+import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -71,6 +73,52 @@ function readContextVersion(database: Pick<OpenClawAgentDatabase, "db">, session
       ])
       .where("session_id", "=", sessionId),
   )!;
+}
+
+function assertContextAnchor(
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
+  resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
+  through: TranscriptEntryAnchor,
+): void {
+  if (
+    resolved.agentId !== through.agentId ||
+    resolved.sessionId !== through.sessionId ||
+    resolved.sessionKey !== through.sessionKey ||
+    database.path !== through.storePath
+  ) {
+    throw new SessionTranscriptReadFenceError(
+      "Completed-turn anchor belongs to another transcript",
+    );
+  }
+  const current = readActiveTranscriptEntryAnchorInTransaction({
+    database,
+    resolved: { ...resolved, sessionKey: through.sessionKey },
+    entryId: through.entryId,
+  });
+  if (
+    !current ||
+    (["generation", "rawSeq", "effectiveParentId", "activeMessagePosition"] as const).some(
+      (field) => current[field] !== through[field],
+    )
+  ) {
+    throw new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed");
+  }
+}
+
+/** Later appends are allowed; rewriting or removing the accepted turn is not. */
+export function validateSessionTranscriptContextAnchor(
+  scope: SessionTranscriptReadScope,
+  through: TranscriptEntryAnchor,
+): void {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => assertContextAnchor(database, resolved, through),
+    toDatabaseOptions(resolved),
+    { throwOnMissingTable: true },
+  );
+  if (!result.found) {
+    throw new SessionTranscriptReadFenceError("Completed-turn transcript no longer exists");
+  }
 }
 
 /** Unadmitted context must still describe this session when an async read returns. */
@@ -114,7 +162,10 @@ export function validateSessionTranscriptContextAdmission(
 }
 
 /** Read a transient context without opening the writer lifecycle or copying native evidence. */
-export function readSessionTranscriptModelContext(scope: SessionTranscriptReadScope): {
+export function readSessionTranscriptModelContext(
+  scope: SessionTranscriptReadScope,
+  through?: TranscriptEntryAnchor,
+): {
   events: TranscriptEvent[];
   version?: SessionTranscriptContextVersion;
 } {
@@ -139,6 +190,7 @@ export function readSessionTranscriptModelContext(scope: SessionTranscriptReadSc
         version,
       };
     },
+    through,
   );
   return result.found ? result.value : { events: [] };
 }
@@ -167,6 +219,7 @@ export function readSessionTranscriptContextMessages<T>(
 function withTranscriptContextSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (snapshot: TranscriptContextSnapshot) => T,
+  through?: TranscriptEntryAnchor,
 ): { found: true; value: T } | { found: false } {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
@@ -177,10 +230,14 @@ function withTranscriptContextSnapshot<T>(
           const db = getSessionKysely(database.db);
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readContextVersion(database, resolved.sessionId);
+          if (through) {
+            assertContextAnchor(database, resolved, through);
+          }
           const base = db
             .selectFrom("transcript_events")
             .where("session_id", "=", resolved.sessionId)
-            .$if(fence !== undefined, (query) => query.where("seq", "<", fence!.beforeRawSeq));
+            .$if(fence !== undefined, (query) => query.where("seq", "<", fence!.beforeRawSeq))
+            .$if(through !== undefined, (query) => query.where("seq", "<=", through!.rawSeq));
           const header = executeSqliteQueryTakeFirstSync(
             database.db,
             base
@@ -212,12 +269,18 @@ function withTranscriptContextSnapshot<T>(
             })(),
           );
           // Navigation entries belong to this snapshot; normalize ancestry without another copy.
-          const entries = selectSessionTranscriptTreePathNodes(tree, tree.leafId).map(
-            ({ entry, parentId }) => {
-              entry.parentId = parentId;
-              return entry;
-            },
-          );
+          if (through && !tree.byId.has(through.entryId)) {
+            throw new SessionTranscriptReadFenceError(
+              "Completed-turn anchor is outside the admitted context",
+            );
+          }
+          const entries = selectSessionTranscriptTreePathNodes(
+            tree,
+            through?.entryId ?? tree.leafId,
+          ).map(({ entry, parentId }) => {
+            entry.parentId = parentId;
+            return entry;
+          });
           const readPayload = prepareSqliteQuerySync<ContextEntry, { event_json: string }>(
             database.db,
             (parameter) =>

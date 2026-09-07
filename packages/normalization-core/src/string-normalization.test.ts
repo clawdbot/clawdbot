@@ -59,8 +59,26 @@ describe("normalization-core/string-normalization", () => {
     expect(normalizeStringEntriesLower([" A ", "MiXeD", 7])).toEqual(["a", "mixed", "7"]);
   });
 
-  it("sorts unique string values", () => {
-    expect(sortUniqueStrings(["b", "a", "b"])).toEqual(["a", "b"]);
+  it.each([
+    { label: "empty", values: [], expected: [] },
+    { label: "duplicates", values: ["b", "a", "b"], expected: ["a", "b"] },
+    {
+      label: "case and numeric text",
+      values: ["a", "Z", "10", "2", "A", ""],
+      expected: ["", "10", "2", "A", "Z", "a"],
+    },
+    {
+      label: "UTF-16 without normalization",
+      values: ["\ue000", "\ud83d\ude00", "\ud800", "\udc00", "é", "e\u0301", "é"],
+      expected: ["e\u0301", "é", "\ud800", "\ud83d\ude00", "\udc00", "\ue000"],
+    },
+  ])("sorts fresh unique strings from iterables: $label", ({ values, expected }) => {
+    const input = Object.freeze(values);
+    const result = sortUniqueStrings(input);
+    expect(result).toEqual(expected);
+    expect(result).not.toBe(input);
+    expect(sortUniqueStrings(new Set(input))).toEqual(expected);
+    expect(sortUniqueStrings(input.values())).toEqual(expected);
   });
 
   it("deduplicates string values while preserving first-seen order", () => {

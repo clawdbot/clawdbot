@@ -55,6 +55,19 @@ describe("agent internal events", () => {
     expect(event.result).toBe(fullResult);
   });
 
+  it("omits the disposition line for producers without a child run", () => {
+    // Media/cron completions own no run, so an invented disposition would be a
+    // liveness claim about something that was never a process.
+    const prompt = formatAgentInternalEventsForPrompt([taskCompletionEvent("done")]);
+
+    expect(prompt).not.toContain("disposition:");
+    expect(
+      formatAgentInternalEventsForPrompt([
+        { ...taskCompletionEvent("done"), disposition: "still-running" },
+      ]),
+    ).toContain("disposition: still-running");
+  });
+
   it("keeps ordinary child results unchanged", () => {
     const result = "small useful result";
 

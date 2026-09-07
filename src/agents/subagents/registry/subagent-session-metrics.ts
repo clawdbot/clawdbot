@@ -3,6 +3,7 @@
  *
  * Derives display/runtime status from partial live, archived, or recovered registry records.
  */
+import { resolveSubagentRunDisposition } from "../subagent-terminal-outcome.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -16,7 +17,10 @@ type SubagentSessionStartRecord = Pick<SubagentRunRecord, "sessionStartedAt"> & 
 type SubagentSessionRuntimeRecord = Pick<SubagentRunRecord, "accumulatedRuntimeMs"> & {
   execution: Pick<SubagentExecutionMetrics, "startedAt" | "endedAt">;
 };
-type SubagentSessionStatusRecord = Pick<SubagentRunRecord, "endedReason"> & {
+type SubagentSessionStatusRecord = Pick<
+  SubagentRunRecord,
+  "endedReason" | "waitExpiryObservedAt"
+> & {
   execution: Pick<SubagentExecutionMetrics, "status" | "endedAt" | "outcome">;
 };
 
@@ -62,8 +66,8 @@ export function getSubagentSessionRuntimeMs(
 }
 
 /**
- * True when this row's `timeout` outcome recorded only that a wait deadline
- * elapsed, with nothing ever observed to stop the child.
+ * True when a wait-expiry observation (or legacy provisional timeout outcome)
+ * records only a deadline, without observed child stop.
  *
  * The single derivation of that predicate for the whole codebase: the registry's
  * `shouldDeferTerminalCleanupForUnconfirmedChild` delegates here, and so do the
@@ -72,10 +76,19 @@ export function getSubagentSessionRuntimeMs(
  * the cleanup layer.
  */
 export function isSubagentChildStopUnconfirmed(
-  entry: Pick<SubagentSessionStatusRecord, "execution"> | null | undefined,
+  entry: Pick<SubagentSessionStatusRecord, "execution" | "waitExpiryObservedAt"> | null | undefined,
 ): boolean {
-  const outcome = entry?.execution.outcome;
-  return outcome?.status === "timeout" && outcome.timeoutDisposition === "child-unconfirmed";
+  if (!entry) {
+    return false;
+  }
+  // The observation is not terminal evidence and must stop matching after the
+  // actual completion. Legacy provisional rows can already carry an endedAt.
+  return (
+    (typeof entry.waitExpiryObservedAt === "number" &&
+      Number.isFinite(entry.waitExpiryObservedAt) &&
+      entry.execution.endedAt === undefined) ||
+    resolveSubagentRunDisposition(entry.execution.outcome) === "still-running"
+  );
 }
 
 /** Maps persisted run outcome fields to the compact session status shown in tools/UI. */

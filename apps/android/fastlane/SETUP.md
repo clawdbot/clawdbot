@@ -104,11 +104,13 @@ pnpm android:release:upload
 
 `Android Beta Release` is a separate, manual workflow. Dispatch it from trusted
 `main` with a canonical `release/YYYY.M.PATCH-mobile` branch and that branch's
-exact full commit SHA. The workflow accepts only a candidate that descends from
-the workflow SHA and differs in exactly the five generated mobile release
-metadata files. Approval of the `android-beta-release` environment gates all
-access to signing assets, Google Play credentials, and immutable release-ref
-mutation.
+exact full commit SHA. The workflow derives the frozen Code SHA from the release
+branch and the current trusted Tooling SHA. Every later candidate commit must be
+linear and may change only the five generated mobile release metadata files.
+All five target files must byte-match regeneration using current trusted tooling
+and the frozen Code SHA metadata. Approval of the `android-beta-release`
+environment gates all access to signing assets, Google Play credentials, and
+immutable release-ref mutation.
 
 Repository/environment secrets required by name:
 

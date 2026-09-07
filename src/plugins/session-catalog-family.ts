@@ -355,6 +355,10 @@ async function listHosts(
       query.onHost?.(host);
     }
   }
+  // Use the captured host selection after local discovery and progress callbacks.
+  if (requested && !Array.from(requested).some((hostId) => hostId.startsWith("node:"))) {
+    return hosts;
+  }
   let nodes: CatalogNode[];
   try {
     nodes = (await (query.listNodes?.() ?? options.runtime.nodes.list())).nodes;

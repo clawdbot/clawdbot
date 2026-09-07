@@ -24,6 +24,7 @@ import {
   renderGitHubConnectionSetup,
   renderGitHubDetails,
   renderGitHubHealth,
+  renderGitHubUnloadedStatus,
 } from "./github-identity-view.ts";
 
 /** Profile credentials have their own read-scoped lifecycle, independent of users.self edits. */
@@ -187,9 +188,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
         ? t("githubConnections.reconnectRequired")
         : connected
           ? t("githubConnections.connected")
-          : personal
-            ? t("githubConnections.disconnected")
-            : t("githubConnections.notLoaded");
+          : t("githubConnections.disconnected");
     return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.githubConnections}>
       ${renderSettingsSection(
         {
@@ -202,7 +201,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
                     ?disabled=${this.locked || (!this.profileId && !this.system.status)}
                     @click=${() => this.openSetup(this.profileId ? "personal" : "system")}
                   >
-                    ${t("agentTools.githubConnect")}
+                    ${t("githubConnections.manage")}
                   </button>
                   <button
                     class="btn btn--sm"
@@ -225,12 +224,16 @@ export class GitHubConnections extends OpenClawLightDomElement {
                     "githubConnections.personalDescription",
                   )}`
                 : t("githubConnections.unboundDescription"),
-              control: html`${renderSettingsStatus({
-                kind: reconnectRequired ? "warn" : connected ? "ok" : "muted",
-                label: personalLabel,
-              })}
+              control: html`${
+                this.profileId && !personal
+                  ? renderGitHubUnloadedStatus(this.personal)
+                  : renderSettingsStatus({
+                      kind: reconnectRequired ? "warn" : connected ? "ok" : "muted",
+                      label: personalLabel,
+                    })
+              }
               ${
-                this.profileId && this.canRead
+                this.profileId && this.canRead && personal
                   ? html`<button
                       class="btn btn--sm"
                       ?disabled=${this.locked}
@@ -252,7 +255,10 @@ export class GitHubConnections extends OpenClawLightDomElement {
               description: html`${system?.account ? `@${system.account.login} · ` : ""}${t(
                 "githubConnections.systemDescription",
               )}`,
-              control: html`${renderGitHubHealth(system)}${
+              control: html`${renderGitHubHealth(system, {
+                loading: this.system.loading || this.personal.loading,
+                error: this.system.error ?? this.personal.error,
+              })}${
                 this.canAdmin
                   ? html`<button
                       class="btn btn--sm"

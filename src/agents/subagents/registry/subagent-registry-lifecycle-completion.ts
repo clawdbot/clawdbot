@@ -6,6 +6,8 @@ import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import {
+  isSubagentRunStillRunning,
+  resolveSubagentRunDisposition,
   type SubagentRunOutcome,
   withSubagentOutcomeTiming,
 } from "../announce/subagent-announce-output.js";
@@ -53,7 +55,11 @@ function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunR
     !Number.isFinite(params.entry.runTimeoutSeconds) ||
     params.entry.runTimeoutSeconds <= 0 ||
     params.entry.execution.outcome?.status !== "timeout" ||
-    typeof params.entry.execution.endedAt !== "number"
+    typeof params.entry.execution.endedAt !== "number" ||
+    // A wait-expiry publication describes the waiter, not the run. Fencing the
+    // run behind it would discard the child's own terminal callback and leave
+    // the parent's last word "timed out" for a child that went on to finish.
+    isSubagentRunStillRunning(params.entry.execution.outcome)
   ) {
     return false;
   }
@@ -308,39 +314,42 @@ export async function completeSubagentRunAttempt(
       Number.isFinite(completeParams.startedAt)
         ? completeParams.startedAt
         : undefined;
-    const expiredDeadlineMs = recoveryRequested
-      ? undefined
-      : resolveExpiredExplicitRunDeadlineMs({
-          entry,
-          nextEndedAt: endedAt,
-          observedStartedAt,
-        });
+    // Once only the wait expired, the later child result is authoritative.
+    // Reapplying that clock here would turn a real success into a terminal
+    // timeout after we deliberately kept the task open for its actual result.
+    // Abort/error/timeout outcomes retain their existing deadline attribution.
+    const preserveObservedResult =
+      shouldDeferTerminalCleanupForUnconfirmedChild(entry) && completionOutcome.status === "ok";
+    const expiredDeadlineMs =
+      recoveryRequested || preserveObservedResult
+        ? undefined
+        : resolveExpiredExplicitRunDeadlineMs({
+            entry,
+            nextEndedAt: endedAt,
+            observedStartedAt,
+          });
     if (expiredDeadlineMs !== undefined) {
       endedAt = expiredDeadlineMs;
+      // Clamping the reported end to the deadline does not re-observe the run,
+      // so the caller's disposition is the only liveness evidence there is.
       completionOutcome = {
         status: "timeout",
-        // This caller observed an end past the stored deadline, so only its
-        // timing is clamped back — the stop itself is evidence. An already
-        // unconfirmed disposition stays unconfirmed; nothing here observed it.
-        timeoutDisposition:
-          completionOutcome.status === "timeout"
-            ? (completionOutcome.timeoutDisposition ?? "child-stopped")
-            : "child-stopped",
+        ...(completionOutcome.disposition || completionOutcome.timeoutDisposition
+          ? { disposition: resolveSubagentRunDisposition(completionOutcome) }
+          : {}),
       };
       completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
     }
     if (
       shouldDeferTerminalCleanupForUnconfirmedChild(entry) &&
-      !(
-        completionOutcome.status === "timeout" &&
-        completionOutcome.timeoutDisposition === "child-unconfirmed"
-      )
+      !isSubagentRunStillRunning(completionOutcome)
     ) {
       // Authoritative stop evidence promotes this row out of the deferred,
       // non-terminal cleanup state. Reopen cleanup so the terminal effects that
       // were withheld while the child might still have been running can run now.
       entry.cleanupHandled = false;
       entry.cleanupCompletedAt = undefined;
+      clearDeliveryState(entry);
       // The provisional completion capture goes with it. `freezeRunResultAtCompletion`
       // is first-write-wins on `resultText`, so whatever partial text (or `null`)
       // was captured when the WAIT expired would survive this promotion and be
@@ -370,7 +379,7 @@ export async function completeSubagentRunAttempt(
           killIntent.lifecycleGeneration !== undefined &&
           isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration);
         completionReason = SUBAGENT_ENDED_REASON_KILLED;
-        completionOutcome = { status: "error", error: killIntent.reason };
+        completionOutcome = { status: "error", error: killIntent.reason, disposition: "killed" };
         entry.killIntent = undefined;
         if (killOwnsCurrentLifecycle) {
           suppressSessionEffects = false;
@@ -509,6 +518,8 @@ export async function completeSubagentRunAttempt(
         status: "terminal",
         endedAt,
         outcome: executionOutcome,
+        interruptedAt: undefined,
+        interruptionReason: undefined,
         restartRecovery: retainedRestartRecovery,
         suppressSessionEffects: suppressSessionEffects ? true : undefined,
       };

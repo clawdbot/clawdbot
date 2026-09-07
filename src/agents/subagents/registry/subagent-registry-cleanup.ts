@@ -37,12 +37,9 @@ export function resolveCleanupCompletionReason(
 }
 
 /**
- * True while this run is in the durable, non-terminal-cleanup `child-unconfirmed`
- * state: it was completed on a deadline alone and nothing was ever observed to
- * stop the child.
- *
- * The registry row is terminal so the parent gets woken, but the child may still
- * be running, so **no terminal effect may run against it**: not the
+ * True while a wait expired without observed child stop. New rows retain a
+ * nonterminal observation; legacy rows may carry a provisional timeout outcome
+ * and endedAt. Neither form authorizes terminal effects against the child: not
  * `sessions.delete` that removes its session and transcript, not its attachments
  * directory, not its browser sessions, not its MCP runtimes, not the internal
  * session-effects teardown, not the context-engine "this child ended" report,

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   openOpenClawAgentDatabase,
@@ -13,21 +14,34 @@ import {
 } from "./disk-budget.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 
-export function reclaimSqliteFreePages(databaseOptions: OpenClawAgentDatabaseOptions): void {
-  // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across awaits.
-  const database = openOpenClawAgentDatabase(databaseOptions);
-  // Committed row deletion first lands in the WAL. TRUNCATE makes that shrink immediately;
-  // incremental vacuum can then return free tail pages from the main file without a rewrite.
-  database.walMaintenance.checkpoint();
-  // SAFETY: SQLite returns this fixed numeric column for PRAGMA freelist_count.
-  const row = database.db.prepare("PRAGMA freelist_count").get() as
-    | { freelist_count?: unknown }
-    | undefined;
-  const freePages = Number(row?.freelist_count ?? 0);
-  if (Number.isSafeInteger(freePages) && freePages > 0) {
-    database.db.exec(`PRAGMA incremental_vacuum(${freePages});`);
+export async function reclaimSqliteFreePages(
+  databaseOptions: OpenClawAgentDatabaseOptions,
+): Promise<void> {
+  let remaining: number | undefined;
+  while (remaining === undefined || remaining > 0) {
+    if (remaining !== undefined) {
+      await setImmediate();
+    }
+    // Reacquire after yielding: idle cached handles can be evicted between passes.
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    database.walMaintenance.checkpoint();
+    // sqlite-allow-raw -- Physical budget decisions need current SQLite page accounting.
+    const freePages = () =>
+      Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0);
+    const before = freePages();
+    if (!Number.isSafeInteger(before) || before <= 0) {
+      return;
+    }
+    // Bound the entire drain to its initial freelist, even if other writers free more pages.
+    remaining = Math.min(remaining ?? before, before);
+    const pages = Math.min(512, remaining);
+    database.db.exec(`PRAGMA incremental_vacuum(${pages});`); // sqlite-allow-raw -- Bounded maintenance outside a transaction.
+    database.walMaintenance.checkpoint();
+    remaining -= pages;
+    if (freePages() >= before) {
+      return;
+    }
   }
-  database.walMaintenance.checkpoint();
 }
 
 export function hasCanonicalSessionTranscriptArchives(
@@ -141,7 +155,7 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(params: {
           .where("generation", "=", row.generation),
       );
     }, params.databaseOptions);
-    reclaimSqliteFreePages(params.databaseOptions);
+    await reclaimSqliteFreePages(params.databaseOptions);
     usage = await measureSessionPhysicalDiskUsage(params.storePath);
   }
   return { removedFiles, usage };
@@ -153,13 +167,11 @@ export async function pruneAllSessionTranscriptArchivesToHighWater(params: {
   highWaterBytes: number;
   storePath: string;
 }): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
-  let canonical = {
-    removedFiles: 0,
-    usage: await measureSessionPhysicalDiskUsage(params.storePath),
-  };
-  if (hasCanonicalSessionTranscriptArchives(params.databaseOptions)) {
-    canonical = await pruneCanonicalSessionTranscriptArchivesToHighWater(params);
-  }
+  // Reclaim committed free pages before pressure can destroy a retained archive.
+  await reclaimSqliteFreePages(params.databaseOptions);
+  const canonical = hasCanonicalSessionTranscriptArchives(params.databaseOptions)
+    ? await pruneCanonicalSessionTranscriptArchivesToHighWater(params)
+    : { removedFiles: 0, usage: await measureSessionPhysicalDiskUsage(params.storePath) };
   if (canonical.usage.totalBytes <= params.highWaterBytes) {
     return canonical;
   }

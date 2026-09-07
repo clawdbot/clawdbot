@@ -451,7 +451,7 @@ val generateMermaidAssets =
   tasks.register<Exec>("generateMermaidAssets") {
     val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
     workingDir(repositoryRoot)
-    commandLine("pnpm", "--filter", "@openclaw/mermaid-renderer", "build")
+    commandLine("pnpm", "--dir", "packages/mermaid-renderer", "build")
     inputs
       .files(
         fileTree(repositoryRoot.resolve("packages/mermaid-renderer")) {

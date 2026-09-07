@@ -1,5 +1,4 @@
 /** Cancellation path for active ACP turns and idle runtime handles. */
-import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   AcpRuntimeError,
@@ -42,7 +41,6 @@ export async function runManagerCancelSession(params: {
     ) {
       throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP task is no longer the active run.");
     }
-    return current;
   };
   const requireExpectedOwner = () => {
     if (!expectedOwnerKey) {
@@ -86,8 +84,7 @@ export async function runManagerCancelSession(params: {
       meta: resolvedMeta,
     });
     try {
-      await cancelRuntimeHandle({
-        runtime,
+      await runtime.cancel({
         handle,
         reason: params.reason,
       });
@@ -99,7 +96,11 @@ export async function runManagerCancelSession(params: {
         clearLastError: true,
       });
     } catch (error) {
-      const acpError = normalizeCancelError(error);
+      const acpError = toAcpRuntimeError({
+        error,
+        fallbackCode: "ACP_TURN_FAILED",
+        fallbackMessage: "ACP cancel failed before completion.",
+      });
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
@@ -128,30 +129,6 @@ export async function cancelManagerActiveTurn(params: {
   }
   await withAcpRuntimeErrorBoundary({
     run: async () => await params.activeTurn.cancelPromise!,
-    fallbackCode: "ACP_TURN_FAILED",
-    fallbackMessage: "ACP cancel failed before completion.",
-  });
-}
-
-async function cancelRuntimeHandle(params: {
-  runtime: AcpRuntime;
-  handle: AcpRuntimeHandle;
-  reason?: string;
-}): Promise<void> {
-  await withAcpRuntimeErrorBoundary({
-    run: async () =>
-      await params.runtime.cancel({
-        handle: params.handle,
-        reason: params.reason,
-      }),
-    fallbackCode: "ACP_TURN_FAILED",
-    fallbackMessage: "ACP cancel failed before completion.",
-  });
-}
-
-function normalizeCancelError(error: unknown): AcpRuntimeError {
-  return toAcpRuntimeError({
-    error,
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "ACP cancel failed before completion.",
   });

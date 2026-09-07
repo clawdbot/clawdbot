@@ -43,10 +43,10 @@ export function createChannelPairingChallengeIssuer(params: {
     >,
   ) =>
     issuePairingChallenge({
+      ...challenge,
       channel: params.channel,
       accountId: params.accountId,
       upsertPairingRequest: params.upsertPairingRequest,
-      ...challenge,
     });
 }
 

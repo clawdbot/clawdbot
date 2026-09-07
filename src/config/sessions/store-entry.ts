@@ -186,7 +186,7 @@ type SessionEntryCandidate = {
   sessionKey: string;
 };
 
-function resolveSessionEntryCandidates(params: {
+export function resolveSessionEntryCandidates(params: {
   entries: readonly SessionEntryCandidate[];
   sessionKey: string;
 }): {

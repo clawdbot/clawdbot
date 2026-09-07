@@ -20,6 +20,7 @@ const AGENT_INTERNAL_EVENT_SOURCES = [
   "music_generation",
 ] as const;
 const AGENT_INTERNAL_EVENT_STATUSES = ["ok", "timeout", "error", "unknown"] as const;
+const AGENT_RUN_DISPOSITIONS = ["exited", "killed", "still-running"] as const;
 const CONVERSATION_REF_PATTERN = "^conv_[a-f0-9]{32}$";
 
 /** Generated media/file attachment metadata carried by internal agent events. */
@@ -47,6 +48,7 @@ const AgentInternalEventSchema = closedObject({
   taskLabel: Type.String(),
   status: Type.String({ enum: [...AGENT_INTERNAL_EVENT_STATUSES] }),
   statusLabel: Type.String(),
+  disposition: Type.Optional(Type.String({ enum: [...AGENT_RUN_DISPOSITIONS] })),
   result: Type.String(),
   modelRouteChange: Type.Optional(Type.String()),
   attachments: Type.Optional(Type.Array(AgentGeneratedAttachmentSchema)),

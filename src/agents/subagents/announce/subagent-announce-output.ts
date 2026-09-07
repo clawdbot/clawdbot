@@ -11,12 +11,16 @@ import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.j
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
+import type { AgentRunDisposition } from "../../internal-event-contract.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
-import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
+import {
+  classifySubagentTerminalOutcome,
+  resolveSubagentRunDisposition,
+} from "../subagent-terminal-outcome.js";
 import {
   captureSubagentCompletionReplyUsing,
   readLatestSubagentOutputWithRetryUsing,
@@ -30,6 +34,8 @@ import {
   resolveSessionStorePathCore,
 } from "./subagent-announce.runtime.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
+
+export { resolveSubagentRunDisposition } from "../subagent-terminal-outcome.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 const MAX_CHILD_COMPLETION_RESULT_CHARS = 512;
@@ -96,32 +102,28 @@ type AgentWaitResult = {
  * stored run deadline). No stop was observed, so the child may still be
  * running and the outcome describes the end of the WAIT, not of the run.
  */
-export type SubagentTimeoutDisposition = "child-stopped" | "child-unconfirmed";
+type SubagentTimeoutDisposition = "child-stopped" | "child-unconfirmed";
 
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
+  /**
+   * Written only by producers that observed something other than the run
+   * publishing its own terminal state: a waiter whose budget expired while the
+   * run stayed live, or a kill. Absence therefore means `exited`; read it
+   * through `resolveSubagentRunDisposition` rather than defaulting inline.
+   */
+  disposition?: AgentRunDisposition;
   error?: string;
-  /** Only meaningful when `status` is `timeout`. */
+  /** Legacy persisted timeout evidence. New outcomes write `disposition` only. */
   timeoutDisposition?: SubagentTimeoutDisposition;
   startedAt?: number;
   endedAt?: number;
   elapsedMs?: number;
 };
 
-/**
- * True when an `agent.wait` result carries evidence that the child run itself
- * settled. The gateway attaches these fields only from a terminal snapshot; a
- * plain wait expiry comes back as a bare `status: "timeout"`, which is why a
- * timeout status alone can never be read as the child having stopped.
- */
-export function waitObservedRunStop(
-  wait: Pick<AgentWaitResult, "endedAt" | "stopReason" | "livenessState"> | undefined,
-): boolean {
-  return (
-    typeof wait?.endedAt === "number" ||
-    typeof wait?.stopReason === "string" ||
-    typeof wait?.livenessState === "string"
-  );
+/** True when the observation carries no confirmed child stop. */
+export function isSubagentRunStillRunning(outcome: SubagentRunOutcome | undefined): boolean {
+  return resolveSubagentRunDisposition(outcome) === "still-running";
 }
 
 export function withSubagentOutcomeTiming(
@@ -143,7 +145,12 @@ export function withSubagentOutcomeTiming(
   if (typeof startedAt === "number" && typeof endedAt === "number") {
     nextTiming.elapsedMs = Math.max(0, endedAt - startedAt);
   }
-  return { ...outcome, ...nextTiming };
+  const { timeoutDisposition, ...canonicalOutcome } = outcome;
+  return {
+    ...canonicalOutcome,
+    ...(timeoutDisposition ? { disposition: resolveSubagentRunDisposition(outcome) } : {}),
+    ...nextTiming,
+  };
 }
 
 function countAssistantToolCalls(message: unknown): number {
@@ -371,44 +378,39 @@ export function applySubagentWaitOutcome(params: {
     // provider timeouts through (openclaw#125407).
     switch (classifySubagentTerminalOutcome(terminalOutcome)) {
       case "timeout": {
-        // Two orthogonal facts, both kept.
+        // Two independent facts about a timeout, both preserved here.
         //
         // (1) A run that failed inside the lifecycle error retry grace window is
         // surfaced to waiters as a timeout carrying the failure text and
         // `pendingError: true` (see createPendingErrorTimeoutSnapshot). Keep that
         // cause so the announce reports why the child died, not a bare "timed out".
         //
-        // (2) A bare `status: "timeout"` snapshot is a wait expiry, not a stop, so
-        // classifying it as terminal would lose a distinction a caller may already
-        // have established. A pendingError timeout still carries a disposition.
+        // (2) A timeout reason alone does not establish whether the child stopped.
+        // Preserve terminal timestamps and prior disposition when a later wait
+        // expires without new evidence. Only a bare expiry is unconfirmed.
         const pendingErrorText =
           params.wait?.pendingError === true ? (terminalOutcome.error ?? waitError) : undefined;
         const priorDisposition =
-          params.outcome?.status === "timeout" ? params.outcome.timeoutDisposition : undefined;
-        const timeoutDisposition = waitObservedRunStop(params.wait)
-          ? ("child-stopped" as const)
-          : (priorDisposition ?? ("child-unconfirmed" as const));
+          outcome?.disposition || outcome?.timeoutDisposition
+            ? resolveSubagentRunDisposition(outcome)
+            : undefined;
+        const observedStop =
+          terminalOutcome.reason === "hard_timeout" ||
+          asFiniteNumber(params.wait?.endedAt) !== undefined ||
+          typeof params.wait?.stopReason === "string" ||
+          typeof params.wait?.livenessState === "string" ||
+          (priorDisposition !== "still-running" &&
+            (asFiniteNumber(next.endedAt) !== undefined ||
+              asFiniteNumber(outcome?.endedAt) !== undefined));
+        const disposition = observedStop ? "exited" : (priorDisposition ?? "still-running");
         outcome = pendingErrorText
-          ? { status: "timeout", error: pendingErrorText, timeoutDisposition }
-          : { status: "timeout", timeoutDisposition };
+          ? { status: "timeout", error: pendingErrorText, disposition }
+          : { status: "timeout", disposition };
         break;
       }
-      case "cancellation": {
-        // An explicit restart/aborted stop reason normally owns the outcome
-        // (openclaw#125407). One exception: when it lands on an already-published
-        // `child-unconfirmed` timeout, it IS the authoritative stop evidence that
-        // state was waiting for. Promoting keeps the run a timeout — the parent
-        // still learns its deadline elapsed and the work may be incomplete —
-        // while re-arming the terminal cleanup that `child-unconfirmed` defers.
-        // Reporting "terminated" instead would discard the deadline fact and read
-        // to an orchestrator as a child that died before doing anything.
-        outcome =
-          params.outcome?.status === "timeout" &&
-          params.outcome.timeoutDisposition === "child-unconfirmed"
-            ? { ...params.outcome, timeoutDisposition: "child-stopped" as const }
-            : { status: "error", error: "subagent run terminated" };
+      case "cancellation":
+        outcome = { status: "error", error: "subagent run terminated", disposition: "killed" };
         break;
-      }
       case "failure":
         outcome = { status: "error", error: terminalOutcome.error ?? waitError };
         break;
@@ -672,7 +674,9 @@ export async function buildCompactAnnounceStatsLine(params: {
   sessionKey: string;
   startedAt?: number;
   endedAt?: number;
+  disposition?: AgentRunDisposition;
 }) {
+  const stillRunning = params.disposition === "still-running";
   const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = subagentAnnounceOutputDeps.resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = subagentAnnounceOutputDeps.resolveSessionStorePathCore(cfg.session?.store, {
@@ -706,14 +710,26 @@ export async function buildCompactAnnounceStatsLine(params: {
       ? Math.max(0, params.endedAt - params.startedAt)
       : undefined;
 
-  const parts = [
-    `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
-    hasDirectionalUsage
-      ? `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
-      : promptCache === undefined
-        ? "tokens unknown"
-        : `tokens ${formatTokenCount(promptCache)} prompt/cache`,
-  ];
+  // A live child has not flushed its usage counters, so a zeroed token total
+  // reads as "the run did nothing" when it means "nothing is final yet". Label
+  // both numbers by what they actually measure instead of publishing 0. For a
+  // terminal run, fall back to prompt/cache totals (or say so) rather than
+  // implying directional counts we never received.
+  const parts = stillRunning
+    ? [
+        `waited ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
+        hasDirectionalUsage && ioTotal > 0
+          ? `tokens so far ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
+          : "child tokens not yet reported",
+      ]
+    : [
+        `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
+        hasDirectionalUsage
+          ? `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
+          : promptCache === undefined
+            ? "tokens unknown"
+            : `tokens ${formatTokenCount(promptCache)} prompt/cache`,
+      ];
   if (hasDirectionalUsage && typeof promptCache === "number" && promptCache > ioTotal) {
     parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
   }

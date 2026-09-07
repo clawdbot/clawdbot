@@ -247,19 +247,27 @@ it("measures each native item relative to its own PCM inside one response", asyn
   }
 });
 
-it.each(["resumed", "next-item"])(
-  "retains native item order and progress after starvation before %s",
-  async (nextItemId) => {
+it.each(
+  ["resumed", "next-item"].flatMap((nextItemId) =>
+    [500, 510].map((firstMs) => ({ nextItemId, firstMs })),
+  ),
+)(
+  "retains native item order and progress after $firstMs ms starvation before $nextItemId",
+  async ({ nextItemId, firstMs }) => {
     const fixture = createRealtimePlaybackFixture();
     try {
-      fixture.callbacks.onAudio(Buffer.alloc(24_000), { itemId: "resumed" });
+      fixture.callbacks.onAudio(Buffer.alloc(firstMs * 48), { itemId: "resumed" });
+      fixture.callbacks.onMark?.("first", () => fixture.acknowledgeMark("first"));
       await fixture.voiceSdk.entersState(
         fixture.player,
         fixture.voiceSdk.AudioPlayerStatus.Idle,
         4_000,
       );
+      expect(fixture.stopTerminally).not.toHaveBeenCalled();
+      expect(fixture.onTerminalError).not.toHaveBeenCalled();
+      expect(fixture.acknowledgeMark.mock.calls).toEqual([["first"]]);
       expect(fixture.callbacks.getPlaybackState?.()).toEqual([
-        { itemId: "resumed", audioEndMs: 500 },
+        { itemId: "resumed", audioEndMs: firstMs },
       ]);
       expect(fixture.roomPlayer.isActive()).toBe(true);
       fixture.callbacks.onAudio(Buffer.alloc(24_000), { itemId: nextItemId });
@@ -274,12 +282,18 @@ it.each(["resumed", "next-item"])(
       }
       const resumed = nextItemId === "resumed";
       expect(fixture.callbacks.getPlaybackState?.()).toEqual([
-        { itemId: "resumed", audioEndMs: 500 + (resumed ? state.resource.playbackDuration : 0) },
+        {
+          itemId: "resumed",
+          audioEndMs: firstMs + (resumed ? state.resource.playbackDuration : 0),
+        },
         ...(resumed ? [] : [{ itemId: nextItemId, audioEndMs: state.resource.playbackDuration }]),
       ]);
       fixture.callbacks.onResponseDone?.({ status: "completed" });
       expect(fixture.callbacks.getPlaybackState?.()).toEqual([
-        { itemId: nextItemId, audioEndMs: (resumed ? 500 : 0) + state.resource.playbackDuration },
+        {
+          itemId: nextItemId,
+          audioEndMs: (resumed ? firstMs : 0) + state.resource.playbackDuration,
+        },
       ]);
       await fixture.voiceSdk.entersState(
         fixture.player,

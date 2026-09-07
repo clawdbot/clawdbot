@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
@@ -8,7 +9,7 @@ import {
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 
 export type SessionMessageProjectionState = {
-  streamErrorFallbackPending: boolean;
+  assistantErrorPending: boolean;
   turnBoundaryPending: boolean;
 };
 
@@ -74,16 +75,16 @@ export function projectSessionMessagePayload(params: {
   });
   const projected = params.projectionState
     ? projectChatDisplayMessagesWithState([rawMessage], {
-        streamErrorFallbackPending: params.projectionState.streamErrorFallbackPending,
+        assistantErrorPending: params.projectionState.assistantErrorPending,
         turnBoundaryPending: params.projectionState.turnBoundaryPending,
       })
     : {
         messages: [projectChatDisplayMessage(rawMessage)],
-        streamErrorFallbackPending: false,
+        assistantErrorPending: false,
         turnBoundaryPending: false,
       };
   const projectionState = {
-    streamErrorFallbackPending: projected.streamErrorFallbackPending,
+    assistantErrorPending: projected.assistantErrorPending,
     turnBoundaryPending: projected.turnBoundaryPending,
   };
   const message = projected.messages[0];
@@ -114,10 +115,10 @@ export function projectTranscriptEntryMessage(
   seq: number,
   transcriptPosition?: TranscriptDisplayPosition,
 ): unknown {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+  if (!isVisibleTranscriptRecord(entry)) {
     return null;
   }
-  const record = entry as Record<string, unknown>;
+  const record = entry;
   if (record.message) {
     const recordTimestampMs =
       typeof record.timestamp === "string"

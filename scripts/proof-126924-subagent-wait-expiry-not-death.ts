@@ -73,9 +73,8 @@
  *   arising from a live child.
  *
  * SCENARIOS (each asserts; the script exits non-zero on any violation)
- *  1. Deadline-only expiry      — the run completes so the parent wakes, the
- *                                 outcome says `child-unconfirmed`, and the
- *                                 detached task stays NONTERMINAL.
+ *  1. Deadline-only expiry      — the observation wakes the parent without
+ *                                 terminalizing the run or detached task.
  *  2. Continued liveness        — while the child's own row still says running,
  *                                 no `sessions.delete` is submitted, the row is
  *                                 not retired, and our guess is not stamped onto
@@ -103,9 +102,8 @@
  *                                 slot, so the sibling does not start beside a
  *                                 possibly-live child. The observed stop later
  *                                 releases it and the sibling runs.
- *  8. Result recapture          — the promoted run must publish the child's
- *                                 FINAL output, not the partial text frozen when
- *                                 the wait expired.
+ *  8. Final capture             — expiry must not freeze partial output; the
+ *                                 completed run publishes the child's FINAL output.
  *  9. List liveness             — the production `buildSubagentList` must show an
  *                                 unconfirmed run as live rather than filing it
  *                                 under recent timeouts while its task is still
@@ -489,23 +487,20 @@ try {
 
   // ---------------------------------------------------------------- scenario 1
   await waitFor(
-    "the deadline-only wait expiry to complete both runs",
+    "the deadline-only wait expiry to be observed for both runs",
     () =>
-      readRun(LIVE_RUN_ID)?.execution.outcome !== undefined &&
-      readRun(ABSENT_RUN_ID)?.execution.outcome !== undefined,
+      readRun(LIVE_RUN_ID)?.waitExpiryObservedAt !== undefined &&
+      readRun(ABSENT_RUN_ID)?.waitExpiryObservedAt !== undefined,
   );
   for (const [runId, childSessionKey] of [
     [LIVE_RUN_ID, LIVE_CHILD_SESSION_KEY],
     [ABSENT_RUN_ID, ABSENT_CHILD_SESSION_KEY],
   ] as const) {
     const run = readRun(runId);
-    assert.equal(run?.execution.status, "terminal", "the run must complete so the parent wakes");
-    assert.equal(run?.execution.outcome?.status, "timeout");
-    assert.equal(
-      run?.execution.outcome?.timeoutDisposition,
-      "child-unconfirmed",
-      "a deadline is a clock comparison; nothing observed the child stop",
-    );
+    assert.equal(run?.execution.status, "running", "an expired wait does not terminalize the run");
+    assert.equal(run?.execution.endedAt, undefined);
+    assert.equal(run?.execution.outcome, undefined);
+    assert.equal(typeof run?.waitExpiryObservedAt, "number");
     const taskStatus = readTaskStatus(runId, childSessionKey);
     assert.equal(
       taskStatus,
@@ -513,7 +508,7 @@ try {
       `the detached task must stay nonterminal on a deadline-only expiry (${runId} was ${String(taskStatus)})`,
     );
   }
-  log("[1/12] deadline-only expiry: outcome=timeout disposition=child-unconfirmed for both runs");
+  log("[1/12] deadline-only expiry: nonterminal observation retained for both runs");
   log(
     "[1/12] detached tasks read back through the real task registry: status=running (nonterminal)",
   );
@@ -533,13 +528,9 @@ try {
   // start the sibling beside a child nothing has observed stopping.
   await waitFor(
     "the collector's deadline-only expiry",
-    () => readRun(COLLECT_RUN_ID)?.execution.outcome !== undefined,
+    () => readRun(COLLECT_RUN_ID)?.waitExpiryObservedAt !== undefined,
   );
-  assert.equal(
-    readRun(COLLECT_RUN_ID)?.execution.outcome?.timeoutDisposition,
-    "child-unconfirmed",
-    "the collector must reach the same deadline-only disposition",
-  );
+  assert.equal(readRun(COLLECT_RUN_ID)?.execution.endedAt, undefined);
   await sleep(200);
   assert.equal(
     swarmScheduler.isSwarmRunActive(COLLECT_RUN_ID),
@@ -552,7 +543,7 @@ try {
     "no queued sibling may start beside a collector whose stop was never observed",
   );
   log(
-    "[7/12] swarm slot retention: collector expired child-unconfirmed, slot still held, queued sibling not started",
+    "[7/12] swarm slot retention: collector wait expired nonterminally, slot still held, queued sibling not started",
   );
 
   // Now the collector's own record reports a stop. The promotion must release
@@ -673,12 +664,11 @@ try {
   // wait expired on a clock while a successful stop had already happened.
   const observedEndedAt = deadlineMs - 2_000;
   // The child's transcript changed when it finished, exactly as it would in
-  // production. The registry froze `PARTIAL_OUTPUT` at wait expiry, and
-  // `freezeRunResultAtCompletion` is first-write-wins on `resultText`.
+  // production. A wait expiry must not freeze partial output as a final result.
   assert.equal(
     readRun(LIVE_RUN_ID)?.completion?.resultText,
-    PARTIAL_OUTPUT,
-    "scenario 8 requires the provisional capture to have really frozen the partial text",
+    undefined,
+    "wait expiry must not capture partial output as a terminal result",
   );
   childTranscript.set(LIVE_CHILD_SESSION_KEY, FINAL_OUTPUT);
   await writeChildSessionRow(LIVE_CHILD_SESSION_KEY, {
@@ -780,17 +770,14 @@ try {
   // `lifecycle` abort event is published through the production emitter and
   // consumed by the registry's own listener; its authoritative `endedAt` is the
   // deadline itself, which is where a hard run-timeout kill lands.
-  assert.equal(
-    readRun(KILL_RUN_ID)?.execution.outcome?.timeoutDisposition,
-    "child-unconfirmed",
-    "scenario 10 requires the kill run to be deferred first",
-  );
+  assert.equal(typeof readRun(KILL_RUN_ID)?.waitExpiryObservedAt, "number");
+  assert.equal(readRun(KILL_RUN_ID)?.execution.endedAt, undefined);
   assert.equal(
     readChildSessionRow(KILL_CHILD_SESSION_KEY),
     undefined,
     "scenario 10 requires a genuinely absent session record, so only the callback can promote",
   );
-  const killEndedAt = readRun(KILL_RUN_ID)?.execution.endedAt;
+  const killEndedAt = readRun(KILL_RUN_ID)?.waitExpiryObservedAt;
   assert.equal(typeof killEndedAt, "number");
   agentEvents.emitAgentEvent({
     runId: KILL_RUN_ID,
@@ -809,14 +796,10 @@ try {
   });
   await waitFor(
     "the delayed cancellation to promote the unconfirmed row",
-    () => readRun(KILL_RUN_ID)?.execution.outcome?.timeoutDisposition !== "child-unconfirmed",
+    () => readRun(KILL_RUN_ID)?.execution.endedAt !== undefined,
   );
   const promotedKillRun = readRun(KILL_RUN_ID);
-  assert.notEqual(
-    promotedKillRun?.execution.outcome?.timeoutDisposition,
-    "child-unconfirmed",
-    "a killed lifecycle end is stop evidence regardless of its recorded timestamp",
-  );
+  assert.equal(typeof promotedKillRun?.execution.endedAt, "number");
   assert.ok(promotedKillRun, "the promoted row must still exist to be inspected");
   assert.equal(
     promotedKillRun.endedReason,
@@ -839,6 +822,14 @@ try {
   // reconciliation branch, so this row reaches expiry without passing through
   // it — which is exactly how the expiry path escaped the provisional guard.
   const suspendedRow = liveRow(ABSENT_RUN_ID);
+  // Exercise retained legacy rows explicitly: new waits never create a
+  // provisional terminal row or a suspended terminal delivery.
+  suspendedRow.execution = {
+    ...suspendedRow.execution,
+    status: "terminal",
+    endedAt: suspendedRow.waitExpiryObservedAt,
+    outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+  };
   suspendedRow.expectsCompletionMessage = true;
   suspendedRow.delivery = {
     status: "suspended",
@@ -918,7 +909,7 @@ try {
   registryState.restoreSubagentRunsFromDisk({ runs: observedStopControl });
   const controlRow = observedStopControl.get(ABSENT_RUN_ID);
   assert.ok(controlRow, "scenario 11's control needs the same reloaded row");
-  controlRow.execution.outcome = { status: "timeout", timeoutDisposition: "child-stopped" };
+  controlRow.execution.outcome = { status: "timeout", disposition: "exited" };
   delete controlRow.delivery;
   registryHelpers.reconcileOrphanedRestoredRuns({
     runs: observedStopControl,

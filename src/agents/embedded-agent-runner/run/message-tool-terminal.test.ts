@@ -3,6 +3,7 @@
 // the run before the model can observe the tool result.
 import type { Agent, AfterToolCallContext } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 
 async function recordsDeliveredSourceReply(params: {
@@ -475,14 +476,7 @@ function createToolCallAssistant(
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "toolUse",
     timestamp: 0,
   };

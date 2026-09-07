@@ -37,6 +37,9 @@ export type SubagentRegistrySweeperOptions = {
   clearAcceptedSubagentRestartRecovery: ReturnType<
     typeof createSubagentRunManager
   >["clearAcceptedSubagentRestartRecovery"];
+  clearPendingSubagentRecoveryNotice: ReturnType<
+    typeof createSubagentRunManager
+  >["clearPendingSubagentRecoveryNotice"];
   resumeSettledSubagentRestartRecovery: ReturnType<
     typeof createSubagentRunManager
   >["resumeSettledSubagentRestartRecovery"];
@@ -76,6 +79,7 @@ export type SubagentRegistrySweeperOptions = {
   getRunsForCollectorGroup: (
     requesterSessionKey: string,
     groupId: string,
+    requesterAgentId?: string,
   ) => Iterable<[string, SubagentRunRecord]>;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };

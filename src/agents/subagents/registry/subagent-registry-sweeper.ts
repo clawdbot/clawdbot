@@ -27,7 +27,7 @@ import {
 } from "./subagent-registry-sweep-kill.js";
 import type { SubagentRegistrySweeperOptions } from "./subagent-registry-sweeper.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
@@ -43,7 +43,6 @@ const restartRecoveryLoader = createLazyImportLoader(
   () => import("./subagent-registry-restart-recovery.js"),
 );
 const killRuntimeLoader = createLazyImportLoader(() => import("./subagent-control.runtime.js"));
-
 export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOptions) {
   const { runs, resumedRuns } = params;
   let intervalStarted = false;
@@ -109,6 +108,7 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
     getGatewayRuntime: params.getGatewayRecoveryRuntime,
     abandonLaunch: params.abandonSubagentRestartRecoveryLaunch,
     clearAcceptedRecovery: params.clearAcceptedSubagentRestartRecovery,
+    clearPendingNotice: params.clearPendingSubagentRecoveryNotice,
     resumeAcceptedRecovery: params.resumeSettledSubagentRestartRecovery,
     replaceRun: params.replaceSubagentRunAfterSteer,
     markLaunchAttempted: params.markSubagentRestartRecoveryLaunchAttempted,
@@ -179,11 +179,10 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
     try {
       const now = Date.now();
       const storeCache: SubagentSessionStoreCache = new Map();
-      let mutated = false;
       const mutatedRunIds = new Set<string>();
       const collectorArchiveCandidates = new Map<
         string,
-        { requesterSessionKey: string; groupId: string }
+        { requesterSessionKey: string; groupId: string; requesterAgentId?: string }
       >();
       const phase = ([runId, entry]: [string, SubagentRunRecord]) =>
         entry.requesterSettleWake
@@ -227,7 +226,14 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           // The restored FIFO callback owns this row until durable settlement.
           continue;
         }
-        if (entry.requesterSettleWake) {
+        // Yield freezes the parent's wake before its children finish. Keep
+        // terminal delivery priority while unfinished children reach recovery.
+        if (
+          entry.requesterSettleWake &&
+          entry.execution.status !== "running" &&
+          hasSubagentRunEnded(entry) &&
+          !entry.execution.restartRecovery
+        ) {
           params.resumeRequesterSettleWake(runId, entry);
           continue;
         }
@@ -249,7 +255,6 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
               emitSubagentEndedHookForRun: params.emitSubagentEndedHookForRun,
               warn: params.warn,
             });
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           continue;
@@ -267,7 +272,6 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
               warn: params.warn,
             })
           ) {
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           continue;
@@ -286,17 +290,33 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
             warn: params.warn,
           });
           if (reconciled) {
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           continue;
         }
         if (
-          (entry.execution.restartRecovery?.phase === "accepted" ||
+          (entry.resumptionNotice !== undefined ||
+            entry.execution.restartRecovery?.phase === "accepted" ||
             entry.terminalOwner === "interrupted-recovery" ||
             (!getAgentRunContext(runId) && typeof entry.execution.endedAt !== "number")) &&
           (await recovery.recover(runId, entry, now))
         ) {
+          continue;
+        }
+        if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+          if (clearUnconfirmedCollectorRetention(entry)) {
+            mutatedRunIds.add(runId);
+          }
+          // Restart evidence above keeps its existing owner. In the absence of
+          // that evidence, neither missing local context nor retention expiry
+          // proves that a child stopped. Use the child's own terminal record.
+          await settleSubagentRunFromSessionStore(params.completeSubagentRunWithRecovery, {
+            runId,
+            entry,
+            now,
+            storeCache,
+            source: "sweeper-unconfirmed-child",
+          });
           continue;
         }
         if (typeof entry.execution.endedAt !== "number") {
@@ -316,7 +336,6 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
                   resumedRuns,
                 })
               ) {
-                mutated = true;
                 mutatedRunIds.add(runId);
               }
               continue;
@@ -369,7 +388,6 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
         }
 
         if (clearUnconfirmedCollectorRetention(entry)) {
-          mutated = true;
           mutatedRunIds.add(runId);
         }
         if (
@@ -423,19 +441,19 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
             }
             entry.collectorLaunchCleanupPending = false;
             entry.cleanupCompletedAt = now;
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           const groupId = entry.groupId?.trim();
           const swarmRequesterSessionKey =
             entry.swarmRequesterSessionKey ?? entry.requesterSessionKey;
           const groupKey = groupId
-            ? JSON.stringify([swarmRequesterSessionKey, groupId])
+            ? JSON.stringify([entry.requesterAgentId, swarmRequesterSessionKey, groupId])
             : undefined;
           if (groupKey && groupId) {
             collectorArchiveCandidates.set(groupKey, {
               requesterSessionKey: swarmRequesterSessionKey,
               groupId,
+              requesterAgentId: entry.requesterAgentId,
             });
           }
           continue;
@@ -449,28 +467,6 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
               entry.delivery.disposition === "session_queued"))
         ) {
           // Queued or leased completion delivery owns this row until it settles.
-          continue;
-        }
-        if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
-          // A retention clock is not stop evidence. Only the child's own
-          // terminal session record promotes this row out of the unconfirmed
-          // state; while that record still says running, nothing here may
-          // retire the row, its attachments, or its session.
-          await settleSubagentRunFromSessionStore(params.completeSubagentRunWithRecovery, {
-            runId,
-            entry,
-            now,
-            storeCache,
-            source: "sweeper-unconfirmed-child",
-          });
-          // Fail closed on every result. `settled` already promoted the row
-          // through the ordinary lifecycle path, so the next sweep retires it
-          // with the observed outcome. `live` is positive evidence the child is
-          // still running. `absent` is not evidence of a stop at all — the entry
-          // is best-effort and also reads absent when the store is unreadable or
-          // simply not written yet, so treating it as death would delete a live
-          // child's session and attachments. Retain and retry instead; only
-          // observed stop evidence may retire this row.
           continue;
         }
         if (!entry.archiveAtMs && entry.cleanup === "keep" && entry.spawnMode !== "session") {
@@ -488,7 +484,6 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
               });
             }
             runs.delete(runId);
-            mutated = true;
             mutatedRunIds.add(runId);
             if (!entry.retainAttachmentsOnKeep) {
               await safeRemoveAttachmentsDir(entry);
@@ -524,7 +519,6 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           }
         }
         runs.delete(runId);
-        mutated = true;
         mutatedRunIds.add(runId);
         await safeRemoveAttachmentsDir(entry);
         if (!suppressSessionEffects && !sessionOwnershipChanged) {
@@ -533,8 +527,15 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           });
         }
       }
-      for (const { requesterSessionKey, groupId } of collectorArchiveCandidates.values()) {
-        const groupEntries = [...params.getRunsForCollectorGroup(requesterSessionKey, groupId)];
+      for (const {
+        requesterSessionKey,
+        groupId,
+        requesterAgentId,
+      } of collectorArchiveCandidates.values()) {
+        const readGroup = () => [
+          ...params.getRunsForCollectorGroup(requesterSessionKey, groupId, requesterAgentId),
+        ];
+        const groupEntries = readGroup();
         if (groupEntries.some(([, candidate]) => blocksSwarmGroupArchival(candidate, now))) {
           continue;
         }
@@ -625,7 +626,7 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           continue;
         }
         const expectedGroupEntries = new Map(groupEntries);
-        const liveGroupEntries = [...params.getRunsForCollectorGroup(requesterSessionKey, groupId)];
+        const liveGroupEntries = readGroup();
         if (
           liveGroupEntries.length !== groupEntries.length ||
           liveGroupEntries.some(
@@ -641,11 +642,10 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           runs.delete(candidateRunId);
           mutatedRunIds.add(candidateRunId);
         }
-        mutated = true;
       }
       params.sweepPendingLifecycle(now);
 
-      if (mutated) {
+      if (mutatedRunIds.size > 0) {
         params.persist(...mutatedRunIds);
       }
       if (runs.size === 0) {

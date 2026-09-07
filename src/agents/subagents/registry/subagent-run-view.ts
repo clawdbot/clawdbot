@@ -33,11 +33,9 @@ export function buildSubagentRunView(params: {
     latest.push(entry);
     if (
       isLiveUnendedSubagentRun(entry, now) ||
-      // A row whose wait expired without observing the child stop has an
-      // `endedAt`, so the unended test above rejects it — which would file a
-      // possibly-live child under "recent" alongside genuinely finished runs.
-      // The listing a parent reads before deciding whether to spawn a
-      // replacement has to keep it visible as live work.
+      // Legacy expiry rows may carry provisional endedAt; newer observations
+      // may outlive the unended liveness window. Neither proves a child stop.
+      // Keep them visible for re-observation, not alongside confirmed endings.
       isSubagentChildStopUnconfirmed(entry) ||
       params.countPendingDescendantRuns(entry.childSessionKey) > 0
     ) {

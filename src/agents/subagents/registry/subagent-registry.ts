@@ -3,6 +3,7 @@ import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
@@ -69,6 +70,7 @@ const subagentRegistryBootstrapState: {
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 let activeGatewayContextResolver: GatewayContextResolver | undefined;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+const SUBAGENT_WAIT_EXPIRY_TERMINAL_GRACE_MS = 250;
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 /** Admission pressure for recoverable completion deliveries; rows are never pruned for capacity. */
 export function getSubagentDeliveryBacklogPressure(): {
@@ -427,6 +429,8 @@ const subagentSweeper = createSubagentRegistrySweeper({
     subagentRunManager.abandonSubagentRestartRecoveryLaunch(params),
   clearAcceptedSubagentRestartRecovery: (params) =>
     subagentRunManager.clearAcceptedSubagentRestartRecovery(params),
+  clearPendingSubagentRecoveryNotice: (params) =>
+    subagentRunManager.clearPendingSubagentRecoveryNotice(params),
   resumeSettledSubagentRestartRecovery: (params) =>
     subagentRunManager.resumeSettledSubagentRestartRecovery(params),
   replaceSubagentRunAfterSteer: (params) => subagentRunManager.replaceSubagentRunAfterSteer(params),
@@ -502,6 +506,73 @@ const subagentRunManager = createSubagentRunManager({
   completeCleanupBookkeeping,
   completeSubagentRun: async (params) => {
     await completionRuntime.completeSubagentRunWithRecovery(params, "subagent-wait");
+  },
+  reportSubagentWaitExpiry: async ({ entry, observedAt, startedAt, lifecycleGeneration }) => {
+    // A restart may retain the row, but must retire the original wait's writes
+    // and delivery authority across both the grace timer and announcement.
+    const isCurrent = () =>
+      isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+      subagentRuns.get(entry.runId) === entry &&
+      typeof entry.execution.endedAt !== "number";
+    const ownsObservation = () => isCurrent() && entry.waitExpiryObservedAt === observedAt;
+    if (
+      !isCurrent() ||
+      typeof entry.waitExpiryAnnouncedAt === "number" ||
+      (typeof entry.waitExpiryObservedAt === "number" && entry.waitExpiryObservedAt !== observedAt)
+    ) {
+      return;
+    }
+    entry.waitExpiryObservedAt ??= observedAt;
+    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+      entry.execution = { ...entry.execution, startedAt };
+      entry.sessionStartedAt ??= startedAt;
+    }
+    persistSubagentRunsOrThrow(entry.runId);
+
+    // Record the observation before yielding so the sweeper cannot mistake this
+    // live-but-unconfirmed child for a lost execution during announcement grace.
+    // The grace delays only the wake: an authoritative terminal event still wins.
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, SUBAGENT_WAIT_EXPIRY_TERMINAL_GRACE_MS);
+      timer.unref?.();
+    });
+    if (!ownsObservation()) {
+      return;
+    }
+
+    if (entry.collect === true || entry.expectsCompletionMessage === false) {
+      return;
+    }
+    const announceResult = await subagentRegistryDeps.runSubagentAnnounceFlow({
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      requesterAgentId: entry.requesterAgentId,
+      requesterOrigin: entry.requesterOrigin,
+      requesterDisplayKey: entry.requesterDisplayKey,
+      task: entry.task,
+      timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt,
+      endedAt: observedAt,
+      label: entry.label,
+      outcome: { status: "timeout", disposition: "still-running" },
+      deliveryPhase: "wait-expiry",
+      expectsCompletionMessage: entry.expectsCompletionMessage,
+      spawnMode: entry.spawnMode,
+      wakeOnDescendantSettle: entry.wakeOnDescendantSettle,
+      suppressChildSessionEffects: true,
+      isCompletionDeliveryAllowed: ownsObservation,
+      resolveGatewayContext: getGatewayContextResolver(entry),
+    });
+    if (announceResult !== "delivered") {
+      throw new Error("subagent wait-expiry announcement was not delivered");
+    }
+    if (ownsObservation()) {
+      entry.waitExpiryAnnouncedAt = Date.now();
+      persistSubagentRunsOrThrow(entry.runId);
+    }
   },
   resolveSubagentTask: findSubagentTaskForRun,
 });

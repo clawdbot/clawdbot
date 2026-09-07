@@ -519,6 +519,12 @@ async function completeTerminalCleanup(
   if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
     return;
   }
+  if (entry.resumptionNotice) {
+    // The recovered run may finish before its resumption notice is delivered.
+    // Restart recovery retries that debt for a bounded terminal window, then
+    // clears it and re-enters cleanup so completion cannot remain wedged.
+    return;
+  }
   // Closing the child's browser sessions and retiring its run-mode MCP runtime
   // both tear down resources a still-live child is using. A bare deadline is
   // not evidence that it stopped, so they wait for the observed stop that

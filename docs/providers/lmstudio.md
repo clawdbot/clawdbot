@@ -197,6 +197,14 @@ the default trust.
 
 ## Troubleshooting
 
+### Model discovery failures
+
+When a configured server cannot list models, OpenClaw reports an unavailable catalog or a
+catalog authentication rejection. A refresh can keep the last successful inventory when the
+connection and credentials still match. A successful empty response clears discovered models;
+explicitly configured models remain available without discovery. Restore the server connection
+or correct its credentials, then refresh the model list.
+
 ### LM Studio not detected
 
 Make sure LM Studio is running:

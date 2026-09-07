@@ -24,6 +24,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "cerebras": "cerebras"
+    },
     "providers": {
       "cerebras": {
         "baseUrl": "https://api.cerebras.ai/v1",
