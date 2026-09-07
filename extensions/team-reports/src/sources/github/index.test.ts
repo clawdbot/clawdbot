@@ -29,7 +29,10 @@ function source(
   return { api: createGithubSource({ logger: logs, fetchImpl, signal }), fetchImpl, logs };
 }
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("GitHub reports source", () => {
   it("resolves relative next-page links against the current endpoint on GHES", async () => {
@@ -90,6 +93,8 @@ describe("GitHub reports source", () => {
   });
 
   it("qualifies every issue search by type for fine-grained tokens", async () => {
+    // Discovery searches extend to now; pin now to the window end to assert exact query strings.
+    vi.spyOn(Date, "now").mockReturnValue(untilMs);
     const { api, fetchImpl } = source(emptyRoute);
     const result = await api.collect(config, window, roster);
     const queries = fetchImpl.mock.calls
@@ -160,6 +165,7 @@ describe("GitHub reports source", () => {
   ])(
     "splits and paginates capped %s is:%s searches, warns on incomplete results and deduplicates PR lookups",
     async (qualifier, type) => {
+      vi.spyOn(Date, "now").mockReturnValue(untilMs);
       const merged = { ...issue(2), pull_request: { merged_at: at }, closed_at: at };
       const oldMerge = {
         ...issue(3),
@@ -388,6 +394,44 @@ describe("GitHub reports source", () => {
       );
     },
   );
+
+  it("discovers a comment-only repository whose item was updated again after the window closed", async () => {
+    const old = "2026-08-01T00:00:00Z";
+    const { api, fetchImpl } = source((url) => {
+      if (url.pathname === "/orgs/example/repos") {
+        return json([{ ...repo(), pushed_at: old }]);
+      }
+      if (url.pathname === "/search/issues") {
+        const query = url.searchParams.get("q") ?? "";
+        const range = /updated:(\S+)\.\.(\S+)/.exec(query);
+        // The item's last update moved past the report window; discovery must not stop at the window end.
+        const reachesLaterUpdate = range !== null && Date.parse(range[2] ?? "") > untilMs;
+        const items =
+          query.includes(" is:issue updated:") && reachesLaterUpdate
+            ? [Object.assign(issue(1, "app"), { created_at: old })]
+            : [];
+        return json({ total_count: items.length, items });
+      }
+      if (url.pathname === "/repos/example/app/issues/comments") {
+        return json([
+          {
+            user: { login: "reviewer" },
+            body: "Comment inside the window on an item edited later",
+            created_at: at,
+            html_url: "https://github.test/comment/2",
+          },
+        ]);
+      }
+      return emptyRoute(url);
+    });
+    const result = await api.collect(config, window, roster);
+    expect(result.status.warnings).toEqual([]);
+    expect(result.items).toEqual([
+      expect.objectContaining({ kind: "issue_comment", repo: "example/app", actor: "reviewer" }),
+    ]);
+    const paths = fetchImpl.mock.calls.map(([input]) => new URL(input).pathname);
+    expect(paths).toContain("/repos/example/app/issues/comments");
+  });
 
   it("collects an advisory-only repository while respecting repository exclusions", async () => {
     const { api, fetchImpl, logs } = source((url) => {

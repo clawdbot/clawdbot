@@ -169,6 +169,12 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       const items = new Map<string, GithubItem>();
       const active = new Set<string>();
       const updatedRepos = new Set<string>();
+      // updated_at is an item's LAST update, so a later edit would hide in-window comments during
+      // historical regeneration; bound discovery by now and let the comment endpoints filter events.
+      const discoveryWindow: ActivityWindow = {
+        sinceMs: window.sinceMs,
+        untilMs: Math.max(window.untilMs, Date.now()),
+      };
       const seenIssues = new Set<string>();
       const add = (item: GithubItem) => {
         checkAbort(runtime.signal, ABORT_LABEL);
@@ -304,7 +310,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               client,
               { kind: "issues", qualifier: "updated", type },
               org,
-              window,
+              discoveryWindow,
               issueSchema,
             )) {
               const repoName = /\/repos\/([^/]+\/[^/]+)\/?$/
