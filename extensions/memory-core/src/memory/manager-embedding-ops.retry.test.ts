@@ -137,6 +137,15 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
     ],
     ["an explicit maximum input length", () => "embeddings max input length is 10"],
     [
+      "zhipu Chinese item-limit error",
+      () => '{"error":{"code":"1214","message":"input数组最大不得超过64条"}}',
+    ],
+    [
+      "bailian batch size invalid error",
+      () =>
+        '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 20.: input.contents"}',
+    ],
+    [
       "a DashScope-style per-request row cap",
       () =>
         '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
