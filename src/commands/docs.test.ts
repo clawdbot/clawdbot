@@ -101,6 +101,7 @@ describe("docsSearchCommand", () => {
       new Response(
         JSON.stringify({
           results: [
+            { title: "Invalid result without a link" },
             { title: "CLI reference", link: "https://docs.openclaw.ai/cli" },
             { title: "Plugin guide", link: "https://docs.openclaw.ai/plugins" },
           ],

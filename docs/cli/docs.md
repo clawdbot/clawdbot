@@ -26,6 +26,8 @@ openclaw docs <query...> [--json] [--limit <count>]
 
 With no query, `openclaw docs` prints the docs entrypoint URL and a sample search command instead of running a search.
 
+Omit `--limit` to show all results returned by the search service. The limit applies to displayed results and does not reduce the downloaded response size.
+
 ## Examples
 
 ```bash
