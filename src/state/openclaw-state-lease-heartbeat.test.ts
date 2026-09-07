@@ -152,7 +152,9 @@ describe("maintenance lease heartbeat", () => {
 
   it("acknowledges ownership checks while the parent holds a state write transaction", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-transaction" }, async (state) => {
-      await withOpenClawStateLease(options(state.env), async (lease) => {
+      // This control checks liveness during a transaction, not the one-second
+      // expiry boundary. Allow a cold worker to start under parallel checking.
+      await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
         runOpenClawStateWriteTransaction(
           ({ db }) => {
             lease.assertOwnedInTransaction(db);

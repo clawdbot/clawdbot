@@ -6,7 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { withSqliteSnapshotSource } from "../infra/sqlite-readonly-location.js";
+import { withSqliteSnapshotSource } from "../infra/sqlite-snapshot-source.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-cache.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {

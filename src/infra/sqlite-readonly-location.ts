@@ -14,6 +14,7 @@ import {
 } from "./sqlite-private-directory.js";
 import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
 import { withSqliteSourceHandle, withSqliteSourceHandleAsync } from "./sqlite-source-handle.js";
+import { hasStateDatabaseSourceExclusion } from "./state-database-coordinator.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -477,8 +478,8 @@ async function createOnlineReadOnlyBackup(
  * Active rollback and WAL state use SQLite's locking and backup protocol.
  * Crash residue that cannot be opened read-only is copied and recovered
  * privately so inspection never mutates coordination files beside the source.
- * The InProcess exports are child-only: POSIX close() can release every lock
- * the calling process holds on the same source inode.
+ * In-process reads require drained source handles or a separate child: source
+ * close() must not release another live SQLite owner's POSIX locks.
  */
 async function prepareReadOnlySourceInProcess(
   pathname: string,
@@ -606,6 +607,18 @@ export async function prepareSqliteReadOnlyLocation(
   let stagingRoot: string | undefined;
   try {
     options.signal?.throwIfAborted();
+    if (hasStateDatabaseSourceExclusion(pathname)) {
+      const prepared = options.preserveSourceArtifacts
+        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
+        : await prepareSqliteReadOnlyLocationInProcess(pathname);
+      try {
+        options.signal?.throwIfAborted();
+        return prepared;
+      } catch (error) {
+        prepared.cleanup();
+        throw error;
+      }
+    }
     // A stopped worker may never publish its random snapshot path. Allocate its
     // private parent first so cancellation can join the child and remove all copies.
     if (options.signal) {
@@ -633,52 +646,9 @@ export async function prepareSqliteReadOnlyLocation(
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
 ): PreparedSqliteReadOnlyLocation {
-  return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname));
-}
-
-async function prepareSqliteSnapshotSource(
-  pathname: string,
-): Promise<PreparedSqliteReadOnlyLocation | undefined> {
-  const canonicalPath = fs.realpathSync.native(pathname);
-  const journalPath = `${canonicalPath}-journal`;
-  let journal: BigIntStats;
-  try {
-    journal = fs.lstatSync(journalPath, { bigint: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-  if (!journal.isFile()) {
-    throw new Error(`SQLite rollback journal must be a regular file: ${journalPath}`);
-  }
-  return await prepareSqliteReadOnlyLocation(canonicalPath);
-}
-
-export async function withSqliteSnapshotSource<T>(
-  pathname: string,
-  operation: (sourcePath: string) => Promise<T>,
-): Promise<T> {
-  let prepared = await prepareSqliteSnapshotSource(pathname);
-  try {
-    try {
-      return prepared
-        ? await operation(prepared.location)
-        : await withSqliteSourceHandleAsync(pathname, () => operation(pathname));
-    } catch (error) {
-      if (prepared) {
-        throw error;
-      }
-      prepared = await prepareSqliteSnapshotSource(pathname);
-      if (!prepared) {
-        throw error;
-      }
-      return await operation(prepared.location);
-    }
-  } finally {
-    prepared?.cleanup();
-  }
+  return hasStateDatabaseSourceExclusion(pathname)
+    ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
+    : adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname));
 }
 
 export function prepareSqliteReadOnlyLocationInProcess(pathname: string, stagingRoot?: string) {

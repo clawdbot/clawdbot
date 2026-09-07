@@ -323,9 +323,7 @@ export const openClawStateDatabaseCache = {
 };
 
 /** Drain local cached owners before excluding participating foreign handles for file removal. */
-export function acquireOpenClawStateDatabaseFileExclusion(pathname: string): {
-  release: () => void;
-} {
+export function acquireOpenClawStateDatabaseFileExclusion(pathname: string) {
   const databasePath = path.resolve(pathname);
   const lifecycle = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
   let handles: ReturnType<typeof acquireStateDatabaseHandleExclusion>;
@@ -337,6 +335,8 @@ export function acquireOpenClawStateDatabaseFileExclusion(pathname: string): {
     throw error;
   }
   return {
+    assertCurrent: handles.assertCurrent,
+    runWithSourceReads: handles.runWithSourceReads,
     release: () => {
       try {
         handles.release();

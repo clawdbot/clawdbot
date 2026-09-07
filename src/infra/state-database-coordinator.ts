@@ -1,9 +1,11 @@
 // Coordinates Gateway presence and shared-state lifecycle operations outside removable state.
+import { AsyncLocalStorage } from "node:async_hooks";
 import os from "node:os";
 import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import {
+  createSqliteLifecycleAggregateError,
   ensurePrivateSqliteCoordinatorDirectory,
   runWithSqliteCoordinator,
   SqliteCoordinatorError,
@@ -15,6 +17,13 @@ const heldCoordinators = new Map<
   string,
   { coordinator: { release: () => void }; references: number }
 >();
+
+type SourceReadScope = {
+  active: boolean;
+  assertCurrent: () => void;
+  pin: () => { release: () => void };
+};
+const sourceReadScopes = new AsyncLocalStorage<ReadonlyMap<string, SourceReadScope>>();
 
 type CoordinatorFamily = "gateway-lifecycle" | "state-lifecycle" | "state-handles";
 type CoordinatorOptions = {
@@ -173,6 +182,11 @@ export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
       runtimeDirectory: params.runtimeDirectory ?? resolveStateLifecycleRuntimeDirectory(),
       uid: params.uid ?? (typeof process.getuid === "function" ? process.getuid() : undefined),
     });
+  const sourceScope = sourceReadScopes.getStore()?.get(pathname);
+  if (sourceScope?.active) {
+    sourceScope.assertCurrent();
+    return sourceScope.pin();
+  }
   ensurePrivateSqliteCoordinatorDirectory(path.dirname(pathname), "state-handles coordinator");
   const coordinator = tryAcquireSharedSqliteCoordinator(pathname, {
     busyTimeoutMs: params.busyTimeoutMs,
@@ -185,5 +199,76 @@ export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
 
 /** Acquire only after closing local cached owners under the state lifecycle gate. */
 export function acquireStateDatabaseHandleExclusion(params: CoordinatorOptions) {
-  return acquireLifecycleCoordinator("state-handles", params);
+  const coordinator = acquireLifecycleCoordinator("state-handles", params);
+  const owner = heldCoordinators.get(coordinator.path);
+  // Only the returned owner can create internal read pins. A second public
+  // acquisition must not borrow another task's process-local exclusion.
+  if (!owner || owner.references !== 1) {
+    coordinator.release();
+    throw new StateDatabaseCoordinatorContentionError("state-handles");
+  }
+  let released = false;
+  const assertCurrent = () => {
+    if (released || heldCoordinators.get(coordinator.path) !== owner) {
+      throw new SqliteCoordinatorError("SQLite source exclusion is no longer current");
+    }
+  };
+  const pin = () => {
+    assertCurrent();
+    return acquireLifecycleCoordinator("state-handles", {
+      ...params,
+      coordinatorPath: coordinator.path,
+    });
+  };
+  return {
+    assertCurrent,
+    release() {
+      released = true;
+      coordinator.release();
+    },
+    async runWithSourceReads<T>(
+      this: void,
+      operation: (assertCurrent: () => void) => Promise<T>,
+    ): Promise<T> {
+      const retained = pin();
+      const scope: SourceReadScope = { active: true, assertCurrent, pin };
+      const scopes = new Map(sourceReadScopes.getStore());
+      scopes.set(coordinator.path, scope);
+      let result: T;
+      try {
+        result = await sourceReadScopes.run(scopes, () => operation(assertCurrent));
+        assertCurrent();
+      } catch (error) {
+        scope.active = false;
+        try {
+          retained.release();
+        } catch (releaseError) {
+          throw createSqliteLifecycleAggregateError(
+            [error, releaseError],
+            "SQLite excluded read and release both failed",
+            error,
+          );
+        }
+        throw error;
+      }
+      scope.active = false;
+      retained.release();
+      return result;
+    },
+  };
+}
+
+/** Only a live process-local exclusion owner may copy its already-drained source. */
+export function hasStateDatabaseSourceExclusion(databasePath: string): boolean {
+  const pathname = resolveLifecycleCoordinatorPath("state-handles", {
+    databasePath,
+    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+    uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+  });
+  const scope = sourceReadScopes.getStore()?.get(pathname);
+  if (!scope?.active) {
+    return false;
+  }
+  scope.assertCurrent();
+  return true;
 }
