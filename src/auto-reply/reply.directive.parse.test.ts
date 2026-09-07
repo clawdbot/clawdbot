@@ -373,8 +373,16 @@ describe("directive parsing", () => {
     expect(model.cleaned).toBe("please sync -s now");
   });
 
-  it("keeps here as the selected model in mixed commands", () => {
+  it("treats a bare mid-message token in mixed commands as prose (#137197)", () => {
     const model = parseInlineSessionDirectives("please /model here continue");
+    expect(model.cleaned).toBe("please /model here continue");
+    expect(model.hasModelDirective).toBe(false);
+  });
+
+  it("still extracts a bare aliased token in mixed commands", () => {
+    const model = parseInlineSessionDirectives("please /model here continue", {
+      modelAliases: ["here"],
+    });
     expect(model.cleaned).toBe("please continue");
     expect(model.rawModelDirective).toBe("here");
   });

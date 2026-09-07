@@ -39,11 +39,37 @@ describe("extractModelDirective", () => {
       },
     );
 
-    it("keeps here as a model name and preserves following message text", () => {
+    it("treats a bare mid-message token as prose, not a model directive (#137197)", () => {
+      // An unaliased bare word after an inline /model is ordinary prose:
+      // treating it as a model shorthand default-provider-constructed errors
+      // like "deepseek/bzw." that aborted the whole turn.
       const result = extractModelDirective("please /model here continue");
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleaned).toBe("please /model here continue");
+    });
+
+    it("still switches mid-message on a configured alias", () => {
+      const result = extractModelDirective("please /model here continue", {
+        aliases: ["here"],
+      });
       expect(result.hasDirective).toBe(true);
       expect(result.rawModel).toBe("here");
       expect(result.cleaned).toBe("please continue");
+    });
+
+    it("still switches mid-message on an explicit provider/model ref", () => {
+      const result = extractModelDirective("check via /model openai/gpt-5.6-sol whether it works");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("openai/gpt-5.6-sol");
+      expect(result.cleaned).toBe("check via whether it works");
+    });
+
+    it("leaves the reporter's prose sentence untouched", () => {
+      const prose =
+        "Prüfe anschließend, ob das Modell über /model bzw. /models in Telegram auswählbar ist.";
+      const result = extractModelDirective(prose);
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleaned).toBe(prose);
     });
 
     it("parses a leading -s as a model-less session option", () => {

@@ -12,6 +12,10 @@ const MODEL_RUNTIME_VALUE_PATTERN = String.raw`[A-Za-z0-9_.:-]+`;
 const MODEL_SCOPE_OPTION_PATTERN = String.raw`(?:--session|-s|--agent|-a|--global|-g)(?=$|\s)`;
 const MODEL_OPTION_PATTERN = String.raw`(?:(?:${MODEL_SCOPE_OPTION_PATTERN}|--runtime)(?=$|\s)|runtime=|harness=)`;
 const MODEL_RUNTIME_OPTION_PATTERN = String.raw`(?:--runtime|runtime=|harness=)\s*((?!${MODEL_OPTION_PATTERN})${MODEL_RUNTIME_VALUE_PATTERN})`;
+// Reserved bare tokens: informational or reset forms with their own
+// mixed-message contract — never prose-confusable, never default-provider
+// constructed.
+const RESERVED_MODEL_DIRECTIVE_TOKENS = new Set(["list", "status", "default"]);
 // Captures 2/3 are runtime-first; 4/5 are scope-first so duplicates stay unconsumed.
 const MODEL_TRAILING_OPTIONS_PATTERN = String.raw`(?:(?:\s+(?:--runtime|runtime=|harness=)\s*((?!${MODEL_OPTION_PATTERN})${MODEL_RUNTIME_VALUE_PATTERN}))(\s+${MODEL_SCOPE_OPTION_PATTERN})?|(\s+${MODEL_SCOPE_OPTION_PATTERN})(?:\s+(?:--runtime|runtime=|harness=)\s*((?!${MODEL_OPTION_PATTERN})${MODEL_RUNTIME_VALUE_PATTERN}))?)?`;
 const MODEL_OPTIONS_ONLY_DIRECTIVE_PATTERN = new RegExp(
@@ -101,6 +105,27 @@ export function extractModelDirective(
     const split = splitTrailingAuthProfile(raw);
     rawModel = split.model;
     rawProfile = split.profile;
+  }
+
+  // A bare model token embedded mid-message is far more likely ordinary prose
+  // than a model shorthand: without a configured alias or an explicit
+  // provider/model ref it would otherwise be default-provider-constructed into
+  // a policy error that aborts the whole turn (#137197). Message-leading
+  // directives keep the existing command behavior, including fuzzy matching,
+  // and reserved tokens (list/status/default) keep their mixed-message
+  // contract.
+  const isMessageLeading =
+    match?.index !== undefined && body.slice(0, match.index).trim().length === 0;
+  const reservedToken = RESERVED_MODEL_DIRECTIVE_TOKENS.has(rawModel?.toLowerCase() ?? "");
+  if (
+    modelMatch &&
+    rawModel !== undefined &&
+    !reservedToken &&
+    !rawModel.includes("/") &&
+    !aliases.some((alias) => alias.toLowerCase() === rawModel.toLowerCase()) &&
+    !isMessageLeading
+  ) {
+    return { cleaned: body, scopeConflict: false, hasDirective: false };
   }
 
   const cleaned = match
