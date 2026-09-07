@@ -231,7 +231,7 @@ describe("Zalo polling media replies", () => {
           mediaMaxMb: testCase.mediaMaxMb,
         });
         const run = monitorZaloProvider({
-          token: "test-token-placeholder",
+          token: "zalo-token",
           account,
           config,
           runtime: createRuntimeEnv(),
