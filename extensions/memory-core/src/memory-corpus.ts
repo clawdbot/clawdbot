@@ -7,6 +7,7 @@ import {
 import {
   createMemorySearchDeadlineError,
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+  formatMemorySearchDeadline,
   isMemorySearchDeadlineError,
   resolveMemorySearchAbortError,
 } from "./memory/search-deadline.js";
@@ -118,7 +119,7 @@ export async function runMemoryCorpusDeadline<T>(params: {
   const controller = new AbortController();
   const startedAt = performance.now();
   const timeoutError = createMemorySearchDeadlineError(
-    `${params.operation} timed out after ${Math.round(timeoutMs / 1000)}s`,
+    `${params.operation} timed out after ${formatMemorySearchDeadline(timeoutMs)}`,
   );
   const expire = () => controller.abort(timeoutError);
   const checkDeadline = () => {

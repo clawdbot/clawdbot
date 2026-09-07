@@ -75,6 +75,23 @@ it.each(["provider", "caller"] as const)(
   },
 );
 
+it("reports a fractional deadline as configured", async () => {
+  vi.useFakeTimers();
+  const result = runMemoryCorpusDeadline({
+    operation: "memory_get",
+    timeoutMs: 400,
+    run: async (signal) =>
+      await attemptMemoryCorpus({
+        corpus: "memory",
+        signal,
+        unavailableValue: [],
+        run: async () => await new Promise<string[]>(() => {}),
+      }),
+  });
+  await vi.advanceTimersByTimeAsync(400);
+  expect(await result).toMatchObject({ deadline: true, error: "memory_get timed out after 0.4s" });
+});
+
 it("honors a configured deadline instead of the built-in 15s", async () => {
   vi.useFakeTimers();
   const pending = createDeferred<string[]>();

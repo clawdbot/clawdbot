@@ -365,6 +365,11 @@ describe("memory_get corpus outcomes", () => {
         text: "",
         disabled: true,
         error: "memory_get timed out after 1s",
+        warning:
+          "Memory corpus unavailable: memory_get timed out after 1s Retry memory_get after a short wait, or raise memory.search.query.timeoutSeconds if reads keep timing out.",
+        corpora: [
+          { corpus: "memory", outcome: "unavailable", error: "memory_get timed out after 1s" },
+        ],
       },
     });
   });

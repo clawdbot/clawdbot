@@ -90,8 +90,8 @@ export type ResolvedMemorySearchConfig = {
   query: {
     maxResults: number;
     minScore: number;
-    /** Deadline for one memory_search or memory_get call. */
-    timeoutMs: number;
+    /** Deadline for one memory_search or memory_get call; consumers default it when absent. */
+    timeoutMs?: number;
     hybrid: {
       enabled: boolean;
       vectorWeight: number;

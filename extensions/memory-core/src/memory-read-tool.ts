@@ -74,7 +74,14 @@ export async function executeMemoryReadResult(
             path: params.relPath,
             text: "",
             disabled: true,
-            ...("error" in memory ? { error: memory.error } : {}),
+            ...composeMemoryCorpusMetadata(
+              [memory],
+              "deadline" in memory && memory.deadline
+                ? [
+                    "Retry memory_get after a short wait, or raise memory.search.query.timeoutSeconds if reads keep timing out.",
+                  ]
+                : [],
+            ),
           },
         );
       },

@@ -410,12 +410,14 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             },
           };
         };
-        // Cleanup after the search spends what is left of the same call budget.
-        const callStartedAt = Date.now();
+        // Cleanup after the search spends what is left of the same call budget,
+        // measured on the monotonic clock the deadline itself uses.
+        const timeoutMs = settings.query.timeoutMs ?? DEFAULT_MEMORY_SEARCH_TIMEOUT_MS;
+        const callStartedAt = performance.now();
         try {
           return await runMemoryCorpusDeadline({
             operation: "memory_search",
-            timeoutMs: settings.query.timeoutMs,
+            timeoutMs,
             parentSignal: callerSignal,
             run: async (signal) => {
               searchSignal = signal;
@@ -545,10 +547,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           );
         } finally {
           cleanupStarted = true;
-          const remainingTimeoutMs = Math.max(
-            0,
-            settings.query.timeoutMs - (Date.now() - callStartedAt),
-          );
+          const remainingTimeoutMs = Math.max(0, timeoutMs - (performance.now() - callStartedAt));
           if (searchSignal?.aborted) {
             // Admitted searches retain their leases until they settle; teardown
             // must not add another cleanup timeout to an already expired reply.
@@ -573,7 +572,7 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
         const from = readPositiveIntegerParam(rawParams, "from");
         const lines = readPositiveIntegerParam(rawParams, "lines");
         const requestedCorpus = readCorpusParam(rawParams, ["memory", "wiki", "all"]);
-        const { readAgentMemoryFile } = await loadMemoryToolRuntime();
+        const timeoutMs = settings.query.timeoutMs ?? DEFAULT_MEMORY_SEARCH_TIMEOUT_MS;
         if (requestedCorpus === "wiki") {
           return await executeWikiMemoryReadResult({
             relPath,
@@ -584,18 +583,21 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
             sandboxed: options.sandboxed,
             requestedCorpus,
             signal: callerSignal,
-            timeoutMs: settings.query.timeoutMs,
+            timeoutMs,
           });
         }
         return await executeMemoryReadResult({
-          read: async () =>
-            await readAgentMemoryFile({
+          // The lazy runtime import runs inside the read so a cold start is part of the same deadline.
+          read: async () => {
+            const { readAgentMemoryFile } = await loadMemoryToolRuntime();
+            return await readAgentMemoryFile({
               cfg,
               agentId,
               relPath,
               from: from ?? undefined,
               lines: lines ?? undefined,
-            }),
+            });
+          },
           requestedCorpus,
           relPath,
           from: from ?? undefined,
@@ -604,7 +606,7 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
           agentSessionKey: options.agentSessionKey,
           sandboxed: options.sandboxed,
           signal: callerSignal,
-          timeoutMs: settings.query.timeoutMs,
+          timeoutMs,
         });
       },
   });

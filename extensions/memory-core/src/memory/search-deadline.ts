@@ -21,9 +21,14 @@ export function createMemorySearchDeadlineError(message: string): Error {
   return error;
 }
 
+/** Deadline as configured, e.g. `15s` or `0.4s`, never rounded to a different value. */
+export function formatMemorySearchDeadline(timeoutMs: number): string {
+  return `${Number((timeoutMs / 1000).toFixed(3))}s`;
+}
+
 function createMemorySearchTimeoutError(timeoutMs: number): Error {
   return createMemorySearchDeadlineError(
-    `memory_search timed out after ${Math.round(timeoutMs / 1000)}s`,
+    `memory_search timed out after ${formatMemorySearchDeadline(timeoutMs)}`,
   );
 }
 
