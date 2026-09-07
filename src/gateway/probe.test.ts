@@ -418,10 +418,10 @@ describe("probeGateway", () => {
     expect(gatewayClientState.stopAndWaitCalls).toEqual([{ timeoutMs: 1_000 }]);
   });
 
-  it("connects with operator.read scope", async () => {
+  it("connects with operator read and admin scopes for deep detail fetch", async () => {
     const result = await runTokenProbe();
 
-    expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
+    expect(gatewayClientState.options?.scopes).toEqual(["operator.read", "operator.admin"]);
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
     expect(gatewayClientState.requests).toEqual([
       "health",
@@ -484,6 +484,29 @@ describe("probeGateway", () => {
     });
   });
 
+  it("treats admin-granted sessions as read-capable when detail fetch reports missing operator.read", async () => {
+    gatewayClientState.helloAuth = {
+      role: "operator",
+      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+    };
+    gatewayClientState.requestError = {
+      code: "FORBIDDEN",
+      message: "missing scope: operator.read",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+    };
+
+    const result = await runTokenProbe();
+
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.auth.capability).toBe("admin_capable");
+    expect(lastGatewayClientOptions()?.scopes).toEqual(["operator.read", "operator.admin"]);
+  });
+
   it("loads probe identity and cached device auth from the provided env", async () => {
     const env = {
       ...process.env,
@@ -530,7 +553,7 @@ describe("probeGateway", () => {
       await runTokenProbe({ originScopedDeviceAuth });
 
       expect(gatewayClientState.options?.deviceIdentity).toBeNull();
-      expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
+      expect(gatewayClientState.options?.scopes).toEqual(["operator.read", "operator.admin"]);
     },
   );
 
