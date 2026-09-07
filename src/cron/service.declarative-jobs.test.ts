@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { resolveCronSession } from "./isolated-agent/session.js";
 import { toPublicCronJob } from "./public-job.js";
@@ -9,6 +10,7 @@ import {
   installCronTestHooks,
 } from "./service.test-harness.js";
 import type { CronAddResult } from "./service/state.js";
+import { resolveSkillCollectionReviewMonitorSpecs } from "./skill-collection-review-monitor.js";
 import { loadCronStore } from "./store.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
@@ -195,6 +197,50 @@ describe("CronService declarative jobs", () => {
       });
       const cleared = await cron.update(created.id, { displayName: null });
       expect(cleared).not.toHaveProperty("displayName");
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("persists an ineligible review and reconciles recovery without replacing its job", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    const cfg = {
+      agents: {
+        defaults: { model: "openai/gpt-blocked" },
+        list: [{ id: "main", models: { "openai/gpt-blocked": { agentRuntime: { id: "codex" } } } }],
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } as OpenClawConfig;
+    const project = () => resolveSkillCollectionReviewMonitorSpecs(cfg)[0]!.input;
+    await cron.start();
+    try {
+      const created = declarativeResult(
+        await cron.add(project(), { enabledExplicit: true, systemOwned: true }),
+      );
+      expect(created.job).toMatchObject({
+        enabled: false,
+        displayName: expect.stringContaining("no-rooted-runtime"),
+      });
+      expect(created.job.state.nextRunAtMs).toBeUndefined();
+      expect(
+        (await loadCronStore(storePath)).jobs.find((job) => job.id === created.id),
+      ).toMatchObject({ enabled: false, displayName: created.job.displayName });
+      cfg.agents!.defaults!.model = "anthropic/claude-sonnet-4-6";
+      const recovered = declarativeResult(
+        await cron.add(project(), { enabledExplicit: true, systemOwned: true }),
+      );
+      expect(recovered).toMatchObject({
+        id: created.id,
+        created: false,
+        updated: true,
+        enabled: true,
+      });
+      expect(recovered.job.displayName).toBe("Skill collection review (main)");
+      expect(recovered.job.state.nextRunAtMs).toEqual(expect.any(Number));
+      expect(
+        (await loadCronStore(storePath)).jobs.find((job) => job.id === created.id),
+      ).toMatchObject({ enabled: true, displayName: "Skill collection review (main)" });
     } finally {
       cron.stop();
     }

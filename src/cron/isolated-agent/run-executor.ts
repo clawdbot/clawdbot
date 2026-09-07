@@ -50,6 +50,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { assertCronExecutionRootRuntime } from "../execution-root-runtime.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob, CronStoredJob } from "../types.js";
@@ -72,7 +73,6 @@ import {
   runCliAgent,
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
-import { assertCronExecutionRootRuntime } from "./run-prepare-runtime.js";
 import {
   type CronLiveSelection,
   type MutableCronSession,

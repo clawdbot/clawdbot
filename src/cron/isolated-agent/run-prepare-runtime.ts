@@ -48,26 +48,6 @@ export type WithRunSession = (
   result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
 ) => RunCronAgentTurnResult;
 
-const CRON_EXECUTION_ROOT_RUNTIME_ERROR =
-  "collection review requires a runtime that enforces the Workshop root through OpenClaw tools";
-
-export class CronExecutionRootRuntimeError extends Error {
-  constructor() {
-    super(CRON_EXECUTION_ROOT_RUNTIME_ERROR);
-    this.name = "CronExecutionRootRuntimeError";
-  }
-}
-
-export function assertCronExecutionRootRuntime(
-  executionRoot: string | undefined,
-  runtime: string,
-  rootedCliExecution: boolean,
-): void {
-  if (executionRoot && runtime !== "openclaw" && !rootedCliExecution) {
-    throw new CronExecutionRootRuntimeError();
-  }
-}
-
 const sessionAccessorRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
 );
