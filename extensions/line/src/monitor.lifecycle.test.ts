@@ -8,7 +8,6 @@ import {
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
@@ -21,12 +20,7 @@ import { createEvent, withQueue } from "./webhook-spool.test-support.js";
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 type LineHandleWebhook = ReturnType<typeof import("./bot.js").createLineBot>["handleWebhook"];
 type LineBotOptions = Parameters<typeof import("./bot.js").createLineBot>[0];
-type ResolvedTurn = {
-  delivery: {
-    deliver: (payload: { text: string }) => Promise<unknown>;
-    preparePayload?: (payload: ReplyPayload) => ReplyPayload;
-  };
-};
+type ResolvedTurn = Pick<ChannelInboundTurnPlan, "delivery">;
 
 const {
   createLineBotMock,
@@ -420,7 +414,7 @@ describe("monitorLineProvider lifecycle", () => {
     const runTurn = async (params: {
       adapter: { resolveTurn: () => ResolvedTurn };
     }): Promise<{ dispatched: false }> => {
-      await params.adapter.resolveTurn().delivery.deliver({ text: "reply" });
+      await params.adapter.resolveTurn().delivery.deliver({ text: "reply" }, { kind: "final" });
       return { dispatched: false };
     };
     setLineRuntime({
@@ -501,7 +495,6 @@ describe("monitorLineProvider lifecycle", () => {
 
   it("resolves a reply's presentation into LINE controls before delivering it", async () => {
     const { setLineRuntime } = await import("./runtime.js");
-    type ResolvedTurn = Pick<ChannelInboundTurnPlan, "delivery">;
     let resolvedTurn: ResolvedTurn | undefined;
     const runTurn = async (params: {
       adapter: { resolveTurn: () => ResolvedTurn };
