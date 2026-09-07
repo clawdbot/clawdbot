@@ -1912,6 +1912,69 @@ fs.readFileSync = (file, ...args) => {
     ]);
   });
 
+  it.each([
+    ["2026.8.2", "2026.9.3", 0, "external"],
+    ["2026.9.2", "2026.9.3", 0, "external"],
+    ["2026.9.2", "2026.9.4", 0, "self-update"],
+    ["2026.9.1", "2026.9.3", 0, "self-update"],
+    ["2026.9.2", "2026.9.3", 17, "external"],
+  ])(
+    "routes installer transition %s → %s and preserves exit %s",
+    (baseline, candidate, failure, route) => {
+      const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+      const start = runner.indexOf("run_update_smoke() {");
+      const end = runner.indexOf("\nrun_historical_external_transition()", start);
+      // Older runners have no external adapter, but still expose the same entry point.
+      const body = runner.slice(
+        start,
+        end < 0 ? runner.indexOf("\nrun_update_candidate()", start) : end,
+      );
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+set -eu
+${body}
+resolve_update_baseline_version() { :; }
+npm_install_global() { :; }
+print_install_audit() { :; }
+verify_installed_cli() { :; }
+assert_update_smoke_offline() { echo idle; }
+run_historical_external_transition() { echo external; return "$FAILURE"; }
+run_update_candidate() { echo "self-update:$1"; }
+verify_candidate_ai_runtime() { echo verified; }
+run_update_smoke
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PACKAGE_NAME: "openclaw",
+            UPDATE_BASELINE_VERSION: baseline,
+            UPDATE_EXPECT_VERSION: candidate,
+            UPDATE_BASELINE_TAG_URL: "",
+            UPDATE_TAG_URL: "https://fixture.invalid/candidate.tgz",
+            FAILURE: String(failure),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(failure);
+      expect(result.stdout).toContain("idle\n");
+      expect(result.stdout).toContain(
+        route === "external" ? "external\n" : `self-update:${baseline}\n`,
+      );
+      if (failure === 0) {
+        expect(result.stdout).toContain(`self-update:${candidate}\n`);
+        expect(result.stdout).toContain("verified\n");
+      } else {
+        expect(result.stdout).not.toContain("self-update:");
+        expect(result.stdout).not.toContain("verified\n");
+      }
+    },
+  );
+
   it("wraps long npm/update operations with heartbeat and install-size audits", () => {
     const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
 

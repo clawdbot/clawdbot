@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
+  runExternalPackageTransition: vi.fn(),
   ensureLocalNpmShim: vi.fn(),
   ensureDevUpdateGitInstall: vi.fn(),
   installPackageSpec: vi.fn(),
@@ -24,6 +25,10 @@ const mocks = vi.hoisted(() => ({
   stopGateway: vi.fn(),
   waitForGateway: vi.fn(),
   verifyFreshShellCommand: vi.fn(),
+}));
+
+vi.mock("../../scripts/lib/cross-os-release-checks/external-package-transition.ts", () => ({
+  runExternalPackageTransition: mocks.runExternalPackageTransition,
 }));
 
 vi.mock("../../scripts/lib/cross-os-release-checks/install.ts", async (importOriginal) => ({
@@ -225,6 +230,44 @@ describe("cross-OS manual gateway lane evidence", () => {
       },
     );
   });
+
+  it.each(["pass", "refusal-proof-failed"])(
+    "selects the explicit 9.2 to 9.3 transition before updater execution: %s",
+    async (outcome) => {
+      arrangeSuccessfulLane();
+      mocks.readInstalledVersion.mockReset().mockReturnValue("2026.9.2");
+      mocks.readInstalledMetadata.mockReturnValue({
+        version: "2026.9.3",
+        commit: candidate.sourceSha,
+      });
+      const receipt = {
+        status: "pass",
+        method: "external-package-manager-and-fresh-doctor",
+        selfUpdatePassed: false,
+      };
+      if (outcome === "pass") {
+        mocks.runExternalPackageTransition.mockResolvedValue(receipt);
+      } else {
+        mocks.runExternalPackageTransition.mockRejectedValue(new Error("refusal proof failed"));
+      }
+      const promise = runUpgradeLane({
+        ...upgradeParams(),
+        build: { ...candidate, candidateVersion: "2026.9.3" },
+      });
+      if (outcome === "pass") {
+        await expect(promise).resolves.toEqual(receipt);
+      } else {
+        await expect(promise).resolves.toMatchObject({
+          status: "fail",
+          error: expect.stringContaining("refusal proof failed"),
+        });
+      }
+      expect(mocks.runOpenClaw).not.toHaveBeenCalled();
+      expect(mocks.runExternalPackageTransition).toHaveBeenCalledOnce();
+      // A failed transition must never become the existing Windows install fallback.
+      expect(mocks.installPackageSpec).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("records bounded evidence when the supported Windows timeout fallback succeeds", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
