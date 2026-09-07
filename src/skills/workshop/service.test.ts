@@ -217,7 +217,7 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow("run authority closed during proposal staging");
 
     expect(checks).toBe(2);
-    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({ proposals: [] });
+    await expect(listSkillProposals()).resolves.toMatchObject({ proposals: [] });
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Original body.");
   });
 

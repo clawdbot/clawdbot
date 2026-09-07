@@ -47,7 +47,6 @@ import {
   resolveCliSourceReplyMirror,
   settleCliBackendOutcome,
   settleCliPreparationError,
-  settlePreparedCliRun,
 } from "./cli-runner/cli-run-settlement.js";
 import {
   buildCliHookAssistantMessage,
@@ -73,6 +72,7 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
+import { settlePreparedCliRunWithSkillUsage } from "./cli-runner/skill-usage.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -84,7 +84,6 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
-import { recordExplicitSkillSelectionsForRun } from "./skill-selection-usage.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 const cliRunnerDeps = cliRunSettlementDeps;
@@ -237,12 +236,7 @@ async function runCliAgentInternal(
     await settleCliPreparationError(error, params);
     throw error;
   }
-  recordExplicitSkillSelectionsForRun({
-    operationalRunInstance: context.params.admittedRunContext.operationalRunInstance,
-    selections: context.params.explicitSkillSelections,
-    skillsSnapshot: context.params.skillsSnapshot,
-  });
-  return await settlePreparedCliRun({
+  return await settlePreparedCliRunWithSkillUsage({
     context,
     diagnosticLifecycle,
     run: async () => await runPreparedCliAgent(context, diagnosticLifecycle),

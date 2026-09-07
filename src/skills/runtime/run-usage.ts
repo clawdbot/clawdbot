@@ -119,3 +119,11 @@ export function discardRunWorkspaceSkillUsage(
     workspaceSkillUsageByAuthority.delete(delegatedAuthority);
   }
 }
+
+/** Revokes both telemetry and exact-authority receipts for one execution. */
+export function discardRunSkillUsageForOperationalRun(
+  operationalRunInstance: RunSkillUsageInstance,
+): void {
+  discardRunSkillUsage(operationalRunInstance.runId);
+  discardRunWorkspaceSkillUsage(operationalRunInstance);
+}
