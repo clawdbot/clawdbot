@@ -321,6 +321,27 @@ describe("native link routing", () => {
     );
   });
 
+  it("opens the panel menu action externally during Settings takeover and restores it afterward", async () => {
+    const bridge = installBridge();
+    let canPresentBrowserPanel = false;
+    routing = startNativeLinkRouting({ canPresentBrowserPanel: () => canPresentBrowserPanel });
+    const anchor = appendLink("https://example.com/report");
+
+    for (const available of [false, true]) {
+      canPresentBrowserPanel = available;
+      contextMenu(anchor);
+      const menu = document.querySelector("openclaw-native-link-menu");
+      await (menu as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+      menuItem("Open in Browser Panel").click();
+      expect(bridge.messages).toEqual([
+        { type: "open-link", url: "https://example.com/report", target: "external" },
+      ]);
+      expect(bridge.browserRequests).toEqual(
+        available ? [{ open: true, url: "https://example.com/report", native: true }] : [],
+      );
+    }
+  });
+
   it("ignores a stale hide event after replacing the context menu", async () => {
     installBridge();
     routing = startNativeLinkRouting();

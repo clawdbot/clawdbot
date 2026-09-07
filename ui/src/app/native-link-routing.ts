@@ -211,7 +211,11 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
         return;
       }
       if (action === "inline") {
-        openBrowserPanel(url);
+        if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
+          postNativeLink(nativePostMessage, url, "external");
+        } else {
+          openBrowserPanel(url);
+        }
         return;
       }
       postNativeLink(nativePostMessage, url, action);
