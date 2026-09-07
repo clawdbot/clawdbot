@@ -279,6 +279,12 @@ openclaw-session-owner-chip {
   pointer-events: none;
 }
 
+/* With no artwork to wrap, the ring collapses to the 12px spinner the trailing
+   slot used to draw; a full-size empty circle reads as a missing icon. */
+.session-glyph--bare .session-glyph__ring {
+  inset: 4px;
+}
+
 .session-glyph__badge {
   position: absolute;
   z-index: 1;
