@@ -188,7 +188,7 @@ describe("cached group content classification", () => {
     },
   );
 
-  it("keeps media visible and folds commentary after the same message changes in place", () => {
+  it("keeps media visible and folds text-less activity after the same message changes in place", () => {
     const content: Record<string, unknown>[] = [
       { type: "image", url: "https://example.com/diagram.png" },
     ];
@@ -222,7 +222,7 @@ describe("cached group content classification", () => {
       { kind: "group", role: "assistant" },
     ]);
 
-    preview.content.splice(0, 1, { type: "text", text: "Preparing a diagram" });
+    preview.content.splice(0, 1, { type: "thinking", thinking: "Preparing a diagram" });
 
     expect(project()).toMatchObject([
       { kind: "group", role: "user" },
@@ -231,6 +231,42 @@ describe("cached group content classification", () => {
         groups: [{ role: "assistant", messages: [{ message: preview }] }, { role: "tool" }],
       },
       { kind: "group", role: "assistant" },
+    ]);
+  });
+
+  it("keeps assistant text before the final reply visible and folds only tool work", () => {
+    const messages = [
+      { role: "user", content: "Explain the plan", timestamp: 1 },
+      {
+        role: "assistant",
+        content: "Here is the full answer the user watched stream.",
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "lookup",
+        toolName: "read",
+        content: "ok",
+        timestamp: 3,
+      },
+      { role: "assistant", content: "That covers it.", timestamp: 4 },
+    ];
+
+    expect(
+      collapseCompletedTurnWork(cachedGroups(messages), {
+        sessionKey: "agent:target:dashboard:history",
+        runWorking: false,
+      }),
+    ).toMatchObject([
+      { kind: "group", role: "user" },
+      {
+        kind: "group",
+        role: "assistant",
+        visibleContent: "text",
+        messages: [{ message: messages[1] }],
+      },
+      { kind: "work-group", groups: [{ role: "tool" }] },
+      { kind: "group", role: "assistant", messages: [{ message: messages[3] }] },
     ]);
   });
 });

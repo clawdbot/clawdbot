@@ -210,7 +210,17 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
     return false;
   }
   const role = item.role.toLowerCase();
-  return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
+  if (role === "tool") {
+    return true;
+  }
+  // Assistant text that precedes the final reply is still part of the answer
+  // the user watched stream (completions transports retag pre-tool text as
+  // commentary after the fact). Fold only text-less activity, never visible text.
+  return (
+    role === "assistant" &&
+    !assistantGroupIsForwardedBoundary(item) &&
+    item.visibleContent !== "text"
+  );
 }
 
 function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
