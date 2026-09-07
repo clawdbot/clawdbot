@@ -1747,6 +1747,18 @@ message(action="send", channel="discord", target="channel:123", path="/path/to/a
     - if a guild `channels` map exists, only listed channels are allowed
     - verify `requireMention` behavior and mention patterns
 
+    The Control UI channel details and `openclaw channels status` warn when the
+    effective policy is `allowlist` but no guilds are configured. Add your server
+    under `channels.discord.guilds`, or the account's `guilds` map when overridden.
+    An explicit `channels.discord.accounts.default.guilds` map also overrides the
+    top-level map, even when the account map is empty.
+
+    If status reports a deferred configuration reload, wait for active work to
+    finish and refresh. A successful channel stop/start does not apply unpublished
+    configuration. The warning distinguishes waiting to publish configuration
+    from channel work deferred after publication; connection health alone does
+    not confirm that a policy change has applied.
+
     Useful checks:
 
 ```bash
