@@ -134,6 +134,7 @@ final class GatewayConnectionController {
 
         self.updateFromDiscovery()
         self.observeDiscovery()
+        self.observeGatewayRegistration()
 
         if self.discoveryEnabled, self.localNetworkAccessRequested {
             self.discovery.start()
@@ -707,6 +708,11 @@ final class GatewayConnectionController {
 
     private func refreshActiveGatewayRegistrationFromSettingsAsync() async {
         guard let appModel else { return }
+        // A queued handoff owns transport recovery; registration must not restart its paused sessions.
+        while self.pendingAutoConnectTask != nil || appModel.hasGatewaySessionResetInFlight {
+            await self.pendingAutoConnectTask?.value
+            await appModel.waitForGatewaySessionResetIfNeeded()
+        }
         guard let cfg = appModel.activeGatewayConnectConfig else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
         let generation = appModel.gatewayConnectGeneration
@@ -715,6 +721,11 @@ final class GatewayConnectionController {
             stableID: cfg.stableID,
             deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
             allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
+        await appModel.waitForGatewaySessionResetIfNeeded()
+        // A replacement route can commit within the same connect generation while permissions are sampled.
+        guard appModel.gatewayAutoReconnectEnabled,
+              appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: cfg) == true
+        else { return }
         let refreshedConfig = GatewayConnectConfig(
             url: cfg.url,
             stableID: cfg.stableID,
@@ -723,7 +734,25 @@ final class GatewayConnectionController {
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
             nodeOptions: nodeOptions)
+        // Unchanged registration is not a request to recover deliberately stopped transport loops.
+        guard !cfg.hasSameConnectionInputs(as: refreshedConfig) else { return }
         appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
+    }
+
+    private func observeGatewayRegistration() {
+        withObservationTracking {
+            _ = self.appModel?.locationAuthorizationSnapshot
+            // An attempt can invalidate a sampled refresh without replacing the route (for example, cancellation).
+            _ = self.appModel?.gatewayConnectGeneration
+            // Startup and target-review resume may install options captured before authorization changed.
+            _ = self.appModel?.activeGatewayConnectConfig
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.observeGatewayRegistration()
+                await self.refreshActiveGatewayRegistrationFromSettingsAsync()
+            }
+        }
     }
 
     func clearPendingTrustPrompt() {
