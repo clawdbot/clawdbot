@@ -1390,6 +1390,13 @@ function collectAllowAlwaysPatterns(params: {
   if (!isWindowsPlatform(params.platform)) {
     return;
   }
+  if (POSIX_SHELL_WRAPPERS.has(normalizeExecutableToken(segment.argv[0] ?? ""))) {
+    // The inline payload is owned by a POSIX shell (for example `sh -c` reached
+    // through a package-manager carrier), so windows-cmd/PowerShell nested
+    // analysis does not apply. POSIX shells only bind durable positional
+    // carriers (handled above), so nothing is reusable here.
+    return;
+  }
   const nested = analyzeWindowsShellCommand({
     command: inlineCommand,
     cwd: params.cwd,
