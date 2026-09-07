@@ -398,7 +398,6 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     expect(readMigrationCheckpointStatus).not.toHaveBeenCalled();
     expect(acquireStartupMigrationLeaseWithWait).not.toHaveBeenCalled();
-    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
   it("releases the startup lease when the fresh config guard rejects", async () => {
@@ -890,9 +889,8 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyPluginDoctorState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
-    expect(beforeStateMigrations).toHaveBeenNthCalledWith(1);
     expect(beforeStateMigrations).toHaveBeenNthCalledWith(
-      2,
+      1,
       expect.objectContaining({ valid: true }),
     );
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();

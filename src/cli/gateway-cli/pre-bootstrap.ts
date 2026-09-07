@@ -1,12 +1,16 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import * as startupRepair from "../../commands/doctor/shared/automatic-startup-config-repair.js";
-import { resetPublishedConfigRuntimeEnv } from "../../config/config-env-vars.js";
+import {
+  cloneEnvWithPlatformSemantics,
+  resetPublishedConfigRuntimeEnv,
+} from "../../config/config-env-vars.js";
 // Gateway startup checks that must run before shared CLI bootstrap can migrate state.
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "../../config/gateway-env-selection.js";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
+import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { formatCliCommand } from "../command-format.js";
 import type { GatewayRunPreBootstrapOptions } from "./future-config-guard.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
@@ -197,18 +201,26 @@ async function readGuardedGatewayRunConfig(
   params: GatewayRunGuardParams,
 ): Promise<ConfigFileSnapshot | null> {
   const { readConfigFileSnapshot } = await import("../../config/config.js");
-  const snapshot = await readConfigFileSnapshot({
-    isolateEnv: true,
-    observe: false,
-    pluginValidation: "core-only",
+  const { createConfigIO } = await import("../../config/io.factory.js");
+  return await withArtifactPreservingStateReads(async () => {
+    const current = await readConfigFileSnapshot({
+      isolateEnv: true,
+      observe: false,
+      pluginValidation: "core-only",
+    });
+    const guard = (snapshot: ConfigFileSnapshot) =>
+      enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
+    if (!guard(current)) {
+      return null;
+    }
+    const recovery = await createConfigIO({
+      configPath: current.path,
+      env: cloneEnvWithPlatformSemantics(process.env),
+      observe: false,
+      pluginValidation: "core-only",
+    }).prepareConfigRecovery(current);
+    return recovery ? (guard(recovery.snapshot) ? recovery.snapshot : null) : current;
   });
-  return enforceGatewayRunFutureConfigGuard({
-    opts: params.opts,
-    runtime: params.runtime,
-    snapshot,
-  })
-    ? snapshot
-    : null;
 }
 
 async function isSameGatewayRunConfigSnapshot(

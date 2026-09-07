@@ -56,6 +56,21 @@ function schemaMetadata(databasePath: string) {
 describe("startup admission before persistent writes", () => {
   it.each([
     {
+      name: "clobbered config with a healthy backup",
+      workspace: false,
+      repairable: false,
+      config: "clobbered",
+      restored: true,
+      reason: "Config auto-restored from backup",
+    },
+    {
+      name: "clobbered config with a legacy workspace in its backup",
+      workspace: true,
+      repairable: false,
+      config: "clobbered",
+      reason: "Legacy workspace setup state requires migration",
+    },
+    {
       name: "legacy workspace",
       workspace: true,
       repairable: false,
@@ -116,12 +131,24 @@ describe("startup admission before persistent writes", () => {
       reason: "set gateway.mode=local (current: remote)",
     },
   ])(
-    "preserves shipped schema and every persistent artifact on $name refusal",
-    ({ workspace, repairable, config, reason, consolidated, invalidPlugin, repairedSession }) => {
+    "admits or preserves shipped state for $name",
+    ({
+      workspace,
+      repairable,
+      config,
+      reason,
+      consolidated,
+      invalidPlugin,
+      repairedSession,
+      restored,
+    }) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-startup-admission-"));
       const runtimeRoot = createSourceRuntime(root);
       const stateDir = path.join(root, "state");
-      const workspaceDir = path.join(stateDir, "workspace");
+      const workspaceDir = path.join(
+        stateDir,
+        config === "clobbered" ? "recovered-workspace" : "workspace",
+      );
       const configPath = path.join(stateDir, "openclaw.json");
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
       fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -144,7 +171,10 @@ describe("startup admission before persistent writes", () => {
           fs.writeFileSync(
             configPath,
             JSON.stringify({
-              gateway: config === "missing-mode" ? {} : { mode: config },
+              gateway:
+                config === "missing-mode"
+                  ? {}
+                  : { mode: config === "clobbered" ? "local" : config },
               plugins: invalidPlugin
                 ? { load: { paths: [path.join(root, "missing-plugin")] } }
                 : { enabled: false },
@@ -162,6 +192,13 @@ describe("startup admission before persistent writes", () => {
                   : {}),
             }),
           );
+          if (config === "clobbered") {
+            fs.copyFileSync(configPath, `${configPath}.bak`);
+            fs.writeFileSync(
+              configPath,
+              '{"update":{"channel":"stable"},"env":{"vars":{"OPENCLAW_GATEWAY_TOKEN":"discarded-test-token"}}}\n',
+            );
+          }
         }
         if (repairedSession) {
           const legacyStore = path.join(stateDir, "external", "agent", "sessions.json");
@@ -199,6 +236,9 @@ describe("startup admission before persistent writes", () => {
           commandPath: ["gateway", "run"],
           runtime: { log: console.log, error: console.error, exit(code) { throw new ExitError(code); } },
         });
+        if (${Boolean(restored)} && process.env.OPENCLAW_GATEWAY_TOKEN) {
+          throw new Error("Discarded clobbered config environment leaked through admission.");
+        }
       `;
         const result = runSourceRuntime(
           runtimeRoot,
@@ -208,7 +248,8 @@ describe("startup admission before persistent writes", () => {
             USERPROFILE: root,
             OPENCLAW_STATE_DIR: stateDir,
             OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_WORKSPACE_DIR: workspaceDir,
+            OPENCLAW_WORKSPACE_DIR:
+              config === "clobbered" ? path.join(stateDir, "empty-workspace") : workspaceDir,
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
             NO_COLOR: "1",
@@ -229,10 +270,17 @@ describe("startup admission before persistent writes", () => {
         );
         const output = `${result.stdout}\n${result.stderr}`;
         expect(result.error, output).toBeUndefined();
-        expect(result.status, output).toBe(78);
+        expect(result.status, output).toBe(restored ? 0 : 78);
         expect(output).toContain(reason);
-        expect(manifest(stateDir)).toEqual(before);
-        expect(schemaMetadata(databasePath)).toEqual(schemaBefore);
+        if (restored) {
+          expect(fs.readFileSync(configPath, "utf8")).toBe(
+            fs.readFileSync(`${configPath}.bak`, "utf8"),
+          );
+          expect(schemaMetadata(databasePath).userVersion).toBe(16);
+        } else {
+          expect(manifest(stateDir)).toEqual(before);
+          expect(schemaMetadata(databasePath)).toEqual(schemaBefore);
+        }
       } finally {
         if (prepared.isOpen) {
           prepared.close();

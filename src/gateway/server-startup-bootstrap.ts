@@ -12,6 +12,7 @@ import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-
 import {
   getRuntimeConfigSourceSnapshot,
   readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
 import { normalizeStateDirEnv } from "../config/paths.js";
@@ -43,6 +44,7 @@ import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -82,12 +84,18 @@ export async function prepareGatewayServerBootstrap(input: {
 }) {
   const { port, opts, log, logSecrets, loadWorkerEnvironmentStartupModule } = input;
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
-  // Direct callers and repeated server starts also need admission before bootstrap writes.
-  const workspaceSnapshot = await readConfigFileSnapshot({
-    observe: false,
-    pluginValidation: "core-only",
+  // Derive defaults and admit exactly the snapshot that bootstrap will consume.
+  process.env.OPENCLAW_GATEWAY_PORT = String(port);
+  const envBeforeStartupConfigLoad = { ...process.env };
+  const startupConfigSnapshotRead = await withArtifactPreservingStateReads(async () => {
+    const read =
+      opts.startupConfigSnapshotRead ??
+      (await readConfigFileSnapshotWithPluginMetadata({ observe: false }));
+    assertConfiguredWorkspaceStateReady({
+      cfg: captureConfigOverrideApplier()(read.snapshot.config),
+    });
+    return read;
   });
-  assertConfiguredWorkspaceStateReady({ cfg: workspaceSnapshot.config });
   const formatRuntimeGatewayAuthTokenWarning = input.formatRuntimeGatewayAuthTokenWarning;
   const traceOriginAt = opts.processStartedAt ?? opts.startupStartedAt;
   const startupElapsedMs =
@@ -176,8 +184,6 @@ export async function prepareGatewayServerBootstrap(input: {
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
   const ambientEnvTriggers = opts.ambientEnvTriggers ?? "suppress";
 
-  // Ensure all default port derivations (browser/canvas) see the actual runtime port.
-  process.env.OPENCLAW_GATEWAY_PORT = String(port);
   logAcceptedEnvOption({
     key: "OPENCLAW_RAW_STREAM",
     description: "raw stream logging enabled",
@@ -206,15 +212,12 @@ export async function prepareGatewayServerBootstrap(input: {
   });
   const { loadGatewayStartupConfigSnapshot } = await startupConfigModulePromise;
 
-  const envBeforeStartupConfigLoad = { ...process.env };
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
       minimalTestGateway,
       log,
       measure: (name, run) => startupTrace.measure(name, run),
-      ...(opts.startupConfigSnapshotRead
-        ? { initialSnapshotRead: opts.startupConfigSnapshotRead }
-        : {}),
+      initialSnapshotRead: startupConfigSnapshotRead,
     }),
   );
   const configSnapshot = startupConfigLoad.snapshot;

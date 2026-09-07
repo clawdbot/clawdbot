@@ -1,6 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { createConfigIO } from "../config/io.factory.js";
 import { readConfigFileSnapshot, type ConfigSnapshotReadMeasure } from "../config/io.js";
+import type { PreparedConfigRecovery } from "../config/io.types.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -18,6 +21,7 @@ import type {
   MigrationMessages,
 } from "../infra/state-migrations.types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { ExitError } from "../runtime.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   migrationCheckpointIdentitiesMatch,
@@ -49,32 +53,67 @@ export async function readStartupMigrationSnapshot(params: {
     read: DoctorConfigPreflightPluginSnapshotRead,
   ) => ReturnType<typeof planAutomaticConfigRepair>;
   validateConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
-}): Promise<DoctorConfigPreflightPluginSnapshotRead> {
+  beforeStateMigrations?: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+}): Promise<DoctorConfigPreflightPluginSnapshotRead & { recovery?: PreparedConfigRecovery }> {
   return await withArtifactPreservingStateReads(async () => {
     await refuseStartupMigrationsForLiveGatewayOwner(params.env);
     try {
       const selected = await readConfigFileSnapshot({
         observe: false,
+        isolateEnv: true,
         pluginValidation: "core-only",
       });
-      const startupConfig = resolveStartupConfigSnapshot(selected);
+      const recoveryOptions = { configPath: selected.path, observe: false, env: params.env };
+      const coreRecovery = await createConfigIO({
+        ...recoveryOptions,
+        pluginValidation: "core-only",
+      }).prepareConfigRecovery(selected);
+      const candidate = coreRecovery?.snapshot ?? selected;
+      const startupConfig = resolveStartupConfigSnapshot(candidate);
       await assertStartupStateMigrationReady({
-        cfg: startupConfig?.sourceConfig ?? selected.sourceConfig ?? selected.config,
+        cfg: startupConfig?.sourceConfig ?? candidate.sourceConfig ?? candidate.config,
         env: params.env,
       });
       // Core readiness must be decided before plugin metadata opens shared state.
       if (startupConfig) {
         await params.validateConfig?.(startupConfig);
       }
-      const read = await params.readSnapshot();
+      let read: DoctorConfigPreflightPluginSnapshotRead = coreRecovery
+        ? {
+            ...(await createConfigIO({
+              ...recoveryOptions,
+              env: cloneEnvWithPlatformSemantics(params.env),
+            }).readConfigFileSnapshotWithPluginMetadata({ allowCurrentPluginMetadata: false })),
+            pluginMigrationFingerprint: null,
+          }
+        : await params.readSnapshot();
       assertStartupConfigUnchanged(selected, read.snapshot);
+      const recovery = await createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot);
+      if (Boolean(coreRecovery) !== Boolean(recovery)) {
+        throwStartupMigrationIdentityChanged();
+      }
+      if (recovery) {
+        assertStartupConfigUnchanged(candidate, recovery.snapshot);
+        read = {
+          snapshot: recovery.snapshot,
+          pluginMetadataSnapshot: recovery.pluginMetadataSnapshot,
+          pluginMigrationFingerprint:
+            recovery.pluginMetadataSnapshot?.configFingerprint?.trim() || null,
+        };
+      }
       const repair = read.snapshot.valid ? null : params.planRepair(read);
       if (!read.snapshot.valid && !repair) {
         throw new Error('OpenClaw config is invalid; run "openclaw doctor --fix" before startup.');
       }
       await params.validateConfig?.(repair?.snapshot ?? read.snapshot);
-      return read;
+      if (params.beforeStateMigrations && !(await params.beforeStateMigrations(read.snapshot))) {
+        throwStartupMigrationGuardRejected();
+      }
+      return { ...read, ...(recovery ? { recovery } : {}) };
     } catch (error) {
+      if (error instanceof ExitError) {
+        throw error;
+      }
       return throwStartupMigrationRefusal(formatErrorMessage(error), error);
     }
   });
