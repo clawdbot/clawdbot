@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 
 // Validates docs i18n glossary terms against configured usage rules.
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { requireOptionArgument } from "./lib/arg-utils.mts";
+import {
+  createGitRunner,
+  gitExitCode,
+  isTerminalGitFailure,
+  parseArgs,
+  readGitFile,
+} from "./lib/docs-i18n-glossary-git.mts";
 
 const ROOT = process.cwd();
 const GLOSSARY_PATH = path.join(ROOT, "docs", ".i18n", "glossary.zh-CN.json");
@@ -13,7 +18,6 @@ const LIST_ITEM_LINK_RE = /^\s*(?:[-*]|\d+\.)\s+\[([^\]]+)\]\((\/[^)]+)\)/;
 const MAX_TITLE_WORDS = 8;
 const MAX_LABEL_WORDS = 6;
 const MAX_TERM_LENGTH = 80;
-
 type TermMatch = {
   file: string;
   line: number;
@@ -21,31 +25,9 @@ type TermMatch = {
   term: string;
 };
 
-export function parseArgs(argv: string[]) {
-  const args = { base: "", head: "" };
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--base") {
-      args.base = requireOptionArgument(argv, i, "--base");
-      i += 1;
-      continue;
-    }
-    if (argv[i] === "--head") {
-      args.head = requireOptionArgument(argv, i, "--head");
-      i += 1;
-    }
-  }
-  return args;
-}
+const runGit = createGitRunner();
 
-function runGit(args: string[]) {
-  return execFileSync("git", args, {
-    cwd: ROOT,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-  }).trim();
-}
-
-function resolveBase(explicitBase: string) {
+async function resolveBase(explicitBase: string) {
   if (explicitBase) {
     return explicitBase;
   }
@@ -57,8 +39,14 @@ function resolveBase(explicitBase: string) {
 
   for (const candidate of ["origin/main", "fork/main", "main"]) {
     try {
-      return runGit(["merge-base", candidate, "HEAD"]);
-    } catch {
+      return await runGit(["merge-base", candidate, "HEAD"]);
+    } catch (error) {
+      if (
+        (error instanceof Error && "timedOut" in error && error.timedOut === true) ||
+        isTerminalGitFailure(error)
+      ) {
+        throw error;
+      }
       // Try the next candidate.
     }
   }
@@ -66,14 +54,14 @@ function resolveBase(explicitBase: string) {
   return "";
 }
 
-function listChangedDocs(base: string, head: string) {
+async function listChangedDocs(base: string, head: string) {
   const args = ["diff", "--name-only", "--diff-filter=ACMR", base];
   if (head) {
     args.push(head);
   }
   args.push("--", "docs");
 
-  return runGit(args)
+  return (await runGit(args))
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => DOC_FILE_RE.test(line));
@@ -129,14 +117,6 @@ function isGlossaryCandidate(term: string, maxWords: number) {
   return wordCount(term) <= maxWords;
 }
 
-function readGitFile(base: string, relPath: string) {
-  try {
-    return runGit(["show", `${base}:${relPath}`]);
-  } catch {
-    return "";
-  }
-}
-
 function extractTerms(file: string, text: string) {
   const terms = new Map<string, TermMatch>();
   const lines = text.split("\n");
@@ -180,9 +160,9 @@ function extractTerms(file: string, text: string) {
   return terms;
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const base = resolveBase(args.base);
+  const base = await resolveBase(args.base);
 
   if (!base) {
     console.warn(
@@ -191,7 +171,7 @@ function main() {
     process.exit(0);
   }
 
-  const changedDocs = listChangedDocs(base, args.head);
+  const changedDocs = await listChangedDocs(base, args.head);
   if (changedDocs.length === 0) {
     process.exit(0);
   }
@@ -206,7 +186,7 @@ function main() {
     }
 
     const currentTerms = extractTerms(relPath, fs.readFileSync(absPath, "utf8"));
-    const baseTerms = extractTerms(relPath, readGitFile(base, relPath));
+    const baseTerms = extractTerms(relPath, await readGitFile(base, relPath, runGit));
 
     for (const [term, match] of currentTerms) {
       if (baseTerms.has(term)) {
@@ -236,5 +216,10 @@ function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
-  main();
+  try {
+    await main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(isTerminalGitFailure(error) ? (gitExitCode(error) ?? 1) : 1);
+  }
 }
