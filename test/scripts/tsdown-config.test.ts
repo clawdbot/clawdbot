@@ -616,11 +616,14 @@ describe("tsdown config", () => {
     expect(packageConfigs.map((entry) => entry.dts)).toEqual(packageConfigs.map(() => true));
     expect(unifiedRuntimeConfig?.dts).toBe(false);
     expect(unifiedDeclarationConfigs.every(Boolean)).toBe(true);
+    const runtimeEntryNames = Object.keys(unifiedRuntimeConfig?.entry ?? {});
+    expect(runtimeEntryNames).toContain("native-hook-relay/entry");
+    const declarationEntryNames = runtimeEntryNames.filter(
+      (name) => name !== "native-hook-relay/entry",
+    );
     for (const declarationConfig of unifiedDeclarationConfigs) {
       expect(declarationConfig?.dts).toMatchObject({ emitDtsOnly: true });
-      expect(Object.keys(declarationConfig?.entry ?? {})).toEqual(
-        Object.keys(unifiedRuntimeConfig?.entry ?? {}),
-      );
+      expect(Object.keys(declarationConfig?.entry ?? {})).toEqual(declarationEntryNames);
     }
   });
 

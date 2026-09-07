@@ -3,12 +3,6 @@ import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createBraveWebSearchProvider as createBraveWebSearchContractProvider } from "../web-search-contract-api.js";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
-import {
-  mapBraveLlmContextResults,
-  normalizeBraveCountry,
-  normalizeBraveLanguageParams,
-  resolveBraveMode,
-} from "./brave-web-search-provider.shared.js";
 
 const loggerInfoMock = vi.hoisted(() => vi.fn());
 
@@ -279,86 +273,54 @@ describe("brave web search provider", () => {
     },
   );
 
-  it("normalizes brave language parameters and swaps reversed ui/search inputs", () => {
-    expect(
-      normalizeBraveLanguageParams({
-        search_lang: "en-US",
-        ui_lang: "ja",
-      }),
-    ).toEqual({
-      search_lang: "jp",
-      ui_lang: "en-US",
+  it.each([
+    [
+      { search_lang: "en-US", ui_lang: "ja" },
+      { search_lang: "jp", ui_lang: "en-US" },
+    ],
+    [
+      { search_lang: "tr-TR", ui_lang: "tr" },
+      { search_lang: "tr", ui_lang: "tr-TR" },
+    ],
+    [
+      { search_lang: "EN", ui_lang: "en-us" },
+      { search_lang: "en", ui_lang: "en-US" },
+    ],
+    [{ search_lang: "xx" }, { error: "invalid_search_lang" }],
+    [{ search_lang: "en-US" }, { error: "invalid_search_lang" }],
+    [{ ui_lang: "en" }, { error: "invalid_ui_lang" }],
+  ])("normalizes language parameters through the public tool: %#", async (args, expected) => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async () => emptyWebSearchResponse());
+    global.fetch = mockFetch as typeof global.fetch;
+    const result = await createBraveTool({ webSearch: { apiKey: "brave-test-key" } }).execute({
+      query: "localized search",
+      ...args,
     });
-    expect(normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" })).toEqual({
-      search_lang: "tr",
-      ui_lang: "tr-TR",
-    });
-    expect(normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual({
-      search_lang: "en",
-      ui_lang: "en-US",
-    });
-  });
-
-  it("flags invalid brave language fields", () => {
-    expect(
-      normalizeBraveLanguageParams({
-        search_lang: "xx",
-      }),
-    ).toEqual({ invalidField: "search_lang" });
-    expect(normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
-      invalidField: "search_lang",
-    });
-    expect(normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
-      invalidField: "ui_lang",
-    });
-  });
-
-  it("normalizes Brave country codes and falls back unsupported values to ALL", () => {
-    expect(normalizeBraveCountry("de")).toBe("DE");
-    expect(normalizeBraveCountry(" VN ")).toBe("ALL");
-    expect(normalizeBraveCountry("")).toBeUndefined();
-  });
-
-  it("defaults brave mode to web unless llm-context is explicitly selected", () => {
-    expect(resolveBraveMode()).toBe("web");
-    expect(resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
-  });
-
-  it("accepts llm-context in the Brave plugin config schema", () => {
-    if (!braveManifest.configSchema) {
-      throw new Error("Expected Brave manifest config schema");
+    if ("error" in expected) {
+      expect(result).toMatchObject(expected);
+      expect(mockFetch).not.toHaveBeenCalled();
+      return;
     }
-
-    const result = validateJsonSchemaValue({
-      schema: braveManifest.configSchema,
-      cacheKey: "test:brave-config-schema",
-      value: {
-        webSearch: {
-          mode: "llm-context",
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
+    const requestUrl = fetchRequestUrl(mockFetch);
+    expect(requestUrl.searchParams.get("search_lang")).toBe(expected.search_lang);
+    expect(requestUrl.searchParams.get("ui_lang")).toBe(expected.ui_lang);
   });
 
-  it("accepts baseUrl in the Brave plugin config schema", () => {
-    if (!braveManifest.configSchema) {
-      throw new Error("Expected Brave manifest config schema");
-    }
-
-    const result = validateJsonSchemaValue({
-      schema: braveManifest.configSchema,
-      cacheKey: "test:brave-config-schema-base-url",
-      value: {
-        webSearch: {
-          baseUrl: "https://api.search.brave.com/proxy",
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
+  it.each([{ baseUrl: "https://api.search.brave.com/proxy" }, { mode: "llm-context" }])(
+    "accepts supported Brave plugin config fields: %#",
+    (webSearch) => {
+      if (!braveManifest.configSchema) {
+        throw new Error("Expected Brave manifest config schema");
+      }
+      const result = validateJsonSchemaValue({
+        schema: braveManifest.configSchema,
+        cacheKey: "test:brave-config-schema-base-url",
+        value: { webSearch },
+      });
+      expect(result.ok).toBe(true);
+    },
+  );
 
   it("uses configured Brave baseUrl for web search requests", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
@@ -584,29 +546,6 @@ describe("brave web search provider", () => {
     ]);
   });
 
-  it("maps llm-context results into wrapped source entries", () => {
-    expect(
-      mapBraveLlmContextResults({
-        grounding: {
-          generic: [
-            {
-              url: "https://example.com/post",
-              title: "Example",
-              snippets: ["a", "", "b"],
-            },
-          ],
-        },
-      }),
-    ).toEqual([
-      {
-        url: "https://example.com/post",
-        title: "Example",
-        snippets: ["a", "b"],
-        siteName: "example.com",
-      },
-    ]);
-  });
-
   it("returns validation errors for invalid date ranges", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const tool = createBraveTool({ webSearch: { apiKey: "BSA..." } });
@@ -694,7 +633,9 @@ describe("brave web search provider", () => {
     ] as const;
     global.fetch = vi.fn(async () =>
       jsonResponse({
-        grounding: { generic: urls.map((url) => ({ url, title: "Source", snippets: ["text"] })) },
+        grounding: {
+          generic: urls.map((url) => ({ url, title: "Source", snippets: ["text", ""] })),
+        },
         sources: {
           [urls[1]]: { age: ["Monday, January 15, 2024", "2024-01-15", "380 days ago"] },
           [urls[0]]: {
@@ -713,6 +654,11 @@ describe("brave web search provider", () => {
       "2024-01-15",
       undefined,
     ]);
+    expect((result.results as Array<Record<string, unknown>>)[0]).toMatchObject({
+      snippets: [expect.stringContaining("text")],
+      siteName: "example.com",
+      title: expect.stringContaining("Source"),
+    });
   });
 
   it("sends Brave llm-context auth in the X-Subscription-Token header", async () => {
@@ -804,7 +750,11 @@ describe("brave web search provider", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("falls back unsupported country values before calling Brave", async () => {
+  it.each([
+    ["de", "DE"],
+    [" VN ", "ALL"],
+    ["", null],
+  ])("normalizes country %j through the public tool", async (country, expected) => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
       return emptyWebSearchResponse();
@@ -813,13 +763,10 @@ describe("brave web search provider", () => {
 
     const tool = createBraveTool({ webSearch: { apiKey: "BSA..." } });
 
-    await tool.execute({
-      query: "latest Vietnam news",
-      country: "VN",
-    });
+    await tool.execute({ query: "localized news", country });
 
     const requestUrl = fetchRequestUrl(mockFetch);
-    expect(requestUrl.searchParams.get("country")).toBe("ALL");
+    expect(requestUrl.searchParams.get("country")).toBe(expected);
   });
 
   it("emits brave.http diagnostics for requests, responses, and cache events", async () => {

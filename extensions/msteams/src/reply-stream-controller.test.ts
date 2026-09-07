@@ -386,13 +386,18 @@ describe("createTeamsReplyStreamController", () => {
     });
   });
 
-  it("allows fallback delivery for second text segment after tool calls", () => {
+  it.each([false, true])("keeps later partial segments whole with settled=%s", async (settled) => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
 
     ctrl.onPartialReply({ text: "First segment" });
     expect(ctrl.preparePayload({ text: "First segment" })).toBeUndefined();
+    expect(ctrl.claimNativeDelivery()).toBe(true);
+    if (settled) {
+      await ctrl.finalize();
+    }
 
+    ctrl.onPartialReply({ text: "Second segment after tools" });
     const result = ctrl.preparePayload({ text: "Second segment after tools" });
     expect(result).toEqual({ text: "Second segment after tools" });
   });
@@ -904,6 +909,7 @@ describe("createTeamsReplyStreamController", () => {
         fallbackPayload: { text: " world" },
       });
       expect(stream.events.off).toHaveBeenCalledWith(0);
+      expect(ctrl.preparePayload({ text: "hello again" })).toEqual({ text: "hello again" });
     });
 
     it("does not redeliver an acknowledged final when stream close produces no activity", async () => {

@@ -14,6 +14,16 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
+const DEFAULT_NATIVE_HOOK_RELAY_ENTRYPOINT = "dist/native-hook-relay/entry.js";
+const DEFAULT_NATIVE_HOOK_RELAY_STATIC_MAX_BYTES = 512 * 1024;
+const NATIVE_HOOK_RELAY_FORBIDDEN_STATIC_MARKERS = [
+  "MAX_NATIVE_HOOK_RELAY_INVOCATIONS",
+  "getActivePluginSessionExtensionRegistry",
+  "requestDeferredPluginToolApproval",
+  "runBeforeToolCallHook",
+];
+// fs-safe must retain its package scope for optional native-platform loading.
+const NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS = ["kysely", "@openclaw/fs-safe"];
 const WORKER_DEPLOY_ENTRYPOINTS = [
   `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
   `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
@@ -44,6 +54,9 @@ type CliBootstrapCheckParams = {
   distDir?: string;
   gatewayRunChunkMaxBytes?: number;
   legacyGatewayChunkDiscovery?: boolean;
+  nativeHookRelayEntrypoint?: string;
+  requireNativeHookRelay?: boolean;
+  nativeHookRelayStaticMaxBytes?: number;
   fs?: typeof fs;
   logger?: { error(message: string): void };
 };
@@ -187,6 +200,7 @@ function walkStaticImportGraph(
     resolved: string,
     specifier: string,
   ) => string | undefined,
+  onSource?: (filePath: string, source: string) => string[],
 ) {
   const queue = roots.map((entrypoint) => path.resolve(rootDir, entrypoint));
   const visited = new Set<string>();
@@ -207,6 +221,7 @@ function walkStaticImportGraph(
       );
       continue;
     }
+    errors.push(...(onSource?.(filePath, source) ?? []));
     for (const specifier of listStaticImportSpecifiers(source)) {
       if (!specifier || isBuiltinSpecifier(specifier)) {
         continue;
@@ -239,6 +254,66 @@ function walkStaticImportGraph(
   }
 
   return errors;
+}
+
+/** Collects isolation and static-graph budget errors for the native hook relay executable. */
+export function collectNativeHookRelayBundleErrors(params: CliBootstrapCheckParams = {}) {
+  const rootDir = params.rootDir ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const entrypoint = params.nativeHookRelayEntrypoint ?? DEFAULT_NATIVE_HOOK_RELAY_ENTRYPOINT;
+  const entrypointPath = path.resolve(rootDir, entrypoint);
+  // Release tooling also validates older packages whose supported relay is the general CLI.
+  // Current builds require this artifact; every present relay is checked in either mode.
+  if (!params.requireNativeHookRelay && !fsImpl.existsSync(entrypointPath)) {
+    return [];
+  }
+  const bundleDir = path.resolve(rootDir, params.distDir ?? "dist");
+  const maxBytes =
+    params.nativeHookRelayStaticMaxBytes ?? DEFAULT_NATIVE_HOOK_RELAY_STATIC_MAX_BYTES;
+  let staticBytes = 0;
+  const errors = walkStaticImportGraph(
+    fsImpl,
+    rootDir,
+    [entrypoint],
+    (filePath, specifier) =>
+      NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS.some(
+        (dependency) => specifier === dependency || specifier.startsWith(`${dependency}/`),
+      )
+        ? ""
+        : `Native hook relay static graph imports unexpected package "${specifier}" from ${
+            path.relative(rootDir, filePath) || filePath
+          }.`,
+    (filePath, resolved, specifier) => {
+      const relativeToBundle = path.relative(bundleDir, resolved);
+      return !relativeToBundle.startsWith("..") && !path.isAbsolute(relativeToBundle)
+        ? undefined
+        : `Native hook relay static graph escapes the built runtime via "${specifier}" from ${
+            path.relative(rootDir, filePath) || filePath
+          }.`;
+    },
+    (filePath, source) => {
+      try {
+        staticBytes += fsImpl.statSync(filePath).size;
+      } catch {
+        staticBytes += Buffer.byteLength(source, "utf8");
+      }
+      return NATIVE_HOOK_RELAY_FORBIDDEN_STATIC_MARKERS.flatMap((marker) =>
+        source.includes(marker)
+          ? [
+              `Native hook relay static graph contains server marker "${marker}" in ${
+                path.relative(rootDir, filePath) || filePath
+              }.`,
+            ]
+          : [],
+      );
+    },
+  ).filter(Boolean);
+  if (staticBytes > maxBytes) {
+    errors.push(
+      `Native hook relay static graph is ${staticBytes} bytes, above budget ${maxBytes} bytes.`,
+    );
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
 /**
@@ -453,6 +528,7 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
   const errors = [
     ...collectCliBootstrapExternalImportErrors(params),
     ...collectGatewayRunChunkBudgetErrors(params),
+    ...collectNativeHookRelayBundleErrors(params),
     ...collectWorkerDeployArtifactErrors(params),
   ];
   if (errors.length === 0) {
@@ -468,7 +544,7 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
-    checkCliBootstrapExternalImports();
+    checkCliBootstrapExternalImports({ requireNativeHookRelay: true });
     console.log("CLI bootstrap import guard passed.");
   } catch {
     process.exit(1);
