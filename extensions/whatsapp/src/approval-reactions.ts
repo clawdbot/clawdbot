@@ -542,7 +542,11 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     params.logVerboseMessage?.(
       `whatsapp: approval reaction failed id=${target.approvalId} sender=${actorId}: ${String(error)}`,
     );
-    return true;
+    // A transient Gateway 5xx/network/auth error is not terminal: propagate it
+    // so the caller can route the reaction into the durable ingress, whose
+    // drain releases the claim and replays it under its retry policy — the
+    // same owner boundary as signal (#130134) and matrix (#129879).
+    throw error;
   }
 }
 

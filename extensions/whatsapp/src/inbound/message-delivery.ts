@@ -427,6 +427,24 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     if (context.skipRecentOutboundEcho === true) {
       return "completed";
     }
+    // Approval reactions own their event before normalization: reaction
+    // payloads do not normalize into ordinary inbound messages, and a
+    // transient Gateway failure must propagate to the drain so it releases
+    // the claim and replays the reaction once the Gateway recovers.
+    if (
+      await maybeResolveWhatsAppApprovalReaction({
+        cfg: options.loadConfig?.() ?? options.cfg,
+        accountId: options.accountId,
+        msg,
+        selfJid: self.jid,
+        selfLid: self.lid,
+        resolveInboundJid,
+        resolveReactionTargetJids,
+        logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
+      })
+    ) {
+      return "completed";
+    }
     const prepared = await preparation;
     if (prepared === null) {
       return "completed";
@@ -497,8 +515,14 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
       const receiveOrder = nextReceiveOrder++;
-      if (
-        await maybeResolveWhatsAppApprovalReaction({
+      // Fast path: resolve approval reactions before admission. A transient
+      // Gateway failure must fall through to durable admission instead — the
+      // drain-side resolution below replays it under the queue's retry policy.
+      // Never let the throw escape this loop: sibling messages in the same
+      // upsert batch still need their own delivery.
+      let approvalReactionResolved = false;
+      try {
+        approvalReactionResolved = await maybeResolveWhatsAppApprovalReaction({
           cfg: options.loadConfig?.() ?? options.cfg,
           accountId: options.accountId,
           msg,
@@ -507,8 +531,14 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
           resolveInboundJid,
           resolveReactionTargetJids,
           logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
-        })
-      ) {
+        });
+      } catch (error) {
+        inboundLogger.warn(
+          { error: formatError(error) },
+          "whatsapp approval reaction resolution failed; admitting reaction for durable replay",
+        );
+      }
+      if (approvalReactionResolved) {
         continue;
       }
 
