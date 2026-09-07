@@ -407,6 +407,80 @@ describe("export html security hardening", () => {
     expect(code.textContent).toContain("answer = true");
   });
 
+  it("renders inline markup inside tight list items instead of showing it literally", async () => {
+    // #140785: tight list items (no blank line between them) previously rendered
+    // **bold**, [links] and `code` as literal markdown because the text renderer
+    // escaped the composite text token instead of traversing its inline children.
+    const session: SessionData = {
+      header: { id: "session-tight-list", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content:
+              "- **Important**: read [the guide](https://example.test/guide) and use `config.json`.\n" +
+              "- Plain item.",
+          },
+        },
+      ],
+      leafId: "1",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+
+    // The first tight list item must render real inline elements, not literal markdown.
+    expect(messages.querySelector("strong")?.textContent).toBe("Important");
+    const link = requireElement(messages.querySelector("a"), "link missing");
+    expect(link.textContent).toBe("the guide");
+    expect(link.getAttribute("href")).toBe("https://example.test/guide");
+    expect(messages.querySelector("code")?.textContent).toBe("config.json");
+
+    // No literal markdown delimiters remain as visible text.
+    expect(messages.textContent).not.toContain("**");
+    expect(messages.textContent).not.toContain("[the guide](");
+    expect(messages.textContent).not.toContain("`config.json`");
+    // The second, plain item is still present.
+    expect(messages.textContent).toContain("Plain item");
+  });
+
+  it("escapes raw HTML inside tight list items via the inline-delegate path", async () => {
+    // The composite-text delegation must still route inline HTML tokens through
+    // the hardened html renderer — walking child tokens must not weaken escaping.
+    const session: SessionData = {
+      header: { id: "session-tight-list-xss", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content:
+              "- item with <img src=x onerror=alert(1)> inline\n" +
+              "- **safe** markup",
+          },
+        },
+      ],
+      leafId: "1",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+    expect(messages.querySelector("img[onerror]")).toBeNull();
+    expect(messages.querySelector("strong")?.textContent).toBe("safe");
+    expect(messages.innerHTML).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
   it("escapes tree and header metadata fields", async () => {
     const attack = "<img src=x onerror=alert(9)>";
     const baseEntries: SessionEntry[] = [

@@ -1886,8 +1886,15 @@
         }
         return `<pre><code class="hljs">${highlighted}</code></pre>`;
       },
-      // Text content: escape HTML tags
+      // Text content: escape HTML tags.
+      // Composite text tokens (tight list items without blank lines) carry
+      // their parsed inline children in token.tokens; render those through the
+      // renderer set so **bold**, [links](…) and `code` are not shown literally.
+      // Leaf text keeps the existing HTML escaping.
       text(token) {
+        if (token.tokens && token.tokens.length > 0) {
+          return this.parser.parseInline(token.tokens);
+        }
         return escapeHtmlTags(escapeHtml(token.text));
       },
       // Inline code: escape HTML
