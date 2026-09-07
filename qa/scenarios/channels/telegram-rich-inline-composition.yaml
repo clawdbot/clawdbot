@@ -78,7 +78,7 @@ flow:
                 ];
                 for (const [id, html, atom] of [
                   ['math', '<tg-math>x</tg-math>', { '@type': 'richTextMathematicalExpression', expression: 'x' }],
-                  ['emoji', '<tg-emoji emoji-id="5368324170671202286">😀</tg-emoji>', { '@type': 'richTextCustomEmoji', custom_emoji_id: '5368324170671202286', alternative_text: '😀' }]
+                  ['emoji', '<tg-emoji emoji-id="5368324170671202286">👍</tg-emoji>', { '@type': 'richTextCustomEmoji', custom_emoji_id: '5368324170671202286', alternative_text: '👍' }]
                 ]) {
                   fixtures.push({ id: `${id}-link`, markdown: `[${html}](https://example.com/qa)`, pattern: url(atom) });
                   fixtures.push({ id: `${id}-spoiler`, markdown: `||${html}||`, pattern: wrap('richTextSpoiler', atom) });

@@ -230,7 +230,7 @@ export async function assertTelegramRichObservationFlow(
   const emoji = {
     "@type": "richTextCustomEmoji",
     custom_emoji_id: "5368324170671202286",
-    alternative_text: "😀",
+    alternative_text: "👍",
   };
   const annotation = (wrapper: (text: unknown) => unknown) =>
     paragraph({
@@ -312,7 +312,7 @@ export async function assertTelegramRichObservationFlow(
               : testCase === "lost-literal-ancestor" && id === 11
                 ? literalScope(wrap("richTextSuperscript", wrap("richTextBold", plain("x"))))
                 : testCase === "emoji-degraded" && id === 6
-                  ? paragraph(url(plain("😀")))
+                  ? paragraph(url(plain("👍")))
                   : testCase === "first-content-failed" && id === 1 && kind === "message"
                     ? paragraph(plain("Download"))
                     : block,
@@ -497,7 +497,7 @@ export async function assertTelegramRichObservationFlow(
           matchesPattern: false,
           block:
             testCase === "emoji-degraded"
-              ? paragraph(url(plain("😀")))
+              ? paragraph(url(plain("👍")))
               : paragraph(plain("Download")),
         },
       );
