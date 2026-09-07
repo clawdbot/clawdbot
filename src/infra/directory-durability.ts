@@ -1,3 +1,4 @@
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import {
   publishFileExclusive,
@@ -91,6 +92,34 @@ function postPublicationFailure(params: {
   );
 }
 
+export function sameFileStatFingerprint(left: Stats, right: Stats): boolean {
+  // Hard-link creation/removal changes ctime. The remaining fields bind the
+  // pathname to the published bytes even when Windows recycles a file identity.
+  return (
+    sameFileIdentity(left, right) &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.birthtimeMs === right.birthtimeMs
+  );
+}
+
+function publicationVerificationPhase(
+  published: PublishFileExclusiveResult,
+): PublishFileExclusiveFailurePhase {
+  return published.method === "hardlink" ? "hardlink-verify" : "copy-verify";
+}
+
+function assertPublishedTargetFingerprint(
+  targetPath: string,
+  expectedIdentity: Stats,
+  message: string,
+): void {
+  const currentTarget = fsSync.lstatSync(targetPath);
+  if (!currentTarget.isFile() || !sameFileStatFingerprint(expectedIdentity, currentTarget)) {
+    throw new Error(`${message}: ${targetPath}`);
+  }
+}
+
 /** Publish one file without replacement under OpenClaw's durability policy. */
 export async function publishFileNoClobber(
   sourcePath: string,
@@ -108,6 +137,22 @@ export async function publishFileNoClobber(
     expectedSourceIdentity: sourceIdentity,
     strategy: options.strategy,
   });
+  const verificationPhase = publicationVerificationPhase(published);
+  try {
+    if (
+      published.method === "hardlink" &&
+      !sameFileStatFingerprint(sourceIdentity, published.identity)
+    ) {
+      throw new Error(`File publication target changed after hard-link creation: ${targetPath}`);
+    }
+    assertPublishedTargetFingerprint(
+      targetPath,
+      published.identity,
+      "File publication target changed after creation",
+    );
+  } catch (error) {
+    throw postPublicationFailure({ error, phase: verificationPhase, published });
+  }
   const degraded = published.directorySync.status === "unsupported";
   if (options.durability === "fail-closed") {
     try {
@@ -123,15 +168,27 @@ export async function publishFileNoClobber(
 
   if (options.moveSource) {
     try {
-      const currentSource = await fs.lstat(sourcePath);
-      if (!currentSource.isFile() || !sameFileIdentity(currentSource, sourceIdentity)) {
+      const currentSource = fsSync.lstatSync(sourcePath);
+      if (!currentSource.isFile() || !sameFileStatFingerprint(currentSource, sourceIdentity)) {
         throw new Error(`File publication source changed before removal: ${sourcePath}`);
       }
-      await fs.unlink(sourcePath);
+      assertPublishedTargetFingerprint(
+        targetPath,
+        published.identity,
+        "File publication target changed before source removal",
+      );
+      // Keep the final ownership fence and unlink in one synchronous section so
+      // another in-process publication cannot interleave between them.
+      fsSync.unlinkSync(sourcePath);
+      assertPublishedTargetFingerprint(
+        targetPath,
+        published.identity,
+        "File publication target changed after source removal",
+      );
     } catch (error) {
       throw postPublicationFailure({
         error,
-        phase: published.method === "hardlink" ? "hardlink-verify" : "copy-verify",
+        phase: verificationPhase,
         published,
       });
     }

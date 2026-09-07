@@ -12,6 +12,7 @@ import {
   pinDirectory,
   publishFileExclusive,
   requireDirectorySync,
+  sameFileStatFingerprint,
   syncDirectory,
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
@@ -340,17 +341,6 @@ function removePublishedTargetIfOwned(
   } catch {
     return false;
   }
-}
-
-function sameFileStatFingerprint(left: Stats, right: Stats): boolean {
-  // Creating the publication hard link changes source ctime, so compare the
-  // mutation fields that remain stable for the same bytes and pathname owner.
-  return (
-    sameFileIdentity(left, right) &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.birthtimeMs === right.birthtimeMs
-  );
 }
 
 function assertSynchronousCallbackResult(result: unknown, label: string): void {
