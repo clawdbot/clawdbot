@@ -176,14 +176,14 @@ These credentials are minted, rotated, session-bearing, or OAuth-durable classes
 
 [//]: # "secretref-unsupported-list-start"
 
-- `hooks.token`
-- `hooks.gmail.pushToken`
-- `hooks.mappings[].sessionKey`
 - `auth-profiles.oauth.*`
 - `channels.discord.accounts.*.threadBindings.webhookToken`
 - `channels.discord.threadBindings.webhookToken`
 - `channels.whatsapp.accounts.*.creds.json`
 - `channels.whatsapp.creds.json`
+- `hooks.gmail.pushToken`
+- `hooks.mappings[].sessionKey`
+- `hooks.token`
 
 [//]: # "secretref-unsupported-list-end"
 
