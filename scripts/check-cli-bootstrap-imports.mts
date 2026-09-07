@@ -267,7 +267,7 @@ export function collectNativeHookRelayBundleErrors(params: CliBootstrapCheckPara
   if (!params.requireNativeHookRelay && !fsImpl.existsSync(entrypointPath)) {
     return [];
   }
-  const bundleDir = path.dirname(entrypointPath);
+  const bundleDir = path.resolve(rootDir, params.distDir ?? "dist");
   const maxBytes =
     params.nativeHookRelayStaticMaxBytes ?? DEFAULT_NATIVE_HOOK_RELAY_STATIC_MAX_BYTES;
   let staticBytes = 0;
@@ -287,7 +287,7 @@ export function collectNativeHookRelayBundleErrors(params: CliBootstrapCheckPara
       const relativeToBundle = path.relative(bundleDir, resolved);
       return !relativeToBundle.startsWith("..") && !path.isAbsolute(relativeToBundle)
         ? undefined
-        : `Native hook relay static graph escapes its isolated bundle via "${specifier}" from ${
+        : `Native hook relay static graph escapes the built runtime via "${specifier}" from ${
             path.relative(rootDir, filePath) || filePath
           }.`;
     },

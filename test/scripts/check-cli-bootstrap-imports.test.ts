@@ -282,30 +282,30 @@ describe("check-cli-bootstrap-imports", () => {
     ]);
   });
 
-  it("accepts a bounded native hook relay graph isolated from the unified dist", () => {
+  it("accepts a bounded native hook relay graph with shared runtime chunks", () => {
     const root = makeTempRoot();
     writeFixture(
       root,
       "dist/native-hook-relay/entry.js",
-      'import "./client.js";\nvoid import("../gateway-call.js");\n',
+      'import "../client.js";\nvoid import("../gateway-call.js");\n',
     );
     writeFixture(
       root,
-      "dist/native-hook-relay/client.js",
+      "dist/client.js",
       'import "kysely";\nimport "@openclaw/fs-safe/config";\nimport "@openclaw/fs-safe/advanced";\n',
     );
 
     expect(collectNativeHookRelayBundleErrors({ rootDir: root })).toEqual([]);
   });
 
-  it("reports server owners and static imports that escape the isolated relay graph", () => {
+  it("reports server owners and static imports that escape the built runtime", () => {
     const root = makeTempRoot();
-    writeFixture(root, "dist/native-hook-relay/entry.js", 'import "../unified.js";\n');
-    writeFixture(root, "dist/unified.js", "const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;\n");
+    writeFixture(root, "dist/native-hook-relay/entry.js", 'import "../../outside.js";\n');
+    writeFixture(root, "outside.js", "const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;\n");
 
     expect(collectNativeHookRelayBundleErrors({ rootDir: root })).toEqual([
-      'Native hook relay static graph contains server marker "MAX_NATIVE_HOOK_RELAY_INVOCATIONS" in dist/unified.js.',
-      'Native hook relay static graph escapes its isolated bundle via "../unified.js" from dist/native-hook-relay/entry.js.',
+      'Native hook relay static graph contains server marker "MAX_NATIVE_HOOK_RELAY_INVOCATIONS" in outside.js.',
+      'Native hook relay static graph escapes the built runtime via "../../outside.js" from dist/native-hook-relay/entry.js.',
     ]);
   });
 

@@ -812,22 +812,15 @@ const configs: UserConfig[] = [
       name: TSDOWN_UNIFIED_CONFIG_GROUP,
       // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
       // and bundled hooks in one graph so runtime singletons are emitted once.
-      entry: unifiedDistEntries,
+      entry: {
+        ...unifiedDistEntries,
+        "native-hook-relay/entry": "src/cli/native-hook-relay-entry.ts",
+      },
       deps: unifiedDeps,
       // Explicit ESM chunks avoid repeated package-format parsing in Node;
       // named entrypoints retain their public .js paths.
       outputOptions: { chunkFileNames: "[name]-[hash].mjs" },
       plugins: [createStateSchemaInlinePlugin(), createGatewayRunChunkMetadataPlugin()],
-    },
-    false,
-  ),
-  nodeBuildConfig(
-    {
-      name: TSDOWN_UNIFIED_CONFIG_GROUP,
-      entry: { entry: "src/cli/native-hook-relay-entry.ts" },
-      outDir: "dist/native-hook-relay",
-      deps: unifiedDeps,
-      plugins: [createStateSchemaInlinePlugin()],
     },
     false,
   ),
