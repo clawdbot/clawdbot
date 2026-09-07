@@ -9,6 +9,21 @@ sidebarTitle: "Offline and reconnect"
 
 What survives a dropped connection, and how the Control UI recovers when it returns.
 
+## Warm reload
+
+After a successful connection, OpenClaw keeps a small agent roster, the session list
+without live run state, and custom groups in browser storage. Recent transcripts
+use the existing chat cache. On reload, the shell, sidebar, and cached conversation
+can appear while the Gateway is still connecting. Live state replaces the cached
+roster on connect, and chat requests changes from its saved transcript cursor.
+
+Warm reload records belong to the Gateway credential scope and signed-in profile.
+Changing credentials or clearing site data clears the cached boot state. Agent and
+session roster records expire after 30 days. A different profile reported on connect
+clears the cached boot state and transcripts before loading live data. Recent transcripts
+keep their existing cache limits. If browser storage is unavailable or no usable record exists, the
+initial connection screen appears as usual.
+
 ## Gateway updates and suspended tabs
 
 An open tab checks the active UI build when it returns to the foreground, comes back online,
@@ -108,7 +123,7 @@ If the destination changes, a newer draft appears, or storage fails, recovery ke
 available rather than overwriting newer input. Do not clear browser site data
 while you still have saved messages or attachment drafts to recover.
 
-First opens and reloads show a small animated OpenClaw mark while the Gateway resolves the initial
+First opens and reloads without usable warm state show a small animated OpenClaw mark while the Gateway resolves the initial
 connection, including when authentication comes from a trusted proxy or Tailscale instead of a
 browser-stored credential. The login gate appears only after the initial connection fails or the
 Gateway actively rejects authentication (bad token/password, missing trusted identity, revoked
