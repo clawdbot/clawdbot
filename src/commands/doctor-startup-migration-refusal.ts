@@ -15,7 +15,7 @@ export function throwStartupMigrationGuardRejected(): never {
 
 export function throwStartupMigrationIdentityChanged(): never {
   throwStartupMigrationRefusal(
-    "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.",
+    "OpenClaw migration inputs changed during startup; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.",
   );
 }
 

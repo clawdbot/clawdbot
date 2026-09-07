@@ -701,7 +701,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
 
     await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
-      "plugin migration inputs changed during startup convergence",
+      "migration inputs changed during startup",
     );
 
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
@@ -719,7 +719,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     );
 
     await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
-      "plugin migration inputs changed during startup convergence",
+      "migration inputs changed during startup",
     );
 
     expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({

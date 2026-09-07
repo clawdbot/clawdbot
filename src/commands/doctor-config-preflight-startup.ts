@@ -67,6 +67,7 @@ export async function readStartupMigrationSnapshot(params: {
         await params.validateConfig?.(startupConfig);
       }
       const read = await params.readSnapshot();
+      assertStartupConfigUnchanged(selected, read.snapshot);
       const repair = read.snapshot.valid ? null : params.planRepair(read);
       if (!read.snapshot.valid && !repair) {
         throw new Error('OpenClaw config is invalid; run "openclaw doctor --fix" before startup.');
@@ -77,6 +78,15 @@ export async function readStartupMigrationSnapshot(params: {
       return throwStartupMigrationRefusal(formatErrorMessage(error), error);
     }
   });
+}
+
+function assertStartupConfigUnchanged(before: ConfigFileSnapshot, after: ConfigFileSnapshot): void {
+  if (
+    before.path !== after.path ||
+    !isDeepStrictEqual(before.sourceConfig ?? before.config, after.sourceConfig ?? after.config)
+  ) {
+    throwStartupMigrationIdentityChanged();
+  }
 }
 
 /** Admission runs before lease acquisition: even acquiring a lease commits SQLite writes. */
@@ -152,16 +162,7 @@ export async function prepareStartupMigrationPlugins(params: {
     return params.snapshotRead;
   }
   const refreshed = await params.readRefreshedSnapshot();
-  const snapshot = params.snapshotRead.snapshot;
-  if (
-    snapshot.path !== refreshed.snapshot.path ||
-    !isDeepStrictEqual(
-      snapshot.sourceConfig ?? snapshot.config,
-      refreshed.snapshot.sourceConfig ?? refreshed.snapshot.config,
-    )
-  ) {
-    throwStartupMigrationIdentityChanged();
-  }
+  assertStartupConfigUnchanged(params.snapshotRead.snapshot, refreshed.snapshot);
   if (
     params.beforeStateMigrations &&
     !(await measureDoctorConfigPreflightStep(

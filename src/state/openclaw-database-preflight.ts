@@ -601,7 +601,9 @@ export async function preflightOpenClawDatabaseSchemas(options: {
         )
       : []),
     ...(options.configuredAgentDatabaseCandidatePaths ?? []).map((candidatePath) => ({
-      agentId: resolveUnsuffixedSqliteTargetFromSessionStorePath(candidatePath).agentId,
+      agentId: options.requireStartupMigrationReadiness
+        ? resolveUnsuffixedSqliteTargetFromSessionStorePath(candidatePath).agentId
+        : undefined,
       path: candidatePath,
     })),
   ];
