@@ -62,6 +62,7 @@ function createFixture() {
   const databaseOptions = { ...options, path: database.path };
   const plan = createHistoryEvictionReclamationPlan({
     databaseOptions,
+    diskBudget: {},
     materializedPlans: [],
     protectedSessionIds: new Set(scopes.map((scope) => scope.sessionId)),
     sessionId: "already-removed-history",

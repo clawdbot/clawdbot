@@ -40,11 +40,11 @@ Auto-compaction is on by default. It runs when the session nears the context lim
 
 Stopping a run also stops its overflow or timeout recovery. The built-in OpenClaw runtime does not start further recovery hooks, maintenance, transcript truncation, or retries after cancellation. Cancellation is not rollback: a compaction that already completed remains in the transcript and is still counted, without sending a late reply. The context estimate follows the latest model or compaction observation; billing totals remain separate.
 
-Normal replies check session usage before the next turn. Successful direct commands using the built-in OpenClaw runtime, including `openclaw agent --local`, run the same usage-based maintenance after recording the completed turn and protecting any pending reply. The following command then uses the compacted context. This works in safeguard mode even when memory flush is disabled; native runtimes retain their own compaction ownership.
+The built-in OpenClaw runtime performs required checkpointing and compaction before inference. In persistent Gateway sessions, optional memory flushing and compaction wait until reply delivery has settled and its foreground owner has closed. That work uses a separate session owner and the turn's remaining time. A new message cancels and settles optional work before reading the session for its own inference.
 
-If direct-command post-turn compaction fails, OpenClaw logs a warning and returns the completed reply while the run and session are still current. Cancellation, restart, or a replaced session still stops that result from being returned.
+One-shot `openclaw agent --local` commands skip optional post-turn work; the next command performs required maintenance before inference. Generic CLI backends keep their existing synchronous host compaction, and native runtimes retain their own compaction policy. Optional maintenance failures are logged without replacing an already completed reply. Cancellation, restart, or a replaced session still fences active writers.
 
-Set `agents.defaults.compaction.enabled: false` to disable the embedded runtime's proactive threshold compaction and direct-command post-turn maintenance. OpenClaw's preflight and overflow-recovery compaction paths remain available, as does manual `/compact`.
+Set `agents.defaults.compaction.enabled: false` to disable proactive threshold compaction and optional maintenance in the built-in runtime. Overflow-recovery compaction and manual `/compact` remain available.
 
 You will see:
 
@@ -81,6 +81,19 @@ Type `/compact` in any chat to force a compaction. Add instructions to guide the
 Client-side compaction in the built-in OpenClaw runtime passes focus to both older-history and split-turn-prefix summaries. The host limits operator-provided focus to 800 Unicode code points and escapes it as prompt data before adding it to model requests.
 
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
+
+When the built-in OpenClaw runtime has prepared the foreground request,
+client-side automatic compaction also accounts for its system prompt, tool
+schemas, pending input, and output reserve when choosing the retained tail.
+It may retain fewer recent messages so the summary and conversation fit together.
+Choosing a larger summarization model does not increase the foreground model's
+context window. The reserve is a preferred target, not a provider token limit.
+When the fixed prompt or pending input consumes that target, OpenClaw can still reclaim older
+history while preserving the unprocessed request. Such a replacement must
+strictly reduce history; unchanged or larger results are rejected. Otherwise,
+automatic compaction requires the complete replacement to fit the estimated target.
+Early required preflight runs before those request facts are available and still
+uses history-based sizing; it does not guarantee this preferred headroom.
 
 ### Provider checkpoints
 

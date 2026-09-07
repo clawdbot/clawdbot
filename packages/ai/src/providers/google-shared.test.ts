@@ -1,4 +1,3 @@
-// Google shared provider tests cover response conversion and finish reasons.
 import { createServer } from "node:http";
 import {
   ApiError,
@@ -9,6 +8,8 @@ import {
   type Part,
 } from "@google/genai";
 import { describe, expect, it, vi } from "vitest";
+// Google shared provider tests cover response conversion and finish reasons.
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -17,7 +18,6 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
-  createGoogleAssistantOutput,
   runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
 import { convertMessages } from "./google-shared.test-helpers.js";
@@ -41,7 +41,7 @@ const model: Model<"google-generative-ai"> = {
   maxTokens: 8_192,
 };
 
-const createOutput = () => createGoogleAssistantOutput(model);
+const createOutput = () => createAssistantOutput(model);
 
 describe("buildGoogleSimpleThinking", () => {
   it.each([
@@ -239,7 +239,7 @@ async function runGoogleFixture(
   fixture: GoogleFixtureOptions = {},
 ) {
   const targetModel = fixture.targetModel ?? model;
-  const output = createGoogleAssistantOutput(targetModel);
+  const output = createAssistantOutput(targetModel);
   const stream = new AssistantMessageEventStream();
   const events: StreamEvent[] = [];
   const collect = fixture.collectEvents

@@ -159,7 +159,7 @@ export async function compactEmbeddedRunForRecovery(
       ownerNumbers: runParams.ownerNumbers,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
-          sessionKey: runParams.sandboxSessionKey?.trim() || runParams.sessionKey,
+          sessionKey: runParams.sessionKey,
           sessionId: activeSession.id,
           agentId: input.sessionAgentId,
         }),
@@ -224,6 +224,7 @@ export async function compactEmbeddedRunForRecovery(
             // Attach private facts to the object the delegate actually receives.
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                requestBudget: input.state.compactionRequestBudget,
                 memoryTranscript: owner.sessionManager
                   ? {
                       sessionManager: owner.sessionManager,

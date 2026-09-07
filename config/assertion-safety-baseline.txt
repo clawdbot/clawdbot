@@ -643,7 +643,6 @@ extensions/matrix/src/matrix/actions/verification.ts	1
 extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	5
 extensions/matrix/src/matrix/client/logging.ts	3
-extensions/matrix/src/matrix/client/runtime.ts	1
 extensions/matrix/src/matrix/config-update.ts	4
 extensions/matrix/src/matrix/credentials-state.ts	2
 extensions/matrix/src/matrix/delivery-plan.ts	1
@@ -1452,7 +1451,7 @@ packages/ai/src/providers/anthropic-server-fallback.ts	3
 packages/ai/src/providers/anthropic-thinking-replay.ts	2
 packages/ai/src/providers/anthropic-tool-projection.ts	2
 packages/ai/src/providers/anthropic-usage.ts	3
-packages/ai/src/providers/anthropic.ts	7
+packages/ai/src/providers/anthropic.ts	6
 packages/ai/src/providers/azure-openai-responses.ts	1
 packages/ai/src/providers/clean-for-gemini.ts	15
 packages/ai/src/providers/google-shared.ts	3
@@ -1756,7 +1755,7 @@ src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
 src/agents/embedded-agent-runner/run/attempt-finalize.ts	2
 src/agents/embedded-agent-runner/run/attempt-history.ts	17
-src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	18
+src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	16
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
@@ -1861,7 +1860,7 @@ src/agents/mcp-connection-resolver.ts	2
 src/agents/mcp-http-fetch.ts	3
 src/agents/mcp-json-schema-validator.ts	6
 src/agents/mcp-oauth-store.ts	2
-src/agents/mcp-transport-config.ts	12
+src/agents/mcp-transport-config.ts	5
 src/agents/mcp-transport.ts	2
 src/agents/mcp-ui-resource.ts	4
 src/agents/media-generation-task-status-shared.ts	1
@@ -2263,7 +2262,7 @@ src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	3
 src/cli/capability-cli/image.ts	17
 src/cli/capability-cli/model.ts	4
-src/cli/capability-cli/shared.ts	6
+src/cli/capability-cli/shared.ts	4
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	7
 src/cli/capability-cli/web.ts	6
@@ -2279,7 +2278,7 @@ src/cli/command-secret-gateway.ts	2
 src/cli/command-secret-targets.ts	2
 src/cli/completion-runtime.ts	4
 src/cli/config-cli-input.ts	2
-src/cli/config-cli-path.ts	6
+src/cli/config-cli-path.ts	5
 src/cli/config-cli-runner.ts	3
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	7
@@ -2329,7 +2328,6 @@ src/cli/plugin-install-plan.ts	1
 src/cli/plugins-authoring-command.ts	8
 src/cli/plugins-command-helpers.ts	1
 src/cli/plugins-install-config.ts	2
-src/cli/plugins-uninstall-command.ts	4
 src/cli/plugins-update-command.ts	5
 src/cli/ports.ts	9
 src/cli/precomputed-help.ts	1
@@ -2384,7 +2382,6 @@ src/commands/auth-choice.apply.api-providers.ts	1
 src/commands/backup-git.ts	1
 src/commands/backup-restore.ts	1
 src/commands/backup-schedule.ts	1
-src/commands/backup-shared.ts	1
 src/commands/backup-verify.ts	2
 src/commands/channel-setup/config-compatibility.ts	2
 src/commands/channel-setup/discovery.ts	10
@@ -2502,7 +2499,6 @@ src/commands/models/list.persisted-catalog.ts	2
 src/commands/models/list.probe.ts	2
 src/commands/models/list.registry.ts	3
 src/commands/models/list.rows.ts	3
-src/commands/models/list.status-command.ts	1
 src/commands/models/shared.ts	3
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
@@ -3081,7 +3077,7 @@ src/infra/provider-usage.fetch.deepseek.ts	1
 src/infra/provider-usage.fetch.minimax.ts	2
 src/infra/push-apns-http2.ts	1
 src/infra/push-apns.relay.ts	1
-src/infra/push-apns.ts	7
+src/infra/push-apns.ts	3
 src/infra/push-web.ts	2
 src/infra/question-gateway-resolver.ts	3
 src/infra/question-reaction-runtime.ts	3
@@ -3293,7 +3289,7 @@ src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3
-src/plugin-sdk/provider-onboard.ts	6
+src/plugin-sdk/provider-onboard.ts	5
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	10
@@ -3327,7 +3323,7 @@ src/plugins/bundle-mcp.ts	2
 src/plugins/bundled-channel-config-metadata.ts	4
 src/plugins/bundled-plugin-scan.ts	1
 src/plugins/candidate-install-owner.ts	2
-src/plugins/capability-provider-runtime.ts	15
+src/plugins/capability-provider-runtime.ts	14
 src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
@@ -3472,7 +3468,6 @@ src/plugins/update-summary.ts	2
 src/plugins/web-search-credential-presence.ts	1
 src/plugins/web-search-install-catalog.ts	2
 src/poll-params.ts	1
-src/process/command-queue.state.ts	1
 src/process/command-queue.ts	2
 src/process/exec-spawn.ts	4
 src/process/exec.ts	3

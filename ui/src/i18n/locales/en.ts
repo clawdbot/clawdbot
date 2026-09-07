@@ -1112,6 +1112,7 @@ export const en: TranslationMap & {
     archivedBy: "Archived by {name}",
     archiveReason: "Archive reason",
     archiveReasonManual: "Archived manually",
+    archiveReasonAgeRetention: "Automatically archived by age retention",
     archiveReasonActiveSessionCap:
       "Automatically archived because the active-session limit was reached",
     archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
@@ -1862,6 +1863,7 @@ export const en: TranslationMap & {
     retry: "Retry",
     applyChanges: "Apply changes",
     rawDiscard: "Discard",
+    reloadBlocked: "Finish saving or discard pending config changes before reloading.",
     rawDraftBlocksApply:
       "Unsaved raw config edits — save or discard them in the Raw editor before restarting.",
     rawDraftPendingFormTitle:
@@ -2460,7 +2462,7 @@ export const en: TranslationMap & {
     missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
     heading: "Connect a verified AI model",
     intro:
-      "OpenClaw checks the AI access available on this Gateway and verifies the exact model before it enables conversations.",
+      "OpenClaw discovers AI access on this Gateway. Choose a provider to begin; nothing is selected, tested, installed, or saved automatically.",
     required: {
       title: "No AI provider configured",
       body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
@@ -2472,8 +2474,8 @@ export const en: TranslationMap & {
     checkAgain: "Check again",
     recovery: {
       unknown:
-        "The previous activation is unresolved. You can verify and use the selected model, or check again after the setup attempt has finished. No activation will be repeated automatically.",
-      wait: "The previous setup attempt may still be running. Wait for its bounded setup window to finish, then choose Check again to retry.",
+        "The previous activation is unresolved. Check again refreshes the current setup without repeating it. If a model is available, you can verify and use it.",
+      wait: "The previous setup attempt may still be running. Check again can refresh its result. If no model appears, check again after {time} to choose a provider.",
       useCurrent: "Verify & use selected model",
     },
     verify: {
@@ -2501,6 +2503,13 @@ export const en: TranslationMap & {
       retry: "Retry test",
       testingButton: "Testing…",
     },
+    nativeDiscovery: {
+      title: "Discover existing conversations",
+      body: "Show native assistant conversations from this Gateway host in OpenClaw. This is discovery, not an import or copy.",
+      enable: "Show existing native conversations",
+      decline:
+        "Leave unchecked to keep native session catalogs off when you connect your AI provider. Existing installations are not changed.",
+    },
     empty: {
       title: "Recommended installs",
       intro: "No existing AI access was detected. Install one of these tools, then check again.",
@@ -2511,7 +2520,9 @@ export const en: TranslationMap & {
       useApiKey: "Use API key",
     },
     signIn: {
-      title: "Sign in with a provider",
+      title: "Connect an AI provider",
+      install: "Review & install",
+      custom: "Set up endpoint",
       signIn: "Sign in",
       pair: "Pair",
       more: "More sign-in options",
@@ -2586,8 +2597,10 @@ export const en: TranslationMap & {
       copy: "Copy",
       expires: "Expires in {count} minutes",
       cancelled: "Provider sign-in was cancelled.",
+      finishingStep: "Setup is finishing the current step. You can cancel when it finishes.",
+      cancelFailed: "Could not confirm cancellation: {error}",
       sessionExpired:
-        "This setup session expired after the Gateway restarted. Close this dialog, then start model setup again.",
+        "The Gateway no longer has this setup session. It may already have finished. Close this dialog and choose Check again to review the current setup.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
   },
@@ -3413,7 +3426,7 @@ export const en: TranslationMap & {
   githubConnections: {
     title: "GitHub connections",
     description:
-      "Choose the account for each purpose. Your verified sign-in identity and co-author credit stay separate.",
+      "Publishing access is separate from your verified GitHub sign-in and co-author credit. Connect an account here to publish with it.",
     mine: "My GitHub",
     system: "System GitHub",
     personalDescription: "Your account for explicitly selected Publish PR actions.",
@@ -3423,7 +3436,10 @@ export const en: TranslationMap & {
     signInRequired: "Personal sign-in required",
     connected: "Connected",
     disconnected: "Not connected",
-    notLoaded: "Not verified",
+    notLoaded: "Status not loaded",
+    checking: "Checking connection…",
+    statusUnavailable: "Connection status unavailable",
+    manage: "Manage connections",
     reconnectRequired: "Reconnect required",
     connectMine: "Connect My GitHub",
     changeMine: "Change My GitHub",
@@ -3469,7 +3485,8 @@ export const en: TranslationMap & {
       linkedEmails: "Linked emails",
       linkedEmailsDescription: "Email addresses connected to this profile.",
       githubAccount: "GitHub account",
-      githubAccountDescription: "Automatically verified from your GitHub-backed sign-in.",
+      githubAccountDescription:
+        "Verified sign-in identity, not permission to publish. Manage publishing access under GitHub connections below.",
       githubVerified: "Verified from your GitHub-backed sign-in",
       githubUnavailable: "Unavailable",
       githubUnavailableDescription: "GitHub-backed sign-in is unavailable. Refresh to retry.",

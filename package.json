@@ -2137,7 +2137,7 @@
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
     "@openclaw/fs-safe": "0.8.1",
-    "@openclaw/proxyline": "0.3.7",
+    "@openclaw/proxyline": "0.3.11",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.22.2",
     "acorn": "8.18.0",

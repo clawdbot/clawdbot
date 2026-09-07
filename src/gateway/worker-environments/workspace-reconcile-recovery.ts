@@ -191,11 +191,7 @@ export async function createWorkspacePatch(params: {
     if (packed.stdout.byteLength > MAX_RECONCILIATION_TOTAL_BYTES) {
       throw new Error("Cloud workspace recovery snapshot exceeds its byte limit");
     }
-    for (const name of await fs.readdir(temporary)) {
-      if (name !== ".git") {
-        await fs.rm(path.join(temporary, name), { recursive: true, force: true });
-      }
-    }
+    await clearTemporaryWorkspace(temporary);
     for (const entry of params.appliedEntries) {
       await materializeSnapshotEntry({
         root: temporary,

@@ -10,6 +10,7 @@ import {
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { INCOMPLETE_ASSISTANT_STREAM_RE } from "../../failover/message-patterns.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
 import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { log } from "../logger.js";
@@ -24,6 +25,7 @@ import {
   buildAttemptReplayMetadata,
   hasAttemptTerminalState,
 } from "./attempt-terminal-evidence.js";
+import { hasComposedVisibleAnswerAfterSettledTools } from "./incomplete-turn-classification.js";
 import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
 import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
 import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptResult } from "./types.js";
@@ -85,13 +87,14 @@ function resolveSettledTurnFinalizationContext(params: {
     terminal.timedOutDuringCompaction ||
     terminal.timedOutDuringToolExecution ||
     (terminal.promptErrorSource !== null && terminal.promptErrorSource !== "prompt") ||
-    !isTransientNetworkError(failure)
+    !isTransientSettledTurnFailure(failure)
   ) {
     return undefined;
   }
-  // A turn that already produced visible text has nothing to finalize, and a
-  // turn without a tool result never settled one.
-  if (!params.assistantTexts.every((text) => !text.trim())) {
+  // Pre-tool commentary is not a final answer. Only text after the last tool
+  // result, or subscription text that cannot be attributed to that commentary,
+  // means the turn already composed something to keep.
+  if (hasComposedVisibleAnswerAfterSettledTools(params)) {
     return undefined;
   }
   if (!params.messagesSnapshot.some((message) => message.role === "toolResult")) {
@@ -101,6 +104,20 @@ function resolveSettledTurnFinalizationContext(params: {
     source: "openclaw-transcript",
     messages: Object.freeze([...params.messagesSnapshot]),
   };
+}
+
+function isTransientSettledTurnFailure(failure: unknown): boolean {
+  if (isTransientNetworkError(failure)) {
+    return true;
+  }
+  const message =
+    typeof failure === "object" &&
+    failure !== null &&
+    "message" in failure &&
+    typeof failure.message === "string"
+      ? failure.message.trim()
+      : "";
+  return INCOMPLETE_ASSISTANT_STREAM_RE.test(message);
 }
 
 function normalizeEmbeddedAttemptToolMetas(

@@ -17,6 +17,7 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { createModelFallbackConfig } from "../../test-helpers/model-fallback-config-fixture.js";
 import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
@@ -440,16 +441,9 @@ describe("handleEmbeddedAssistantFailure", () => {
   it("recovers a real loopback Mistral partial EOF through embedded model fallback", async () => {
     const { assistant, partialText } = await streamIncompleteMistralResponseOverLoopback();
     const classification = classifyAssistantFailoverReason(assistant);
-    const config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "mistral/mistral-large-latest",
-            fallbacks: ["google/mock-2"],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const config = createModelFallbackConfig("mistral/mistral-large-latest", [
+      "google/mock-2",
+    ]) satisfies OpenClawConfig;
     const calls: string[] = [];
     let embeddedFailure: { reason: string; rawError?: string } | undefined;
     let embeddedTrace: AssistantFailureInput["traceAttempts"] = [];
@@ -764,16 +758,10 @@ describe("handleEmbeddedAssistantFailure", () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
     try {
-      const config = {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/mock-0",
-              fallbacks: ["anthropic/mock-1", "groq/mock-2"],
-            },
-          },
-        },
-      } satisfies OpenClawConfig;
+      const config = createModelFallbackConfig("openai/mock-0", [
+        "anthropic/mock-1",
+        "groq/mock-2",
+      ]) satisfies OpenClawConfig;
       const calls: string[] = [];
       const run = async (provider: string, model: string) => {
         calls.push(`${provider}/${model}`);

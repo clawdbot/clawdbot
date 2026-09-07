@@ -11,7 +11,9 @@ const loadOllamaWebSearchProvider = createLazyRuntimeModule(
 );
 
 export function createLazyOllamaWebSearchProvider(): WebSearchProviderPlugin {
-  let providerPromise: Promise<WebSearchProviderPlugin> | undefined;
+  let providerPromise:
+    | Promise<Pick<WebSearchProviderPlugin, "runSetup" | "createTool">>
+    | undefined;
   const loadProvider = () =>
     (providerPromise ??= loadOllamaWebSearchProvider().then((runtime) =>
       runtime.createOllamaWebSearchProvider(),

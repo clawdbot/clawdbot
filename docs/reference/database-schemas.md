@@ -614,6 +614,8 @@ Agent database maintenance fences other writers with a 60-second lease in the sh
 
 Maintenance schema admission runs its initial full-file integrity check in a read-only Worker when that check is outside a write transaction. The connection and maintenance lease remain held until the Worker exits. Schema changes, index repairs, and compaction retain their synchronous phases.
 
+Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at five seconds or the remaining initial lease lifetime. These fields do not establish why startup stalled or ownership was lost.
+
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 
 ## Troubleshooting

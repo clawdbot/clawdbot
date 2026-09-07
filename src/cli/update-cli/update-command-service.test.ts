@@ -108,7 +108,7 @@ describe("maybeRestartService", () => {
     });
   });
 
-  it.each(["current", "revoked", "reclaimed", "advanced", "ack-advanced"] as const)(
+  it.each(["current", "revoked", "reclaimed", "advanced", "ack-advanced", "aborted"] as const)(
     "persists private serving proof only for the original recovery record: %s",
     async (change) => {
       const home = tempDirs.make("serving-recovery-consumer-");
@@ -151,7 +151,11 @@ describe("maybeRestartService", () => {
         options,
       );
       const proof = { ...receipt, runId: admitted.runId };
+      const controller = new AbortController();
       mocks.verifyUpdateServing.mockImplementationOnce(async () => {
+        if (change === "aborted") {
+          controller.abort();
+        }
         current = change !== "revoked";
         if (change === "reclaimed") {
           record = claimUpdateRecovery(record, fence, options);
@@ -191,6 +195,7 @@ describe("maybeRestartService", () => {
       };
       const verification = verifyUpdatedGateway({
         opts,
+        signal: controller.signal,
         result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
         serviceEnv: options.env,
         gatewayPort: 18789,
@@ -200,7 +205,12 @@ describe("maybeRestartService", () => {
       });
       if (change !== "current") {
         await expect(verification).rejects.toMatchObject({
-          name: change === "revoked" ? "Error" : "UpdateRecoveryConflictError",
+          name:
+            change === "aborted"
+              ? "AbortError"
+              : change === "revoked"
+                ? "Error"
+                : "UpdateRecoveryConflictError",
         });
         expect(onVerified).not.toHaveBeenCalled();
         expect(loadUpdateRecovery(admitted.runId, options)?.verification).toBeNull();

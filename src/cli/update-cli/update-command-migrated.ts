@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -73,7 +74,10 @@ export async function inspectActivatedUpdateState(
         stderrTail: `Shared state migration did not finish: expected schema ${candidateSchemaVersions.state}, found ${sharedVersion ?? "missing"}.`,
       });
     }
-    return updateStateSchemaVersionsMatch(schemaVersions, current)
+    return updateStateSchemaVersionsMatch(schemaVersions, current, {
+      sharedPath: resolveOpenClawStateSqlitePath(env),
+      candidateSchemaVersions,
+    })
       ? undefined
       : "state-migrated-no-rollback";
   } catch (error) {
@@ -112,13 +116,14 @@ export type MigratedUpdateFinalizationResult = {
   result: UpdateRunResult;
   exitCode: number;
   terminalRunId: string;
+  automaticTriage?: TriageFailureContext;
 };
 
 /** After migration, only candidate code may reopen state or finish the run. */
 export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
-): Promise<{ result: UpdateRunResult; exitCode: number }> {
+): Promise<Omit<MigratedUpdateFinalizationResult, "terminalRunId">> {
   if (params.opts.recovery) {
     throw new UpdateCommandRecoveryPendingError(
       "Durable worker continuation requires a reconciled handoff and fresh executor.",
@@ -241,7 +246,11 @@ export async function continueMigratedUpdateInFreshProcess(
       response.result.steps.push(retained);
       defaultRuntime.error(retained.stderrTail);
     }
-    return { result: response.result, exitCode: response.exitCode };
+    return {
+      result: response.result,
+      exitCode: response.exitCode,
+      automaticTriage: response.automaticTriage,
+    };
   } catch (error) {
     try {
       await windowsRecovery?.complete(false);

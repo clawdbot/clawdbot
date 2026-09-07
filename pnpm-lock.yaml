@@ -205,8 +205,8 @@ importers:
         specifier: 0.8.1
         version: 0.8.1
       '@openclaw/proxyline':
-        specifier: 0.3.7
-        version: 0.3.7(undici@8.10.2)
+        specifier: 0.3.11
+        version: 0.3.11(undici@8.10.2)
       '@silvia-odwyer/photon-node':
         specifier: 0.3.4
         version: 0.3.4
@@ -4189,8 +4189,8 @@ packages:
       node-pty:
         optional: true
 
-  '@openclaw/proxyline@0.3.7':
-    resolution: {integrity: sha512-RWkt4mPcBOj7E8euyeqynkIFXvEIxVStYH0YHDC08feq5qFyBXGmfdWC+MTMVJXfHN2ituoxLlrIyjpyJpW7ew==}
+  '@openclaw/proxyline@0.3.11':
+    resolution: {integrity: sha512-XDlrrQE0fapfTpqCBK9WB+U4W+/0lsrRIXI2nZ74W/lWMF+X4T5t2dfj8Ms250Th4qjnNi6WuSX5OZJqyLoZ3g==}
     engines: {node: '>=22.19.0'}
     peerDependencies:
       undici: '>=8.5.0 <9'
@@ -11487,7 +11487,7 @@ snapshots:
     dependencies:
       ghostty-web: 0.4.0
 
-  '@openclaw/proxyline@0.3.7(undici@8.10.2)':
+  '@openclaw/proxyline@0.3.11(undici@8.10.2)':
     dependencies:
       undici: 8.10.2
 

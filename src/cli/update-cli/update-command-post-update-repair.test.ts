@@ -139,6 +139,7 @@ function fixture(): FinishUpdateParams {
   const env = { ...process.env };
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
   return {
+    mutationStarted: true,
     result: {
       status: "ok",
       mode: "npm",
@@ -432,7 +433,12 @@ describe("post-activation repair after rollback refusal or failure", () => {
           mocks.restartCommand.mock.invocationCallOrder.at(-1)!,
         );
       }
+      // Plugin writes complete in the original stopped interval even when the
+      // subsequent activation/repair fails; they are never rerun after restore.
       expect(mocks.converge).toHaveBeenCalledOnce();
+      expect(mocks.converge.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.restart.mock.invocationCallOrder[0]!,
+      );
       expect(mocks.repair).toHaveBeenCalledOnce();
       if (rollback === "restored") {
         expect(completeRecovery).toHaveBeenCalled();

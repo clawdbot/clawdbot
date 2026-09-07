@@ -212,6 +212,7 @@ describe("durable terminal finalizer consumer", () => {
       continueMigratedUpdateInFreshProcess(
         {
           opts: f.opts,
+          mutationStarted: true,
           root: f.live,
           result: { status: "ok", mode: "npm", root: f.live, steps: [], durationMs: 0 },
           configSnapshot: {

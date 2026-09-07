@@ -67,6 +67,7 @@ export async function finishSuccessfulPackageSwitch(
   const packageRoot = params.packageRoot ?? "/tmp/openclaw-update";
   const previousRoot = params.previousRoot ?? packageRoot;
   await finishUpdate({
+    mutationStarted: true,
     result: {
       status: "ok",
       mode: params.updateMode ?? "npm",
