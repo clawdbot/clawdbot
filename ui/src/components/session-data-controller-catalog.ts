@@ -234,7 +234,8 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     applyError: (error) => {
       owner.sessionCatalogRefreshStatus = failPanelRefresh(
         owner.sessionCatalogRefreshStatus,
-        sessionCatalogRequestError(error).message,
+        error,
+        owner.context?.gateway.snapshot,
       );
       owner.requestSessionDataUpdate();
     },

@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
@@ -14,17 +15,6 @@ type SvgRenderSource = {
   retainCount: number;
   retired: boolean;
 };
-
-function isCrossOriginHttpSource(source: string): boolean {
-  try {
-    const url = new URL(source, window.location.href);
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin
-    );
-  } catch {
-    return false;
-  }
-}
 
 class ChatSvgAttachment extends OpenClawLightDomContentsElement {
   @property() src = "";

@@ -312,7 +312,7 @@ export function renderSettingsSegmented<T extends string>(props: {
   value: T;
   options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
   /** The selected radio is passed so callers can anchor visual transitions. */
-  onChange: (value: T, element: HTMLElement) => void;
+  onChange: (value: T, element: HTMLElement) => boolean | void;
   /** Optional activation for an already-selected value, such as clearing an explicit default. */
   onReselect?: (value: T, element: HTMLElement) => void;
   disabled?: boolean;
@@ -327,13 +327,15 @@ export function renderSettingsSegmented<T extends string>(props: {
       .value=${live(props.value)}
       ?disabled=${props.disabled ?? false}
       @change=${(event: Event) => {
-        const value = (event.currentTarget as HTMLElement & { value?: string }).value;
+        const group = event.currentTarget as HTMLElement & { value?: string };
+        const value = group.value;
         if (value !== undefined) {
-          const group = event.currentTarget as HTMLElement;
           const selected = [...group.querySelectorAll<HTMLElement>("wa-radio")].find(
             (radio) => radio.getAttribute("value") === value,
           );
-          props.onChange(value as T, selected ?? group);
+          if (props.onChange(value as T, selected ?? group) === false) {
+            group.value = props.value;
+          }
         }
       }}
     >

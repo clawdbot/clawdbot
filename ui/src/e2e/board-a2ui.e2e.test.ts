@@ -112,10 +112,19 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
     await controlUi?.close();
   });
 
-  for (const colorScheme of ["dark", "light"] as const) {
-    it(`renders a v0.9 widget with the ${colorScheme} scrollbar theme`, async ({
-      onTestFailed,
-    }) => {
+  for (const { colorScheme, rejectsAction, name } of [
+    ...(["dark", "light"] as const).map((theme) => ({
+      colorScheme: theme,
+      rejectsAction: false,
+      name: `renders a v0.9 widget with the ${theme} scrollbar theme`,
+    })),
+    {
+      colorScheme: "light" as const,
+      rejectsAction: true,
+      name: "shows rejected v0.9 actions and clears the widget on reset",
+    },
+  ]) {
+    it(name, async ({ onTestFailed }) => {
       const context = await browser.newContext({
         colorScheme,
         permissions: ["local-network-access"],
@@ -252,6 +261,50 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
         .poll(() => outer.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
       expect(await outer.getAttribute("inert")).toBeNull();
+      if (rejectsAction) {
+        actionStage = "installing oversized action";
+        await widgetFrame.evaluate(() => {
+          Reflect.get(globalThis, "openclawA2UI").applyMessages([
+            {
+              version: "v0.9",
+              updateComponents: {
+                surfaceId: "main",
+                components: [
+                  {
+                    id: "action",
+                    component: "Button",
+                    child: "action-label",
+                    variant: "primary",
+                    action: {
+                      event: { name: "refresh", context: { diagnostic: "x".repeat(8193) } },
+                    },
+                  },
+                ],
+              },
+            },
+          ]);
+        });
+        actionStage = "clicking oversized action";
+        await clickBoardWidgetControl(page, widgetFrame.getByText("Refresh data"));
+        actionStage = "waiting for rejected-action alert";
+        await expect
+          .poll(() => widgetFrame.getByRole("alert").allTextContents())
+          .toEqual(["widget state payload exceeds 8192 UTF-8 bytes"]);
+        expect(await widgetFrame.getByRole("alert").isVisible()).toBe(true);
+        expect(await gateway.getRequests("board.event")).toHaveLength(0);
+        expect(pageErrors).toEqual([]);
+
+        actionStage = "resetting renderer after rejection";
+        await widgetFrame.evaluate(() => Reflect.get(globalThis, "openclawA2UI").reset());
+        await expect.poll(() => widgetFrame.getByRole("alert").count()).toBe(0);
+        await expect.poll(() => widgetFrame.locator("a2ui-surface").count()).toBe(0);
+        await widgetFrame.evaluate(
+          (initialMessages) =>
+            Reflect.get(globalThis, "openclawA2UI").applyMessages(initialMessages),
+          messages,
+        );
+        await widgetFrame.getByText("A2UI board widget").waitFor();
+      }
       actionStage = "waiting for native pointer entry and clicking refresh";
       await clickBoardWidgetControl(page, widgetFrame.getByText("Refresh data"));
       actionStage = "waiting for board.event";
@@ -264,6 +317,11 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
           action: { name: "refresh", surfaceId: "main", sourceComponentId: "action" },
         },
       });
+      if (rejectsAction) {
+        expect(await widgetFrame.getByRole("alert").count()).toBe(0);
+        expect(pageErrors).toEqual([]);
+        return;
+      }
       await page.mouse.move(40, 40);
 
       const scrollbar = await widgetFrame.evaluate(() => {

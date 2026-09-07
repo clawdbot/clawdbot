@@ -1,5 +1,6 @@
 // Resolves additional CA certificate settings for Node child processes.
 import fs from "node:fs";
+import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 
 const LINUX_CA_BUNDLE_PATHS = [
   "/etc/ssl/certs/ca-certificates.crt",
@@ -9,27 +10,6 @@ const LINUX_CA_BUNDLE_PATHS = [
 
 export type EnvMap = Record<string, string | undefined>;
 type AccessSyncFn = (path: string, mode?: number) => void;
-
-/**
- * Version manager path markers (Linux subset), mirroring VERSION_MANAGER_MARKERS
- * in src/daemon/runtime-paths.ts. Not imported directly because bootstrap code
- * must avoid daemon-layer dependencies at startup.
- * Version-manager-installed Node does not inherit system CA certificates,
- * so we detect this to auto-inject NODE_EXTRA_CA_CERTS.
- */
-const VERSION_MANAGER_PATH_MARKERS: readonly string[] = [
-  "/.nvm/",
-  "/.fnm/",
-  "/.local/share/fnm/",
-  "/.volta/",
-  "/.asdf/",
-  "/.local/share/mise/",
-  "/.n/",
-  "/.nodenv/",
-  "/.nodebrew/",
-  "/nvs/",
-  "/.nvs/",
-];
 
 export function resolveAutoNodeExtraCaCerts(
   params: {
@@ -50,9 +30,9 @@ export function resolveAutoNodeExtraCaCerts(
     return undefined;
   }
 
+  // Version-manager Node may not inherit system CAs; supply NODE_EXTRA_CA_CERTS.
   const isVersionManagerRuntime =
-    Boolean(env.NVM_DIR?.trim()) ||
-    VERSION_MANAGER_PATH_MARKERS.some((marker) => execPath.includes(marker));
+    Boolean(env.NVM_DIR?.trim()) || matchesVersionManagerPath(execPath, "linux-ca");
   if (!isVersionManagerRuntime) {
     return undefined;
   }

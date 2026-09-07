@@ -924,6 +924,44 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it.each<[string, boolean]>([
+    ["channels.mattermost.accounts.ops.groupPolicy", true],
+    ["channels.mattermost.accounts.support.groupPolicy", true],
+    ["channels.mattermost.accounts.ops.guilds.123.users", true],
+    ["channels.mattermost.accounts.very-long-account-name.groupPolicy", true],
+    ["channels.mattermost.accounts.locked.groupPolicy", false],
+    ["channels.mattermost.accounts.ops.token", false],
+    ["channels.mattermost.accounts.ops.guildsBackup", false],
+    ["channels.mattermost.accounts.ops", false],
+    ["channels.mattermost.accounts..groupPolicy", false],
+  ])("honors per-account dynamic policy paths: %s", (path, dynamic) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: mattermostPlugin.id,
+          source: "test",
+          plugin: {
+            ...mattermostPlugin,
+            reload: {
+              configPrefixes: [
+                "channels.mattermost",
+                "channels.mattermost.accounts.very-long-account-name",
+                "channels.mattermost.accounts.locked.groupPolicy",
+              ],
+              noopPrefixes: [
+                "channels.mattermost.accounts.*.groupPolicy",
+                "channels.mattermost.accounts.*.guilds",
+              ],
+            },
+          },
+        },
+      ]),
+    );
+    const plan = buildGatewayReloadPlan([path]);
+    expect(isNoopGatewayReloadPlan(plan)).toBe(dynamic);
+    expect(plan.restartChannels).toEqual(new Set(dynamic ? [] : ["mattermost"]));
+  });
+
   it.each<[OpenClawConfig, OpenClawConfig]>([
     [{}, { messages: { ackReactionScope: "all" } }],
     [{ messages: { ackReactionScope: "all" } }, {}],

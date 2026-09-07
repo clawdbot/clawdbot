@@ -432,6 +432,36 @@ describe("tui command handlers", () => {
   });
 
   it.each([
+    { command: "/models", value: "fixture/model" },
+    { command: "/sessions", value: "agent:main:other" },
+    { command: "/agents", value: "other" },
+  ])(
+    "consumes $command selection before its asynchronous action finishes",
+    async ({ command, value }) => {
+      const pending = createDeferred();
+      const action = vi.fn(() => pending.promise);
+      const harness = createHarness({
+        listModels: vi.fn().mockResolvedValue([{ provider: "fixture", id: "model" }]),
+        listSessions: vi.fn().mockResolvedValue({ sessions: [{ key: "agent:main:other" }] }),
+        agents: [{ id: "main" }, { id: "other" }],
+        patchSession: action,
+        setSession: action,
+      });
+      await harness.handleCommand(command);
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+
+      selector.onSelect?.({ value });
+      expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
+      selector.onSelect?.({ value });
+      expect(action).toHaveBeenCalledOnce();
+
+      pending.resolve();
+      await flushAsyncSelect();
+      expect(harness.closeOverlay).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
     {
       name: "model",
       command: "/models",

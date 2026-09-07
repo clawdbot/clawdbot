@@ -825,45 +825,88 @@ describe("attachGatewayWsConnectionHandler", () => {
   });
 
   it.each([
-    { reason: "normal peer close", durationMs: 1_000, cause: undefined, code: 1000 },
-    { reason: "missed protocol pong", durationMs: 50_000, cause: "heartbeat-timeout", code: 1006 },
-  ])("records connected close ownership after $reason", async ({ durationMs, cause, code }) => {
-    vi.useFakeTimers();
-    const socket = createGatewayWsTestSocket({ ping: true });
-    socket.terminate.mockImplementation(() => socket.emit("close", 1006, Buffer.alloc(0)));
-    const { logWsControl, passed } = await connectTestWs({ socket });
-    const handlerParams = passed as {
-      setClient: (client: never) => boolean;
-    };
+    { write: "normal", durationMs: 1_000, cause: undefined, code: 1000 },
+    { write: "pending", durationMs: 75_000, cause: "heartbeat-timeout", code: 1006 },
+    { write: "completed", durationMs: 50_000, cause: "heartbeat-timeout", code: 1006 },
+    { write: "failed", durationMs: 50_000, cause: "heartbeat-timeout", code: 1006 },
+    { write: "threw", durationMs: 50_000, cause: "heartbeat-timeout", code: 1006 },
+  ])(
+    "records connected close ownership with a $write ping write",
+    async ({ write, durationMs, cause, code }) => {
+      vi.useFakeTimers();
+      const socket = createGatewayWsTestSocket({ ping: true });
+      const callbacks: Array<((error?: Error) => void) | undefined> = [];
+      socket.ping?.mockImplementation((_data, _mask, callback?: (error?: Error) => void) => {
+        callbacks.push(callback);
+        if (write === "threw") {
+          throw new Error("private write error");
+        }
+        if (write === "completed" || write === "failed") {
+          callback?.(write === "failed" ? new Error("private write error") : undefined);
+        }
+      });
+      socket.bufferedAmount = 41;
+      socket.terminate.mockImplementation(() => {
+        // Destroy can settle a pending write before close; retain the decision snapshot.
+        callbacks.at(-1)?.(new Error("private teardown error"));
+        socket.bufferedAmount = 0;
+        socket.emit("close", 1006, Buffer.alloc(0));
+      });
+      const { logWsControl, passed } = await connectTestWs({ socket });
+      const handlerParams = passed as {
+        setClient: (client: never) => boolean;
+      };
 
-    expect(
-      handlerParams.setClient({
-        socket,
-        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
-        connId: "conn-authenticated-user",
-        authenticatedUserId: "alice@example.com",
-        usesSharedGatewayAuth: false,
-      } as never),
-    ).toBe(true);
+      expect(
+        handlerParams.setClient({
+          socket,
+          connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+          connId: "conn-authenticated-user",
+          authenticatedUserId: "alice@example.com",
+          usesSharedGatewayAuth: false,
+        } as never),
+      ).toBe(true);
 
-    vi.advanceTimersByTime(durationMs);
-    if (!cause) {
-      socket.emit("close", code, Buffer.from("done"));
-    }
-    const closeReason = cause ? "n/a" : "done";
-    expect(logWsControl.info).toHaveBeenCalledWith(
-      expect.stringContaining(`webchat disconnected code=${code} reason=${closeReason} conn=`),
-      { cause, durationMs },
-    );
-    expect(logWsControl.info).toHaveBeenCalledWith(
-      expect.stringMatching(
-        new RegExp(
-          `^authenticated user disconnected code=${code} reason=${closeReason} conn=.+ user=alice@example\\.com$`,
+      if (write === "pending") {
+        vi.advanceTimersByTime(25_000);
+        socket.emit("pong");
+        vi.advanceTimersByTime(25_000);
+        callbacks[0]?.(); // An old completion must not mark the new attempt completed.
+        vi.advanceTimersByTime(25_000);
+      } else {
+        vi.advanceTimersByTime(durationMs);
+      }
+      if (!cause) {
+        socket.emit("close", code, Buffer.from("done"));
+      }
+      const closeReason = cause ? "n/a" : "done";
+      const context = {
+        cause,
+        durationMs,
+        ...(cause
+          ? {
+              pingWriteState: write === "threw" ? "failed" : write,
+              lastPongAgeMs: write === "pending" ? 50_000 : undefined,
+              bufferedBytes: 41,
+            }
+          : {}),
+      };
+      expect(logWsControl.info).toHaveBeenCalledWith(
+        expect.stringContaining(`webchat disconnected code=${code} reason=${closeReason} conn=`),
+        context,
+      );
+      expect(logWsControl.info).toHaveBeenCalledWith(
+        expect.stringMatching(
+          new RegExp(
+            `^authenticated user disconnected code=${code} reason=${closeReason} conn=.+ user=alice@example\\.com$`,
+          ),
         ),
-      ),
-      { cause, durationMs },
-    );
-  });
+        context,
+      );
+      expect(socket.terminate).toHaveBeenCalledTimes(cause ? 1 : 0);
+      expect(JSON.stringify(logWsControl.info.mock.calls)).not.toContain("private");
+    },
+  );
 
   it("records disconnect history for the current node connection", async () => {
     const unregister = vi.fn(() => "node-1");

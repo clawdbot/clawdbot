@@ -40,6 +40,7 @@ import {
   hasSlackReplyStructuredContent,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyBlocks,
+  type PreparedSlackReply,
 } from "../reply-blocks.js";
 import { resolveSlackReplyThreadTs } from "../thread-ts.js";
 import type { SlackEventScope } from "./event-scope.js";
@@ -121,7 +122,7 @@ function resolveSlackMediaHookSpokenText(payload: ReplyPayload): string | undefi
 
 export async function deliverReplies(params: {
   cfg: OpenClawConfig;
-  replies: ReplyPayload[];
+  replies: PreparedSlackReply[];
   target: string;
   token: string;
   accountId?: string;
@@ -153,7 +154,8 @@ export async function deliverReplies(params: {
   eventScope?: SlackEventScope;
 }) {
   let latestResult: SlackSendResult | undefined;
-  for (const payload of params.replies) {
+  for (const prepared of params.replies) {
+    const { payload } = prepared;
     if (payload.isReasoning === true) {
       continue;
     }
@@ -168,10 +170,7 @@ export async function deliverReplies(params: {
       reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
         ? reply.trimmedText
         : undefined;
-    const materializeAuthoredText = !reply.hasMedia && hasSlackReplyStructuredContent(payload);
-    const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
-      materializeAuthoredText,
-    });
+    const { authoredTextPlacement, segments } = prepared.resolveDelivery();
     if (!textRaw && !reply.hasMedia && segments.length === 0) {
       continue;
     }

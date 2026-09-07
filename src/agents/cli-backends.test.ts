@@ -215,6 +215,7 @@ describe("resolveCliBackendConfig", () => {
       config: { command: "setup-acme", args: ["run"] },
       parseJsonlEvent,
       resolveModelId,
+      isolatesInstructionsWithExactTools: true,
     });
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
@@ -230,6 +231,7 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.resolveModelId?.({ modelId: "acme-large", contextWindow: "1m" })).toBe(
       "acme-large[1m]",
     );
+    expect(resolved.isolatesInstructionsWithExactTools).toBe(true);
   });
 
   it("returns null when no plugin owns the backend", () => {
@@ -262,6 +264,7 @@ describe("resolveCliBackendConfig", () => {
           manualCompaction,
           nativeToolMode: "selectable",
           toolAvailabilityEnforcement: "execution-args",
+          isolatesInstructionsWithExactTools: true,
           sideQuestionToolMode: "disabled",
         }),
       ],
@@ -276,6 +279,7 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.manualCompaction).toBe(manualCompaction);
     expect(resolved.nativeToolMode).toBe("selectable");
     expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
+    expect(resolved.isolatesInstructionsWithExactTools).toBe(true);
     expect(resolved.sideQuestionToolMode).toBe("disabled");
   });
 
@@ -292,6 +296,7 @@ describe("resolveCliBackendConfig", () => {
     });
 
     expect(requireBackend().toolAvailabilityEnforcement).toBeUndefined();
+    expect(requireBackend().isolatesInstructionsWithExactTools).toBeUndefined();
   });
 });
 

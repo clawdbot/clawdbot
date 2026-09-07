@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -571,7 +572,7 @@ export function filterAndSortSessionEntries(
 
 /** Projects lightweight list rows while sharing the event loop with other requests. */
 export async function listSessionsFromStoreAsync(
-  params: ListSessionsFromStoreParams,
+  params: ListSessionsFromStoreParams & { workStartedAt?: number },
 ): Promise<SessionsListResult> {
   // Pin the active plugin-registry workspace dir for the duration of this
   // call so per-row metadata lookups use a stable memo key. Without this pin,
@@ -579,7 +580,7 @@ export async function listSessionsFromStoreAsync(
   // between rows, the memo never hits, and each row triggers a full
   // loadPluginMetadataSnapshot scan (~100 ms).
   return withPinnedActivePluginRegistryWorkspaceDir(async () => {
-    let workStartedAt = performance.now();
+    let workStartedAt = params.workStartedAt ?? performance.now();
     const { cfg, store, targetsBySessionKey } = params;
     const list = prepareSessionList(params);
     const sessions: GatewaySessionRow[] = [];
@@ -599,6 +600,12 @@ export async function listSessionsFromStoreAsync(
         ];
       });
     const transcriptFields = readScopedSessionTitleFieldsFromTranscriptBatch(transcriptScopes);
+    // Consume synchronous sharing facts and capture transcripts before yielding.
+    // Loading and preparation can spend the budget even for zero or one row.
+    if (performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS) {
+      await yieldToEventLoop();
+      workStartedAt = performance.now();
+    }
     let transcriptFieldIndex = 0;
     for (let i = 0; i < list.entries.length; i++) {
       const [key, entry] = expectDefined(list.entries[i], "entries entry at i");
@@ -642,9 +649,7 @@ export async function listSessionsFromStoreAsync(
         i + 1 < list.entries.length &&
         performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS
       ) {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await yieldToEventLoop();
         // Waiting behind other work is not projection work; start the next budget on resume.
         workStartedAt = performance.now();
       }

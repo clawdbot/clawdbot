@@ -155,7 +155,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
-  it("rejects an over-cap bridge frontier before dispatching its admitted prefix", async () => {
+  it("rejects an over-queue-cap bridge frontier before dispatching its admitted prefix", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
@@ -184,7 +184,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
         "code-call-frontier-overflow",
         {
           code: `return await Promise.all(
-            Array.from({ length: 3 }, (_, index) => fake_mutation({ index })),
+            Array.from({ length: 2 + 128 + 1 }, (_, index) => fake_mutation({ index })),
           );`,
         },
       ),

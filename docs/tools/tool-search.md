@@ -336,6 +336,8 @@ Normal OpenClaw behavior still applies to final calls:
 - channel/runtime tool policy
 - approval hooks
 - plugin `before_tool_call` hooks
+- tool `executionMode`: sequential calls run exclusively with other calls in the
+  same catalog, including calls from other Tool Search or Code Mode cells
 - session identity, logs, and telemetry
 
 ## Config
