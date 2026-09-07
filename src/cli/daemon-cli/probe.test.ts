@@ -331,6 +331,7 @@ describe("probeGatewayStatus", () => {
         method: "status",
         timeoutMs: 5_000,
         sharedStateMode: "read-only",
+        skipImplicitAuth: true,
         configPath: "/tmp/openclaw-daemon/openclaw.json",
         serviceTargetUrl: "ws://127.0.0.1:19191",
         onHelloOk: expect.any(Function),
@@ -365,6 +366,7 @@ describe("probeGatewayStatus", () => {
       method: "status",
       timeoutMs: 30_000,
       sharedStateMode: "read-only",
+      skipImplicitAuth: true,
       serviceTargetUrl: "ws://127.0.0.1:19191",
       onHelloOk: expect.any(Function),
     });
@@ -413,6 +415,7 @@ describe("probeGatewayStatus", () => {
       method: "status",
       timeoutMs: 5_000,
       sharedStateMode: "read-only",
+      skipImplicitAuth: true,
       onHelloOk: expect.any(Function),
       localPortOverride: undefined,
       serviceTargetUrl: "ws://127.0.0.1:19191",
@@ -637,7 +640,7 @@ describe("probeGatewayStatus", () => {
       return { status: "ok" };
     });
 
-    const serviceUrl = "ws://10.0.0.5:19191";
+    const serviceUrl = "wss://service.example:19191";
     await probeGatewayStatus({
       url: serviceUrl,
       token: "temp-token",
@@ -665,7 +668,7 @@ describe("probeGatewayStatus", () => {
       return { status: "ok" };
     });
 
-    const urlOverride = "ws://10.0.0.5:19001";
+    const urlOverride = "wss://explicit.example:19001";
     await probeGatewayStatus({
       url: "ws://127.0.0.1:19191",
       urlOverride,

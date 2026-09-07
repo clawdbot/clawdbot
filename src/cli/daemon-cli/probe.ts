@@ -93,6 +93,7 @@ export async function probeGatewayStatus(opts: {
             method: "status",
             timeoutMs: opts.timeoutMs,
             sharedStateMode: "read-only",
+            skipImplicitAuth: true,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
             onHelloOk: (hello) => {
               gatewayReached = true;

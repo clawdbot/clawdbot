@@ -456,6 +456,7 @@ export function buildGatewayConnectionDetails(
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    serviceTargetUrl?: string;
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {

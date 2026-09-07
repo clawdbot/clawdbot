@@ -65,30 +65,33 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
   const cliUrlOverride = normalizeOptionalString(options.url);
+  const serviceUrl = normalizeOptionalString(options.serviceTargetUrl);
   const envUrlOverride =
-    cliUrlOverride || options.ignoreEnvUrlOverride || options.localPortOverride !== undefined
+    cliUrlOverride ||
+    serviceUrl ||
+    options.ignoreEnvUrlOverride ||
+    options.localPortOverride !== undefined
       ? undefined
       : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl = normalizeOptionalString(remote?.url);
-  const serviceUrl = normalizeOptionalString(options.serviceTargetUrl);
-  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
+  const remoteMisconfigured = isRemoteMode && !urlOverride && !serviceUrl && !remoteUrl;
   const urlSourceHint =
     options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
-  const url = urlOverride || remoteUrl || serviceUrl || localUrl;
+  const url = urlOverride || serviceUrl || remoteUrl || localUrl;
   const displayUrl = redactSensitiveUrlLikeString(url);
   const urlSource = urlOverride
     ? urlSourceHint === "env"
       ? "env OPENCLAW_GATEWAY_URL"
       : "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : serviceUrl
-        ? "service target"
+    : serviceUrl
+      ? "service target"
+      : remoteUrl
+        ? "config gateway.remote.url"
         : remoteMisconfigured
           ? "missing gateway.remote.url (fallback local)"
           : "local loopback";
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
+  const bindDetail = !urlOverride && (serviceUrl || !remoteUrl) ? `Bind: ${bindMode}` : undefined;
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;

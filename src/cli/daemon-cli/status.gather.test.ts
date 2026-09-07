@@ -410,6 +410,7 @@ describe("gatherDaemonStatus", () => {
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_PORT",
+      "OPENCLAW_GATEWAY_URL",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
       "DAEMON_GATEWAY_TOKEN",
@@ -419,6 +420,7 @@ describe("gatherDaemonStatus", () => {
     setTestEnvValue("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-cli/openclaw.json");
     deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
     deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
     deleteTestEnvValue("DAEMON_GATEWAY_TOKEN");
     deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
     isDefaultInstallIdentity.mockReset().mockReturnValue(true);
@@ -563,6 +565,111 @@ describe("gatherDaemonStatus", () => {
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["configured", true],
+    ["configured", false],
+    ["environment", true],
+    ["environment", false],
+    ["none", true],
+    ["none", false],
+  ] as const)("uses service %s credentials with remote URL present=%s", async (auth, remoteUrl) => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        tls: { enabled: true },
+        auth:
+          auth === "none"
+            ? { mode: "none" }
+            : {
+                mode: "token",
+                ...(auth === "configured" ? { token: "service-config-token" } : {}),
+              },
+        remote: {
+          ...(remoteUrl ? { url: "wss://remote.example:19443" } : {}),
+          token: "remote-token",
+          password: "remote-password",
+          tlsFingerprint: "sha256:99:88:77:66",
+        },
+      },
+    };
+    const originalConfig = structuredClone(daemonLoadedConfig);
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+        OPENCLAW_GATEWAY_TOKEN: "service-env-token",
+      },
+    });
+    setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-token");
+    setTestEnvValue("OPENCLAW_GATEWAY_URL", "wss://ambient.example:19444");
+
+    const status = await gatherStatus();
+    const input = callArg(callGatewayStatusProbe) as Parameters<
+      typeof import("./probe.js").probeGatewayStatus
+    >[0];
+
+    expect(input.url).toBe("wss://127.0.0.1:19001");
+    expect(input.urlOverride).toBeUndefined();
+    expect(input.token).toBe(
+      auth === "none"
+        ? undefined
+        : auth === "configured"
+          ? "service-config-token"
+          : "service-env-token",
+    );
+    expect(input.password).toBeUndefined();
+    expect(input.tlsFingerprint).toBe("sha256:11:22:33:44");
+    expect(input.config?.gateway?.mode).toBe("local");
+    expect(input.config?.gateway?.remote).toBeUndefined();
+    expect(input.config?.gateway?.auth).toEqual({ mode: auth === "none" ? "none" : "token" });
+    expect(input.config?.gateway?.tls).toBeUndefined();
+    expect(status.rpc?.url).toBe(input.url);
+    expect(daemonLoadedConfig).toEqual(originalConfig);
+  });
+
+  it.each([{}, { token: "explicit-token" }, { password: "explicit-password" }])(
+    "isolates explicit status target credentials %j",
+    async (auth) => {
+      daemonLoadedConfig = {
+        gateway: {
+          mode: "remote",
+          tls: { enabled: true },
+          auth: { mode: "token", token: "service-token" },
+          remote: {
+            url: "wss://remote.example:19443",
+            token: "remote-token",
+            tlsFingerprint: "sha256:99:88:77:66",
+          },
+        },
+      };
+      const originalConfig = structuredClone(daemonLoadedConfig);
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-token");
+      await gatherStatus({
+        rpc: { url: "wss://explicit.example:19445", ...auth },
+        allowExecSecretRefs: false,
+      });
+
+      const input = callArg(callGatewayStatusProbe) as Parameters<
+        typeof import("./probe.js").probeGatewayStatus
+      >[0];
+      expect(input).toMatchObject({
+        url: "wss://explicit.example:19445",
+        urlOverride: "wss://explicit.example:19445",
+        ...auth,
+      });
+      expect({ token: input.token, password: input.password }).toEqual(auth);
+      expect(input.tlsFingerprint).toBeUndefined();
+      expect(input.config?.gateway?.remote).toBeUndefined();
+      expect(input.config?.gateway?.auth).toBeUndefined();
+      expect(input.config?.gateway?.tls).toBeUndefined();
+      expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
+      expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
+      expect(daemonLoadedConfig).toEqual(originalConfig);
+    },
+  );
+
   it.each(
     [
       ["gateway", "status", "--port", "19002"],
@@ -583,7 +690,15 @@ describe("gatherDaemonStatus", () => {
         expect.objectContaining({
           url: "ws://127.0.0.1:19002",
           localPortOverride: 19002,
-          config: cliLoadedConfig,
+          config: {
+            gateway: {
+              bind: "loopback",
+              mode: "local",
+              remote: undefined,
+              auth: undefined,
+              tls: undefined,
+            },
+          },
           configPath: "/tmp/openclaw-cli/openclaw.json",
         }),
       );
@@ -853,7 +968,16 @@ describe("gatherDaemonStatus", () => {
         config?: unknown;
         configPath?: string;
       };
-      expect(probeInput.config).toBe(cliLoadedConfig);
+      expect(probeInput.config).toEqual({
+        ...cliLoadedConfig,
+        gateway: {
+          ...cliLoadedConfig.gateway,
+          mode: "local",
+          auth: undefined,
+          remote: undefined,
+          tls: undefined,
+        },
+      });
       expect(probeInput.configPath).toBe("/tmp/openclaw-cli/openclaw.json");
       const authInput = callArg(resolveGatewayProbeAuthSafeWithSecretInputsCalls) as {
         cfg?: unknown;
@@ -1158,7 +1282,7 @@ describe("gatherDaemonStatus", () => {
     ]);
   });
 
-  it("skips established gateway connection scans for remote gateway status", async () => {
+  it("skips established gateway connection scans for an explicit remote target", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1167,7 +1291,11 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    const status = await gatherStatus({ probe: false, deep: true });
+    const status = await gatherStatus({
+      probe: false,
+      deep: true,
+      rpc: { url: "wss://gateway.example" },
+    });
 
     expect(inspectPortConnections).not.toHaveBeenCalled();
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
@@ -1383,7 +1511,7 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
-  it("skips remote password exec SecretRef auth despite an ambient password", async () => {
+  it("keeps service password auth independent of unused remote exec SecretRefs", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1407,18 +1535,16 @@ describe("gatherDaemonStatus", () => {
       allowExecSecretRefs: false,
     });
 
-    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).toHaveBeenCalledTimes(1);
     const probeInput = callArg(callGatewayStatusProbe) as {
       token?: string;
       password?: string;
       allowRpcConfigCredentials?: boolean;
     };
     expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBeUndefined();
-    expect(probeInput.allowRpcConfigCredentials).toBe(false);
-    expect(status.rpc?.authWarning).toContain(
-      "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
-    );
+    expect(probeInput.password).toBe("ambient-password");
+    expect(probeInput.allowRpcConfigCredentials).toBe(true);
+    expect(status.rpc?.authWarning).toBeUndefined();
   });
 
   it("ignores remote exec SecretRefs for local probes when exec refs are disabled", async () => {
@@ -1448,7 +1574,7 @@ describe("gatherDaemonStatus", () => {
     expect(probeInput.password).toBeUndefined();
   });
 
-  it("ignores local exec SecretRefs for remote probes when exec refs are disabled", async () => {
+  it("ignores local exec SecretRefs for explicit URL probes when exec refs are disabled", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1467,10 +1593,13 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    const status = await gatherStatus({ allowExecSecretRefs: false });
+    const status = await gatherStatus({
+      rpc: { url: "wss://gateway.example" },
+      allowExecSecretRefs: false,
+    });
 
     expect(status.rpc?.authWarning).toBeUndefined();
-    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).toHaveBeenCalledTimes(1);
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBeUndefined();
     expect(probeInput.password).toBeUndefined();
@@ -1557,7 +1686,7 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 
-  it("keeps configured remote password authoritative for remote probes", async () => {
+  it("keeps service token auth authoritative over configured remote password auth", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1578,8 +1707,8 @@ describe("gatherDaemonStatus", () => {
     await gatherStatus();
 
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
-    expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBe("remote-password"); // pragma: allowlist secret
+    expect(probeInput.token).toBe("local-token");
+    expect(probeInput.password).toBe("local-password");
   });
 
   it("skips TLS runtime loading when probe is disabled", async () => {
@@ -1669,7 +1798,7 @@ describe("gatherDaemonStatus", () => {
     expect(status.lastError).toBeUndefined();
   });
 
-  it("does not read local gateway errors in remote mode", async () => {
+  it("reads service gateway errors despite remote client mode", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1679,14 +1808,15 @@ describe("gatherDaemonStatus", () => {
     };
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
-      url: "wss://remote.example:18790",
+      url: "ws://127.0.0.1:19001",
       error: "gateway closed (1000): ",
     });
+    readLastGatewayErrorLine.mockResolvedValueOnce("service gateway failure");
 
     const status = await gatherStatus();
 
-    expect(readLastGatewayErrorLine).not.toHaveBeenCalled();
-    expect(status.lastError).toBeUndefined();
+    expect(readLastGatewayErrorLine).toHaveBeenCalledOnce();
+    expect(status.lastError).toBe("service gateway failure");
   });
 
   it("compares plugin drift against the running gateway version from the probe, not the CLI VERSION", async () => {

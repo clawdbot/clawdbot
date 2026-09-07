@@ -1591,33 +1591,42 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
-  it("keeps a service-derived target authoritative over OPENCLAW_GATEWAY_URL", async () => {
-    const config = {
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-      },
-    } satisfies OpenClawConfig;
-    resolveGatewayPort.mockReturnValue(19191);
-    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
-    try {
-      process.env.OPENCLAW_GATEWAY_URL = "wss://env-gateway.example/ws";
+  it.each([true, false])(
+    "keeps service target diagnostics authoritative with remote URL present=%s",
+    (remoteUrl) => {
+      const config = {
+        gateway: {
+          mode: "remote",
+          bind: "loopback",
+          remote: {
+            ...(remoteUrl ? { url: "wss://remote-gateway.example/ws" } : {}),
+            token: "remote-token",
+          },
+        },
+      } satisfies OpenClawConfig;
+      resolveGatewayPort.mockReturnValue(19191);
+      const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+      try {
+        process.env.OPENCLAW_GATEWAY_URL = "wss://env-gateway.example/ws";
 
-      const details = await buildGatewayProbeConnectionDetails({
-        config,
-        serviceTargetUrl: "ws://10.0.0.5:19191",
-      });
+        const details = buildGatewayConnectionDetails({
+          config,
+          serviceTargetUrl: "wss://service-gateway.example:19191",
+        });
 
-      expect(details.url).toBe("ws://10.0.0.5:19191");
-      expect(details.urlSource).toBe("service target");
-    } finally {
-      if (prevUrl === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_URL;
-      } else {
-        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+        expect(details.url).toBe("wss://service-gateway.example:19191");
+        expect(details.urlSource).toBe("service target");
+        expect(details.remoteFallbackNote).toBeUndefined();
+        expect(details.message).not.toContain("remote-gateway.example");
+      } finally {
+        if (prevUrl === undefined) {
+          delete process.env.OPENCLAW_GATEWAY_URL;
+        } else {
+          process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+        }
       }
-    }
-  });
+    },
+  );
 
   it("redacts credential-bearing target URLs from connection messages", () => {
     setLocalLoopbackGatewayConfig(18800);

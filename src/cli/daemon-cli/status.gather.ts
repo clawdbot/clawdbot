@@ -630,10 +630,8 @@ export async function gatherDaemonStatus(
       rpcUrlOverride: opts.rpc.url,
       localPortOverride,
     });
-  const probeMode =
-    localPortOverride === undefined && daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
   const serviceTargetsProbe = useNativeServiceTargetContext && !probeUrlOverride;
-  const shouldInspectLocalGateway = probeMode === "local" && !probeUrlOverride;
+  const shouldInspectLocalGateway = !probeUrlOverride;
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
@@ -651,7 +649,7 @@ export async function gatherDaemonStatus(
   const establishedClients = await inspectEstablishedGatewayClients({
     daemonPort,
     deep: opts.deep,
-    gatewayMode: probeMode,
+    gatewayMode: shouldInspectLocalGateway ? "local" : "remote",
   });
 
   const extraServices = opts.deep
@@ -685,8 +683,8 @@ export async function gatherDaemonStatus(
   let skippedProbeAuthForDisabledExecSecretRef = false;
   if (opts.probe) {
     const explicitAuth = {
-      token: opts.rpc.token,
-      password: opts.rpc.password,
+      token: trimToUndefined(opts.rpc.token),
+      password: trimToUndefined(opts.rpc.password),
     };
     const canResolveProbeAuth =
       opts.allowExecSecretRefs !== false ||
@@ -694,14 +692,21 @@ export async function gatherDaemonStatus(
         cfg: daemonCfg,
         env: mergedDaemonEnv as NodeJS.ProcessEnv,
         explicitAuth,
-        mode: probeMode,
+        mode: "local",
       });
-    if (canResolveProbeAuth) {
+    if (probeUrlOverride || explicitAuth.token || explicitAuth.password) {
+      daemonProbeAuth = explicitAuth;
+    } else if (
+      daemonCfg.gateway?.auth?.mode === "none" ||
+      daemonCfg.gateway?.auth?.mode === "trusted-proxy"
+    ) {
+      daemonProbeAuth = {};
+    } else if (canResolveProbeAuth) {
       const probeAuthResolution = await loadGatewayProbeAuthModule().then(
         ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
           resolveGatewayProbeAuthSafeWithSecretInputs({
             cfg: daemonCfg,
-            mode: probeMode,
+            mode: "local",
             env: mergedDaemonEnv as NodeJS.ProcessEnv,
             explicitAuth,
           }),
@@ -716,6 +721,21 @@ export async function gatherDaemonStatus(
     }
   }
 
+  // Target auth and TLS are already resolved for this command. The generic client
+  // must not reinterpret service diagnostics as a configured remote connection.
+  const probeConfig: OpenClawConfig = {
+    ...daemonCfg,
+    gateway: {
+      ...daemonCfg.gateway,
+      mode: "local",
+      remote: undefined,
+      auth:
+        !probeUrlOverride && daemonCfg.gateway?.auth?.mode
+          ? { mode: daemonCfg.gateway.auth.mode }
+          : undefined,
+      tls: undefined,
+    },
+  };
   const rpc = opts.probe
     ? await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
         probeGatewayStatus({
@@ -724,7 +744,7 @@ export async function gatherDaemonStatus(
           localPortOverride,
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
-          config: daemonCfg,
+          config: probeConfig,
           tlsFingerprint: localCertificate?.ok
             ? localCertificate.value.fingerprintSha256
             : undefined,

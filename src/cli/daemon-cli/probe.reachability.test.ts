@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { ensureGatewayReadyForOperation } from "../../commands/gateway-readiness.js";
@@ -59,6 +60,62 @@ async function checkDashboardReadiness(url: string, rpc: NonNullable<DaemonStatu
 }
 
 describe("Gateway reachability over real sockets", () => {
+  it.each([{}, { token: "service-token" }, { password: "service-password" }])(
+    "freezes resolved service auth %j without pairing writes",
+    async (auth) => {
+      const state = await createOpenClawTestState({
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "ambient-token",
+          OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
+        },
+      });
+      cleanups.push(() => state.cleanup());
+      const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+      cleanups.push(() => closeMinimalGatewayServer(wss));
+      let connectAuth: unknown;
+      wss.on("connection", (ws) => {
+        sendMinimalGatewayConnectChallenge(ws);
+        ws.on("message", (data) => {
+          const frame = parseMinimalGatewayRequestFrame(data);
+          if (frame.method === "connect") {
+            connectAuth = frame.params?.auth;
+            sendMinimalGatewayResponse(
+              ws,
+              frame.id!,
+              buildMinimalGatewayHelloOkPayload({
+                methods: ["status"],
+                auth: { role: "operator", scopes: ["operator.read"] },
+              }),
+            );
+          } else {
+            sendMinimalGatewayResponse(ws, frame.id!, { status: "ok" });
+          }
+        });
+      });
+      await once(wss, "listening");
+      const address = wss.address();
+      assert(address && typeof address !== "string");
+      const before = await fs.readdir(state.stateDir, { recursive: true });
+      const rpc = await probeGatewayStatus({
+        url: `ws://127.0.0.1:${address.port}`,
+        ...auth,
+        config: {
+          gateway: {
+            mode: "local",
+            auth: { mode: "none", token: "config-token" },
+            remote: { token: "remote-token", password: "remote-password" },
+          },
+        },
+        timeoutMs: 2_000,
+        json: true,
+        requireRpc: true,
+      });
+      expect(rpc, JSON.stringify(rpc)).toMatchObject({ ok: true });
+      expect(connectAuth ?? {}).toEqual(auth);
+      expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(before);
+    },
+  );
+
   it.each(["terminate", "policy-close", "silent", "upgrade-rejected"] as const)(
     "does not start a second service or accept a %s listener",
     async (mode) => {
