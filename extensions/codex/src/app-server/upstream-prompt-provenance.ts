@@ -5,6 +5,20 @@ const UPSTREAM_USER_TEXT_META_KEY = "upstreamUserText" as const;
 const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
 const CODEX_META_KEY = "__openclaw";
 
+/**
+ * Mirror-identity suffix for the per-turn Codex reasoning mirror
+ * (`${turnId}:reasoning`). Reasoning is private telemetry, never the turn's
+ * final assistant answer, so selectors that pick the terminal/last assistant
+ * message must exclude identities ending with this suffix.
+ */
+export const CODEX_REASONING_MIRROR_IDENTITY_SUFFIX = ":reasoning" as const;
+
+/** True when a message is the per-turn Codex reasoning mirror. */
+export function isCodexReasoningMirrorMessage(message: AgentMessage): boolean {
+  const identity = readMirrorIdentity(message);
+  return identity !== undefined && identity.endsWith(CODEX_REASONING_MIRROR_IDENTITY_SUFFIX);
+}
+
 export function attachCodexMirrorIdentity<T extends AgentMessage>(message: T, identity: string): T {
   const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
   const baseMeta = asOptionalRecord(existing) ?? {};

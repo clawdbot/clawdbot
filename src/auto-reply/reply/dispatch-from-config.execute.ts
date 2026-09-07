@@ -126,6 +126,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   },
                 } satisfies InternalReplyResolverOptions),
                 onObservedReplyDelivery: state.markObservedReplyDelivery,
+                onSourceReplyFinalDelivered: state.markSourceReplyFinalDelivered,
                 typingPolicy: typing.typingPolicy,
                 suppressTyping: typing.suppressTyping,
                 onPartialReply: deferFinalTtsText

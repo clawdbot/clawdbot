@@ -36,6 +36,7 @@ import {
 import {
   attachCodexMirrorIdentity,
   attachUpstreamUserText,
+  isCodexReasoningMirrorMessage,
   readMirrorIdentity,
 } from "./upstream-prompt-provenance.js";
 import {
@@ -66,6 +67,20 @@ function readMirroredAssistantText(message: MirroredAgentMessage | undefined): s
     ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n") ||
         undefined
     : undefined;
+}
+
+/**
+ * Select the turn's terminal (last-assistant) mirror message.
+ *
+ * The `${turnId}:reasoning` mirror is private reasoning telemetry, never the
+ * turn's final assistant answer. Excluding it here stops a reasoning-only turn
+ * from re-adopting reasoning as the visible final message and leaking it into
+ * chat history (bug B, beast-telegram-delivery-w0-sep7-1427).
+ */
+export function selectTerminalMirrorMessage<T extends AgentMessage>(
+  messages: readonly T[],
+): T | undefined {
+  return messages.filter((message) => !isCodexReasoningMirrorMessage(message)).at(-1);
 }
 
 /** Imports a bounded, user-visible Codex history tail into a new OpenClaw transcript. */
@@ -196,7 +211,7 @@ async function mirrorBestEffort(params: {
     const assistantTranscriptIdempotencyKey = normalizeOptionalString(
       (assistantTranscriptMessage as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
     );
-    const terminalMessage = mirroredMessages.at(-1);
+    const terminalMessage = selectTerminalMirrorMessage(mirroredMessages);
     const terminalMirrorIdentity = terminalMessage
       ? readMirrorIdentity(terminalMessage)
       : undefined;

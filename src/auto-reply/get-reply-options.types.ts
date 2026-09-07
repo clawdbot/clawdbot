@@ -383,6 +383,13 @@ export type GetReplyOptions = {
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
   /** Called when a suppressed source reply mode observes visible delivery through another path. */
   onObservedReplyDelivery?: () => Promise<void> | void;
+  /**
+   * Called when a genuine *final* source reply settles out-of-band (e.g.
+   * message-tool-only mode). Unlike onObservedReplyDelivery, this fires only for
+   * final delivery, so channel terminal branches can set finalAnswerDelivered
+   * and avoid a false failure notice.
+   */
+  onSourceReplyFinalDelivered?: () => Promise<void> | void;
   /** Emit tool result summaries for channel-owned progress UI even when verbose is off. */
   forceToolResultProgress?: boolean;
   disableBlockStreaming?: boolean;

@@ -46,6 +46,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     emptyFinalAllowedAsSilent,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
+    getSourceReplyFinalDelivered,
     isRoutedReplyDelivered,
     markInboundDedupeReplayUnsafe,
     noVisibleReplyFallbackDirected,
@@ -479,6 +480,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
       : {}),
     ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
+    ...(getSourceReplyFinalDelivered() ? { sourceReplyFinalDelivered: true } : {}),
     ...(replyAdmission?.status === "accepted" ? { deferredToActiveRun: replyAdmission.mode } : {}),
     // Eligibility keys off settled visible delivery: a suppressed or cancelled
     // final (including the core fallback itself) leaves channel-level recovery

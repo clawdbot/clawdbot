@@ -20,6 +20,14 @@ export type DispatchFromConfigResult = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sendPolicyDenied?: boolean;
   observedReplyDelivery?: boolean;
+  /**
+   * True when a genuine *final* source reply settled out-of-band (e.g.
+   * message-tool-only mode) rather than through the channel's own final
+   * dispatch counts. Distinct from observedReplyDelivery, which also latches on
+   * progress/partial deliveries. Channel terminal branches use this to set
+   * finalAnswerDelivered so they do not emit a false failure notice.
+   */
+  sourceReplyFinalDelivered?: boolean;
   deferredToActiveRun?: "steer" | "followup";
   noVisibleReplyFallbackEligible?: boolean;
   noVisibleReplyFallbackDelivered?: boolean;

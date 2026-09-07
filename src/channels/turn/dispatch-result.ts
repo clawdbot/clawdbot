@@ -11,6 +11,7 @@ export type ChannelTurnDispatchResultLike =
         counts: Partial<Record<ReplyDispatchKind, { delivered: number; failedAfterSend: number }>>;
       };
       observedReplyDelivery?: boolean;
+      sourceReplyFinalDelivered?: boolean;
       deferredToActiveRun?: "steer" | "followup";
     }
   | null
