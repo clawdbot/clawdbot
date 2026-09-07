@@ -9,7 +9,6 @@ import type { GatewayService } from "../../daemon/service.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { UpdatePreMutationError } from "./shared.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -23,7 +22,6 @@ import {
   resolveOwnedManagedUpdateEnv,
   resolveUpdatedInstallCommandEnv,
 } from "./update-command-service-env.js";
-import { ManagedServiceStopFailure } from "./update-command-service-maintenance.js";
 import {
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
@@ -1030,56 +1028,5 @@ describe("buildInvalidConfigPostCoreUpdateResult", () => {
     expect(built.message).toBe(
       "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
     );
-  });
-});
-
-describe("ManagedServiceStopFailure", () => {
-  it("carries the inspected stop state through the error boundary", () => {
-    const inspected = {
-      stopped: true,
-      inspected: true,
-      runtimeInspected: true,
-      running: false,
-      serviceEnv: { OPENCLAW_PROFILE: "work" } as NodeJS.ProcessEnv,
-      serviceUpdateVerdict: {
-        kind: "owned" as const,
-        root: "/usr/local/lib/openclaw",
-        fingerprint: "abc123",
-        refreshDefinition: true,
-      },
-    };
-    const cause = new Error("port 18789 still busy after stop");
-    const err = new ManagedServiceStopFailure(inspected, cause);
-
-    expect(err).toBeInstanceOf(ManagedServiceStopFailure);
-    expect(err).toBeInstanceOf(Error);
-    expect(err.inspectedState).toEqual(inspected);
-    expect(err.inspectedState.stopped).toBe(true);
-    expect(err.inspectedState.serviceEnv).toEqual({ OPENCLAW_PROFILE: "work" });
-    expect(err.cause).toBe(cause);
-  });
-});
-
-describe("UpdatePreMutationError", () => {
-  it("preserves the cause chain so callers can inspect the original failure", () => {
-    const original = new Error("launchctl bootout failed");
-    const err = new UpdatePreMutationError(
-      "managed-service-stop-failed",
-      `Failed to stop managed gateway service before update: ${String(original)}`,
-      { cause: original },
-    );
-
-    expect(err).toBeInstanceOf(UpdatePreMutationError);
-    expect(err).toBeInstanceOf(Error);
-    expect(err.reason).toBe("managed-service-stop-failed");
-    expect(err.cause).toBe(original);
-    expect(err.name).toBe("UpdatePreMutationError");
-  });
-
-  it("works without a cause for backward compatibility", () => {
-    const err = new UpdatePreMutationError("database-schema-preflight", "schema is incompatible");
-
-    expect(err.reason).toBe("database-schema-preflight");
-    expect(err.cause).toBeUndefined();
   });
 });

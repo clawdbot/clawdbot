@@ -49,7 +49,6 @@ import {
 import { recordUpdateGatewayHealth, verifyUpdatedGateway } from "./update-command-verification.js";
 
 export {
-  ManagedServiceStopFailure,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,

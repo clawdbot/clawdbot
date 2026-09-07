@@ -43,18 +43,6 @@ import {
 
 export { UpdateCommandAbort } from "./update-command-windows-task.js";
 
-/** Wraps a stop-attempt error with the pre-stop inspected state so the caller
- *  can populate the recovery record even when the assignment never completed. */
-export class ManagedServiceStopFailure extends Error {
-  constructor(
-    readonly inspectedState: PreManagedServiceStop,
-    cause: unknown,
-  ) {
-    super(`Managed gateway stop failed: ${String(cause)}`, { cause });
-    this.name = "ManagedServiceStopFailure";
-  }
-}
-
 const GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE =
   "Gateway service management skipped: inspection is unavailable. Run `openclaw gateway status --deep` and restart the gateway manually when service access is restored.";
 const GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE =
@@ -329,6 +317,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
   expectedService?: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
   activatedInstall?: { packageUpdateNodeRunner?: string; invocationCwd?: string };
+  onStopped?: (state: PreManagedServiceStop) => void;
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
@@ -548,6 +537,8 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       await service.stop({
         env: currentState.env,
         stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
+        // Native stop may unload the service before a later port check fails.
+        onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
       });
     }
     if (windowsTaskAutoStartRecovery) {
@@ -575,7 +566,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
         throw new UpdateCommandAbort();
       }
     }
-    throw new ManagedServiceStopFailure({ ...inspected, stopped: true }, err);
+    throw err;
   }
   return {
     ...inspected,

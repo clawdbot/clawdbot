@@ -8086,6 +8086,36 @@ describe("update-cli", () => {
     },
   );
 
+  it.each([false, true])(
+    "recovers a failed managed service stop only after an observed mutation (%s)",
+    async (mutated) => {
+      const root = await mockPackageInstallAtCaseDir("openclaw-update-partial-stop");
+      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      serviceStop.mockImplementationOnce(async ({ onMutation }) => {
+        if (mutated) {
+          onMutation?.({ mode: "bootout" });
+        }
+        throw new Error(mutated ? "port still busy after bootout" : "bootout refused");
+      });
+
+      await expect(invokeUpdateCli({ channel: "beta", yes: true, json: true })).rejects.toEqual(
+        new ExitError(1),
+      );
+
+      expect(serviceStop).toHaveBeenCalledOnce();
+      expect(freshRestartCalls(), getErrorOutput()).toHaveLength(mutated ? 1 : 0);
+      expect(replaceConfigFile).not.toHaveBeenCalled();
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        reason: "managed-service-stop-failed",
+        recovery: { serviceRestartSafe: true },
+      });
+      expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
+        version: "1.0.0",
+      });
+    },
+  );
+
   it("restores Windows Scheduled Task autostart when service stop fails", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const root = await mockPackageInstallAtCaseDir("openclaw-update-stop-failure");
