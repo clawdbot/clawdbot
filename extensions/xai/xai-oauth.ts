@@ -636,6 +636,7 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
     const provider = await buildLiveXaiOAuthProvider({
       discoveryApiKey: tokens.accessToken,
       signal: ctx.signal,
+      fetchGuard: (params) => fetchWithSsrFGuard({ ...params, beforeRequest: ctx.assertCurrent }),
     });
     progress.stop("xAI OAuth complete");
     return buildOauthProviderAuthResult({

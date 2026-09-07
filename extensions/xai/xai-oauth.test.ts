@@ -124,90 +124,121 @@ describe("xAI OAuth", () => {
     });
   });
 
-  it("revalidates live authority before following an OAuth redirect", async () => {
-    const transport = new MockAgent();
-    transport.disableNetConnect();
-    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
-      const response = await undiciFetch(requestUrl(input), {
-        method: init?.method,
-        headers: Object.fromEntries(new Headers(init?.headers)),
-        redirect: init?.redirect,
-        signal: init?.signal,
-        dispatcher: transport,
+  it.each(["OAuth", "catalog"] as const)(
+    "revalidates live authority before following a %s redirect",
+    async (boundary) => {
+      const transport = new MockAgent();
+      transport.disableNetConnect();
+      const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+        const response = await undiciFetch(requestUrl(input), {
+          method: init?.method,
+          headers: Object.fromEntries(new Headers(init?.headers)),
+          redirect: init?.redirect,
+          signal: init?.signal,
+          dispatcher: transport,
+        });
+        return new Response(await response.arrayBuffer(), {
+          status: response.status,
+          headers: Object.fromEntries(response.headers),
+        });
       });
-      return new Response(await response.arrayBuffer(), {
-        status: response.status,
-        headers: Object.fromEntries(response.headers),
+      vi.stubGlobal("fetch", fetchImpl);
+      const held = createDeferred<void>();
+      const release = createDeferred<void>();
+      const controller = new AbortController();
+      let current = true;
+      const redirectStart =
+        boundary === "OAuth"
+          ? XAI_OAUTH_DISCOVERY_URL
+          : "https://cli-chat-proxy.grok.com/v1/models";
+      if (boundary === "catalog") {
+        const auth = transport.get("https://auth.x.ai");
+        auth.intercept({ path: "/.well-known/openid-configuration" }).reply(200, {
+          device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+          token_endpoint: "https://auth.x.ai/oauth2/token",
+        });
+        auth.intercept({ path: "/oauth2/device/code", method: "POST" }).reply(200, {
+          device_code: "device",
+          user_code: "CODE",
+          verification_uri: "https://auth.x.ai/device",
+          expires_in: 60,
+          interval: 1,
+        });
+        auth.intercept({ path: "/oauth2/token", method: "POST" }).reply(200, {
+          access_token: "access",
+          refresh_token: "refresh",
+          expires_in: 60,
+        });
+        transport
+          .get("https://cli-chat-proxy.grok.com")
+          .intercept({ path: "/v1/settings" })
+          .reply(200, { default_model: "subscription-fixture" });
+      }
+      const origin = transport.get(new URL(redirectStart).origin);
+      origin.intercept({ path: new URL(redirectStart).pathname }).reply(async () => {
+        held.resolve();
+        await release.promise;
+        return { statusCode: 302, responseOptions: { headers: { location: "/retired" } } };
       });
-    });
-    vi.stubGlobal("fetch", fetchImpl);
-    const held = createDeferred<void>();
-    const release = createDeferred<void>();
-    const controller = new AbortController();
-    let current = true;
-    const origin = transport.get("https://auth.x.ai");
-    origin.intercept({ path: "/.well-known/openid-configuration" }).reply(async () => {
-      held.resolve();
-      await release.promise;
-      return { statusCode: 302, responseOptions: { headers: { location: "/retired" } } };
-    });
-    const redirected = vi.fn(() => ({ statusCode: 403, data: "denied" }));
-    origin.intercept({ path: "/retired" }).reply(redirected);
-    const outcome = createXaiOAuthAuthMethod()
-      .run({
-        config: {},
-        isRemote: true,
-        openUrl: async () => {},
-        prompter: createTestWizardPrompter(),
-        runtime: createRuntimeEnv(),
-        signal: controller.signal,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("owner retired");
-          }
-        },
-        oauth: {
-          createVpsAwareHandlers: () => {
-            throw new Error("unexpected browser flow");
+      const redirected = vi.fn(() => ({ statusCode: 403, data: "denied" }));
+      origin.intercept({ path: "/retired" }).reply(redirected);
+      const outcome = createXaiOAuthAuthMethod()
+        .run({
+          config: {},
+          isRemote: true,
+          openUrl: async () => {},
+          prompter: createTestWizardPrompter(),
+          runtime: createRuntimeEnv(),
+          signal: controller.signal,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("owner retired");
+            }
           },
-        },
-      })
-      .catch((error: unknown) => error);
-    try {
-      await Promise.race([
-        held.promise,
-        outcome.then((error) => {
-          throw new Error("login ended before the held redirect", { cause: error });
-        }),
-      ]);
-      current = false;
-      release.resolve();
-      const error = await outcome;
-      expect(redirected).not.toHaveBeenCalled();
-      expect(transport.pendingInterceptors()).toEqual([
-        expect.objectContaining({ path: "/retired" }),
-      ]);
-      expect(error).toMatchObject({ message: expect.stringContaining("owner retired") });
-      expect(fetchImpl).toHaveBeenCalledWith(
-        XAI_OAUTH_DISCOVERY_URL,
-        expect.objectContaining({
-          redirect: "manual",
-          signal: expect.any(AbortSignal),
-        }),
-      );
-      expect(controller.signal.aborted).toBe(false);
-    } finally {
-      controller.abort();
-      release.resolve();
-      await outcome;
-      await transport.close();
-    }
-  });
+          oauth: {
+            createVpsAwareHandlers: () => {
+              throw new Error("unexpected browser flow");
+            },
+          },
+        })
+        .catch((error: unknown) => error);
+      try {
+        await Promise.race([
+          held.promise,
+          outcome.then((error) => {
+            throw new Error("login ended before the held redirect", { cause: error });
+          }),
+        ]);
+        current = false;
+        release.resolve();
+        const error = await outcome;
+        expect(redirected).not.toHaveBeenCalled();
+        expect(transport.pendingInterceptors()).toEqual([
+          expect.objectContaining({ path: "/retired" }),
+        ]);
+        expect(error).toMatchObject({ message: expect.stringContaining("owner retired") });
+        expect(fetchImpl).toHaveBeenCalledWith(
+          redirectStart,
+          expect.objectContaining({
+            redirect: "manual",
+            signal: expect.any(AbortSignal),
+          }),
+        );
+        expect(controller.signal.aborted).toBe(false);
+      } finally {
+        controller.abort();
+        release.resolve();
+        await outcome;
+        await transport.close();
+      }
+    },
+  );
 
   it.each([
     { boundary: "discovery response", requests: 1 },
     { boundary: "device prompt", requests: 2 },
     { boundary: "pending poll", requests: 3 },
+    { boundary: "token response", requests: 3 },
   ])(
     "revalidates live authority after held $boundary before another request",
     async ({ boundary, requests }) => {
@@ -242,6 +273,15 @@ describe("xAI OAuth", () => {
             expires_in: 60,
             interval: 1,
           });
+        }
+        if (url.endsWith("/models")) {
+          return jsonResponse({ data: [{ id: "subscription-fixture", api_backend: "responses" }] });
+        }
+        if (url.endsWith("/settings")) {
+          return jsonResponse({ default_model: "subscription-fixture" });
+        }
+        if (boundary === "token response") {
+          await hold();
         }
         polls += 1;
         if (boundary === "pending poll" && polls === 1) {
@@ -653,6 +693,7 @@ describe("xAI OAuth", () => {
                   : {}),
               },
         isRemote: true,
+        assertCurrent: vi.fn(),
         openUrl,
         prompter: createTestWizardPrompter({
           progress: vi.fn(() => progress),
