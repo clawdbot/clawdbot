@@ -1714,6 +1714,120 @@ describe("createModelSelectionState respects session model override", () => {
 });
 
 describe("createModelSelectionState inherits primary from stale last-used", () => {
+  it.each([
+    { name: "same-provider", credentialProvider: "anthropic", profileExists: true, keep: true },
+    { name: "provider-alias", credentialProvider: "claude-cli", profileExists: true, keep: true },
+    { name: "incompatible", credentialProvider: "openai", profileExists: true, keep: false },
+    { name: "missing shared", credentialProvider: "anthropic", profileExists: false, keep: false },
+    { name: "missing personal", credentialProvider: "anthropic", profileExists: false, keep: true },
+  ])("validates the $name auth pin after clearing last-used", async (testCase) => {
+    const sessionKey = "agent:main:telegram:direct:1";
+    const profileId =
+      testCase.name === "missing personal"
+        ? "personal:11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222"
+        : "anthropic:work";
+    if (testCase.profileExists) {
+      authProfileStoreMock.store.profiles[profileId] = {
+        type: "api_key",
+        provider: testCase.credentialProvider,
+        key: "test-key",
+      };
+    }
+    const authPin = {
+      authProfileOverride: profileId,
+      authProfileOverrideSource: "user" as const,
+      authProfileOverrideCompactionCount: 3,
+    };
+    const sessionEntry = makeEntry({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      contextTokens: 200_000,
+      ...authPin,
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("anthropic");
+    expect(state.model).toBe("claude-opus-4-6");
+    expect(sessionEntry.modelProvider).toBeUndefined();
+    expect(sessionEntry.model).toBeUndefined();
+    expect(sessionEntry.contextTokens).toBeUndefined();
+    expect(authProfileStoreMock.ensureAuthProfileStore).toHaveBeenCalled();
+    if (testCase.keep) {
+      expect(sessionEntry).toMatchObject(authPin);
+    } else {
+      expect(sessionEntry.authProfileOverride).toBeUndefined();
+      expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+      expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+    }
+    expect(sessionStore[sessionKey]).toEqual(sessionEntry);
+  });
+
+  it("persists a compatible auth pin while clearing stale last-used", async () => {
+    const sessionKey = "agent:main:telegram:direct:1";
+    const authPin = {
+      authProfileOverride: "anthropic:work",
+      authProfileOverrideSource: "user" as const,
+      authProfileOverrideCompactionCount: 3,
+    };
+    authProfileStoreMock.store.profiles[authPin.authProfileOverride] = {
+      type: "api_key",
+      provider: "anthropic",
+      key: "test-key",
+    };
+    const sessionEntry = makeEntry({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      contextTokens: 200_000,
+      ...authPin,
+    });
+    const initialEntry = { ...sessionEntry };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    sessionPersistenceMocks.persistReplySessionEntry.mockImplementationOnce(async ({ entry }) => ({
+      status: "persisted",
+      entry: { ...entry },
+    }));
+
+    await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath: "sessions.json",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      hasModelDirective: false,
+    });
+
+    expect(sessionPersistenceMocks.persistReplySessionEntry).toHaveBeenCalledExactlyOnceWith({
+      storePath: "sessions.json",
+      sessionKey,
+      initialEntry,
+      entry: expect.objectContaining(authPin),
+    });
+    const persisted = sessionPersistenceMocks.persistReplySessionEntry.mock.calls[0]?.[0].entry;
+    expect(persisted?.modelProvider).toBeUndefined();
+    expect(persisted?.model).toBeUndefined();
+    expect(persisted?.contextTokens).toBeUndefined();
+    expect(sessionEntry).toMatchObject(authPin);
+    expect(sessionStore[sessionKey]).toEqual(sessionEntry);
+  });
+
   it("clears last-used when it differs from the current primary", async () => {
     const sessionKey = "agent:main:telegram:direct:1";
     const sessionEntry = makeEntry({
