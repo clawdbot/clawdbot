@@ -41,3 +41,11 @@ export type ProviderExternalAuthProfile = {
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
+
+/** Internal synchronous resolver shared by provider hooks and auth-store overlays. */
+export type ProviderExternalAuthProfileResolver = (params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveExternalAuthProfilesContext;
+}) => ProviderExternalAuthProfile[];

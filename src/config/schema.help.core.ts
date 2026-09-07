@@ -2,7 +2,7 @@
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
-import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
+import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
   worktreeRoot:
@@ -86,7 +86,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
   telemetry:
     "Explicit consent for anonymous feature statistics attached to the daily update check. Feature statistics are disabled by default and never include messages, credentials, or identifiers.",
-  ...projectTelemetryFieldMetadata("help"),
+  ...TELEMETRY_FIELD_HELP,
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,
@@ -106,9 +106,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.enabled":
     "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
   "gateway.cliAgents":
-    "Experimental Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Keep disabled unless operators should be able to start those engines from the new-session model picker.",
+    "Experimental Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":
-    "Shows catalog-backed CLI agents in the Control UI new-session model picker when true (default: false). Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
+    "Shows catalog-backed CLI agents in the Control UI new-session model picker when true (default: true). Set false to disable CLI agents and native CLI session creation. Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
   "gateway.terminal":
     "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
   "gateway.terminal.enabled":

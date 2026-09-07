@@ -1,11 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { t } from "../i18n/index.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
@@ -18,7 +16,7 @@ if (!customElements.get("openclaw-session-progress-hovercard-provider")) {
   );
 }
 
-function mountHovercard(sessionKey = "global", holdProgress = false, supportsOwner = true) {
+function mountHovercard(sessionKey = "global", holdProgress = false) {
   let selectedId = "research";
   const selectionListeners = new Set<() => void>();
   const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
@@ -60,7 +58,6 @@ function mountHovercard(sessionKey = "global", holdProgress = false, supportsOwn
       hello: {
         features: {
           methods: ["progressCard.get", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
-          capabilities: supportsOwner ? [GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE] : [],
         },
       },
     },
@@ -232,18 +229,6 @@ describe("session progress hovercard ownership", () => {
     },
   );
 
-  it("shows the global owner update hint in the actual hover portal", async () => {
-    const harness = mountHovercard("global", false, false);
-    harness.focus();
-    await vi.waitFor(() =>
-      expect(document.querySelector(".session-progress-hovercard")?.textContent).toContain(
-        t("sessionProgressCard.ownerUnsupported"),
-      ),
-    );
-    expect(harness.request.mock.calls.some(([method]) => method === "progressCard.get")).toBe(
-      false,
-    );
-  });
   it.each([
     ["global", "agent:research:global", "research"],
     ["agent:other:main", "agent:other:main", "other"],

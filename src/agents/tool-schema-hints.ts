@@ -280,27 +280,28 @@ function compactObjectHint(
     schema.additionalProperties === true ||
     isRecord(schema.additionalProperties);
   let complete = !structurallyIncomplete && schema.additionalProperties === false;
-  const parts: string[] = [];
+  let body = "";
   for (const key of keys) {
     const name = IDENTIFIER_RE.test(key) ? key : JSON.stringify(key);
     const propertyHint = compactSchemaType(properties[key], depth, limits);
     complete &&= propertyHint.complete;
     const part = `${name}${required.has(key) ? "" : "?"}: ${propertyHint.text}`;
-    const next = `{ ${[...parts, part].join("; ")} }`;
-    if (next.length > limits.maxChars) {
+    const next = body ? `${body}; ${part}` : part;
+    // The budget includes both braces and their inner spaces.
+    if (next.length + 4 > limits.maxChars) {
       omitted = true;
       complete = false;
       break;
     }
-    parts.push(part);
+    body = next;
   }
-  if (parts.length === 0) {
+  if (!body) {
     return keys.length === 0 && !omitted
       ? { text: "{}", complete }
       : { text: "{ ... }", complete: false };
   }
   return {
-    text: `{ ${parts.join("; ")}${omitted ? "; ..." : ""} }`,
+    text: `{ ${body}${omitted ? "; ..." : ""} }`,
     complete,
   };
 }

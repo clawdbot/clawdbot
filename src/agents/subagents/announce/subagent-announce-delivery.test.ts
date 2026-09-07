@@ -108,7 +108,7 @@ afterEach(() => {
 });
 
 describe("queued completion handoff", () => {
-  it.each(["delivered", "source retired", "execution timeout", "delivery deadline"] as const)(
+  it.each(["delivered", "source retired", "long execution", "delivery deadline"] as const)(
     "keeps an accepted busy-parent completion pending until execution: %s",
     async (outcome) => {
       vi.useFakeTimers();
@@ -182,14 +182,11 @@ describe("queued completion handoff", () => {
         }
         sourceAllowed = outcome !== "source retired";
         parentSettled.resolve();
-        if (outcome === "execution timeout") {
+        if (outcome === "long execution") {
           await executionStarted.promise;
           await vi.advanceTimersByTimeAsync(120_001);
-          expect(await delivery).toMatchObject({
-            delivered: false,
-            error: "gateway request timeout for agent",
-          });
-          return;
+          expect(finished).toBe(false);
+          expect((await accepted.promise).signal?.aborted).toBe(false);
         }
         executionSettled.resolve();
         expect(await delivery).toMatchObject(
@@ -4942,6 +4939,60 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   ];
 
   const requesterSettleCases = [
+    ...[
+      {
+        name: "automatic delivery",
+        evidence: { deliveryStatus: { status: "sent", succeeded: true, resultCount: 1 } },
+      },
+      {
+        name: "final message tool",
+        evidence: {
+          messagingToolSentTargets: [{ ...requesterSettleSourceTarget, sourceReplyFinal: true }],
+        },
+      },
+    ].map(({ name, evidence }) => ({
+      name: `preserves ${name} final evidence alongside settled continuation`,
+      routes: [externalRequesterSettleRoute],
+      recordsVisibleFinal: true,
+      response: {
+        result: {
+          payloads: [],
+          meta: { yielded: true },
+          requesterContinuationSettled: true,
+          ...evidence,
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    })),
+    {
+      name: "acknowledges a core-settled next wave without recording a visible final",
+      routes: requesterSettleRoutes,
+      response: {
+        result: { payloads: [], meta: { yielded: true }, requesterContinuationSettled: true },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    ...[
+      { yielded: true, settled: undefined, error: undefined, aborted: undefined },
+      { yielded: false, settled: true, error: undefined, aborted: undefined },
+      { yielded: true, settled: true, error: { kind: "incomplete_turn" }, aborted: undefined },
+      { yielded: true, settled: true, error: undefined, aborted: true },
+    ].map(({ yielded, settled, error, aborted }) => ({
+      name: `rejects unproven or failed continuation (${yielded}/${settled}/${Boolean(error)}/${aborted})`,
+      routes: requesterSettleRoutes,
+      response: {
+        result: {
+          payloads: [],
+          meta: { yielded, error, aborted },
+          acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
+          requesterContinuationSettled: settled,
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    })),
     ...["accepted", "in_flight"].map((status) => ({
       name: `does not record ${status} handoff as a visible final`,
       routes: requesterSettleRoutes,

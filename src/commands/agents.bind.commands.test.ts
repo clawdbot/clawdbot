@@ -12,7 +12,6 @@ import {
 import { baseConfigSnapshot } from "./test-runtime-config-helpers.js";
 
 const pluginRegistryMocks = vi.hoisted(() => ({
-  loadPluginRegistrySnapshot: vi.fn(() => ({})),
   listPluginContributionIds: vi.fn(() => ["external-chat"]),
 }));
 
@@ -37,7 +36,6 @@ vi.mock("../config/bindings.js", () => ({
 
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
   listPluginContributionIds: pluginRegistryMocks.listPluginContributionIds,
 }));
 
@@ -156,7 +154,6 @@ describe("agents bind/unbind commands", () => {
 
   beforeEach(() => {
     resetAgentsBindTestHarness();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockClear();
     pluginRegistryMocks.listPluginContributionIds.mockClear();
   });
 
@@ -201,6 +198,7 @@ describe("agents bind/unbind commands", () => {
       { type: "route", agentId: "main", match: { channel: "telegram" } },
     ]);
     expect(runtime.exit).not.toHaveBeenCalled();
+    expect(pluginRegistryMocks.listPluginContributionIds).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -325,7 +323,7 @@ describe("agents bind/unbind commands", () => {
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(writeConfigFileMock).not.toHaveBeenCalled();
       if (!loadsPluginRegistry) {
-        expect(pluginRegistryMocks.loadPluginRegistrySnapshot).not.toHaveBeenCalled();
+        expect(pluginRegistryMocks.listPluginContributionIds).not.toHaveBeenCalled();
       }
     },
   );
@@ -366,7 +364,7 @@ describe("agents bind/unbind commands", () => {
       config: {},
     });
 
-    await agentsBindCommand({ bind: ["external-chat:work"] }, runtime);
+    await agentsBindCommand({ bind: ["external-chat:work", "external-chat:home"] }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
     const writtenConfig = firstWrittenConfig();
@@ -376,9 +374,27 @@ describe("agents bind/unbind commands", () => {
         agentId: "main",
         match: { channel: "external-chat", accountId: "work" },
       },
+      {
+        type: "route",
+        agentId: "main",
+        match: { channel: "external-chat", accountId: "home" },
+      },
     ]);
-    expect(pluginRegistryMocks.loadPluginRegistrySnapshot).toHaveBeenCalled();
+    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledOnce();
+    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledWith({
+      contribution: "channels",
+      includeDisabled: true,
+      config: {},
+      env: process.env,
+    });
     expect(runtime.exit).not.toHaveBeenCalled();
+    pluginRegistryMocks.listPluginContributionIds.mockReturnValueOnce([]);
+    await expect(
+      agentsBindCommand({ bind: ["external-chat:next"] }, runtime),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('Unknown channel "external-chat"'),
+    });
+    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledTimes(2);
   });
 
   it("unbinds all routes for an agent", async () => {

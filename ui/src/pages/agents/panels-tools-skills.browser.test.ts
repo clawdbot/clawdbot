@@ -1,6 +1,6 @@
 // Control UI tests cover agents panels tools skills behavior.
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
@@ -670,6 +670,109 @@ describe("agents tools panel (browser)", () => {
       replaceState.mockRestore();
       container.remove();
     }
+  });
+
+  it.each([
+    {
+      name: "enables one profile tool",
+      tool: "session_status",
+      enabled: true,
+      expectedAllow: ["untouched", "exec", "web_*"],
+      expectedDeny: ["read", "web_*"],
+    },
+    {
+      name: "disables one aliased tool",
+      tool: "bash",
+      enabled: false,
+      expectedAllow: ["untouched", "web_*"],
+      expectedDeny: ["session_status", "read", "web_*", "exec"],
+    },
+    {
+      name: "enables the catalog without removing wildcard denies",
+      tool: null,
+      enabled: true,
+      expectedAllow: ["untouched", "exec", "web_*", "web_fetch"],
+      expectedDeny: ["read", "web_*"],
+    },
+    {
+      name: "disables the catalog without removing wildcard allows",
+      tool: null,
+      enabled: false,
+      expectedAllow: ["untouched", "web_*"],
+      expectedDeny: ["session_status", "read", "web_*", "exec", "web_fetch"],
+    },
+    {
+      name: "publishes one normalized update for an empty catalog",
+      tool: null,
+      enabled: true,
+      emptyCatalog: true,
+      expectedAllow: ["untouched", "exec", "web_*"],
+      expectedDeny: ["session_status", "read", "web_*"],
+    },
+  ])("$name with one immutable override update", async (testCase) => {
+    const tools = {
+      profile: "minimal",
+      alsoAllow: [" untouched ", " BASH ", "exec", "", "web_*"],
+      deny: [" SESSION_STATUS ", "read", "web_*", "", "read"],
+    };
+    const configForm = { agents: { entries: { main: { tools } } } };
+    const originalConfig = structuredClone(configForm);
+    const onOverridesChange = vi.fn();
+    const toolIds = testCase.emptyCatalog ? [] : ["session_status", "bash", "web_fetch"];
+    const container = document.createElement("div");
+    render(
+      renderAgentTools(
+        createBaseParams({
+          configForm,
+          onOverridesChange,
+          toolsCatalogResult: {
+            agentId: "main",
+            profiles: [{ id: "minimal", label: "Minimal" }],
+            groups: [
+              {
+                id: "policy",
+                label: "Policy",
+                source: "core",
+                tools: toolIds.map((id) => ({
+                  id,
+                  label: id,
+                  description: id,
+                  source: "core" as const,
+                  defaultProfiles: [],
+                })),
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    if (testCase.tool) {
+      const card = Array.from(container.querySelectorAll(".agent-tool-card")).find(
+        (entry) => entry.querySelector(".agent-tool-title")?.textContent?.trim() === testCase.tool,
+      );
+      const toggle = card?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+      assert(toggle, `Missing tool switch: ${testCase.tool}`);
+      expect(toggle.checked).toBe(!testCase.enabled);
+      toggle.checked = testCase.enabled;
+      toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      const label = testCase.enabled ? "Enable All" : "Disable All";
+      const button = Array.from(container.querySelectorAll("button")).find(
+        (entry) => entry.textContent?.trim() === label,
+      );
+      assert(button, `Missing bulk control: ${label}`);
+      button.click();
+    }
+
+    expect(onOverridesChange).toHaveBeenCalledExactlyOnceWith(
+      "main",
+      testCase.expectedAllow,
+      testCase.expectedDeny,
+    );
+    expect(configForm).toEqual(originalConfig);
   });
 
   it.each([

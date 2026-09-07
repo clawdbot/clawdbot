@@ -76,6 +76,7 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
     onDeviceReject: () => undefined,
     onDeviceRotate: () => undefined,
     onDeviceRevoke: () => undefined,
+    onDeviceRename: () => undefined,
     onNodeApprove: () => undefined,
     onNodeReject: () => undefined,
     onInventoryRemove: () => undefined,

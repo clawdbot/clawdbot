@@ -309,12 +309,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     allowlist: options?.runtimeToolAllowlist,
     denylist: explicitFactoryDenylist,
   });
-  // Scheduled turns with an explicit server-stamped tool cap have no originating
-  // renderer. Persistent session targets may still write their durable board;
-  // detached cron-run sessions stay gated because their board is not user-owned.
-  const scheduledPinnedWidgetOnly =
-    options?.gatewayCallerScheduled === true &&
-    scheduledWidgetExplicitlyAllowed &&
+  // Admitted Control UI recovery and explicitly capped scheduled turns can
+  // keep authoring their durable board without claiming an inline renderer.
+  const pinnedWidgetOnly =
+    (options?.pinnedWidgetAuthoring === true ||
+      (options?.gatewayCallerScheduled === true && scheduledWidgetExplicitlyAllowed)) &&
     !inlineWidgetClientAvailable &&
     !widgetPresentation.currentChannelPresenter &&
     Boolean(sessionKey) &&
@@ -432,7 +431,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentSessionKey: sessionKey,
             inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
             inlineClientAvailable: inlineWidgetClientAvailable,
-            pinnedOnly: scheduledPinnedWidgetOnly,
+            pinnedOnly: pinnedWidgetOnly,
             presenters: widgetPresentation.presenters,
             presenterContext: widgetPresentation.context,
           }),
@@ -571,7 +570,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     ...(!embedded || options?.allowGatewaySubagentBinding === true
       ? [
           createSessionsSpawnTool({
-            agentSessionKey: options?.agentSessionKey,
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             requesterTurnRunId: options?.runId,
             requesterThinkingLevel: options?.requesterThinkingLevel,
             completionOwnerKey: options?.runSessionKey,
@@ -611,7 +610,14 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       onYield: options?.onYield,
     }),
     createSubagentsTool({
-      agentSessionKey: options?.agentSessionKey,
+      // Match the durable controller key the spawn tool registers runs under, so split-key
+      // callers (e.g. Telegram DM with a policy key distinct from the durable run key) still
+      // see their spawned runs in the active/recent list. Mirrors createSessionsSpawnTool above.
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      // Retained task rows created before the durable-key alignment still carry the policy
+      // key in owner_key; let the listing/cancel tool match both so those rows stay reachable
+      // for split-key callers instead of disappearing with "Task outside session tree".
+      callerPolicySessionKey: options?.agentSessionKey,
       agentId: sessionAgentId,
       config: sessionConfig,
     }),

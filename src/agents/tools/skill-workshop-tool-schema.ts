@@ -3,10 +3,6 @@
 import { Type } from "typebox";
 import type { SkillProposalStatus } from "../../skills/workshop/types.js";
 import { stringEnum } from "../schema/typebox.js";
-import {
-  SKILL_COLLECTION_ACTION_DESCRIPTION,
-  skillCollectionPlanSchema,
-} from "./skill-workshop-tool-collection.js";
 
 export const SKILL_WORKSHOP_ACTIONS = [
   "create",
@@ -45,23 +41,14 @@ export function resolveProposalOnlyActions(updateProposals: boolean, supportsCom
   ];
 }
 
-export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRevision = false) {
+export function buildSkillWorkshopToolSchema(proposalRevision = false) {
   return Type.Object(
     {
-      action: stringEnum(
-        proposalRevision
-          ? ["inspect", "revise"]
-          : collectionOnly
-            ? ["read", "reconcile"]
-            : [...SKILL_WORKSHOP_ACTIONS],
-        {
-          description: proposalRevision
-            ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
-            : collectionOnly
-              ? SKILL_COLLECTION_ACTION_DESCRIPTION
-              : "create = stage a pending proposal for a new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = stage a full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; complete = finish an internal review when available.",
-        },
-      ),
+      action: stringEnum(proposalRevision ? ["inspect", "revise"] : [...SKILL_WORKSHOP_ACTIONS], {
+        description: proposalRevision
+          ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
+          : "create = stage a pending proposal for a new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = stage a full-body rewrite; history = read historical collection review records (current runs use automation history); restore_collection = restore a retained backup from the previous collection reviewer; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; complete = finish an internal review when available.",
+      }),
       proposal_id: Type.Optional(
         Type.String({
           description:
@@ -158,7 +145,6 @@ export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRe
             "Optional orchestration or experiment correlation id carried into lifecycle events.",
         }),
       ),
-      collection: skillCollectionPlanSchema,
     },
     { additionalProperties: false },
   );

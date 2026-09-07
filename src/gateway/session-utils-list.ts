@@ -544,7 +544,7 @@ function buildSessionsListResult(
   };
 }
 
-export function resolveSessionsListDefaultsAgentId(
+function resolveSessionsListDefaultsAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
 ): string {

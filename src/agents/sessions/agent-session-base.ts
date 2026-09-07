@@ -11,6 +11,7 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "../runtime/index.js";
+import { isToolResultError } from "../tool-result-error.js";
 import {
   takeCodeModeResponseSource,
   prepareCodeModeSourceAppend,
@@ -23,6 +24,7 @@ import type {
 } from "./agent-session-types.js";
 import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
+import type { CompactionRequestBudget } from "./compaction/request-budget.js";
 import {
   type ExtensionCommandContextActions,
   type ExtensionErrorListener,
@@ -256,9 +258,11 @@ export abstract class AgentSessionBase {
     };
 
     this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+      // Normalize adapted failures before middleware, which may explicitly recover.
+      const resultIsError = isError || isToolResultError(result);
       const runner = this.currentExtensionRunner;
       if (!runner.hasHandlers("tool_result")) {
-        return undefined;
+        return { isError: resultIsError };
       }
 
       const hookResult = await this.runWithSessionWriteSettlement(
@@ -270,21 +274,23 @@ export abstract class AgentSessionBase {
             input: args as Record<string, unknown>,
             content: result.content,
             details: result.details,
-            isError,
+            isError: resultIsError,
             ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
           }),
       );
 
-      if (!hookResult) {
-        return undefined;
+      if (hookResult) {
+        this.extensionModifiedToolResultIds.add(toolCall.id);
       }
-      this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
         ...hookResult,
-        isError: hookResult.isError ?? isError,
+        isError: hookResult?.isError ?? resultIsError,
       };
     };
+    // Pre-execution failures skip afterToolCall and its recovery handlers.
+    this.agent.afterToolOutcome = async ({ executionStarted, result, isError }) =>
+      executionStarted ? undefined : { isError: isError || isToolResultError(result) };
   }
 
   // =========================================================================
@@ -875,6 +881,7 @@ export abstract class AgentSessionBase {
   protected abstract checkCompaction(
     assistantMessage: AssistantMessage,
     skipAbortedCheck?: boolean,
+    requestBudget?: CompactionRequestBudget,
   ): Promise<boolean>;
   abstract abortRetry(): void;
   abstract abortCompaction(): void;

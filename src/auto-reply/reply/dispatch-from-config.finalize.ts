@@ -166,8 +166,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         deferredTtsTextPending = "";
       }
       if (finalReply.dedupedAgainstBlock) {
-        // The delivering block already settled into the turn ledger.
-        await suppressPendingFinalDelivery(reply);
+        // Pending block coverage already retired this final's prepared duplicate.
+        if (!finalReply.pendingBlock) {
+          await suppressPendingFinalDelivery(reply);
+        }
         continue;
       }
       attemptedFinalDelivery = true;
@@ -175,6 +177,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       routedFinalCount += finalReply.routedFinalCount;
       if (finalReply.queuedFinal) {
         finalDeliveries.push(finalReply.dispatcherOutcome);
+      }
+      if (finalReply.pendingBlock) {
+        // New audio can settle independently while the original text remains unconfirmed.
+        continue;
       }
       // Queue admission can still be cancelled or fail. Keep the owner's receipt
       // until this exact final payload settles as delivered.
@@ -340,6 +346,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
+    !turnLedger.hasPendingDelivery() &&
     !turnLedger.hasVisibleDelivery();
   let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
   if (noVisibleReplyFallbackAllowed()) {
@@ -431,10 +438,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       replyAdmission.reason === "question-response-refused")
       ? replyAdmission.reason
       : undefined;
+  const preRunRejection =
+    agentRunTerminalOutcome === "failed" ? undefined : state.replyOperationRunState.preRunRejection;
   const dispatchOutcome =
     agentRunTerminalOutcome === "failed" || questionFailure
       ? "error"
-      : queueCapRejected || messageInjectionAborted
+      : queueCapRejected || messageInjectionAborted || preRunRejection
         ? "skipped"
         : "completed";
   const dispatchReason =
@@ -443,11 +452,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ? "queue-cap"
       : messageInjectionAborted
         ? "reply_operation_aborted"
-        : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
-          ? "active_run_injected"
-          : channelTransformSuppressed
-            ? "channel_transform"
-            : state.bindingState.pluginFallbackReason);
+        : preRunRejection
+          ? preRunRejection
+          : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
+            ? "active_run_injected"
+            : channelTransformSuppressed
+              ? "channel_transform"
+              : state.bindingState.pluginFallbackReason);
   state.recordAgentDispatchCompleted(
     dispatchOutcome,
     dispatchReason ? { reason: dispatchReason } : undefined,
@@ -477,6 +488,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ...(noVisibleReplyFallbackDirected &&
     queuedSettleResult === "settled" &&
     !turnLedger.hasVisibleDelivery() &&
+    !turnLedger.hasPendingDelivery() &&
     !noVisibleReplyFallbackDelivered &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&

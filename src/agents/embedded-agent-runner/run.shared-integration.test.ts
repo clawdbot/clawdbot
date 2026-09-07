@@ -12,6 +12,7 @@ import "./run.prompt-timeout-fallback.test-support.js";
 import "./run.projection-retry.test-support.js";
 import "./run.recovery-cancellation.test-support.js";
 import "./run.retry-limit.test-support.js";
+import "./run.retry-lifecycle.test-support.js";
 import "./run.timeout-triggered-compaction.test-support.js";
 import "./sessions-yield.orchestration.test-support.js";
 import "./usage-reporting.test-support.js";

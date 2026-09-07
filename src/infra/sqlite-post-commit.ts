@@ -38,6 +38,17 @@ export function stageSqliteTransactionState(
   return true;
 }
 
+/** A lost transaction invalidates every savepoint's staged state and observers. */
+export function discardSqliteTransactionState(db: DatabaseSync): void {
+  pendingPublications.get(db)?.splice(0);
+  const rolledBackState = pendingTransactionState.get(db)?.splice(0) ?? [];
+  pendingPublications.delete(db);
+  pendingTransactionState.delete(db);
+  for (const state of rolledBackState.toReversed()) {
+    state.rollback();
+  }
+}
+
 /** Nested rollback restores staged state and discards observers; savepoints wait for outer commit. */
 export function withSqlitePostCommitPublications<T>(db: DatabaseSync, transaction: () => T): T {
   const nested = db.isTransaction;

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { tryAcquireExclusiveSqliteCoordinator } from "../infra/node-sqlite.js";
+import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import {
   acquireStateDatabaseCoordinator,
   resolveStateDatabaseCoordinatorPath,

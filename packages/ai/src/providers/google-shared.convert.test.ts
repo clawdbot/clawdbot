@@ -1,11 +1,11 @@
-// Google shared conversion tests cover runtime-to-Google payload conversion.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { createEmptyTransportUsage } from "../transports/transport-stream-shared.js";
 import type { Context, Tool } from "../types.js";
-import { convertMessages, convertTools } from "./google-shared.js";
+import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js";
 import {
   assertRecord,
+  convertMessages,
   expectConvertedRoles,
   getFirstToolParameters,
   makeGeminiCliAssistantMessage,
@@ -20,17 +20,6 @@ const convertMessagesForTest = convertMessages as unknown as (
   context: Context,
 ) => ReturnType<typeof convertMessages>;
 
-function requireRecordProperty(
-  record: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
-  const value = record[key];
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected object property ${key}`);
-  }
-  return value as Record<string, unknown>;
-}
-
 describe("google-shared convertTools", () => {
   it("keeps Google tool declarations stable across discovery order", () => {
     const tools = [
@@ -38,8 +27,8 @@ describe("google-shared convertTools", () => {
       { name: "alpha", description: "First", parameters: { type: "object" } },
     ] as Tool[];
 
-    expect(convertTools(tools)).toEqual(convertTools(tools.toReversed()));
-    expect(convertTools(tools)?.[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
+    expect(convertGoogleTools(tools)).toEqual(convertGoogleTools(tools.toReversed()));
+    expect(convertGoogleTools(tools)?.[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
       "alpha",
       "zeta",
     ]);
@@ -59,7 +48,7 @@ describe("google-shared convertTools", () => {
       },
     ] as unknown as Tool[];
 
-    const converted = convertTools(tools);
+    const converted = convertGoogleTools(tools);
     const params = getFirstToolParameters(
       converted as Parameters<typeof getFirstToolParameters>[0],
     );
@@ -103,7 +92,7 @@ describe("google-shared convertTools", () => {
       },
     ] as unknown as Tool[];
 
-    const converted = convertTools(tools);
+    const converted = convertGoogleTools(tools);
     const params = getFirstToolParameters(
       converted as Parameters<typeof getFirstToolParameters>[0],
     );
@@ -146,7 +135,7 @@ describe("google-shared convertTools", () => {
       },
     ] as unknown as Tool[];
 
-    const converted = convertTools(tools);
+    const converted = convertGoogleTools(tools);
     const params = getFirstToolParameters(
       converted as Parameters<typeof getFirstToolParameters>[0],
     );
@@ -168,20 +157,125 @@ describe("google-shared convertTools", () => {
 
 describe("google-shared convertMessages", () => {
   it.each([
+    {
+      replay: "managed" as const,
+      required: true,
+      expected: [
+        "c2lnXzE=",
+        "skip_thought_signature_validator",
+        "c2lnXzI=",
+        "c2lnXzE=",
+        "c2lnXzI=",
+      ],
+    },
+    {
+      replay: "managed" as const,
+      required: false,
+      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, undefined],
+    },
+    {
+      replay: "signed-parts" as const,
+      required: true,
+      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, "skip_thought_signature_validator"],
+    },
+    {
+      replay: "signed-parts" as const,
+      required: false,
+      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, undefined],
+    },
+  ])(
+    "preserves $replay signature ownership with required=$required",
+    ({ replay, required, expected }) => {
+      const model = makeModel(required ? "gemini-3-flash" : "gemini-2.5-pro");
+      const args = { first: 1, nested: { alpha: 2, beta: 3 } };
+      const reordered = { nested: { beta: 3, alpha: 2 }, first: 1 };
+      const originalBytes = JSON.stringify([args, reordered]);
+      const call = { type: "toolCall" as const, id: "call_1", name: "lookup", arguments: args };
+      const turn = {
+        role: "assistant" as const,
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        stopReason: "toolUse" as const,
+        usage: createEmptyTransportUsage(),
+        timestamp: 0,
+      };
+      const result = {
+        role: "toolResult" as const,
+        toolCallId: "call_1",
+        toolName: "lookup",
+        content: [{ type: "text" as const, text: "ok" }],
+        isError: false,
+        timestamp: 1,
+      };
+      const contents = projectGoogleMessages({
+        model,
+        replay,
+        requiresToolCallSignature: required,
+        messages: [
+          {
+            ...turn,
+            content: [
+              { ...call, thoughtSignature: "c2lnXzE=" },
+              { ...call, arguments: reordered },
+            ],
+          },
+          result,
+          result,
+          {
+            ...turn,
+            content: [
+              { ...call, thoughtSignature: "c2lnXzI=" },
+              { ...call, arguments: reordered },
+            ],
+          },
+          result,
+          result,
+          { ...turn, content: [{ ...call, arguments: reordered }] },
+          result,
+        ],
+      });
+      const parts = contents
+        .flatMap((content) => content.parts)
+        .filter((part) => part.functionCall);
+      expect(parts.map((part) => part.thoughtSignature)).toEqual(expected);
+      expect(parts.map((part) => part.functionCall?.args)).toEqual([
+        args,
+        reordered,
+        args,
+        reordered,
+        reordered,
+      ]);
+      expect(parts[1]?.functionCall?.args).toBe(reordered);
+      expect(JSON.stringify([args, reordered])).toBe(originalBytes);
+    },
+  );
+
+  it.each([
     { label: "serialized object", value: '{"query":"cats"}', expected: { query: "cats" } },
     { label: "malformed JSON", value: "{not valid json", expected: {} },
     { label: "JSON array", value: ["not", "an", "object"], expected: {} },
   ])("coerces $label tool-call arguments to the SDK object contract", ({ value, expected }) => {
     const model = makeModel("gemini-3-flash");
-    const contents = convertMessagesForTest(model, {
+    const context = {
       messages: [
         makeGoogleAssistantMessage(model.id, [
           { type: "toolCall", id: "call_1", name: "lookup", arguments: value },
         ]),
       ],
-    } as Context);
+    } as Context;
 
-    expect(contents[0]?.parts?.[0]?.functionCall?.args).toEqual(expected);
+    for (const contents of [
+      convertMessagesForTest(model, context),
+      projectGoogleMessages({
+        model,
+        messages: context.messages,
+        replay: "managed",
+        requiresToolCallSignature: true,
+      }),
+    ]) {
+      expect(contents[0]?.parts?.[0]?.functionCall?.args).toEqual(expected);
+    }
   });
 
   it.each([
@@ -559,7 +653,7 @@ describe("google-shared convertMessages", () => {
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
     const toolResponse = assertRecord(toolResponsePart);
-    expect(requireRecordProperty(toolResponse, "functionResponse").name).toBe("myTool");
+    expect(assertRecord(toolResponse.functionResponse).name).toBe("myTool");
     expect(expectDefined(contents[3], "contents[3] test invariant").role).toBe("user");
   });
 
@@ -589,7 +683,7 @@ describe("google-shared convertMessages", () => {
       (part) => typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolCall = assertRecord(toolCallPart);
-    expect(requireRecordProperty(toolCall, "functionCall").name).toBe("myTool");
+    expect(assertRecord(toolCall.functionCall).name).toBe("myTool");
   });
 
   it("strips tool call and response ids for google-gemini-cli", () => {
@@ -676,7 +770,7 @@ describe("google-shared convertMessages", () => {
     const toolResponsePart = contents[0]?.parts?.find(
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
-    const toolResponse = requireRecordProperty(assertRecord(toolResponsePart), "functionResponse");
+    const toolResponse = assertRecord(assertRecord(toolResponsePart).functionResponse);
     expect(assertRecord(toolResponse.response).output).toBe(
       '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
     );

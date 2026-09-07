@@ -219,13 +219,9 @@ extension OpenClawChatViewModel {
 
         if isTerminal, ownsCurrentRun, let runID {
             let wasSelectedRun = self.liveUsageRunID == runID
-            if self.pendingRuns.contains(runID) {
-                self.retirePendingRun(
-                    runID,
-                    hapticEvent: phase == "error" ? .runFailed : .runCompleted)
-            } else {
-                self.retireTerminalRun(runID)
-            }
+            self.retirePendingRun(
+                runID,
+                hapticEvent: phase == "error" ? .runFailed : .runCompleted)
             if wasSelectedRun {
                 self.pendingToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
@@ -780,14 +776,14 @@ extension OpenClawChatViewModel {
 
         if phase == "start" {
             guard let sequence = evt.seq else { return }
-            _ = self.applyLiveRunLifecycle(runID: evt.runId, sequence: sequence, terminal: false)
+            _ = self.acceptLiveRunSequence(runID: evt.runId, sequence: sequence)
             return
         }
         guard isTerminalPhase || isFailure || aborted || isSuccessfulStatus else { return }
         let acceptedLifecycle = if isLegacySessionStream {
             true
         } else if let sequence = evt.seq {
-            self.applyLiveRunLifecycle(runID: evt.runId, sequence: sequence, terminal: true)
+            self.acceptLiveRunSequence(runID: evt.runId, sequence: sequence)
         } else {
             isPendingRun || isAdvertisedRun || isSelectedRun
         }
@@ -798,7 +794,8 @@ extension OpenClawChatViewModel {
             self.retirePendingRun(
                 evt.runId,
                 hapticEvent: isFailure || aborted ? .runFailed : .runCompleted)
-        } else if evt.seq == nil {
+        } else if !isLegacySessionStream || evt.seq == nil {
+            // Sequenced legacy streams carry a session ID.
             self.retireTerminalRun(evt.runId)
         }
         guard isSelectedRun || isLegacySessionStream else {

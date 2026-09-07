@@ -27,7 +27,10 @@ import type {
   SessionEntryTargetPatchScope,
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import {
+  readSessionEntryCache,
+  type SessionEntryCacheSnapshot,
+} from "./session-accessor.sqlite-entry-cache.js";
 import {
   assertLifecycleTargetSnapshotUnchanged,
   type SqliteLifecycleTargetSnapshot,
@@ -286,7 +289,6 @@ function listSqliteSessionEntriesFromDatabase(
   resolved: ResolvedSqliteScope,
   scope: SessionEntryListScope,
 ): SessionEntrySummary[] {
-  assertCanonicalSqliteSessionKeysCurrent(database);
   const projection = scope.projection ?? "full";
   const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {
     agentId: database.agentId,
@@ -297,6 +299,14 @@ function listSqliteSessionEntriesFromDatabase(
     latest: scope.readConsistency === "latest",
     projection,
   });
+  return projectSessionEntriesForListing(snapshot, projection === "list" && scope.clone !== false);
+}
+
+/** Applies the listing visibility and canonical-key contract to an owned snapshot. */
+export function projectSessionEntriesForListing(
+  snapshot: SessionEntryCacheSnapshot,
+  cloneEntries = false,
+): SessionEntrySummary[] {
   return snapshot.keys.flatMap((sessionKey) => {
     if (isInternalSessionEffectsKey(sessionKey)) {
       return [];
@@ -315,7 +325,7 @@ function listSqliteSessionEntriesFromDatabase(
     return [
       {
         sessionKey,
-        entry: projection === "list" && scope.clone !== false ? cloneSessionEntry(entry) : entry,
+        entry: cloneEntries ? cloneSessionEntry(entry) : entry,
       },
     ];
   });
@@ -400,7 +410,7 @@ export function replaceSessionEntrySync(scope: SessionAccessScope, entry: Sessio
     writeSessionEntry(database, resolved.sessionKey, entry);
     current = readSessionIdentitySnapshot(database, identityKeys);
   }, toDatabaseOptions(resolved));
-  emitCommittedSessionIdentityDiff(previous, current);
+  emitCommittedSessionIdentityDiff(resolved.agentId, previous, current);
 }
 
 /** Patches one entry in the additive SQLite session store. */
@@ -526,7 +536,8 @@ async function patchSqliteSessionEntrySnapshot(
         previousEntry: selectedPreviousEntry,
       });
       wrote = true;
-      currentIdentity = readSessionIdentitySnapshot(writeDatabase, [sessionKey]);
+      // Identity observers only consume sessionId, already owned by this canonical write.
+      currentIdentity = new Map([[sessionKey, persisted]]);
       result = cloneSessionEntry(persisted);
     }, toDatabaseOptions(resolved));
     try {
@@ -534,7 +545,7 @@ async function patchSqliteSessionEntrySnapshot(
         options.onCommitted?.(cloneSessionEntry(result));
       }
     } finally {
-      emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+      emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
     }
     return result;
   });

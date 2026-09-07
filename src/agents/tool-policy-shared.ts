@@ -56,11 +56,18 @@ export function readToolAllowlistIntersection(
 
 /** Refusal for a tool that keeps its schema but sits outside the run's execution allowlist. */
 export const TOOL_EXECUTION_GATED_MESSAGE =
-  "Unavailable during skill review. Do not retry this tool. Continue with skill_workshop under the review instructions.";
+  "Unavailable in this run. Continue with the tools permitted by the run's instructions.";
 
 export function isToolExecutionAllowed(allowNames: readonly string[], toolName: string): boolean {
   const target = normalizeToolPolicyName(toolName);
   return allowNames.some((name) => normalizeToolPolicyName(name) === target);
+}
+
+/** Snapshot exact names for one synchronous batch; never retain this matcher across awaits. */
+export function createToolExecutionMatcher(allowNames: readonly string[]) {
+  const allowed = new Set<string>();
+  allowNames.forEach((name) => allowed.add(normalizeToolPolicyName(name)));
+  return (toolName: string) => allowed.has(normalizeToolPolicyName(toolName));
 }
 
 /** Normalizes a tool name or alias to the policy id used for matching. */

@@ -32,6 +32,7 @@ import {
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments,
+  sortPromptCacheToolsByName,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -325,10 +326,7 @@ type StreamModelDescriptor = {
   reasoning?: boolean;
 };
 
-type OllamaUsageFallback = {
-  input?: number;
-  output?: number;
-};
+type OllamaUsageFallback = Partial<Record<"input" | "output", number | (() => number)>>;
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 
@@ -430,6 +428,7 @@ interface OllamaChatResponse extends Record<string, unknown> {
   total_duration?: number;
   load_duration?: number;
   prompt_eval_count?: number;
+  prompt_eval_cached_count?: number;
   prompt_eval_duration?: number;
   eval_count?: number;
   eval_duration?: number;
@@ -491,14 +490,23 @@ function estimateOllamaCompletionTokens(
   return estimateTokensFromChars(chars);
 }
 
-function resolveUsageCount(value: number | undefined, fallback: number | undefined): number {
+function resolveUsageCount(
+  value: number | undefined,
+  fallback: OllamaUsageFallback["input"],
+): number {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     return value;
   }
-  if (typeof fallback === "number" && Number.isFinite(fallback) && fallback > 0) {
-    return fallback;
+  // Provider counters, including zero, avoid scanning and serializing history for estimates.
+  const estimate = typeof fallback === "function" ? fallback() : fallback;
+  if (typeof estimate === "number" && Number.isFinite(estimate) && estimate > 0) {
+    return estimate;
   }
   return 0;
+}
+
+function resolveOptionalUsageCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 type InputContentPart =
@@ -792,7 +800,7 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
     return [];
   }
   const result: OllamaTool[] = [];
-  for (const tool of tools) {
+  for (const tool of sortPromptCacheToolsByName(tools)) {
     if (typeof tool.name !== "string" || !tool.name) {
       continue;
     }
@@ -846,13 +854,27 @@ export function buildAssistantMessage(
     }
   }
 
+  const promptTokens = resolveUsageCount(response.prompt_eval_count, usageFallback?.input);
+  const outputTokens = resolveUsageCount(response.eval_count, usageFallback?.output);
+  const reportedCacheRead = resolveOptionalUsageCount(response.prompt_eval_cached_count);
+  // Ollama includes cached tokens in prompt_eval_count; OpenClaw records input as uncached.
+  const cacheRead =
+    reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
+
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
     stopReason: resolveOllamaStopReason(response),
     usage: buildUsageWithNoCost({
-      input: resolveUsageCount(response.prompt_eval_count, usageFallback?.input),
-      output: resolveUsageCount(response.eval_count, usageFallback?.output),
+      input: promptTokens - (cacheRead ?? 0),
+      output: outputTokens,
+      ...(cacheRead === undefined
+        ? {}
+        : {
+            cacheRead,
+            cacheWrite: 0,
+            totalTokens: promptTokens + outputTokens,
+          }),
     }),
   });
 }
@@ -1319,12 +1341,15 @@ function createRawOllamaStreamFn(
             finalResponse.message.tool_calls = accumulatedToolCalls;
           }
 
+          const completedResponse = finalResponse;
           const usageFallback = {
-            input: estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
-            output: estimateOllamaCompletionTokens(
-              finalResponse,
-              estimateStringChars(suppressedThinking),
-            ),
+            input: () =>
+              estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
+            output: () =>
+              estimateOllamaCompletionTokens(
+                completedResponse,
+                estimateStringChars(suppressedThinking),
+              ),
           };
           const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback, {
             ...toolCallNameOptions,

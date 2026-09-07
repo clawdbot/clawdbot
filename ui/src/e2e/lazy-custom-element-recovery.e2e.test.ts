@@ -275,6 +275,9 @@ suite.define(() => {
                 )) >= 2,
             )
             .toBe(true);
+          // A generic automatic retry used to wake one second after this
+          // first settled frame. Close must remain authoritative beyond it.
+          await page.waitForTimeout(1_500);
           if (documentRequests > 1) {
             await reloaded;
           }

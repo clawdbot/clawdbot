@@ -89,8 +89,8 @@ const { FakeWebSocket, isProviderAuthProfileConfiguredMock, resolveApiKeyForProv
     };
   });
 
-vi.mock("ws", () => ({
-  default: FakeWebSocket,
+vi.mock("./ws-runtime.js", () => ({
+  WebSocket: FakeWebSocket,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({

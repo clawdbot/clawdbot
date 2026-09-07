@@ -220,19 +220,18 @@ struct MacNodeModeCoordinatorTests {
 
     private func waitUntil(
         _ description: String,
-        timeout: Duration = .seconds(2),
         condition: @escaping @Sendable () async -> Bool) async throws
     {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
+        let deadline = clock.now.advanced(by: .seconds(2))
         while clock.now < deadline {
-            if await condition() {
-                return
-            }
+            if await condition() { return }
             // Some callers run on MainActor; a real suspension lets the
             // notification task make progress instead of polling it out.
             try await Task.sleep(for: .milliseconds(10))
         }
+        // Completion can arrive during the final suspension.
+        if await condition() { return }
         throw CoordinatorWaitTimeout(operation: description)
     }
 
@@ -252,6 +251,24 @@ struct MacNodeModeCoordinatorTests {
         }
         await gateway.disconnect()
         await coordinator.stopAndWait()
+    }
+
+    @Test func `waiter rechecks a completed async snapshot after its deadline`() async throws {
+        let probe = CoordinatorDrainSnapshotProbe()
+
+        try await self.waitUntil("completed async snapshot") {
+            let captured = await probe.hasCaptured()
+            if captured { return captured }
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return captured
+            }
+            await probe.recordCapture()
+            return captured
+        }
+
+        #expect(await probe.hasCaptured())
     }
 
     @Test func `stale endpoint attempt is rejected after a suspended permission query`() {

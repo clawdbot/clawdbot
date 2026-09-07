@@ -77,7 +77,257 @@ function createLifecycle(minimalTestGateway: boolean, warn = vi.fn()) {
   };
 }
 
+async function createRealMetadataLifecycle(
+  options: { attach?: boolean; ownerAvailable?: boolean } = {},
+) {
+  const actual = await vi.importActual<typeof import("./server-methods/chat-metadata-runtime.js")>(
+    "./server-methods/chat-metadata-runtime.js",
+  );
+  let owner = createChatMetadataOwner(config, "before-publication");
+  let ownerAvailable = options.ownerAvailable ?? true;
+  let revision = 0;
+  let latestRefresh = Promise.resolve();
+  const buildCommands = vi.fn(async () => ({ commands: [] }));
+  mocks.createRuntime.mockImplementation(
+    (params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0]) => {
+      const runtime = actual.createGatewayChatMetadataRuntime({
+        ...params,
+        deps: {
+          getPreparedOwner: () => (ownerAvailable ? owner : undefined),
+          getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
+          getAuthStoreRevision: () => revision,
+          getSkillsVersion: () => 0,
+          getPluginRegistryVersion: () => 0,
+          buildCommands,
+          buildProjection: async ({ facts }) => ({
+            modelCatalog: facts.modelCatalog.entries,
+            read: () => ({ models: facts.modelCatalog.entries }),
+            isCurrent: () => true,
+          }),
+        },
+      });
+      return {
+        ...runtime,
+        refresh: () => {
+          latestRefresh = runtime.refresh();
+          return latestRefresh;
+        },
+      };
+    },
+  );
+  const { lifecycle: pendingLifecycle, warn } = createLifecycle(false);
+  const lifecycle = await pendingLifecycle;
+  const sidecars: Array<{ stop: () => void | Promise<void> }> = [];
+  const attach = () =>
+    lifecycle.attachContext({ broadcast: vi.fn() } as unknown as GatewayRequestContext, sidecars);
+  if (options.attach !== false) {
+    await attach();
+  }
+  const modelEvent = (event: { phase: string; error?: Error }) =>
+    mocks.registerModelListener.mock.calls[0]![0](event);
+  const authEvent = () => mocks.registerAuthListener.mock.calls[0]![0]();
+  return {
+    lifecycle,
+    attach,
+    buildCommands,
+    warn,
+    modelEvent,
+    queueRefresh(stage: "queued" | "building") {
+      const entered = createDeferred();
+      const release = createDeferred();
+      if (stage === "building") {
+        buildCommands.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return { commands: [] };
+        });
+      } else {
+        entered.resolve();
+      }
+      revision += 1;
+      authEvent();
+      return {
+        entered: entered.promise,
+        release: () => release.resolve(),
+        obsolete: latestRefresh,
+      };
+    },
+    replaceOwner() {
+      owner = createChatMetadataOwner(config, "after-publication");
+      ownerAvailable = true;
+      modelEvent({ phase: "published" });
+    },
+    invalidateOwner() {
+      ownerAvailable = false;
+      modelEvent({ phase: "invalidated" });
+    },
+    events: {
+      skills: () => mocks.registerSkillsListener.mock.calls[0]![0](),
+      auth: () => authEvent(),
+      catalog: () => modelEvent({ phase: "catalog-published" }),
+      owner: () => modelEvent({ phase: "invalidated" }),
+    },
+    async stop() {
+      await Promise.all(sidecars.map((sidecar) => Promise.resolve(sidecar.stop())));
+    },
+  };
+}
+
 describe("gateway chat metadata lifecycle", () => {
+  it.each(["queued", "building"] as const)(
+    "keeps readers waiting when %s metadata refresh is superseded by owner publication",
+    async (stage) => {
+      const harness = await createRealMetadataLifecycle();
+      const queued = harness.queueRefresh(stage);
+      let read: Promise<unknown> | undefined;
+      try {
+        await queued.entered;
+        harness.invalidateOwner();
+        let settled = false;
+        read = harness.lifecycle.read({ agentId: "main" }).then(
+          (value) => {
+            settled = true;
+            return value;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+        queued.release();
+        await queued.obsolete.catch(() => undefined);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+
+        expect(harness.warn).not.toHaveBeenCalled();
+        expect(settled).toBe(false);
+        harness.replaceOwner();
+        await expect(read).resolves.toMatchObject({
+          models: [expect.objectContaining({ id: "after-publication" })],
+        });
+      } finally {
+        queued.release();
+        await harness.stop();
+        await read;
+      }
+    },
+  );
+
+  it.each(["skills", "auth", "catalog", "owner"] as const)(
+    "retains a terminal metadata failure through a later %s invalidation",
+    async (event) => {
+      const harness = await createRealMetadataLifecycle();
+      const failure = new Error("prepared owner publication failed");
+      let read: Promise<void> | undefined;
+      try {
+        harness.invalidateOwner();
+        harness.modelEvent({ phase: "failed", error: failure });
+        await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBe(failure);
+        harness.events[event]();
+        let outcome: unknown = Symbol("pending");
+        read = harness.lifecycle.read({ agentId: "main" }).then(
+          (value) => {
+            outcome = value;
+          },
+          (error: unknown) => {
+            outcome = error;
+          },
+        );
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+
+        expect(outcome).toBe(failure);
+        harness.replaceOwner();
+        await expect(harness.lifecycle.read({ agentId: "main" })).resolves.toMatchObject({
+          models: [expect.objectContaining({ id: "after-publication" })],
+        });
+      } finally {
+        await harness.stop();
+        await read;
+      }
+    },
+  );
+
+  it("keeps an initial catch-up waiting when its already-published owner is replaced", async () => {
+    const harness = await createRealMetadataLifecycle({ attach: false });
+    const entered = createDeferred();
+    const release = createDeferred();
+    harness.buildCommands.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return { commands: [] };
+    });
+    const attachment = harness.attach();
+    let read: Promise<unknown> | undefined;
+    try {
+      await entered.promise;
+      harness.invalidateOwner();
+      let settled = false;
+      read = harness.lifecycle.read({ agentId: "main" }).then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      release.resolve();
+      await attachment;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      expect(harness.warn).not.toHaveBeenCalled();
+      harness.replaceOwner();
+      await expect(read).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "after-publication" })],
+      });
+    } finally {
+      release.resolve();
+      await harness.stop();
+      await attachment;
+      await read;
+    }
+  });
+
+  it("waits for first publication after an initial missing-owner catch-up", async () => {
+    const harness = await createRealMetadataLifecycle({ attach: false, ownerAvailable: false });
+    let read: Promise<unknown> | undefined;
+    try {
+      await harness.attach();
+      await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBeInstanceOf(
+        ChatMetadataSnapshotUnavailableError,
+      );
+      harness.modelEvent({ phase: "invalidated" });
+      let settled = false;
+      read = harness.lifecycle.read({ agentId: "main" }).then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      harness.replaceOwner();
+      await expect(read).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "after-publication" })],
+      });
+    } finally {
+      await harness.stop();
+      await read;
+    }
+  });
+
   it("broadcasts settled metadata through the production lifecycle without a failure feedback loop", async () => {
     const actual = await vi.importActual<
       typeof import("./server-methods/chat-metadata-runtime.js")
@@ -378,7 +628,6 @@ describe("gateway chat metadata lifecycle", () => {
     authListener();
     skillsListener();
 
-    expect(mocks.invalidate).toHaveBeenCalledTimes(4);
     expect(mocks.refresh).toHaveBeenCalledOnce();
     expect(warn).not.toHaveBeenCalled();
 

@@ -28,6 +28,7 @@ import {
   buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
+  buildUsageFilterOptions,
   normalizeQueryText,
   removeQueryToken,
   setQueryTokensForKey,
@@ -168,7 +169,7 @@ export function renderUsage(props: UsageProps) {
   const selectedSessionSet = new Set(filters.selectedSessions);
 
   // Sort sessions by tokens or cost depending on mode
-  const sortedSessions = [...data.sessions].toSorted((a, b) => {
+  const sortedSessions = data.sessions.toSorted((a, b) => {
     const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
     const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
     return valB - valA;
@@ -200,11 +201,8 @@ export function renderUsage(props: UsageProps) {
   };
   const filteredSessions = queryResult.sessions.filter(matchesSelectedDays);
   const queryWarnings = queryResult.warnings;
-  const querySuggestions = buildQuerySuggestions(
-    filters.queryDraft,
-    agentScopedSessions,
-    data.aggregates,
-  );
+  const filterOptions = buildUsageFilterOptions(agentScopedSessions, data.aggregates);
+  const querySuggestions = buildQuerySuggestions(filters.queryDraft, filterOptions);
   const queryTerms = extractQueryTerms(filters.queryDraft);
   const selectedValuesFor = (key: string): string[] => {
     const normalized = normalizeQueryText(key);
@@ -213,29 +211,6 @@ export function renderUsage(props: UsageProps) {
       .map((term) => term.value)
       .filter(Boolean);
   };
-  const unique = (items: Array<string | undefined>) => {
-    const set = new Set<string>();
-    for (const item of items) {
-      if (item) {
-        set.add(item);
-      }
-    }
-    return Array.from(set);
-  };
-  const channelOptions = unique(agentScopedSessions.map((s) => s.channel)).slice(0, 12);
-  const providerOptions = unique([
-    ...agentScopedSessions.map((s) => s.modelProvider),
-    ...agentScopedSessions.map((s) => s.providerOverride),
-    ...(data.aggregates?.byProvider.map((entry) => entry.provider) ?? []),
-  ]).slice(0, 12);
-  const modelOptions = unique([
-    ...agentScopedSessions.map((s) => s.model),
-    ...(data.aggregates?.byModel.map((entry) => entry.model) ?? []),
-  ]).slice(0, 12);
-  const toolOptions = unique(data.aggregates?.tools.tools.map((tool) => tool.name) ?? []).slice(
-    0,
-    12,
-  );
 
   // Get first selected session for detail view (timeseries, logs)
   const primarySelectedEntry =
@@ -666,10 +641,10 @@ export function renderUsage(props: UsageProps) {
                 </div>
               </div>
               <div class="usage-filter-row">
-                ${renderFilterSelect("channel", t("usage.filters.channel"), channelOptions)}
-                ${renderFilterSelect("provider", t("usage.filters.provider"), providerOptions)}
-                ${renderFilterSelect("model", t("usage.filters.model"), modelOptions)}
-                ${renderFilterSelect("tool", t("usage.filters.tool"), toolOptions)}
+                ${renderFilterSelect("channel", t("usage.filters.channel"), filterOptions.channel)}
+                ${renderFilterSelect("provider", t("usage.filters.provider"), filterOptions.provider)}
+                ${renderFilterSelect("model", t("usage.filters.model"), filterOptions.model)}
+                ${renderFilterSelect("tool", t("usage.filters.tool"), filterOptions.tool)}
                 <span class="usage-query-hint">${t("usage.query.tip")}</span>
               </div>
               ${

@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
-import { state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import {
   isOptionalElementDefined,
@@ -11,6 +11,7 @@ import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 
 const PLUGIN_MANAGER_DIALOG = {
   tagName: "openclaw-plugin-manager-dialog",
@@ -20,8 +21,16 @@ const PLUGIN_MANAGER_DIALOG = {
   loadModule: () => import("./control-ui-manager-dialog.ts"),
 } satisfies OptionalCustomElement;
 
+export function renderControlUiPluginRecovery(plugins: ControlUiPluginCapability, routeId: string) {
+  // A workspace replacement can remove the Plugins page, so its escape stays host-owned.
+  return routeId !== "plugins" || plugins.selectedReplacement("workspace")
+    ? html`<openclaw-plugin-manager floating></openclaw-plugin-manager>`
+    : nothing;
+}
+
 class ControlUiPluginManager extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true }) private context?: ApplicationContext;
+  @property({ type: Boolean }) floating = false;
   @state() private open = false;
   private readonly dialogLoader = new LazyCustomElementRequestController(this, () => {
     this.open = false;
@@ -37,7 +46,14 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
 
   private get available(): boolean {
     const runtime = this.context?.plugins;
-    return Boolean(runtime && (runtime.hasPlugins || runtime.errors.length));
+    // Page-only plugins still need administrative reload, but not a floating control.
+    return Boolean(
+      runtime &&
+      (this.floating || !runtime.selectedReplacement("workspace")) &&
+      (runtime.registrations("replacements").length ||
+        runtime.errors.length ||
+        (!this.floating && runtime.hasPlugins && runtime.canReload)),
+    );
   }
 
   override willUpdate() {
@@ -58,7 +74,7 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
     return html`${
       this.available
         ? html`<button
-              class="btn btn--sm plugin-ui-recovery"
+              class=${`btn btn--sm${this.floating ? " plugin-ui-recovery" : ""}`}
               type="button"
               @click=${() => {
                 this.open = true;

@@ -149,30 +149,6 @@ export function buildPluginSdkPackageExports() {
   );
 }
 
-/**
- * List all packaged plugin SDK dist artifacts, including production-private runtime JS.
- * @internal Shared repository-script contract.
- */
-export function listPluginSdkDistArtifacts(
-  entries: readonly string[] = pluginSdkEntrypoints,
-  privateEntries: readonly string[] = privateLocalOnlyPluginSdkEntrypoints,
-) {
-  const privateSet = new Set(privateEntries);
-  return [
-    ...entries
-      .filter((entry) => !privateSet.has(entry))
-      .flatMap((entry) => [`dist/plugin-sdk/${entry}.js`, `dist/plugin-sdk/${entry}.d.ts`]),
-    ...entries
-      .filter((entry) => privateSet.has(entry) && !nonProductionPluginSdkSubpathSet.has(entry))
-      .map((entry) => `dist/plugin-sdk/${entry}.js`),
-  ];
-}
-
-/** List private runtime facade artifacts required inside package output. */
-export function listPackagedPrivatePluginSdkRuntimeArtifacts() {
-  return packagedPrivatePluginSdkRuntimeEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`);
-}
-
 /** List private artifacts that must stay out of package output. */
 export function listUnpackagedPrivatePluginSdkDistArtifacts(
   entries: readonly string[] = pluginSdkEntrypoints,

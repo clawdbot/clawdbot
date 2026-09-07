@@ -143,6 +143,13 @@ claude update
 
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
+OpenClaw disables Claude Code's built-in Git workflow instructions and startup
+Git-status snapshot with `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`. Claude Code
+rebuilds that snapshot when a process resumes, so workspace edits or commits
+would otherwise invalidate cached conversation history. Git tools and workspace
+instructions remain available. This does not prevent cache misses after prompt
+changes, compaction, model or thinking changes, or cache expiry.
+
 OpenClaw always launches Claude Code with its default permission mode.
 OpenClaw's permission responses and `PreToolUse` hook keep native tools under
 host control, including when user or enterprise settings would otherwise
@@ -198,8 +205,18 @@ register a small wrapper backend plugin.
   - `none`: never send a session id.
 - `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`, and `input: "stdin"`. The owning Anthropic plugin keeps one Claude Code subprocess warm for compatible consecutive agent turns through its direct CLI transport. If the gateway restarts or the idle process exits, OpenClaw resumes from the stored Claude session id. Stored session ids are verified against a readable project transcript before resume; a missing transcript clears the binding (logged as `reason=transcript-missing`) instead of silently starting a fresh session under `--resume`.
 - Stored CLI sessions are provider-owned continuity. Automatic reset is disabled by default; `/reset` and explicit daily or idle `session.reset` policies still cut them.
-- Fresh CLI sessions normally reseed from OpenClaw's latest compaction summary, the messages retained by that compaction, and subsequent turns on the active branch. OpenClaw reads this history from the canonical session SQLite database; it does not require an OpenClaw JSONL transcript file. To recover short sessions invalidated before compaction, a backend can opt in with `reseedFromRawTranscriptWhenUncompacted: true`. Raw transcript reseed stays bounded and limited to safe invalidations, such as a missing CLI transcript, an orphaned tool-use tail, message-policy/system-prompt/cwd/MCP changes, or a session-expired retry; auth profile or credential-epoch changes never reseed raw transcript history.
+- Fresh CLI sessions can recover OpenClaw history from the canonical session SQLite database when its independent account boundary matches the selected credential. Compacted recovery includes the latest summary, retained messages, and subsequent turns on the active branch. A backend can opt in to bounded recovery before compaction with `reseedFromRawTranscriptWhenUncompacted: true`, including after its native session binding is cleared. Recovery includes saved tool-result text and error markers; it does not execute past tools. The current user turn is sent once, outside the recovered history.
 - Helper runs with a caller-owned in-memory transcript use that history for hooks and fresh-session reseeding, including meaningful history before compaction. Empty memory stays empty even when the run carries another session's storage identity. Context-engine maintenance rewrites that same memory before the helper returns, even when the engine requests background maintenance. Durable transcripts retain their background maintenance path. An explicitly owned native CLI binding can still resume; resumed turns send the current prompt without injecting the memory history again.
+
+### History account boundaries
+
+Native session compatibility and permission to replay saved OpenClaw history are separate. Clearing or replacing a native binding does not establish ownership of older transcript rows. OpenClaw records a private account fingerprint and contiguous transcript coverage before an admitted CLI turn, then advances coverage with that turn’s canonical writes. It never stores credential values in this metadata.
+
+Automatic durable recovery requires a resolved static credential or a named OAuth account. Opaque CLI logins, identity-less OAuth credentials, legacy transcripts without provenance, imported or otherwise unaccounted content, and incompatible provenance versions cannot authorize automatic replay. Native resume remains available under the backend’s existing rules. Switching accounts makes mixed history ineligible even after a successful replacement, a later clear, or a switch back to the original account. A new session or an empty reset can establish a new boundary; a reset that retains messages cannot relabel them.
+
+This uses existing session metadata and transcript generation/sequence counters; no SQLite schema migration or transcript deletion occurs. Existing conversations are not backfilled from their latest native binding. Older binaries do not enforce this new recovery boundary. After a downgrade and subsequent transcript writes, upgrading again refuses automatic replay because those writes are not covered. Do not rely on a downgrade to preserve the new security behavior.
+
+Explicit caller-owned in-memory context remains caller-supplied input, not permission to read a durable conversation carrying the same identifiers. Authentication invalidations still refuse its recovery prompt. When automatic recovery is refused, the saved transcript remains intact; the next CLI process receives the current request without the saved history.
 
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes, including a changed auth profile id, static API key, static token, or OAuth account identity when the CLI exposes one; OAuth access/refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
 
@@ -229,6 +246,9 @@ OpenClaw writes base64 images to temp files. If `imageArg` is set, those paths a
 - `output: "json"` tries to parse JSON and extract text plus a session id.
 - `output: "jsonl"` parses a JSONL stream and extracts the final agent message plus session identifiers when present.
 - For Gemini CLI JSON output, OpenClaw reads reply text from `response` and usage from `stats` when `usage` is missing or empty. The bundled Gemini CLI adapter uses `stream-json`.
+
+JSON examples inside double-quoted banner text are not treated as response or error records.
+For JSONL, banner scanning starts fresh on each line.
 
 Input modes:
 
@@ -393,6 +413,11 @@ Backends without an exact translation still fail closed.
 If no MCP servers are enabled, OpenClaw still injects a strict config when a backend opts into bundle MCP, so background runs stay isolated.
 
 Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end so stdio children and Streamable HTTP/SSE streams do not outlive the run.
+
+A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
+exceeds its deadline, OpenClaw refuses replacement, including from a later run.
+Check the cleanup error and the backend's remaining processes before retrying.
+Command output and process exit alone do not confirm that descendants stopped.
 
 For `claude-cli`, the installed Claude Code process uses its current native
 login. OpenClaw uses a non-secret route marker and never reads, persists,

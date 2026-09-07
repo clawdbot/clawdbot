@@ -661,23 +661,48 @@ describe("read tool", () => {
     expect(textContent(second)).toContain("offset=3");
   });
 
-  it("preserves ordinary multi-line selection and trailing newlines", async () => {
+  it.each([
+    {
+      name: "CRLF lines through EOF",
+      contents: "first\r\nsecond\r\nthird\r\n",
+      args: { offset: 2 },
+      expected: "second\nthird\n",
+    },
+    {
+      name: "the last terminated line",
+      contents: "first\nsecond\nthird\n",
+      args: { offset: 3, limit: 1 },
+      expected: "third\n",
+    },
+    {
+      name: "a limit extending past an unterminated EOF",
+      contents: "first\nsecond\nthird",
+      args: { offset: 2, limit: 20 },
+      expected: "second\nthird",
+    },
+    {
+      name: "a later line cursor through EOF",
+      contents: "first\nsecond\nthird\n",
+      args: { offset: 2, limit: 2, cursor: 2 },
+      expected: "cond\nthird\n",
+    },
+  ])("preserves selected content for $name", async ({ contents, args, expected }) => {
     const tool = createReadToolDefinition("/workspace", {
       operations: {
         access: async () => {},
-        readFile: async () => Buffer.from("first\r\nsecond\r\nthird\r\n"),
+        readFile: async () => Buffer.from(contents),
       },
     });
 
     const selected = await tool.execute(
       "call-lines",
-      { path: "lines.txt", offset: 2 },
+      { path: "lines.txt", ...args },
       undefined,
       undefined,
       {} as never,
     );
 
-    expect(textContent(selected)).toBe("second\nthird\n");
+    expect(textContent(selected)).toBe(expected);
   });
 
   it("clamps non-positive line limits before slicing file content", async () => {
@@ -822,27 +847,33 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("import value\nconst marker = '\uFEFF';");
   });
 
-  it("uses an injected backend decoder when declared", async () => {
-    const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        decodeText: ({ buffer, absolutePath }) => `${absolutePath}:${buffer.toString("hex")}`,
-        access: async () => {},
-        detectImageMimeType: async () => null,
-        readFile: async () => bytes,
-      },
-    });
-    const result = await tool.execute(
-      "call-1",
-      { path: "legacy.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+  it.each(["\ud800a🦞b\udc00", "\ud800first\udc00\nsecond🦞\ud800\n"])(
+    "preserves an injected backend decoder's exact UTF-16 text: %j",
+    async (decoded) => {
+      const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          decodeText: ({ buffer, absolutePath }) =>
+            `${absolutePath}:${buffer.toString("hex")}:${decoded}`,
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => bytes,
+        },
+      });
+      const result = await tool.execute(
+        "call-1",
+        { path: "legacy.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
 
-    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
-    expect(textContent(result)).toBe(`${path.resolve("/workspace", "legacy.txt")}:c4e3bac3`);
-  });
+      expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
+      expect(textContent(result)).toBe(
+        `${path.resolve("/workspace", "legacy.txt")}:c4e3bac3:${decoded}`,
+      );
+    },
+  );
 
   it("waits for an aliased queued write before reading the same new file", async () => {
     const tempDir = tempDirs.make("openclaw-read-write-order-");

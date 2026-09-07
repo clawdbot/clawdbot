@@ -8,7 +8,8 @@ read_when:
   - You want to install the maintained upstream OpenProse Agent Skill
 ---
 
-OpenClaw no longer bundles the OpenProse plugin or its `/prose` command. OpenProse
+OpenClaw no longer bundles the OpenProse plugin or its `/prose` command. The
+v2026.8.1 release removed both. OpenProse
 continues as a maintained upstream Agent Skill. Existing `.prose` source files
 remain yours; the removed plugin did not store state in OpenClaw's SQLite database.
 
@@ -29,7 +30,11 @@ remain yours; the removed plugin did not store state in OpenClaw's SQLite databa
    npx skills add openprose/prose --skill open-prose --agent codex --copy -y
    ```
 
-   This copies the skill to `.agents/skills/open-prose`, which OpenClaw loads as
+   `skills` is a third-party CLI from npm, not an OpenClaw command. Keep
+   `--agent codex`: that value writes the shared `.agents/skills` layout, which
+   OpenClaw reads even though the flag names another agent.
+
+   The command copies the skill to `.agents/skills/open-prose`, which OpenClaw loads as
    a project Agent Skill. It does not restore the removed bundled plugin or the
    `/prose` command.
 

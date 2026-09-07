@@ -15,7 +15,10 @@ import {
   getRegisteredEmbeddingProvider,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ModelProviderConfig,
+  ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -23,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   ensureModel: vi.fn(),
   ensureChat: vi.fn(),
   prepareServer: vi.fn(),
+  reconcileServer: vi.fn(),
   inspectRuntime: vi.fn(),
   genericCreate: vi.fn(),
   detectHardware: vi.fn(),
@@ -43,6 +47,7 @@ vi.mock("./src/managed-server.js", async (importOriginal) => ({
   ensureLlamaCppModel: mocks.ensureModel,
   ensureManagedLlamaServerForChat: mocks.ensureChat,
   prepareManagedLlamaServer: mocks.prepareServer,
+  reconcileManagedLlamaServer: mocks.reconcileServer,
   inspectLlamaServerRuntime: mocks.inspectRuntime,
 }));
 
@@ -173,6 +178,7 @@ describe("llama.cpp provider plugin", () => {
         label: "llama.cpp",
         normalizeToolSchemas: expect.any(Function),
         inspectToolSchemas: expect.any(Function),
+        reconcileLocalService: mocks.reconcileServer,
         auth: expect.arrayContaining([
           expect.objectContaining({ id: "local" }),
           expect.objectContaining({ id: "existing-server" }),
@@ -184,6 +190,23 @@ describe("llama.cpp provider plugin", () => {
       "llama-cpp",
       "llama-cpp-existing-server",
     ]);
+    expect(
+      provider.wrapSimpleCompletionStreamFn?.({
+        config: {
+          models: {
+            providers: {
+              [LLAMA_CPP_PROVIDER_ID]: {
+                baseUrl: "http://127.0.0.1:8080/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        provider: LLAMA_CPP_PROVIDER_ID,
+        modelId: "external",
+        streamFn: vi.fn(),
+      } as never),
+    ).toBeUndefined();
     expect(provider).not.toHaveProperty("createStreamFn");
   });
 
@@ -347,6 +370,48 @@ describe("llama.cpp provider plugin", () => {
     });
   });
 
+  it("reapplies embedding A to B to A and injects preset reconciliation", async () => {
+    const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
+    const options = Object.assign(configuredOptions(), { acquireLocalService });
+    const provider: ModelProviderConfig = options.config.models.providers[LLAMA_CPP_PROVIDER_ID];
+    provider.baseUrl = "http://127.0.0.1:29434/v1";
+    provider.params = { modelCacheDir: "/models/embedding-transition-cache" };
+    mocks.ensureModel.mockImplementation(async ({ source }) => source);
+    await llamaCppEmbeddingProviderAdapter.create({
+      ...options,
+      local: { modelPath: "/models/first-embedding.gguf" },
+    });
+    await llamaCppEmbeddingProviderAdapter.create({
+      ...options,
+      local: { modelPath: "/models/second-embedding.gguf" },
+    });
+    await llamaCppEmbeddingProviderAdapter.create({
+      ...options,
+      local: { modelPath: "/models/first-embedding.gguf" },
+    });
+    expect(mocks.prepareServer).toHaveBeenCalledTimes(3);
+    expect(mocks.prepareServer.mock.calls.map(([call]) => call.embeddingModelPath)).toEqual([
+      "/models/first-embedding.gguf",
+      "/models/second-embedding.gguf",
+      "/models/first-embedding.gguf",
+    ]);
+    const forwarded = mocks.genericCreate.mock.calls[0]?.[0] as {
+      acquireLocalService?: (
+        target: { providerId: string; baseUrl: string },
+        signal?: AbortSignal,
+      ) => Promise<unknown>;
+    };
+    const target = {
+      providerId: LLAMA_CPP_PROVIDER_ID,
+      baseUrl: "http://127.0.0.1:19432/v1",
+    };
+    await forwarded.acquireLocalService?.(target);
+    expect(acquireLocalService).toHaveBeenCalledWith(
+      { ...target, reconcile: mocks.reconcileServer },
+      undefined,
+    );
+  });
+
   it.each([
     ["uses an active custom local model", { enabled: true, provider: "local" }],
     ["uses another memory provider", { enabled: true, provider: "openai" }],
@@ -369,8 +434,49 @@ describe("llama.cpp provider plugin", () => {
       const provider = registerTextProvider();
       const selectedModel = expectDefined(providerConfig.models[0], "managed chat model");
       const inner = vi.fn(() => ({}) as never);
-      const wrapped = provider.wrapStreamFn?.({
-        config,
+      for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
+        const wrapped = provider[hook]?.({
+          config,
+          provider: LLAMA_CPP_PROVIDER_ID,
+          modelId: selectedModel.id,
+          model: {
+            ...selectedModel,
+            provider: LLAMA_CPP_PROVIDER_ID,
+            baseUrl: providerConfig.baseUrl,
+          },
+          streamFn: inner,
+        } as never);
+        await wrapped?.({} as never, { messages: [] } as never, {});
+      }
+
+      expect(mocks.ensureChat).toHaveBeenCalledWith({
+        provider: providerConfig,
+        model: expect.objectContaining({ id: selectedModel.id }),
+      });
+      expect(mocks.ensureChat).toHaveBeenCalledTimes(2);
+      expect(inner).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("prepares managed chat before simple-completion transport", async () => {
+    const configured = configuredOptions();
+    const providerConfig = configured.config.models.providers[LLAMA_CPP_PROVIDER_ID];
+    const selectedModel = expectDefined(providerConfig.models[0], "managed chat model");
+    const order: string[] = [];
+    mocks.ensureChat.mockImplementationOnce(async () => {
+      order.push("prepare");
+    });
+    const transport = vi.fn(() => {
+      order.push("transport");
+      return {} as never;
+    });
+    const wrap = expectDefined(
+      registerTextProvider().wrapSimpleCompletionStreamFn,
+      "simple completion wrapper",
+    );
+    const wrapped = expectDefined(
+      wrap({
+        config: configured.config,
         provider: LLAMA_CPP_PROVIDER_ID,
         modelId: selectedModel.id,
         model: {
@@ -378,18 +484,16 @@ describe("llama.cpp provider plugin", () => {
           provider: LLAMA_CPP_PROVIDER_ID,
           baseUrl: providerConfig.baseUrl,
         },
-        streamFn: inner,
-      } as never);
+        streamFn: transport,
+      } as never),
+      "wrapped simple completion transport",
+    );
 
-      await wrapped?.({} as never, { messages: [] } as never, {});
+    await wrapped({} as never, { messages: [] } as never, {});
 
-      expect(mocks.ensureChat).toHaveBeenCalledWith({
-        provider: providerConfig,
-        model: expect.objectContaining({ id: selectedModel.id }),
-      });
-      expect(inner).toHaveBeenCalledOnce();
-    },
-  );
+    expect(order).toEqual(["prepare", "transport"]);
+    expect(transport).toHaveBeenCalledOnce();
+  });
 
   it("keeps registered text setup chat-capable when local memory is enabled", async () => {
     const provider = registerTextProvider();

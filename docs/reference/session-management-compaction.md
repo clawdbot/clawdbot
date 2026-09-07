@@ -48,19 +48,19 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 | ----------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
 | `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                                      |
 | `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
-| `archiveDashboardAfter` | `"7d"`                | inactivity cutoff for dashboard sessions; `false` or `0` disables                           |
-| `maxEntries`            | `500`                 | cap on unarchived session rows when protection permits                                      |
+| `archiveDashboardAfter` | `"7d"`                | dashboard archiving cutoff; `false` or `0` disables only this trigger                       |
+| `maxEntries`            | `5000`                | cap on unarchived session rows when protection permits                                      |
 | `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
 | `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                             |
 | `highWaterBytes`        | 80% of `maxDiskBytes` | target after cleanup; zero-resolving values use the default, and negatives are invalid      |
 
 Reset boundaries start a fresh history window without deleting earlier transcript rows. When session rollover advances the live `sessionKey -> sessionId` mapping, the previous SQLite session, transcript, trajectory, and search rows also remain; ordinary entry and session lists show only the live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it stores and verifies the compressed transcript archive in SQLite in the same transaction that removes the deleted session's rows. It then publishes, syncs, and reads back the derived `*.jsonl.deleted.<timestamp>.zst` file before reporting success when zstd is available.
 
-`maxDiskBytes` enforcement uses physical bytes: the per-agent SQLite main file, its `-wal` file, and counted files in the agent sessions directory. It never estimates row JSON sizes or subtracts logical row sizes from that total.
+`maxDiskBytes` enforcement uses physical bytes: the per-agent SQLite main file, its `-wal` file, and counted files in the agent sessions directory. It never estimates row JSON sizes or subtracts logical row sizes from that total. This is a cleanup budget, not a guaranteed physical ceiling: protected history and database pages that cannot yet be reclaimed can keep usage above the target.
 
 Gateway model-run probe sessions (keys matching `agent:*:explicit:model-run-<uuid>`) get a separate, fixed `24h` retention. This pruning is pressure-gated: it only runs when session-entry maintenance/cap pressure is reached, and only before the global stale-entry cleanup/cap step. Other explicit sessions do not use this retention.
 
-When combined physical usage exceeds `maxDiskBytes`, `mode: "enforce"` first reclaims checkpointable database space, then removes the oldest retained reset/delete archives. If usage is still above `highWaterBytes`, it walks historical SQLite sessions by `sessions.updated_at`, oldest first. Historical means the session id is not referenced by a live session entry, a route target, or an admitted/in-flight run. For each victim, cleanup stores the compressed archive in the same write transaction that removes the session row and its transcript, trajectory, active, index, and FTS projections. It publishes, syncs, and reads back the derived file after commit. This includes sessions that contain trajectory events but no transcript events. If those tiers are insufficient, cleanup permanently deletes the oldest sessions whose recorded archive reason is `active-session-cap`. Manual, legacy, stale-dashboard, and recovery archives remain protected. Cleanup rechecks entry identity and admission references at deletion time, remeasures physical usage after each victim, and stops at `highWaterBytes`.
+When combined physical usage exceeds `maxDiskBytes`, `mode: "enforce"` first reclaims checkpointable database space, then removes the oldest retained reset/delete archives. If usage is still above `highWaterBytes`, it walks historical SQLite sessions by `sessions.updated_at`, oldest first. Historical means the session id is not referenced by a live session entry, a route target, or an admitted/in-flight run. For each victim, cleanup stores the compressed archive in the same write transaction that removes the session row and its transcript, trajectory, active, index, and FTS projections. It publishes, syncs, and reads back the derived file after commit. This includes sessions that contain trajectory events but no transcript events. If those tiers are insufficient, cleanup permanently deletes the oldest sessions whose recorded archive reason is `active-session-cap`. Manual, legacy, age-retention, stale-dashboard, and recovery archives protect every history generation. Cleanup rechecks entry identity and admission references at deletion time, remeasures physical usage after each victim, and stops at `highWaterBytes`.
 
 Committed writes and deletion first land in the WAL. Cleanup checkpoints it so the WAL can shrink immediately, then uses incremental vacuum to return eligible free tail pages from the main file; pages that are not yet reclaimable stay in the main file and therefore remain counted on the next physical measurement. `mode: "warn"` reports the current physical overage without checkpointing, writing an archive, or deleting rows.
 
@@ -73,7 +73,7 @@ openclaw sessions cleanup --enforce
 
 `maxEntries` counts unarchived session rows; archived rows do not consume the cap. Cleanup archives the oldest eligible ordinary sessions until the unarchived total reaches `maxEntries` or no eligible victims remain. Pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers such as group sessions and thread-scoped chat sessions remain protected, so protected rows can keep the unarchived total above the cap. Synthetic runtime entries (cron, hooks, heartbeat, ACP, sub-agents) remain disposable and can still be removed once they exceed the configured age, count, or disk budget. Isolated cron runs use a separate `cron.sessionRetention` control, independent of model-run probe retention.
 
-Every new archive records a structured reason automatically. Explicit archive actions record `manual`; count-cap and stale-dashboard maintenance record their respective causes; recovery archives record `restart-recovery`. The Control UI renders a human-readable explanation. Missing or unrecognized reasons are treated as protected legacy state rather than inferred.
+Every new archive records a structured reason automatically. Explicit archive actions record `manual`; count-cap and stale-dashboard maintenance record their respective causes; `pruneAfter` archives eligible durable sessions with `age-retention` while deleting disposable automation; recovery archives record `restart-recovery`. The Control UI renders a human-readable explanation. Missing or unrecognized reasons are treated as protected legacy state rather than inferred.
 
 `--dry-run` previews the unarchived-row cap and identifies the unprotected rows that would satisfy it; `--enforce` applies that cleanup immediately but does not remove protection. To reduce protected history, unarchive, unpin, wait for active work to finish, or explicitly delete sessions you no longer want to retain.
 
@@ -261,7 +261,7 @@ The built-in OpenClaw runtime has three scheduling paths:
 
    One provider shape is terminal rather than compaction-recoverable. When the refusal states a single request larger than the provider's entire token limit - Groq answers an oversized request with an HTTP 413 naming TPM and stating `Limit <n>, Requested <m>` - no bucket state can admit it. Compaction budgets against the model's context window rather than that per-request ceiling, and its own summarization request is refused by the same ceiling, so it can only spend further calls that cannot succeed. OpenClaw surfaces the reset guidance immediately instead of compacting, adopting a successor transcript, or retrying. Ordinary TPM throttling, which states a requested size within the limit, stays a rate limit and keeps its normal backoff.
 
-2. **Usage-based maintenance**: normal replies check projected usage before their turn; successful direct commands, including `agent --local` and Gateway agent RPC runs, check after the completed turn is persisted and any pending final reply is protected. Both block on projected usage at or above the active model window minus the selected compaction reserve, subject to an applicable server compaction threshold floor. The memory-flush soft margin does not lower this blocking threshold. Disabling memory flush does not disable this compaction. Direct-command maintenance respects `compaction.enabled: false` and skips a second compaction when the completed run already compacted.
+2. **Usage-based maintenance**: replies and direct commands using OpenClaw's managed loop check projected usage before inference. Required memory checkpointing precedes compaction at or above the active model window minus the selected compaction reserve, subject to an applicable server compaction threshold floor. Successful Gateway commands using that loop also schedule optional maintenance after delivering their completed reply; one-shot local commands skip that optional work. Generic CLI backends retain their existing host compaction before delivery, and native backends retain their own compaction policy. The memory-flush soft margin does not lower the blocking threshold. Disabling memory flush does not disable compaction. Direct-command maintenance respects `compaction.enabled: false` and skips a second post-turn compaction when the completed run already compacted.
 3. **Session-internal threshold maintenance**: default-mode sessions can also compact when actual context usage exceeds the model window minus the session reserve. Safeguard mode disables this competing session-internal path and leaves proactive scheduling to the maintenance owner above.
 
 The persisted `contextBudgetStatus` is a pre-prompt pressure estimate, not an execution command. Completed direct commands, normal replies, and queued follow-up replies record it when the runtime supplies one. `/status` can show this estimate, marked with `~` and `est`, when fresh token usage is unavailable. Compaction and session resets invalidate old estimates; a completed run without a diagnostic clears the previous one unless that run preserves the session's model state (for example, a heartbeat). Its `route` and `shouldCompact` fields can report pressure while the provider attempt is still admitted. Use completed compaction counts and transcript entries to verify that compaction actually happened.
@@ -288,11 +288,15 @@ Two additional guards run outside these paths:
 
 OpenClaw enforces a built-in reserve for embedded runs and caps it at one quarter of the active model context window. The default reserve remains 20,000 tokens for windows of 80,000 tokens or larger. Smaller windows retain at least three quarters of their capacity for prompts and conversation, while the reserve leaves room for compaction summaries and housekeeping such as the memory flush.
 
-Direct-command post-turn maintenance shares the command's remaining timeout
-allowance across memory flushing and compaction. Expiry cancels maintenance
-without discarding an already completed reply; accepted compaction commits remain
-accounted for. Explicit caller cancellation and session ownership checks still
-apply, and an unlimited command timeout remains unlimited.
+Optional maintenance for chat replies and managed Gateway agent commands has a
+fresh session owner and shares the turn's remaining timeout allowance across
+memory flushing and compaction. It starts after actual delivery and persistence
+settle, even if the bounded follow-up admission wait has already expired.
+The completed reply returns first. A new foreground turn cancels and settles
+optional maintenance before acquiring the session lane. Restart and session
+replacement also cancel stale work. Accepted compaction commits remain accounted
+for, and an unlimited command timeout remains unlimited. One-shot local commands using OpenClaw's managed loop
+record an intentional skip without marking a memory flush successful.
 
 Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime and direct-command post-turn maintenance. OpenClaw's reply preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
 
@@ -333,6 +337,13 @@ OpenClaw supports "silent" turns for background tasks where the user should not 
 
 Before auto-compaction happens, OpenClaw can run a silent agentic turn that writes durable state to disk (for example `memory/YYYY-MM-DD.md` in the agent workspace) so compaction cannot erase critical context. It monitors session context usage, and once it crosses a soft threshold below the compaction threshold, it sends a silent "write memory now" directive using the exact silent token `NO_REPLY` / `no_reply` so the user sees nothing.
 
+Memory flushing runs against a private, detached view of the conversation. Its
+internal prompts and replies never enter the original transcript, including when
+a new user message interrupts it. Memory-file writes remain durable. Required
+preflight excludes the already-admitted waiting user; post-reply flushing includes
+the completed turn. Any compaction inside the flush affects only its private view;
+the original conversation has a separate compaction step.
+
 Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/config-agents](/gateway/config-agents#agents-defaults-compaction):
 
 | Key                         | Default | Notes                                                                                                                                                  |
@@ -349,6 +360,10 @@ thresholds, memory flushing can run without requiring compaction.
 The selected memory provider owns the reserve and flush margin; without a flush
 plan, maintenance still uses the effective compaction reserve. Nonpositive
 thresholds suppress token triggers. Transcript byte guards remain independent.
+
+When memory flush refreshes stale usage, it includes projected messages appended
+after the latest valid provider usage report before saving the total as fresh.
+The following compaction check therefore accounts for that later transcript growth.
 
 Notes:
 

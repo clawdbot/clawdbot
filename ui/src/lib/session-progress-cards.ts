@@ -1,17 +1,15 @@
-import {
-  GATEWAY_SERVER_CAPS,
-  type ProgressCard,
-  type ProgressCardGetParams,
-  type ProgressCardGetResult,
-  type ProgressCardPutResult,
-  type ProgressCardStep,
+import type {
+  ProgressCard,
+  ProgressCardGetParams,
+  ProgressCardGetResult,
+  ProgressCardPutResult,
+  ProgressCardStep,
 } from "@openclaw/gateway-protocol";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
-import { isGatewayCapabilityAdvertised, isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -35,7 +33,7 @@ type ProgressCardEntry = {
   load?: Promise<ProgressCard | null>;
 };
 
-type SessionProgressCardLoadError = "access-denied" | "unavailable" | "unsupported-owner";
+type SessionProgressCardLoadError = "access-denied" | "unavailable";
 
 export type SessionProgressCardStore = {
   watch: (owner: object, targets: readonly ProgressCardGetParams[]) => void;
@@ -128,6 +126,12 @@ export function resolveSessionProgressCardTarget(
   };
 }
 
+function progressCardRequestTarget(target: ProgressCardGetParams): ProgressCardGetParams {
+  // Qualified keys already own their session. Explicit agentId additionally requires
+  // a configured agent, so retain the current key-only request contract for those rows.
+  return parseAgentSessionKey(target.sessionKey) ? { sessionKey: target.sessionKey } : target;
+}
+
 function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
   const watchedByOwner = new Map<object, readonly ProgressCardGetParams[]>();
   const entries = new Map<string, ProgressCardEntry>();
@@ -187,29 +191,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     }
   };
   const available = () =>
-    gateway.snapshot.phase === "connected" &&
-    gateway.snapshot.client !== null &&
-    isGatewayMethodAdvertised(gateway.snapshot, PROGRESS_CARD_GET_METHOD) === true;
-
-  const requestTarget = (entry: ProgressCardEntry): ProgressCardGetParams => {
-    if (parseAgentSessionKey(entry.target.sessionKey)) {
-      // Qualified keys already carry their owner; older schemas reject redundant fields.
-      return { sessionKey: entry.target.sessionKey };
-    }
-    if (
-      entry.target.agentId &&
-      isGatewayCapabilityAdvertised(
-        gateway.snapshot,
-        GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
-      ) === true
-    ) {
-      return entry.target;
-    }
-    // Old gateways cannot address canonical global by owner, even through a main alias.
-    entry.error = "unsupported-owner";
-    notify();
-    throw new Error("Update the Gateway to view progress for this session's agent.");
-  };
+    gateway.snapshot.phase === "connected" && gateway.snapshot.client !== null;
 
   const load = async (target: ProgressCardGetParams): Promise<ProgressCard | null> => {
     const resolved = resolveTarget(target);
@@ -223,7 +205,6 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       dirty: true,
     };
     remember(resolved.key, entry);
-    const params = requestTarget(entry);
     if (!entry.dirty && entry.card !== undefined) {
       return entry.card;
     }
@@ -242,7 +223,10 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       connection.isCurrent(scope) &&
       gateway.snapshot.client === scope.client;
     const request = scope.client
-      .request<ProgressCardGetResult>(PROGRESS_CARD_GET_METHOD, params)
+      .request<ProgressCardGetResult>(
+        PROGRESS_CARD_GET_METHOD,
+        progressCardRequestTarget(entry.target),
+      )
       .then((response) => {
         const card = parseProgressCard(response, entry.wireKey);
         if (!current()) {
@@ -392,7 +376,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
         gateway.snapshot.client === scope.client;
       const result = await scope.client
         .request<ProgressCardPutResult>(PROGRESS_CARD_PUT_METHOD, {
-          ...requestTarget(entry),
+          ...progressCardRequestTarget(entry.target),
           expectedRevision: card.revision,
         })
         .catch((error: unknown) => {

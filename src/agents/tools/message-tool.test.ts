@@ -729,8 +729,11 @@ describe("message tool gateway timeout", () => {
     expect(delivery?.sourceReplyDelivered).toBe(mode === "final" ? true : undefined);
   });
 
-  it("does not advertise source-reply finality on ordinary message tools", () => {
-    expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
+  it("advertises scoped source-reply finality without exposing idempotency controls", () => {
+    expect(getToolProperties(createMessageTool()).final).toMatchObject({
+      type: "boolean",
+      description: expect.stringContaining("Ignored for other sends"),
+    });
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });
 
@@ -1261,34 +1264,26 @@ describe("poll vote echo guard", () => {
 });
 
 describe("message tool secret scoping", () => {
-  it("marks message-tool-only source replies in the tool description", () => {
-    const scopedTool = createMessageTool({
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
+  it("keeps explicit-target policy out of the reusable tool definition", () => {
+    const defaultTool = createMessageTool({ sourceReplyDeliveryMode: "message_tool_only" });
     const explicitTargetTool = createMessageTool({
       requireExplicitTarget: true,
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    const defaultTool = createMessageTool();
-
-    expect(scopedTool.description).toContain('visible reply: action="send" + message');
-    expect(getToolProperties(scopedTool).final).toMatchObject({ type: "boolean" });
-    expect(scopedTool.description).toContain("target defaults current source");
-    expect(scopedTool.description).toContain("Final answer private");
-    expect(explicitTargetTool.description).toContain("send needs target");
-    expect(explicitTargetTool.description).not.toContain("target defaults current source");
-    expect(defaultTool.description).not.toContain('visible reply: action="send" + message');
-    expect(getToolProperties(defaultTool)).not.toHaveProperty("final");
+    expect(explicitTargetTool.description).toBe(defaultTool.description);
+    expect(explicitTargetTool.parameters).toEqual(defaultTool.parameters);
   });
 
-  it("forwards source reply delivery mode through createOpenClawTools", () => {
-    const tool = createOpenClawTools({
-      config: {} as never,
-      sourceReplyDeliveryMode: "message_tool_only",
-    }).find((candidate) => candidate.name === "message");
-
-    expect(tool?.description).toContain('visible reply: action="send" + message');
-    expect(getToolProperties(tool!).final).toMatchObject({ type: "boolean" });
+  it("keeps the tool definition stable through createOpenClawTools", () => {
+    const tools = (["automatic", "message_tool_only"] as const).map((sourceReplyDeliveryMode) =>
+      createOpenClawTools({ config: {}, sourceReplyDeliveryMode }).find(
+        (candidate) => candidate.name === "message",
+      ),
+    );
+    expect(tools[0]).toBeDefined();
+    expect(tools[1]?.description).toBe(tools[0]?.description);
+    expect(tools[1]?.parameters).toEqual(tools[0]?.parameters);
+    expect(getToolProperties(tools[1]!).final).toMatchObject({ type: "boolean" });
   });
 
   it("passes source reply delivery mode to the outbound runner", async () => {

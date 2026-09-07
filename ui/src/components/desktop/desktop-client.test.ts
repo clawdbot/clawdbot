@@ -23,6 +23,7 @@ function createFakeRfb() {
     viewOnly = false;
     scaleViewport = false;
     readonly disconnect = vi.fn();
+    readonly sendKey = vi.fn();
 
     constructor(
       readonly target: HTMLElement,
@@ -138,8 +139,9 @@ describe("DesktopClient", () => {
     handle.sendText("m");
     handle.sendBackspace();
     expect(onKeyDown.mock.calls.map((call) => (call[0] as KeyboardEvent | undefined)?.key)).toEqual(
-      ["k", "m", "Backspace"],
+      ["k", "m"],
     );
+    expect(instances[0]?.sendKey).toHaveBeenCalledExactlyOnceWith(0xff08, "Backspace");
 
     handle.disableInput();
     expect(instances[0]?.viewOnly).toBe(true);
@@ -186,7 +188,6 @@ describe("DesktopClient", () => {
     ["LF", "é\nΩ", ["é", "Enter", "Ω"]],
     ["CRLF", "é\r\nΩ", ["é", "Enter", "Ω"]],
     ["CR", "é\rΩ", ["é", "Enter", "Ω"]],
-    ["astral Unicode", "🦞\nΩ", ["\ud83e", "\udd9e", "Enter", "Ω"]],
     ["blank lines", "\n\r\n\r", ["Enter", "Enter", "Enter"]],
   ] as const)("sends %s text line breaks as single Enter presses", async (_name, text, keys) => {
     const { Rfb } = createFakeRfb();

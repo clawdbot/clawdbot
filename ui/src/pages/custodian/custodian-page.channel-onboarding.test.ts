@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import { channelSnapshotEntryIsActive, createChannelCapability } from "../../lib/channels/index.ts";
+import * as uuid from "../../lib/uuid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -21,7 +22,7 @@ function channelSnapshot(patch: Partial<ChannelsStatusSnapshot> = {}): ChannelsS
 
 describe("custodian channel onboarding", () => {
   beforeEach(() => {
-    vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
   });
 
   afterEach(() => {

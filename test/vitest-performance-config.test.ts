@@ -7,73 +7,65 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeEvalArgs } from "../src/test-utils/node-process.ts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
-import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config.ts";
+import { loadVitestPerformanceConfig } from "./vitest/vitest.performance-config.ts";
 
-describe("loadVitestExperimentalConfig", () => {
+describe("loadVitestPerformanceConfig", () => {
   it("enables the filesystem module cache by default", () => {
-    expect(loadVitestExperimentalConfig({}, "linux")).toEqual({
-      experimental: {
-        fsModuleCache: true,
-        fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
-      },
+    expect(loadVitestPerformanceConfig({}, "linux")).toEqual({
+      fsModuleCache: true,
+      fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
     });
   });
 
   it("enables the filesystem module cache explicitly", () => {
     expect(
-      loadVitestExperimentalConfig(
+      loadVitestPerformanceConfig(
         {
           OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
         },
         "linux",
       ),
     ).toEqual({
-      experimental: {
-        fsModuleCache: true,
-        fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
-      },
+      fsModuleCache: true,
+      fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
     });
   });
 
   it("passes through the filesystem module cache path when provided", () => {
     expect(
-      loadVitestExperimentalConfig(
+      loadVitestPerformanceConfig(
         {
           OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/openclaw-vitest-cache",
         },
         "linux",
       ),
     ).toEqual({
-      experimental: {
-        fsModuleCache: true,
-        fsModuleCachePath: "/tmp/openclaw-vitest-cache",
-      },
+      fsModuleCache: true,
+      fsModuleCachePath: "/tmp/openclaw-vitest-cache",
     });
   });
 
   it("disables the filesystem module cache by default on Windows", () => {
-    expect(loadVitestExperimentalConfig({}, "win32")).toStrictEqual({});
+    expect(loadVitestPerformanceConfig({}, "win32")).toStrictEqual({});
   });
 
   it("still allows enabling the filesystem module cache explicitly on Windows", () => {
     expect(
-      loadVitestExperimentalConfig(
+      loadVitestPerformanceConfig(
         {
           OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
         },
         "win32",
       ),
     ).toEqual({
-      experimental: {
-        fsModuleCache: true,
-        fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
-      },
+      fsModuleCache: true,
+      fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
     });
   });
 
   it("allows disabling the filesystem module cache explicitly", () => {
     expect(
-      loadVitestExperimentalConfig(
+      loadVitestPerformanceConfig(
         {
           OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
         },
@@ -84,7 +76,7 @@ describe("loadVitestExperimentalConfig", () => {
 
   it("enables import timing output and import breakdown reporting", () => {
     expect(
-      loadVitestExperimentalConfig(
+      loadVitestPerformanceConfig(
         {
           OPENCLAW_VITEST_IMPORT_DURATIONS: "true",
           OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN: "1",
@@ -92,9 +84,9 @@ describe("loadVitestExperimentalConfig", () => {
         "linux",
       ),
     ).toEqual({
+      fsModuleCache: true,
+      fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
       experimental: {
-        fsModuleCache: true,
-        fsModuleCachePath: path.join(process.cwd(), ".cache", "vitest", "default"),
         importDurations: { print: true },
         printImportBreakdown: true,
       },
@@ -102,7 +94,7 @@ describe("loadVitestExperimentalConfig", () => {
   });
 
   it("uses RUNNER_OS to detect Windows even when the platform is not win32", () => {
-    expect(loadVitestExperimentalConfig({ RUNNER_OS: "Windows" }, "linux")).toStrictEqual({});
+    expect(loadVitestPerformanceConfig({ RUNNER_OS: "Windows" }, "linux")).toStrictEqual({});
   });
 });
 
@@ -176,7 +168,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createVitest } from ${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("vitest/node")).href)};
 const root = ${JSON.stringify(root)};
-const experimental = ${JSON.stringify(loadVitestExperimentalConfig({}, "linux", root).experimental)};
+const cacheConfig = ${JSON.stringify(loadVitestPerformanceConfig({}, "linux", root))};
 ${source}
 `),
     );
@@ -201,7 +193,7 @@ ${source}
         path.join(checkout, "fixture.test.js"),
         'test("runs the fixture", () => expect(2 + 2).toBe(4));\n',
       );
-      const cacheConfig = loadVitestExperimentalConfig({}, "linux", checkout);
+      const cacheConfig = loadVitestPerformanceConfig({}, "linux", checkout);
       const config = {
         root: checkout,
         test: {
@@ -220,9 +212,7 @@ ${source}
     const first = prepareCheckout("first");
     const second = prepareCheckout("second");
     run(root, first.checkout);
-    const firstCache =
-      first.cacheConfig.experimental?.fsModuleCachePath ??
-      path.join(sharedModules, ".experimental-vitest-cache");
+    const firstCache = first.cacheConfig.fsModuleCachePath!;
     const sentinel = path.join(firstCache, "first-checkout-sentinel");
     fs.writeFileSync(sentinel, "owned by first checkout");
     fs.writeFileSync(lockfile, "lockfileVersion: 2\n");
@@ -305,7 +295,8 @@ export default {
   }],
   test: {
     reporters: ["default", path.join(root, "reporter.js")],
-    experimental: aggregate.test.experimental,
+    fsModuleCache: aggregate.test.fsModuleCache,
+    fsModuleCachePath: aggregate.test.fsModuleCachePath,
     projects: ["A", "B"].map((name) => ({
       extends: false,
       root: path.join(root, name),
@@ -327,17 +318,18 @@ export default {
         name,
         globals: true,
         include: ["fixture.test.js"],
-        experimental: scoped.test.experimental,
+        fsModuleCache: scoped.test.fsModuleCache,
+        fsModuleCachePath: scoped.test.fsModuleCachePath,
       },
     })),
   },
 };
 `,
     );
-    const cacheConfig = loadVitestExperimentalConfig({}, "linux", root);
+    const cacheConfig = loadVitestPerformanceConfig({}, "linux", root);
     const env = {
       OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
-      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: cacheConfig.experimental?.fsModuleCachePath,
+      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: cacheConfig.fsModuleCachePath,
     };
     const reporterGenerations: string[] = [];
     const check = (projects: string[], expected: [number, number, number], args: string[] = []) => {
@@ -417,8 +409,8 @@ const plugin = {
     if (!names.some(name => id === path.join(root, name).replaceAll("\\\\", "/"))) return;
     return { code: code.replace("__DEPENDENCY_VERSION__", fs.readFileSync(generation, "utf8")), map: null };
   },
-  async configureVitest({ project, vitest, experimental_defineCacheKeyGenerator }) {
-    experimental_defineCacheKeyGenerator(({ id }) => {
+  async configureVitest({ project, vitest, defineCacheKeyGenerator }) {
+    defineCacheKeyGenerator(({ id }) => {
       keyed.add(id);
       return "fixture-hook-imports";
     });
@@ -430,14 +422,14 @@ const plugin = {
   },
 };
 const create = () => createVitest("test", {
-  root, config: false, watch: false, experimental,
+  root, config: false, watch: false, ...cacheConfig,
 }, { plugins: [plugin] });
 let ctx;
 try {
   ctx = await create();
   assert.equal((await ctx.getRootProject().import("./project-subject.js")).version, "1.0.0");
   assert.equal((await ctx.import("./vitest-subject.js")).version, "1.0.0");
-  assert.ok(fs.readdirSync(experimental.fsModuleCachePath).length > 1);
+  assert.ok(fs.readdirSync(cacheConfig.fsModuleCachePath).length > 1);
   await ctx.close();
   ctx = undefined;
   fs.writeFileSync(path.join(root, "bun.lock"), JSON.stringify({ version: "2.0.0" }));
@@ -454,56 +446,60 @@ try {
     );
   });
 
-  it("keeps selected projects on the current lock generation with separate cache roots", () => {
+  it("invalidates root and selected project cache keys together", () => {
     const { root, generation } = prepareCacheFixture("separate-projects");
     runCacheApi(
       root,
       `
 const generation = ${JSON.stringify(generation)};
-const names = ["A", "B"];
-for (const name of names) {
-  fs.mkdirSync(path.join(root, name));
-  fs.writeFileSync(path.join(root, name, "subject.js"), 'export const version = "__DEPENDENCY_VERSION__";');
+const projectRoot = path.join(root, "A");
+fs.mkdirSync(projectRoot);
+for (const directory of [root, projectRoot]) {
+  fs.writeFileSync(path.join(directory, "subject.js"), 'export const version = "__DEPENDENCY_VERSION__";');
 }
-let transforms = 0;
-const run = async (selected, version) => {
-  const ctx = await createVitest("test", {
-    root, config: false, watch: false, experimental, project: selected,
-    projects: names.map((name) => ({
-      extends: false, root: path.join(root, name),
-      plugins: [{
-        name: "fixture-separate-project-generation",
-        transform(code, id) {
-          if (id !== path.join(root, name, "subject.js").replaceAll("\\\\", "/")) return;
-          transforms += 1;
-          return { code: code.replace("__DEPENDENCY_VERSION__", fs.readFileSync(generation, "utf8")), map: null };
-        },
-      }],
-      test: {
-        name,
-        experimental: { fsModuleCache: true, fsModuleCachePath: path.join(root, "cache-" + name) },
-      },
-    })),
-  });
-  try {
-    assert.deepEqual(ctx.projects.map((project) => project.name).sort(), [...selected].sort());
-    for (const name of selected) {
-      assert.equal((await ctx.getProjectByName(name).import("./subject.js")).version, version, "project " + name);
-    }
-  } finally {
-    await ctx.close();
-  }
+const plugin = {
+  name: "fixture-selected-project-generation",
+  transform(code, id) {
+    if (!id.endsWith("/subject.js")) return;
+    return { code: code.replace("__DEPENDENCY_VERSION__", fs.readFileSync(generation, "utf8")), map: null };
+  },
 };
-await run(names, "1.0.0");
-assert.equal(transforms, 2);
-await run(names, "1.0.0");
-assert.equal(transforms, 2, "same-generation project transforms must stay warm");
-fs.writeFileSync(path.join(root, "bun.lock"), JSON.stringify({ version: "2.0.0" }));
-fs.writeFileSync(generation, "2.0.0");
-await run(["A"], "2.0.0");
-assert.equal(transforms, 3);
-await run(["B"], "2.0.0");
-assert.equal(transforms, 4);
+const ctx = await createVitest("test", {
+  root, config: false, watch: false, ...cacheConfig, project: ["A"],
+  projects: [{
+    extends: false,
+    root: projectRoot,
+    plugins: [plugin],
+    test: {
+      name: "A",
+      fsModuleCache: true,
+      fsModuleCachePath: path.join(root, "cache-A"),
+    },
+  }],
+}, { plugins: [plugin] });
+try {
+  const rootProject = ctx.getRootProject();
+  const selectedProject = ctx.getProjectByName("A");
+  assert.equal((await rootProject.import("./subject.js")).version, "1.0.0");
+  assert.equal((await selectedProject.import("./subject.js")).version, "1.0.0");
+  const entries = [rootProject, selectedProject].map((project) => {
+    const environment = project.runner.environment;
+    const module = [...environment.moduleGraph.idToModuleMap.values()].find((entry) =>
+      entry.id?.endsWith("/subject.js")
+    );
+    assert.ok(module?.id, JSON.stringify([...environment.moduleGraph.idToModuleMap.keys()]));
+    return [environment, module.id];
+  });
+  for (const [environment, id] of entries) {
+    assert.equal(typeof ctx._fsCache.getMemoryCachePath(environment, id), "string");
+  }
+  ctx.clearAllCachePaths();
+  for (const [environment, id] of entries) {
+    assert.equal(ctx._fsCache.getMemoryCachePath(environment, id), undefined);
+  }
+} finally {
+  await ctx.close();
+}
 `,
     );
   });
@@ -516,7 +512,7 @@ assert.equal(transforms, 4);
 const generation = ${JSON.stringify(generation)};
 fs.writeFileSync(path.join(root, "first.js"), "export const value = 1;");
 fs.writeFileSync(path.join(root, "next.js"), 'export const value = 2; export const version = "__DEPENDENCY_VERSION__";');
-const create = () => createVitest("test", { root, config: false, watch: false, experimental }, {
+const create = () => createVitest("test", { root, config: false, watch: false, ...cacheConfig }, {
   plugins: [{
     name: "fixture-clear-generation",
     transform(code, id) {
@@ -528,14 +524,14 @@ const create = () => createVitest("test", { root, config: false, watch: false, e
 let ctx = await create();
 try {
   assert.equal((await ctx.import("./first.js")).value, 1);
-  assert.ok(fs.readdirSync(experimental.fsModuleCachePath).length > 1);
+  assert.ok(fs.readdirSync(cacheConfig.fsModuleCachePath).length > 1);
   await ctx.waitForTestRunEnd();
-  await ctx.experimental_clearCache();
-  assert.equal(fs.existsSync(experimental.fsModuleCachePath), false);
+  await ctx.clearCache();
+  assert.equal(fs.existsSync(cacheConfig.fsModuleCachePath), false);
   const next = await ctx.import("./next.js");
   assert.equal(next.value, 2);
   assert.equal(next.version, "1.0.0");
-  assert.ok(fs.readdirSync(experimental.fsModuleCachePath).length > 0);
+  assert.ok(fs.readdirSync(cacheConfig.fsModuleCachePath).length > 0);
   await ctx.close();
   ctx = undefined;
   fs.writeFileSync(path.join(root, "bun.lock"), JSON.stringify({ version: "2.0.0" }));
