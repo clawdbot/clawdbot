@@ -6,7 +6,7 @@ import { ErrorShapeSchema } from "./frames.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
-import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { NonEmptyString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
 import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
 import { SessionOwnerSchema } from "./sessions-row.js";

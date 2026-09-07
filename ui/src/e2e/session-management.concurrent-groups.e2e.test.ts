@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
   createSessionManagementE2eSuite,
   installMockGateway,
   openSessionMenuSubmenu,
-  sessionRow,
   sessionsListResponse,
   submitInputDialog,
 } from "./session-management.test-support.ts";
@@ -52,7 +52,7 @@ suite.define(() => {
       await row.hover();
       await row.getByRole("button", { name: "Open session menu" }).click();
       await openSessionMenuSubmenu(page, "Move to group");
-      const newGroupItem = page.getByRole("menuitem", { name: "New group…" });
+      const newGroupItem = page.getByRole("menuitem", { name: "New group" });
       await newGroupItem.waitFor({ state: "visible" });
       await activateSelfRemovingControl(newGroupItem);
       await submitInputDialog(page, name);
@@ -64,10 +64,10 @@ suite.define(() => {
 
     try {
       await createGroupFromSessionMenu(tab1.page, "Alpha");
-      await captureUiProof(tab1.page, "concurrent-groups-tab1-alpha.png");
+      await captureUiProof(suite, tab1.page, "concurrent-groups-tab1-alpha.png");
 
       await createGroupFromSessionMenu(tab2.page, "Beta");
-      await captureUiProof(tab2.page, "concurrent-groups-tab2-beta.png");
+      await captureUiProof(suite, tab2.page, "concurrent-groups-tab2-beta.png");
 
       // Each tab must eventually observe the group created in the other tab.
       await tab1.page.locator('[data-session-section="category:Beta"]').waitFor({
@@ -89,8 +89,8 @@ suite.define(() => {
       await expect.poll(() => sectionIds(tab1.page)).toEqual(["category:Alpha", "category:Beta"]);
       await expect.poll(() => sectionIds(tab2.page)).toEqual(["category:Alpha", "category:Beta"]);
 
-      await captureUiProof(tab1.page, "concurrent-groups-tab1-both.png");
-      await captureUiProof(tab2.page, "concurrent-groups-tab2-both.png");
+      await captureUiProof(suite, tab1.page, "concurrent-groups-tab1-both.png");
+      await captureUiProof(suite, tab2.page, "concurrent-groups-tab2-both.png");
 
       // Each tab issued exactly one atomic add for its own group.
       expect(await tab1.gateway.getRequests("sessions.groups.add")).toHaveLength(1);
