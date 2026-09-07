@@ -5,6 +5,7 @@ import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { getLineRuntime } from "./runtime.js";
+import { describeLineWebhookDelivery } from "./status.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
@@ -37,6 +38,15 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
       const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
       if (displayName) {
         lineBotLabel = ` (${displayName})`;
+      }
+      // Startup is where an operator is actually watching, and reaching the same
+      // report through status costs them a flag they have no reason to try when
+      // nothing looks wrong. The probe already has the answer here.
+      const delivery = describeLineWebhookDelivery({
+        webhook: probe.ok ? probe.webhook : undefined,
+      });
+      if (delivery) {
+        ctx.log?.warn(`[${account.accountId}] ${delivery.message} Fix: ${delivery.fix}.`);
       }
     } catch (err) {
       if (getLineRuntime().logging.shouldLogVerbose()) {

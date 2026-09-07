@@ -3,7 +3,11 @@ import type { webhook } from "@line/bot-sdk";
 import type { NextFunction, Request, Response } from "express";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
+import {
+  parseLineWebhookBody,
+  resolveLineWebhookPath,
+  validateLineSignature,
+} from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_RAW_BODY_BYTES = 64 * 1024;
 
@@ -101,7 +105,7 @@ export function startLineWebhook(options: StartLineWebhookOptions): {
         "Set channels.line.channelSecret in your config.",
     );
   }
-  const path = options.path ?? "/line/webhook";
+  const path = resolveLineWebhookPath(options.path);
   const middleware = createLineWebhookMiddleware({
     channelSecret,
     onEvents: options.onEvents,

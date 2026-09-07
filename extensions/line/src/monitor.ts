@@ -14,8 +14,6 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import {
   canonicalizeWebhookRouteKey,
-  normalizePluginHttpPath,
-  normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
   resolveSingleWebhookTarget,
 } from "openclaw/plugin-sdk/webhook-ingress";
@@ -46,7 +44,11 @@ import {
   rejectLineWebhookRequest,
 } from "./webhook-node.js";
 import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
-import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
+import {
+  parseLineWebhookBody,
+  resolveLineWebhookPath,
+  validateLineSignature,
+} from "./webhook-utils.js";
 
 interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -318,9 +320,7 @@ export async function monitorLineProvider(
     },
   });
 
-  const normalizedPath = normalizeWebhookPath(
-    normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook",
-  );
+  const normalizedPath = resolveLineWebhookPath(webhookPath);
   const webhookRouteKey = canonicalizeWebhookRouteKey(normalizedPath);
   const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
     createLineNodeWebhookHandler({
