@@ -619,11 +619,6 @@ export async function runSubagentAnnounceFlow(params: {
     });
     reportDeliveryResult(delivery);
     announceOutcome = delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
-    if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
-      defaultRuntime.log(
-        `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
-      );
-    }
   } catch (err) {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.

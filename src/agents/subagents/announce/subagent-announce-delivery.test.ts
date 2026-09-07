@@ -29,6 +29,7 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrations.legacy-session-store.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { defaultRuntime } from "../../../runtime.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   createChannelTestPluginBase,
@@ -658,6 +659,7 @@ async function deliverSlackChannelAnnouncement(params: {
   callGateway: typeof runtimeCallGateway;
   isActive?: boolean;
   sessionId?: string;
+  getRequesterSessionActivity?: () => { sessionId?: string; isActive: boolean };
   expectsCompletionMessage?: boolean;
   directIdempotencyKey: string;
   requesterSessionKey?: string;
@@ -677,6 +679,7 @@ async function deliverSlackChannelAnnouncement(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceSessionKey?: string;
+  sourceRunId?: string | null;
   sourceTool?: string;
   runtimeConfig?: Record<string, unknown>;
   requesterSessionEntry?: SessionEntry;
@@ -689,10 +692,12 @@ async function deliverSlackChannelAnnouncement(params: {
   } as const;
   testing.setDepsForTest({
     callGateway: params.callGateway,
-    getRequesterSessionActivity: () => ({
-      sessionId: params.sessionId ?? "requester-session-channel",
-      isActive: params.isActive === true,
-    }),
+    getRequesterSessionActivity:
+      params.getRequesterSessionActivity ??
+      (() => ({
+        sessionId: params.sessionId ?? "requester-session-channel",
+        isActive: params.isActive === true,
+      })),
     getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     ...(params.requesterSessionEntry
       ? {
@@ -723,7 +728,8 @@ async function deliverSlackChannelAnnouncement(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: params.directIdempotencyKey,
     internalEvents: params.internalEvents,
-    sourceRunId: "run-generated-media",
+    sourceRunId:
+      params.sourceRunId === null ? undefined : (params.sourceRunId ?? "run-generated-media"),
     sourceSessionKey: params.sourceSessionKey,
     sourceTool: params.sourceTool,
     isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
@@ -5439,6 +5445,90 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(agentParams.sourceReplyDeliveryMode).toBe(
       requireVisibleReply && route.agentParams.deliver ? "automatic" : undefined,
     );
+  });
+
+  it.each([
+    {
+      name: "ordinary subagent completion",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: "agent:worker:subagent:child",
+      sourceRunId: "run-child",
+      expectedSource: "run run-child",
+    },
+    {
+      name: "agent harness completion",
+      sourceTool: "agent_harness_task",
+      sourceSessionKey: "codex-native:child-thread",
+      sourceRunId: null,
+      expectedSource: "session codex-native:child-thread",
+    },
+  ] as const)("logs a recovered direct failure for $name", async (testCase) => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    let activityChecks = 0;
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        deliveryStatus: { status: "failed", errorMessage: "direct agent failed" },
+      },
+    });
+
+    try {
+      const result = await deliverSlackChannelAnnouncement({
+        callGateway,
+        directIdempotencyKey: `announce-recovered-${testCase.sourceTool}`,
+        getRequesterSessionActivity: () => ({
+          sessionId: "requester-session-recovered",
+          isActive: activityChecks++ > 0,
+        }),
+        queueEmbeddedAgentMessageWithOutcome: createQueueOutcomeMock(true),
+        sourceSessionKey: testCase.sourceSessionKey,
+        sourceRunId: testCase.sourceRunId,
+        sourceTool: testCase.sourceTool,
+      });
+
+      expect(result).toMatchObject({ delivered: true, path: "steered" });
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        `[warn] Subagent completion direct announce failed for ${testCase.expectedSource}: direct agent failed; recovered via steered`,
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("logs one terminal direct failure for an unrecovered agent harness completion", async () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway not connected");
+    }) as unknown as typeof runtimeCallGateway;
+
+    try {
+      const result = await deliverSlackChannelAnnouncement({
+        callGateway,
+        directIdempotencyKey: "announce-unrecovered-agent-harness",
+        sourceSessionKey: "codex-native:failed-child-thread",
+        sourceRunId: null,
+        sourceTool: "agent_harness_task",
+      });
+
+      expect(result).toMatchObject({
+        delivered: false,
+        path: "direct",
+        error: "gateway not connected",
+      });
+      expect(callGateway).toHaveBeenCalledTimes(4);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).startsWith("[warn] Subagent completion direct announce failed"),
+        ),
+      ).toEqual([
+        [
+          "[warn] Subagent completion direct announce failed for session codex-native:failed-child-thread: gateway not connected",
+        ],
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it.each([

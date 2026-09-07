@@ -671,7 +671,7 @@ describe("subagent announce seam flow", () => {
     expect(agentCall.params?.to).toBe("-1001234567890");
   });
 
-  it("logs direct completion announce delivery failures through the gateway log path", async () => {
+  it("leaves direct completion failure logging to the shared delivery owner", async () => {
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     agentSpy.mockResolvedValueOnce({ status: "error", error: "Outbound not configured for slack" });
 
@@ -696,9 +696,7 @@ describe("subagent announce seam flow", () => {
     });
 
     expect(didAnnounce).toBe("retryable");
-    expect(logSpy).toHaveBeenCalledWith(
-      "[warn] Subagent completion direct announce failed for run run-direct-failure-log: Outbound not configured for slack",
-    );
+    expect(logSpy).not.toHaveBeenCalled();
     logSpy.mockRestore();
   });
 
