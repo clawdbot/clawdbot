@@ -1489,6 +1489,91 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     },
   );
 
+  it("drops inherited max only after resolving the maintained Codex ACP command", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:inherited-max",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:inherited-max",
+      agent: "codex",
+      mode: "persistent",
+      thinking: "max",
+      thinkingExplicit: false,
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).not.toHaveProperty("thinking");
+    expect(readFirstEnsureSessionInput(ensure)).not.toHaveProperty("thinkingExplicit");
+    expect(handle.appliedThinking).toEqual({ kind: "dropped" });
+  });
+
+  it("preserves inherited max for a custom non-Codex command registered as codex", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? "custom-acp" : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:custom-command",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:custom-command",
+      agent: "codex",
+      mode: "persistent",
+      thinking: "max",
+      thinkingExplicit: false,
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).toMatchObject({ thinking: "max" });
+    expect(readFirstEnsureSessionInput(ensure)).not.toHaveProperty("thinkingExplicit");
+    expect(handle.appliedThinking).toBeUndefined();
+  });
+
+  it("keeps rejecting an explicit max request for the maintained Codex ACP command", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession");
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:codex:acp:explicit-max",
+        agent: "codex",
+        mode: "persistent",
+        thinking: "max",
+        thinkingExplicit: true,
+      }),
+    ).rejects.toMatchObject({ code: "ACP_INVALID_RUNTIME_OPTION" });
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
   it("starts Codex ACP without injecting a leaked non-openai default model", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),

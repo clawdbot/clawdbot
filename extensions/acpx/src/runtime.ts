@@ -633,7 +633,7 @@ function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegate
   const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
   const model = input.model?.trim() || existingOptions?.model;
   const sessionOptions = model ? { ...existingOptions, model } : existingOptions;
-  const { modelExplicit: _modelExplicit, ...rest } = input;
+  const { modelExplicit: _modelExplicit, thinkingExplicit: _thinkingExplicit, ...rest } = input;
   return {
     ...rest,
     ...(sessionOptions ? { sessionOptions } : {}),
@@ -1428,11 +1428,17 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const input = { ...logicalInput, sessionKey: resolveAcpxSessionResource(logicalInput) };
     const isCodexAcp =
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command);
+    const dropInheritedCodexMax =
+      isCodexAcp && input.thinking === "max" && input.thinkingExplicit === false;
+    const effectiveInput = dropInheritedCodexMax ? { ...input } : input;
+    if (dropInheritedCodexMax) {
+      delete effectiveInput.thinking;
+    }
     const claudeModelOverride = isClaudeAcpCommand(command)
       ? normalizeClaudeAcpModelOverride(input.model)
       : undefined;
     const codexClassification = isCodexAcp
-      ? classifyCodexAcpModelRequest(input.model, input.thinking)
+      ? classifyCodexAcpModelRequest(effectiveInput.model, effectiveInput.thinking)
       : undefined;
     if (codexClassification?.kind === "unsupported" && input.modelExplicit) {
       failUnsupportedCodexAcpModel(input.model ?? "");
@@ -1445,7 +1451,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       classifiedCodexOverride && Object.keys(classifiedCodexOverride).length > 0
         ? classifiedCodexOverride
         : undefined;
-    const requestedModel = input.model?.trim();
+    const requestedModel = effectiveInput.model?.trim();
     const appliedModel: OpenClawRuntimeHandle["appliedModel"] =
       isCodexAcp && requestedModel
         ? codexModelOverride?.model
@@ -1453,10 +1459,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           : { kind: "dropped" }
         : undefined;
     const ensureInput = isCodexAcp
-      ? withCodexSessionModel(input, codexModelOverride)
+      ? withCodexSessionModel(effectiveInput, codexModelOverride)
       : claudeModelOverride
-        ? { ...input, model: claudeModelOverride }
-        : input;
+        ? { ...effectiveInput, model: claudeModelOverride }
+        : effectiveInput;
     const stableLaunchCommand =
       codexModelOverride && command
         ? appendCodexAcpConfigOverrides(command, codexModelOverride)
@@ -1484,7 +1490,12 @@ export class AcpxRuntime implements CompleteAcpRuntime {
               : ensureDelegateSessionWithModelFallback(delegate, ensureInput),
         }),
     });
-    return { ...handle, ...logicalTarget, ...(appliedModel ? { appliedModel } : {}) };
+    return {
+      ...handle,
+      ...logicalTarget,
+      ...(appliedModel ? { appliedModel } : {}),
+      ...(dropInheritedCodexMax ? { appliedThinking: { kind: "dropped" as const } } : {}),
+    };
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
