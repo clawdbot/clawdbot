@@ -1014,14 +1014,44 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(fragment.querySelector("a.markdown-github-item, a[data-github-kind]")).toBeNull();
     });
 
-    it("leaves github urls inside code untouched", () => {
+    it("leaves github urls inside fences untouched", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(
-          "`https://github.com/openclaw/openclaw`\n\n```\nhttps://github.com/openclaw/openclaw\n```\n\n`https://github.com/o/r/issues/3434`\n\n```\nhttps://github.com/o/r/pull/3434\n```",
+          "```\nhttps://github.com/openclaw/openclaw\n```\n\n```\nhttps://github.com/o/r/pull/3434\n```",
         ),
       );
       expect(fragment.querySelector("a")).toBeNull();
       expect(fragment.querySelector(".markdown-github-link")).toBeNull();
+    });
+
+    it.each([
+      ["pull request", "`https://github.com/openclaw/openclaw/pull/141131`", "#141131", "pull"],
+      ["issue", "` https://github.com/o/r/issues/3434 `", "#3434", "issue"],
+      ["repository", "`https://github.com/openclaw/openclaw`", "openclaw/openclaw", undefined],
+    ])("promotes a code span holding only a github %s url", (_kind, input, label, kind) => {
+      const href = input.replaceAll("`", "").trim();
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(`See ${input} today`));
+      expect(fragment.querySelector("code")).toBeNull();
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-link");
+      expect(link?.textContent).toBe(label);
+      expect(link?.getAttribute("href")).toBe(href);
+      expect(link?.getAttribute("title")).toBe(href);
+      expect(link?.classList.contains("markdown-bare-url")).toBe(true);
+      expect(link?.classList.contains("markdown-github-item")).toBe(kind !== undefined);
+      expect(link?.getAttribute("data-github-kind")).toBe(kind ?? null);
+    });
+
+    it.each([
+      ["a non-github url", "`https://example.com/o/r/pull/3434`"],
+      ["a url with surrounding prose", "`see https://github.com/o/r/pull/3434`"],
+      [
+        "a code span inside an authored link",
+        "[`https://github.com/o/r/pull/3434`](https://example.com)",
+      ],
+    ])("keeps %s as code", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      expect(fragment.querySelector("code")).not.toBeNull();
+      expect(fragment.querySelector("a.markdown-github-link")).toBeNull();
     });
 
     it("keeps the hover preview target intact on marked links", () => {
