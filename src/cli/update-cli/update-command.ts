@@ -269,7 +269,6 @@ async function updateCommandInternal(
   let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
   let packageInstallEnv: NodeJS.ProcessEnv | undefined;
-  let packageInstallCwd: string | undefined;
   let packageInstallTarget: ResolvedGlobalInstallTarget | undefined;
   let installedPackageName = DEFAULT_PACKAGE_NAME;
   let packageAlreadyCurrent = false;
@@ -328,7 +327,6 @@ async function updateCommandInternal(
     recoveryState.triageTarget.root = root;
     recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
     packageInstallEnv = await createGlobalInstallEnv();
-    packageInstallCwd = invocationCwd;
     if (updateInstallKind === "package") {
       installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
       const manager = await resolveGlobalManager({
@@ -376,7 +374,7 @@ async function updateCommandInternal(
       targetVersion = await resolveTargetVersion(tag, timeoutMs, {
         spec: explicitSpec,
         command: npmMetadataCommand,
-        cwd: packageInstallCwd,
+        cwd: invocationCwd,
         env: packageInstallEnv,
       });
     } else {
@@ -384,7 +382,7 @@ async function updateCommandInternal(
         channel,
         timeoutMs,
         command: npmMetadataCommand,
-        cwd: packageInstallCwd,
+        cwd: invocationCwd,
         env: packageInstallEnv,
       }).then((resolved) => {
         tag = resolved.tag;
@@ -420,7 +418,7 @@ async function updateCommandInternal(
         }),
         command: npmMetadataCommand,
         timeoutMs,
-        cwd: packageInstallCwd,
+        cwd: invocationCwd,
         env: packageInstallEnv,
       });
       if (targetMetadata.error || targetMetadata.version !== targetVersion) {
@@ -474,6 +472,7 @@ async function updateCommandInternal(
     channel,
     devTarget,
     packageTargetSchemaVersions,
+    packageTargetVersion: targetVersion ?? undefined,
     opts,
     refuseUpdate,
   });
@@ -654,6 +653,7 @@ async function updateCommandInternal(
     packageInstallEnv,
     packageInstallTarget,
     packageTargetSchemaVersions,
+    packageTargetVersion: targetVersion ?? undefined,
     packageUpdateNodeRunner,
     managedServiceNodeRunner,
     managedServiceRootRedirect,

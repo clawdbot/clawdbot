@@ -39,6 +39,20 @@ another full Doctor pass. The final report records downtime and verification
 results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
+Package updates also check npm availability for enabled configured plugins before
+stopping the serving Gateway or replacing the installed core. The check uses the
+same plugin version rules as post-update synchronization, including release-cohort
+tracking, beta selection, and extended-stable targets. A missing version or registry
+error refuses the update with `plugin-target-unavailable`; `--dry-run` reports the
+same refusal. Retry when the registry or mirror is ready, select an older available
+core with `openclaw update --tag <version>`, or disable the affected plugin before
+retrying. Extended-stable does not accept `--tag`; retry later or explicitly switch
+channels. Bundled and path-installed plugins do not require registry requests.
+When enabled npm plugins need admission, a package spec whose core version cannot
+be resolved before staging is also refused; select an exact registry version.
+This metadata check does not reserve downloads, so later download failures can
+still require recovery.
+
 Switch channels or target a specific version:
 
 ```bash
