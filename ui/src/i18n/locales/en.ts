@@ -5371,7 +5371,8 @@ export const en: TranslationMap & {
       modes: {
         "read-only": {
           label: "Read Only",
-          description: "Read within the session root; writes and commands are blocked.",
+          description:
+            "Agent tools can read within the session root, but cannot write or run commands.",
         },
         guarded: {
           label: "Guarded",
