@@ -197,7 +197,12 @@ describe("registerQrCli", () => {
     vi.unstubAllEnvs();
   });
 
-  it("prints setup code only when requested", async () => {
+  it.each([
+    { args: ["--setup-code-only"], json: false },
+    { args: ["--json"], json: true },
+    { args: ["--setup-code-only", "--json"], json: true },
+    { args: ["--json", "--setup-code-only"], json: true },
+  ])("prints the requested output for $args", async ({ args, json }) => {
     loadConfig.mockReturnValue({
       gateway: {
         bind: "custom",
@@ -206,14 +211,22 @@ describe("registerQrCli", () => {
       },
     });
 
-    await runQr(["--setup-code-only"]);
+    await runQr(args);
 
     const expected = encodePairingSetupCode({
       url: "ws://127.0.0.1:18789",
       bootstrapToken: "bootstrap-123",
       expiresAtMs: 123,
     });
-    expect(runtime.log).toHaveBeenCalledWith(expected);
+    if (json) {
+      expect(runtime.writeJson, "QR_JSON_WRITER_NOT_REACHED").toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ setupCode: expected, gatewayUrl: "ws://127.0.0.1:18789" }),
+      );
+      expect(runtime.log).not.toHaveBeenCalledWith(expected);
+    } else {
+      expect(runtime.log).toHaveBeenCalledWith(expected);
+      expect(runtime.writeJson).not.toHaveBeenCalled();
+    }
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
     expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(

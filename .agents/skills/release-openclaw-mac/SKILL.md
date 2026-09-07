@@ -11,6 +11,20 @@ This is a regular stable-release skill. Do not invoke it for extended-stable;
 that track does not inherit macOS assets, appcast promotion, or a GitHub Release
 unless the current extended-stable release policy explicitly adds them.
 
+## Release authorization
+
+An explicit stable or full release request includes macOS publication unless
+the operator limits its scope. Continue through validation, signing,
+notarization, promotion, and verification without asking for separate macOS
+consent. Keep the exact release identity and all artifact checks.
+
+Follow the current owner-configured environment policy. Do not invent an extra
+reviewer requirement or recreate an obsolete one. If GitHub still enforces an
+approval, report the actual rule and resolve it through its owner; policy changes
+require explicit organization-owner direction and verified active admin
+membership. Never impersonate a reviewer, fabricate approval, or use another
+signing path to bypass an enforced rule.
+
 ## Credentials
 
 - Resolve Peter-owned ASC item refs, key ids, issuer ids, and service-token provenance from `$release-private`.
@@ -53,10 +67,9 @@ Do not update these from mixed sources. All three ASC fields must come from the 
 - Real mac publish must reuse:
   - a successful release-ops mac preflight run for the same tag/source SHA
   - a successful release-ops mac validation run for the same tag/source SHA
-- Release-ops preflight and real publish enter the protected `mac-release`
-  environment in the `build_sign_and_package` job. Operators may be able to
-  trigger the workflow while Vincent or another environment reviewer approves
-  the paused deployment before signing/notarization/promotion proceeds.
+- Release-ops preflight and real publish use the `mac-release` environment for
+  signing and promotion secrets and its main-only deployment policy. The
+  authorized release operator continues under that environment's current rules.
 - If preflight source SHA differs from tag SHA, validation must also use the same `source_ref`; promotion rejects mismatched proof.
 
 ## Notarization
@@ -71,7 +84,8 @@ Do not update these from mixed sources. All three ASC fields must come from the 
 The public handoff workflow validates the tag, source, build, and package
 metadata before publication. It does not require a GitHub release page because
 it does not upload assets. Keep this validation before the real publish
-workflow; the publisher owns draft creation and final undraft.
+workflow. The core publisher owns GitHub release finalization; macOS promotion
+requires that release to exist and attaches its verified assets.
 
 Public handoff validation:
 
@@ -100,9 +114,9 @@ gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
   -f public_release_branch=release/YYYY.M.PATCH
 ```
 
-Wait for the run to reach the `mac-release` environment approval if GitHub
-pauses it, then get approval from Vincent or another configured environment
-reviewer. Record the successful preflight run id.
+Follow the run through signing and notarization under the configured environment
+policy. Record the successful preflight run id; an approval pause is not a
+successful preflight.
 
 Release-ops validation for a branch-variation preflight:
 
@@ -127,8 +141,8 @@ gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
   -f public_release_branch=release/YYYY.M.PATCH
 ```
 
-Wait for the `mac-release` environment approval again if GitHub pauses the real
-publish run before it promotes assets.
+Follow promotion through asset upload and appcast publication under the same
+release authorization and current environment policy.
 
 - Release-ops `openclaw/releases` publish/validate workflows run from their own
   trusted `main` workflow ref. Real publish has a guard that rejects any other

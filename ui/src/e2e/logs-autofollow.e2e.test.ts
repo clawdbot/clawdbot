@@ -1,7 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -85,7 +86,18 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}logs`);
-        await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
+        try {
+          await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
+        } finally {
+          if (captureUiProof) {
+            await writeFile(
+              path.join(proofDir, "initial-tail.png"),
+              await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [
+                page.locator(".log-row").first(),
+              ]),
+            );
+          }
+        }
         expect((await gateway.getRequests("logs.tail"))[0]?.params).toEqual({
           limit: 500,
           maxBytes: 250_000,
@@ -134,11 +146,12 @@ suite.define(() => {
           )
           .toBeLessThan(2);
         if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(proofDir, "incremental-tail-and-autofollow.png"),
-          });
+          await writeFile(
+            path.join(proofDir, "incremental-tail-and-autofollow.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [
+              stream.locator(".log-row", { hasText: "log line 201" }),
+            ]),
+          );
         }
         expect(pageErrors).toEqual([]);
       },

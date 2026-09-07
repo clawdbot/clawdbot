@@ -140,7 +140,7 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Groq",
     docsPath: "/providers/groq",
-    catalog: { liveModelDiscovery: true },
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
     wrapStreamFn: (ctx) =>
       wrapGroqOversizedRequestRecovery(
         ctx.streamFn,

@@ -167,43 +167,6 @@ export function writeFixture(directory: string, name: string, source: string) {
   return filename;
 }
 
-export function waitForFixtureFile(
-  filename: string,
-  completion: Promise<unknown>,
-  expected?: string,
-) {
-  return new Promise<void>((resolve, reject) => {
-    const matches = () =>
-      fs.existsSync(filename) &&
-      fs.statSync(filename).size > 0 &&
-      (expected === undefined || fs.readFileSync(filename, "utf8") === expected);
-    const check = () => {
-      if (matches()) {
-        clearInterval(poll);
-        resolve();
-      }
-    };
-    // watchFile can adopt a newly created receipt in its first stat without an event.
-    // Poll the persistent state itself so readiness never depends on that race.
-    const poll = setInterval(check, 50);
-    void completion.then(
-      () => {
-        clearInterval(poll);
-        if (matches()) {
-          resolve();
-        } else {
-          reject(new Error(`Child exited before writing ${filename}`));
-        }
-      },
-      (error: unknown) => {
-        clearInterval(poll);
-        reject(new Error(`Child failed before writing ${filename}`, { cause: error }));
-      },
-    );
-    check();
-  });
-}
-
 export function workerProbe(
   directory: string,
   holdSecond = false,
@@ -292,8 +255,9 @@ export function workerProbe(
             expect(url.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
             if (!sourceMode) expect(fileURLToPath(url).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
           }
-          expect(args.includes('tsx')).toBe(sourceMode);
-          expect(args[sourceMode ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
+          const sourceLoader = sourceMode && !process.versions.bun;
+          expect(args.includes('tsx')).toBe(sourceLoader);
+          expect(args[sourceLoader ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
           fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
           const release = inject('releaseFile');
@@ -312,7 +276,7 @@ export function workerProbe(
   const cacheDirectory = path.join(directory, "cache");
   // Vitest keeps invocation metadata at the root cache even for inline projects.
   // Share the fixture's transform directory so cleanup owns both.
-  const experimental = cacheProof ? { fsModuleCache: true, fsModuleCachePath: cacheDirectory } : {};
+  const cacheConfig = cacheProof ? { fsModuleCache: true, fsModuleCachePath: cacheDirectory } : {};
   const config = writeFixture(
     directory,
     "vitest.config.mts",
@@ -322,8 +286,8 @@ export function workerProbe(
     const probe = {name:'fixture:transform-counter', transform(code,id) {
       if (${Boolean(cacheProof)} && ${JSON.stringify(transformFiles)}.includes(id)) fs.appendFileSync(${JSON.stringify(path.join(directory, "transforms.jsonl"))},JSON.stringify(id)+'\\n');
     }};
-    const project = name => ({plugins:[...shared.plugins,probe],resolve:{...shared.resolve,alias:[{find:'#fixture-value',replacement:${JSON.stringify(value)}},...shared.resolve.alias]},test:{name,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,testTimeout:shared.test.testTimeout,experimental:${JSON.stringify(experimental)},provide:{launcherArgv:process.argv,configValue:'first',releaseFile:${holdSecond} && name==='second' ? ${JSON.stringify(path.join(directory, "release"))} : null}}});
-    export default async () => ({root:${JSON.stringify(root)},${cacheProof === "single" ? "...project('first')" : `plugins:shared.plugins,test:{${cacheProof ? `experimental:${JSON.stringify(experimental)},` : ""}projects:[project('first'),project('second')]}`}});
+    const project = name => ({extends:false,plugins:[...shared.plugins,probe],resolve:{...shared.resolve,alias:[{find:'#fixture-value',replacement:${JSON.stringify(value)}},...shared.resolve.alias]},test:{name,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,testTimeout:shared.test.testTimeout,...${JSON.stringify(cacheConfig)},provide:{launcherArgv:process.argv,configValue:'first',releaseFile:${holdSecond} && name==='second' ? ${JSON.stringify(path.join(directory, "release"))} : null}}});
+    export default async () => ({root:${JSON.stringify(root)},${cacheProof === "single" ? "...project('first')" : `plugins:shared.plugins,test:{${cacheProof ? `...${JSON.stringify(cacheConfig)},` : ""}projects:[project('first'),project('second')]}`}});
   `,
   );
   return { config, value, configuredValue, parent, cacheDirectory };

@@ -117,6 +117,22 @@ export function getRuntimeConfig(options?: {
   return loadConfig(options);
 }
 
+/** Revalidate disk policy at a synchronous effect boundary without observing or repairing state. */
+export function readCurrentConfigForPolicyCheck(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+}): OpenClawConfig {
+  return createConfigIO({
+    configPath: params.configPath,
+    env: cloneEnvWithPlatformSemantics(params.env),
+    observe: false,
+    pluginValidation: "core-only",
+    shellEnvFallback: "defer",
+    suppressFutureVersionWarning: true,
+    logger: { warn: () => {}, error: () => {} },
+  }).loadConfig({ skipSuspiciousRecovery: true });
+}
+
 export async function readBestEffortConfig(options?: {
   isolateEnv?: boolean;
   observe?: boolean;
@@ -329,30 +345,19 @@ export async function writeConfigFile(
   let runtimePreflightResult: unknown;
   let managedPreparedCandidates = new Map<symbol, RuntimeConfigWritePreparedCandidate>();
   const writeResult = await io.writeConfigFile(nextCfg, {
+    // Preserve caller policy and provenance; runtime-owned fields take precedence below.
+    ...options,
     baseSnapshot,
     basePluginMetadataSnapshot: baseSnapshotRead.pluginMetadataSnapshot,
-    assertConfigPathForWrite: options.assertConfigPathForWrite,
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
       actualConfigPath: io.configPath,
       expectedConfigPath: options.expectedConfigPath,
       envSnapshotForRestore: options.envSnapshotForRestore,
     }),
     unsetPaths: resolveManagedUnsetPathsForWrite(options.unsetPaths),
-    explicitSetPaths: options.explicitSetPaths,
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
-    persistCanonicalAgentRoster: options.persistCanonicalAgentRoster,
-    allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
-    allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
-    afterWrite: options.afterWrite,
-    allowDestructiveWrite: options.allowDestructiveWrite,
-    allowConfigSizeDrop: options.allowConfigSizeDrop,
-    skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
-    skipOutputLogs: options.skipOutputLogs,
-    skipPluginValidation: options.skipPluginValidation,
-    preservedLegacyRootKeys: options.preservedLegacyRootKeys,
-    lastTouchedVersionOverride: options.lastTouchedVersionOverride,
     preCommitRuntimePreflight: async (sourceConfig) => {
       // A failed canonical reread must retain the actual resolved write payload,
       // including writer metadata, rather than the caller's runtime-shaped input.

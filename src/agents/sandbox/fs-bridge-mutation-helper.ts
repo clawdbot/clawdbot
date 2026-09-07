@@ -114,6 +114,16 @@ export function buildPinnedMkdirpPlan(params: {
   });
 }
 
+export function buildPinnedReadDirectoryPlan(params: {
+  check: PathSafetyCheck;
+  pinned: PinnedSandboxDirectoryEntry;
+}): SandboxFsCommandPlan {
+  return buildPinnedMutationPlan({
+    checks: [params.check],
+    args: ["readdir", params.pinned.mountRootPath, params.pinned.relativePath],
+  });
+}
+
 export function buildPinnedRemovePlan(params: {
   check: PathSafetyCheck;
   pinned: PinnedSandboxEntry;

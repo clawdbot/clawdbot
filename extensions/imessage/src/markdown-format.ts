@@ -54,6 +54,9 @@ function restoreCodeMarkers(
   ranges: Array<{ start: number; length: number; styles: IMessageFormatStyle[] }>,
   codeRanges: Array<{ start: number; length: number }>,
 ): { text: string; ranges: IMessageFormatRange[] } {
+  if (codeRanges.length === 0) {
+    return { text, ranges };
+  }
   let rendered = "";
   let cursor = 0;
   // The code-only renderer merges and sorts these non-overlapping ranges.
@@ -109,11 +112,11 @@ export function extractMarkdownFormatRuns(input: string): {
     { styleMap: IMESSAGE_STYLE_MAP },
     IMESSAGE_FORMAT_PROFILE,
   );
-  const code = renderMarkdownWithAttributedRanges(
-    ir,
-    { styleMap: { code: "code" } },
-    IMESSAGE_CODE_PROFILE,
-  );
+  // Fallback projection can shift inline-code spans, but never creates them.
+  const codeRanges = ir.styles.some((span) => span.style === "code")
+    ? renderMarkdownWithAttributedRanges(ir, { styleMap: { code: "code" } }, IMESSAGE_CODE_PROFILE)
+        .ranges
+    : [];
   return restoreCodeMarkers(
     rendered.text,
     rendered.ranges.map(({ start, length, style }) => ({
@@ -121,6 +124,6 @@ export function extractMarkdownFormatRuns(input: string): {
       length,
       styles: [style],
     })),
-    code.ranges,
+    codeRanges,
   );
 }

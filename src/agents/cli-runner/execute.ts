@@ -28,10 +28,11 @@ import {
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+import { runCliCleanup } from "./cleanup.js";
 import {
   acceptsCliLiveSession,
   buildCliLiveOwnerKey,
-  closeCliLiveSession,
+  restartCliLiveSession,
 } from "./cli-live-session-registry.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
@@ -129,10 +130,22 @@ type PreparedCliRunInternalParams = PreparedCliRunContext["params"] & {
 
 /** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
-  context: PreparedCliRunContext,
+  inputContext: PreparedCliRunContext,
   cliSessionIdToUse?: string,
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
+  // Fresh recovery retains its exact account/read authority across every await
+  // and through the process/plugin execution callbacks, not just preparation.
+  const context =
+    !cliSessionIdToUse && inputContext.openClawHistoryPrompt && inputContext.cliHistoryWriter
+      ? {
+          ...inputContext,
+          params: {
+            ...inputContext.params,
+            assertCurrent: inputContext.cliHistoryWriter.assertReadable,
+          },
+        }
+      : inputContext;
   const params = context.params as PreparedCliRunInternalParams;
   const assertCurrent = createCliRunCurrentAssertion(params);
   assertCurrent();
@@ -341,7 +354,9 @@ export async function executePreparedCliRun(
   };
   const cleanupOuterResource = async (cleanup: (() => Promise<void>) | undefined) => {
     try {
-      await cleanup?.();
+      await runCliCleanup(params, "cli-outer-resource", async () => {
+        await cleanup?.();
+      });
     } catch (error) {
       if (completedOutput?.didSendViaMessagingTool) {
         cliBackendLog.warn(
@@ -601,12 +616,16 @@ export async function executePreparedCliRun(
       });
       toolTracking.finalizeCapture(events.finalizeParsedTools);
       try {
-        await cleanupMcpCaptureAttempt?.();
+        await runCliCleanup(params, "cli-mcp-capture", async () => {
+          await cleanupMcpCaptureAttempt?.();
+        });
       } catch (error) {
         recordRunError(error);
       }
       try {
-        restoreSkillEnv?.();
+        await runCliCleanup(params, "cli-skill-env", async () => {
+          restoreSkillEnv?.();
+        });
       } catch (error) {
         recordRunError(error);
       }
@@ -639,7 +658,7 @@ export async function executePreparedCliRun(
         }
         // The fork argument only applies at process startup; a cached warm child
         // would run inside the source session. Force a fresh spawn.
-        await closeCliLiveSession(context, "restart");
+        await restartCliLiveSession(context);
       }
       return await executeAttempt();
     });
@@ -662,6 +681,7 @@ export async function executePreparedCliRun(
       failure = new AggregateError(
         [error, persistenceError],
         "CLI turn failed and its fork successor could not be persisted",
+        { cause: error },
       );
     }
     if (forkResumeClaimed && !forkSuccessorObserved) {

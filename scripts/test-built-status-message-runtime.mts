@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parsePackageRootArg } from "./lib/package-root-args.mts";
 
-const STATUS_MESSAGE_RUNTIME_RE = /^status-message\.runtime(?:-[A-Za-z0-9_-]+)?\.js$/u;
+const STATUS_MESSAGE_RUNTIME_RE = /^status-message\.runtime(?:-[A-Za-z0-9_-]+\.m?js|\.js)$/u;
 
 /**
  * Finds the preferred built status-message runtime bundle under dist.
@@ -40,7 +40,7 @@ function listBuiltStatusMessageRuntimeFiles(distDir: string) {
 function listFindBuiltStatusMessageRuntimeFiles(distDir: string) {
   const result = spawnSync(
     "find",
-    [distDir, "-maxdepth", "1", "-type", "f", "-name", "status-message.runtime*.js"],
+    [distDir, "-maxdepth", "1", "-type", "f", "-name", "status-message.runtime*.*js"],
     {
       encoding: "utf8",
       maxBuffer: 1024 * 1024,

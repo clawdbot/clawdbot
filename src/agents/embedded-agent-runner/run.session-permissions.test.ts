@@ -77,6 +77,21 @@ describe("embedded run session permissions", () => {
     );
   });
 
+  it.each(["requireWorkspaceOnly", "requireWritableSandbox"] as const)(
+    "preserves the host's %s requirement at attempt dispatch",
+    async (requirement) => {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
+      await runEmbeddedAgent({
+        ...createPluginHarnessRunParams(state),
+        [requirement]: true,
+        runId: "run-workspace-requirement",
+      });
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+        expect.objectContaining({ [requirement]: true }),
+      );
+    },
+  );
+
   it("shares the final plugin-clamped exec mode with the outer run", async () => {
     const execOverrides = {};
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt) => {
@@ -124,7 +139,7 @@ describe("embedded run session permissions", () => {
         expect(attempt.permissionMode).toBe(after ?? undefined);
         expect(attempt.execOverrides?.mode).toBe(execMode);
         expect(attempt.sessionId).toBe(pluginHarnessRunParams.sessionId);
-        expect(attempt.prompt).toContain("Continue from the current transcript");
+        expect(attempt.prompt).toContain("Continue the current task from the existing transcript");
         expect(attempt.prompt).not.toBe(pluginHarnessRunParams.prompt);
         expect(attempt.suppressNextUserMessagePersistence).toBe(true);
         expect(attempt.skipPreparedUserTurnMessage).toBe(true);

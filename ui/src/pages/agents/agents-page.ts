@@ -13,7 +13,6 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
@@ -33,6 +32,7 @@ import {
   loadChatMetadata,
   peekChatMetadata,
   revalidateChatMetadata,
+  subscribeChatMetadata,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
@@ -125,11 +125,9 @@ class AgentsPage
   private agentIdentitySource: ApplicationContext["agentIdentity"] | null = null;
   private hasBoundSessions = false;
   private sessionsSource: ApplicationContext["sessions"] | null = null;
-  private chatModelCatalogAgentId: string | null = null;
-  private chatModelCatalogRequest: {
-    client: GatewayBrowserClient;
-    generation: number;
-    agentId: string;
+  private chatModelCatalogSubscription: {
+    isCurrent: () => boolean;
+    unsubscribe: () => void;
   } | null = null;
   private normalizedLocation = "";
   private githubProfileId: string | null = null;
@@ -146,9 +144,7 @@ class AgentsPage
         return;
       }
       this.invalidateTransientRequests();
-      this.chatModelCatalog = [];
-      this.chatModelCatalogAgentId = null;
-      this.chatModelCatalogError = null;
+      this.resetModelCatalog();
     },
     onSnapshot: () => this.syncGatewayState(),
     ensureInitialData: () => this.ensureInitialData(),
@@ -365,9 +361,6 @@ class AgentsPage
   private resetForClientChange() {
     this.agentsList = null;
     this.agentsSelectedId = null;
-    this.chatModelCatalog = [];
-    this.chatModelCatalogAgentId = null;
-    this.chatModelCatalogError = null;
     this.resetSelectionState();
   }
 
@@ -441,17 +434,6 @@ class AgentsPage
     return Object.fromEntries(
       this.context.agentIdentity.entries().map((entry) => [entry.agentId, entry]),
     );
-  }
-
-  // Local /avatar/<id> images need a bearer credential when gateway auth is
-  // active; the agent select uses this to decide whether <img> URLs can load.
-  private controlUiAuthToken(): string | null {
-    const { snapshot, connection } = this.context.gateway;
-    return resolveControlUiAuthToken({
-      hello: snapshot.hello,
-      settings: connection,
-      password: connection.password,
-    });
   }
 
   private ensureInitialData() {
@@ -596,61 +578,57 @@ class AgentsPage
     });
   }
 
+  private resetModelCatalog() {
+    this.chatModelCatalogSubscription?.unsubscribe();
+    this.chatModelCatalogSubscription = null;
+    this.chatModelCatalog = [];
+    this.chatModelCatalogError = null;
+  }
+
   private ensureModelCatalog(options: { refresh?: boolean } = {}) {
     const client = this.client;
     const agentId = this.resolveSelectedAgentId();
     if (!client || !this.connected || !agentId) {
       return;
     }
-    if (!options.refresh) {
+    if (!this.chatModelCatalogSubscription?.isCurrent()) {
+      this.resetModelCatalog();
+      const generation = this.requestGeneration;
+      const gateway = this.context?.gateway;
+      const agents = this.context?.agents;
+      const subscription = {
+        isCurrent: () =>
+          this.chatModelCatalogSubscription === subscription &&
+          this.context?.gateway === gateway &&
+          this.isCurrentRequest(client, generation, agentId, { agents }),
+        unsubscribe: subscribeChatMetadata(client, { agentId }, (update) => {
+          if (!subscription.isCurrent()) {
+            return;
+          }
+          if (update.type === "invalidated") {
+            this.ensureModelCatalog();
+          } else if (update.type === "error") {
+            this.chatModelCatalogError = formatUiError(update.error);
+          } else {
+            this.chatModelCatalogError = null;
+            if (update.type === "result") {
+              this.chatModelCatalog = update.result.models ?? [];
+            }
+          }
+        }),
+      };
+      this.chatModelCatalogSubscription = subscription;
       const cached = peekChatMetadata(client, { agentId });
       if (cached) {
         this.chatModelCatalog = cached.models ?? [];
-        this.chatModelCatalogAgentId = agentId;
-        this.chatModelCatalogError = null;
-        return;
       }
     }
-    const generation = this.requestGeneration;
-    const previousRequest = this.chatModelCatalogRequest;
-    if (
-      previousRequest?.client === client &&
-      previousRequest.generation === generation &&
-      previousRequest.agentId === agentId
-    ) {
-      return;
-    }
-    if (this.chatModelCatalogAgentId !== agentId) {
-      this.chatModelCatalog = [];
-    }
-    const request = { client, generation, agentId };
-    this.chatModelCatalogRequest = request;
-    this.chatModelCatalogError = null;
-    // Chat metadata carries the selected agent's already-prepared startup models
-    // without initiating the live discovery reserved for explicit picker use.
+    // The store owns current publications and pending reads. A superseded promise
+    // must not overwrite its newer result or erase retained choices on failure.
     const metadataRequest = options.refresh
       ? revalidateChatMetadata(client, { agentId })
       : loadChatMetadata(client, { agentId });
-    void metadataRequest
-      .then((result) => {
-        if (this.isCurrentRequest(client, generation, agentId)) {
-          const models = result.models ?? [];
-          this.chatModelCatalog = models;
-          this.chatModelCatalogAgentId = agentId;
-          this.chatModelCatalogError = null;
-        }
-      })
-      .catch((error: unknown) => {
-        if (this.isCurrentRequest(client, generation, agentId)) {
-          this.chatModelCatalogAgentId = null;
-          this.chatModelCatalogError = formatUiError(error);
-        }
-      })
-      .finally(() => {
-        if (this.chatModelCatalogRequest === request) {
-          this.chatModelCatalogRequest = null;
-        }
-      });
+    void metadataRequest.catch(() => undefined);
   }
 
   private async loadAgentsAndCommit() {
@@ -754,9 +732,7 @@ class AgentsPage
 
   private resetSelectionState() {
     this.gateway.invalidate();
-    this.chatModelCatalog = [];
-    this.chatModelCatalogAgentId = null;
-    this.chatModelCatalogError = null;
+    this.resetModelCatalog();
     this.agentFilesList = null;
     this.agentFilesError = null;
     this.agentFileActive = null;
@@ -949,7 +925,6 @@ class AgentsPage
         renderAgents({
           access,
           basePath: this.context.basePath,
-          authToken: this.controlUiAuthToken(),
           loading: agentsState.agentsLoading,
           error: agentsState.agentsError,
           agentsList: this.agentsList,

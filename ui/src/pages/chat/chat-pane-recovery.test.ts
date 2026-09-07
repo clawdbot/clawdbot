@@ -47,6 +47,7 @@ function createQueuedSendRecoveryFixture() {
     lastRunId: "server-run",
     status: "done",
   };
+  const messages: unknown[] = [];
   const host = makeChatHost({
     chatQueue: [
       {
@@ -61,8 +62,19 @@ function createQueuedSendRecoveryFixture() {
     ],
     requestHandlers: {
       "sessions.list": () => listRefresh.promise,
-      "chat.history": { messages: [], sessionInfo: idle },
-      "chat.send": { runId: "queued-send-run", status: "ok" },
+      "chat.history": () => ({ messages, sessionInfo: idle }),
+      "chat.send": (params: { message: string; idempotencyKey: string }) => {
+        messages.push({
+          role: "user",
+          content: params.message,
+          __openclaw: {
+            id: "queued-user",
+            seq: 1,
+            idempotencyKey: `${params.idempotencyKey}:user`,
+          },
+        });
+        return { runId: params.idempotencyKey, status: "started", messageSeq: 1 };
+      },
     },
     sessionsResult: sessionsResult(active),
   });

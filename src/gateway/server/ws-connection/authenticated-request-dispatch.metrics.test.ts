@@ -107,11 +107,11 @@ describe("authenticated Gateway RPC diagnostics", () => {
           },
         }),
       });
+      const dispatch = harness.dispatcher.dispatch(
+        { type: "req", id: "prepared", method: "health" },
+        client,
+      );
       try {
-        await harness.dispatcher.dispatch(
-          { type: "req", id: "prepared", method: "health" },
-          client,
-        );
         await reached.promise;
         now = 200;
         release.resolve();
@@ -129,6 +129,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
         });
       } finally {
         release.resolve();
+        await dispatch;
         await observed.finished;
       }
     },
@@ -150,8 +151,8 @@ describe("authenticated Gateway RPC diagnostics", () => {
       await completion.promise;
       respond(true, { final: true });
     });
+    const dispatch = fixture.dispatch();
     try {
-      await fixture.dispatch();
       await queued.promise;
       now = 120;
       queue.resolve();
@@ -178,6 +179,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
     } finally {
       queue.resolve();
       completion.resolve();
+      await dispatch;
       await fixture.finished;
     }
   });
@@ -349,8 +351,8 @@ describe("authenticated Gateway RPC diagnostics", () => {
       respond(true, { done: true });
       respond(true, { duplicate: true });
     });
+    const dispatch = fixture.dispatch();
     try {
-      await fixture.dispatch();
       await entered.promise;
       expect(fixture.socket.listenerCount("close")).toBe(0);
       fixture.socket.emit("close");
@@ -367,6 +369,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
       });
     } finally {
       completion.resolve();
+      await dispatch;
       await fixture.finished;
     }
   });
@@ -398,8 +401,8 @@ describe("authenticated Gateway RPC diagnostics", () => {
       await completion.promise;
       respond(true, { private: "must not send" });
     });
+    const dispatch = fixture.dispatch();
     try {
-      await fixture.dispatch();
       await entered.promise;
       fixture.client.invalidated = true;
       completion.resolve();
@@ -414,6 +417,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
       );
     } finally {
       completion.resolve();
+      await dispatch;
       await fixture.finished;
     }
   });
@@ -426,17 +430,23 @@ describe("authenticated Gateway RPC diagnostics", () => {
       entered.resolve();
       await cancelled.promise;
     }, "sessions.companion.ask");
-    await fixture.dispatch();
-    await entered.promise;
-    fixture.socket.emit("close");
-    await fixture.finished;
-    expect(fixture.events.at(-1)).toMatchObject({
-      phase: "dispatch",
-      outcome: "cancelled",
-      response: "none",
-    });
-    expect(fixture.events.some((event) => event.phase === "response")).toBe(false);
-    expect(fixture.socket.listenerCount("close")).toBe(0);
+    const dispatch = fixture.dispatch();
+    try {
+      await entered.promise;
+      fixture.socket.emit("close");
+      await dispatch;
+      await fixture.finished;
+      expect(fixture.events.at(-1)).toMatchObject({
+        phase: "dispatch",
+        outcome: "cancelled",
+        response: "none",
+      });
+      expect(fixture.events.some((event) => event.phase === "response")).toBe(false);
+      expect(fixture.socket.listenerCount("close")).toBe(0);
+    } finally {
+      fixture.socket.emit("close");
+      await dispatch;
+    }
   });
 
   it("distinguishes a throwing handler from the error response it sends", async () => {

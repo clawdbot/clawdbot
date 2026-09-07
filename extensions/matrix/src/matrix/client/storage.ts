@@ -4,13 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
-import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
+import {
+  isMatrixActiveTokenRootDirectory,
+  resolveMatrixAccountStorageRoot,
+} from "../../storage-paths.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
@@ -19,15 +18,17 @@ import {
   migrateLegacyMatrixRecoveryKeyFileToStore,
   scoreMatrixCryptoStateInStore,
 } from "../crypto-state-store.js";
-import { resolveMatrixSqliteStateEnv } from "../sqlite-state.js";
+import {
+  normalizeMatrixStorageMetadata,
+  openMatrixStorageMetaStoreOptions,
+  STORAGE_META_STATE_KEY,
+  type MatrixStorageMetadata,
+} from "./storage-metadata.js";
 import type { MatrixAuth, MatrixStoragePaths } from "./types.js";
 
 const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
 const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
-const STORAGE_META_NAMESPACE = "storage-meta";
-const STORAGE_META_STATE_KEY = "current";
-const STORAGE_META_MAX_ENTRIES = 10;
 type LegacyMoveRecord = {
   sourcePath: string;
   targetPath: string;
@@ -38,24 +39,6 @@ type LegacyArchiveRecord = {
   sourcePath: string;
   label: string;
 };
-
-export type MatrixStorageMetadata = {
-  homeserver?: string;
-  userId?: string;
-  accountId?: string;
-  accessTokenHash?: string;
-  deviceId?: string | null;
-  currentTokenStateClaimed?: boolean;
-  createdAt?: string;
-};
-
-export function openMatrixStorageMetaStoreOptions(storageRootDir: string) {
-  return {
-    namespace: STORAGE_META_NAMESPACE,
-    maxEntries: STORAGE_META_MAX_ENTRIES,
-    env: resolveMatrixSqliteStateEnv({ stateDir: storageRootDir }),
-  };
-}
 
 function openStorageMetaStore(rootDir: string): PluginStateSyncKeyedStore<MatrixStorageMetadata> {
   return getMatrixRuntime().state.openSyncKeyedStore<MatrixStorageMetadata>(
@@ -107,48 +90,6 @@ type PopulatedMatrixStorageRoot = {
   score: number;
   mtimeMs: number;
 };
-
-export function normalizeMatrixStorageMetadata(value: unknown): MatrixStorageMetadata | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const metadata: MatrixStorageMetadata = {};
-  if (typeof value.homeserver === "string" && value.homeserver.trim()) {
-    metadata.homeserver = value.homeserver.trim();
-  }
-  if (typeof value.userId === "string" && value.userId.trim()) {
-    metadata.userId = value.userId.trim();
-  }
-  if (typeof value.accountId === "string" && value.accountId.trim()) {
-    metadata.accountId = value.accountId.trim();
-  }
-  if (typeof value.accessTokenHash === "string" && value.accessTokenHash.trim()) {
-    metadata.accessTokenHash = value.accessTokenHash.trim();
-  }
-  if (typeof value.deviceId === "string" && value.deviceId.trim()) {
-    metadata.deviceId = value.deviceId.trim();
-  }
-  if (value.currentTokenStateClaimed === true) {
-    metadata.currentTokenStateClaimed = true;
-  }
-  if (typeof value.createdAt === "string" && value.createdAt.trim()) {
-    metadata.createdAt = value.createdAt.trim();
-  }
-  return Object.keys(metadata).length > 0 ? metadata : null;
-}
-
-export async function hasMatrixStorageMetaStateInStore(params: {
-  store: Pick<PluginStateKeyedStore<MatrixStorageMetadata>, "lookup">;
-}): Promise<boolean> {
-  return normalizeMatrixStorageMetadata(await params.store.lookup(STORAGE_META_STATE_KEY)) !== null;
-}
-
-export async function writeMatrixStorageMetaStateToStore(params: {
-  payload: MatrixStorageMetadata;
-  store: Pick<PluginStateKeyedStore<MatrixStorageMetadata>, "register">;
-}): Promise<void> {
-  await params.store.register(STORAGE_META_STATE_KEY, params.payload);
-}
 
 function readStoredRootMetadata(rootDir: string): MatrixStorageMetadata {
   if (fs.existsSync(path.join(rootDir, "state", "openclaw.sqlite"))) {
@@ -269,6 +210,11 @@ function resolvePreferredMatrixStorageRoot(params: {
       continue;
     }
     if (entry.name === params.canonicalTokenHash) {
+      continue;
+    }
+    // Sibling reuse is only defined for exact token-hash roots. Filtering here
+    // keeps archived SQLite state out of compatibility checks and scoring.
+    if (!isMatrixActiveTokenRootDirectory(entry.name)) {
       continue;
     }
     const candidateRootDir = path.join(parentDir, entry.name);

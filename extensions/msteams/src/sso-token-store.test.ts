@@ -46,9 +46,7 @@ describe("msteams sso token store (plugin state)", () => {
     expect(await store.get(second)).toEqual(second);
 
     await expect(fs.access(storePath)).rejects.toThrow();
-    await expect(
-      fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
-    ).resolves.toBeUndefined();
+    await fs.access(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
   it("ignores legacy flat-key token files at runtime", async () => {
@@ -81,7 +79,7 @@ describe("msteams sso token store (plugin state)", () => {
         userId: "user-1",
       }),
     ).toBeNull();
-    await expect(fs.access(storePath)).resolves.toBeUndefined();
+    await fs.access(storePath);
   });
 
   it("keeps plugin-state keys bounded for long Teams identifiers", async () => {

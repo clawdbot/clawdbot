@@ -15,6 +15,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   tableExists,
   tableHasColumn,
@@ -333,10 +334,19 @@ export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: stri
 }
 export function detectOpenClawStateDatabaseSchemaMigrations(
   options: OpenClawStateDatabaseOptions = {},
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): OpenClawStateDatabaseSchemaMigration[] {
   const pathname = resolveDatabasePath(options);
   if (!existsSync(pathname)) {
     return [];
+  }
+  if (behavior.artifactPreservingReadOnly) {
+    return (
+      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+        ({ db }) => detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname),
+        { ...options, path: pathname },
+      ) ?? []
+    );
   }
   const db = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {
@@ -408,6 +418,14 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
       tableHasColumn(db, "current_conversation_bindings", "target_session_id"))
   ) {
     migrations.push({ kind: "conversation-binding-targets-v15", path: pathname });
+  }
+  if (
+    userVersion < 16 &&
+    (tableHasColumn(db, "skill_workshop_proposals", "workspace_dir") ||
+      tableHasColumn(db, "skill_workshop_proposals", "claim_released_time") ||
+      tableHasColumn(db, "skill_workshop_collection_reviews", "workspace_dir"))
+  ) {
+    migrations.push({ kind: "skill-workshop-directory-ownership-v16", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

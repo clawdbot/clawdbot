@@ -13,7 +13,6 @@ import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
-  loadCronModelSuggestions,
   toggleCronJob,
   loadCronJobsPage,
   loadCronRuns,
@@ -284,31 +283,6 @@ describe("cron controller", () => {
     expect(
       resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } }),
     ).toStrictEqual([]);
-  });
-
-  it("loads model suggestions from the configured model view", async () => {
-    const request = vi.fn(async () => ({
-      models: [
-        { id: "z-model", provider: "zai" },
-        { id: "a-model", provider: "anthropic" },
-        { id: "z-model", provider: "other" },
-        { provider: "missing-id" },
-      ],
-    }));
-    const state = {
-      client: { request } as unknown as CronState["client"],
-      connected: true,
-      cronModelSuggestions: [],
-    };
-
-    await loadCronModelSuggestions(state, "writer");
-
-    expect(request).toHaveBeenCalledWith("models.list", {
-      agentId: "writer",
-      view: "configured",
-      preparedOnly: true,
-    });
-    expect(state.cronModelSuggestions).toEqual(["a-model", "z-model"]);
   });
 
   it("normalizes stale announce mode when session/payload no longer support announce", () => {
@@ -1185,6 +1159,26 @@ describe("cron controller", () => {
     startCronEdit(state, job);
 
     expect(state.cronForm.timeoutSeconds).toBe("0");
+  });
+
+  it("loads declared Workshop review jobs as locked rows", async () => {
+    const legacyJob = createCronJob({
+      id: "skill-review",
+      name: "Skill review",
+      declarationKey: "skill-collection-review:main",
+      payload: { kind: "agentTurn", message: "Review the Workshop collection." },
+    });
+    const request = createMethodRequest({
+      "cron.list": cronJobsListResponse([legacyJob]),
+    });
+    const state = createStateWithRequest(request);
+
+    await loadCronJobsPage(state);
+    expect(state.cronJobs).toEqual([legacyJob]);
+
+    startCronEdit(state, legacyJob);
+    expect(state.cronForm.payloadKind).toBe("agentTurn");
+    expect(state.cronForm.payloadLocked).toBe(true);
   });
 
   it("preserves command payloads when editing Control UI metadata", async () => {

@@ -44,9 +44,9 @@ export function createScopedPairingAccess(params: {
     /** Upsert a pairing request with the scoped channel/account injected. */
     upsertPairingRequest: (input: ScopedUpsertInput) =>
       params.core.channel.pairing.upsertPairingRequest({
+        ...input,
         channel: params.channel,
         accountId: resolvedAccountId,
-        ...input,
       }),
   };
 }

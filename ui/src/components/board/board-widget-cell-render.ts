@@ -120,10 +120,14 @@ export function renderBoardDisabledPlugin(options: {
   pluginId: string;
   disabled: boolean;
   onRemove: () => void;
+  content?: TemplateResult;
 }): TemplateResult {
   return html`
     <div class="board-widget__disabled-plugin" data-test-id="board-disabled-plugin">
-      <strong>${t("board.widget.disabledPlugin", { pluginId: options.pluginId })}</strong>
+      ${
+        options.content ??
+        html`<strong>${t("board.widget.disabledPlugin", { pluginId: options.pluginId })}</strong>`
+      }
       <button
         class="btn btn--small"
         type="button"

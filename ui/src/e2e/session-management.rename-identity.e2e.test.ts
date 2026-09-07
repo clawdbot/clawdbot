@@ -1,6 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProofEnabled,
@@ -46,19 +48,18 @@ suite.define(() => {
         methodResponses: { "sessions.list": sessionsListResponse([original]) },
         sessionKey: original.key,
       });
-      const capture = async (stage: string) => {
+      const capture = async (stage: string, proofSurface: Locator, content: readonly Locator[]) => {
         if (captureUiProofEnabled) {
           await mkdir(path.join(suite.artifactDir, "session-identity-20260827"), {
             recursive: true,
           });
-          await page.screenshot({
-            path: path.join(
+          await writeFile(
+            path.join(
               path.join(suite.artifactDir, "session-identity-20260827"),
               `${surface}-${stage}.png`,
             ),
-            animations: "disabled",
-            fullPage: true,
-          });
+            await takeControlUiViewportScreenshot(page, proofSurface, content),
+          );
         }
       };
 
@@ -90,7 +91,11 @@ suite.define(() => {
         );
         await expect.poll(() => input.inputValue()).toBe(original.label);
         await input.fill("Stale rename");
-        await capture("editing");
+        await capture(
+          "editing",
+          surface === "header" ? input : page.locator("openclaw-modal-dialog dialog"),
+          [input],
+        );
 
         await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
         await gateway.emitGatewayEvent("sessions.changed", {
@@ -118,7 +123,7 @@ suite.define(() => {
           exact: false,
         });
         await outcome.first().waitFor({ state: "visible" });
-        await capture("outcome");
+        await capture("outcome", page.locator(".shell"), [outcome.first()]);
         await expect
           .poll(() => page.getByText(/changed before patch\. Retry\./).count())
           .toBeGreaterThan(0);
@@ -141,7 +146,7 @@ suite.define(() => {
           label: "Fresh rename",
         });
         await expect.poll(() => row.textContent()).toContain("Fresh rename");
-        await capture("recovered");
+        await capture("recovered", page.locator(".shell"), [row]);
       } finally {
         await context.close();
         if (video) {

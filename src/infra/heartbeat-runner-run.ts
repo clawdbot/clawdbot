@@ -166,6 +166,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       wake,
       prepared,
       outcome,
+      replyPayloadSource: agentRun.replyPayload,
       maybeSendHeartbeatOk,
       outboundSession,
       outboundIdentity,

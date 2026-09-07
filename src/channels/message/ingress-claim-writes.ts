@@ -37,7 +37,7 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
     label: "tombstone" | "dead-letter" | "release";
     write: () => Promise<boolean>;
     falseMeansReclaimed: boolean;
-  }): Promise<void> => {
+  }): Promise<boolean> => {
     let attempt = 0;
     for (;;) {
       // First write still runs after session abort: terminal complete/release
@@ -48,13 +48,10 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
       }
       try {
         const committed = await params.write();
-        if (!committed) {
-          if (params.falseMeansReclaimed) {
-            throw new IngressAdoptionLostError("reclaimed");
-          }
-          return;
+        if (!committed && params.falseMeansReclaimed) {
+          throw new IngressAdoptionLostError("reclaimed");
         }
-        return;
+        return committed;
       } catch (err) {
         if (isIngressAdoptionLostError(err)) {
           throw err;
@@ -102,7 +99,7 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     releaseOptions?: { lastError?: string; recordAttempt?: boolean },
   ) => {
-    await commitClaimWriteWithRetry({
+    return await commitClaimWriteWithRetry({
       claim,
       label: "release",
       write: () => queue.release(claim, { ...releaseOptions, releasedAt: now() }),
@@ -115,7 +112,7 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
     reason: string,
     message: string,
   ) => {
-    await commitClaimWriteWithRetry({
+    return await commitClaimWriteWithRetry({
       claim,
       label: "dead-letter",
       write: () => queue.fail(claim, { reason, message, failedAt: now() }),

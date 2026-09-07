@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.8.1",
+  "version": "2026.9.2",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
@@ -9,7 +9,7 @@
     "@grammyjs/transformer-throttler": "1.2.1",
     "grammy": "1.46.0",
     "typebox": "1.3.18",
-    "undici": "8.10.0",
+    "undici": "8.10.2",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -75,7 +75,9 @@
               "flags": "--use-env",
               "description": "Use TELEGRAM_BOT_TOKEN"
             },
-            "envVars": ["TELEGRAM_BOT_TOKEN"]
+            "envVars": [
+              "TELEGRAM_BOT_TOKEN"
+            ]
           }
         ]
       },
