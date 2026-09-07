@@ -80,8 +80,14 @@ describe("openclaw tool", () => {
     );
   });
 
-  it("lists installed plugins through the canonical read operation", async () => {
+  it("advertises and lists installed plugins through the canonical read operation", async () => {
     const tool = createSystemAgentTool({ surface: "cli" });
+
+    expect(tool.parameters).toMatchObject({
+      properties: {
+        action: { enum: expect.arrayContaining(["plugin_list"]) },
+      },
+    });
 
     const result = await tool.execute("plugins-list", { action: "plugin_list" });
 
