@@ -263,9 +263,8 @@ export function createTeamsReplyStreamController(params: {
     },
 
     onPartialReply(payload: { text?: string }): void {
-      // Partial-token streaming only fires in "partial" mode. In "progress"
-      // mode, openclaw's pipeline doesn't deliver tokens — the model output
-      // arrives as a single payload at preparePayload time.
+      // Partial-token streaming only fires in "partial" mode. Progress-mode
+      // final payloads arrive at preparePayload instead.
       if (!stream || !payload.text || wasCanceled() || streamMode !== "partial") {
         return;
       }
@@ -276,7 +275,8 @@ export function createTeamsReplyStreamController(params: {
         pendingFinalPayload = { text: payload.text };
         return;
       }
-      if (streamFinalizationPending) {
+      // Closing the first segment does not grant another native delivery claim.
+      if (streamFinalizationPending || nativeDeliveryClaimed) {
         return;
       }
       // Convert cumulative-text from the pipeline into deltas for the SDK's
@@ -434,18 +434,6 @@ export function createTeamsReplyStreamController(params: {
           return undefined;
         }
       }
-      // Partial mode with tokens already streamed: stream carries the text;
-      // strip text from the payload (keep media if any) so block delivery
-      // doesn't duplicate. Exception: if a non-cancel stream failure was
-      // latched mid-flight, deliver only a provider-acknowledged remainder;
-      // preserve the full reply when delivery was not acknowledged.
-      if (tokensEmitted && !streamFailed) {
-        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-        pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
-        streamFinalizationPending = true;
-        tokensEmitted = false;
-        return hasMedia ? { ...payload, text: undefined } : undefined;
-      }
       if (streamFailed) {
         // Trim the provider-acknowledged prefix only from the failed segment.
         // Retain its ID/text for final settlement while later tool rounds fall through whole.
@@ -456,20 +444,14 @@ export function createTeamsReplyStreamController(params: {
         pendingFinalPayload = undefined;
         return fallback;
       }
-      // Progress mode (or partial mode that received no tokens — e.g. a
-      // tool-only response): emit the final text into the stream so the
-      // preview card transitions in place to the final reply. The SDK's
-      // HttpStream accumulates the text and the next `finalize()` close()
-      // flushes it as the closing activity.
-      if (streamMode === "progress" && payload.text) {
+      // A native stream owns one final segment. Later progress payloads use
+      // block delivery, just like later partial-mode segments after tools.
+      if (streamMode === "progress" && payload.text && !nativeDispatchStarted) {
         try {
           stream.emit(payload.text);
           emittedText = payload.text;
           nativeDispatchStarted = true;
-          pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
-          streamFinalizationPending = true;
-          const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-          return hasMedia ? { ...payload, text: undefined } : undefined;
+          tokensEmitted = true;
         } catch (err) {
           if (isStreamCancelledError(err)) {
             canceledLocally = true;
@@ -479,6 +461,13 @@ export function createTeamsReplyStreamController(params: {
           // safety net so the user still sees the final reply.
           params.log?.debug?.(`progress-mode finalize failed: ${coerceErrorMessage(err)}`);
         }
+      }
+      if (tokensEmitted) {
+        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+        pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
+        streamFinalizationPending = true;
+        tokensEmitted = false;
+        return hasMedia ? { ...payload, text: undefined } : undefined;
       }
       return payload;
     },
@@ -630,6 +619,8 @@ export function createTeamsReplyStreamController(params: {
           ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
         };
       } finally {
+        // This segment's acknowledged-prefix fallback has been consumed.
+        failedSegmentFallbackPrepared = true;
         queuedFinalActivity = undefined;
         replacementEmitFailed = false;
         replacementFinalPending = false;
