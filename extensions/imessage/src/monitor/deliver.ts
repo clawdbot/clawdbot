@@ -95,7 +95,7 @@ export async function deliverIMessageReply(params: {
       suppression: { reason: "no_visible_result" as const },
     };
   }
-  const result = createAcceptedChannelDeliveryResult({
+  const deliveryResult = createAcceptedChannelDeliveryResult({
     results: accepted.map((result) => ({ receipt: result.receipt })),
     kind: delivered,
     content: accepted
@@ -104,7 +104,7 @@ export async function deliverIMessageReply(params: {
       .join("\n"),
   });
   runtime.log?.(`imessage: delivered reply to ${target}`);
-  return result;
+  return deliveryResult;
 }
 
 export function createIMessageEchoCachingSend(params: {
