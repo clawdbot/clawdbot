@@ -116,9 +116,9 @@ import {
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
-import { cliBackendLog } from "./log.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import { cliBackendLog } from "./log.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
