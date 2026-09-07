@@ -68,7 +68,11 @@ chmod 700 "$RUNTIME_ROOT"
 export TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TMPDIR:-$RUNTIME_ROOT/tmp}"
 export OPENCLAW_TEST_STATE_TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR:-$RUNTIME_ROOT/state-tmp}"
 mkdir -p "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
-export npm_config_prefix="$ARTIFACT_ROOT/npm-prefix"
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  export npm_config_prefix="$RUNTIME_ROOT/npm-prefix"
+else
+  export npm_config_prefix="$ARTIFACT_ROOT/npm-prefix"
+fi
 export NPM_CONFIG_PREFIX="$npm_config_prefix"
 export npm_config_cache="${OPENCLAW_UPGRADE_SURVIVOR_NPM_CACHE:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/npm-cache}"
 export NPM_CONFIG_CACHE="$npm_config_cache"
