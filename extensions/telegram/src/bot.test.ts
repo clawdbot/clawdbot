@@ -2552,8 +2552,13 @@ describe("createTelegramBot", () => {
           handler: async () => ({ text: "memory" }),
         }),
       ).toEqual({ ok: true });
-      createTelegramBot({ token: "tok" });
-      const page = buildCommandsMessagePaginated(loadConfig(), [], {
+      const config = makeTelegramConfig(
+        { dmPolicy: "open", allowFrom: ["*"] },
+        { agents: { defaults: { userTimezone: "UTC" } } },
+      );
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({ token: "tok", config });
+      const page = buildCommandsMessagePaginated(config, [], {
         surface: "telegram",
         forcePaginatedList: true,
         page: Number.MAX_SAFE_INTEGER,
