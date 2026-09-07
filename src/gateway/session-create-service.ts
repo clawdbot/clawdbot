@@ -287,6 +287,7 @@ export async function createGatewaySession(params: {
   /** Creation-only title seed; never renames an existing session. */
   displayName?: string;
   category?: string;
+  inheritParentGroup?: boolean;
   model?: string;
   personalModelSelection?: UserModelAccountSelection;
   /** Direct human authority for defaults on a genuinely new row; never sourced from provenance. */
@@ -600,6 +601,18 @@ export async function createGatewaySession(params: {
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "spawn tool policy requires spawnDepth"),
+    };
+  }
+  if (params.inheritParentGroup === true && !parentSessionKey) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "inheritParentGroup requires parentSessionKey"),
+    };
+  }
+  if (params.inheritParentGroup === true && params.creation?.via !== "spawn") {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "inheritParentGroup requires a visible spawn"),
     };
   }
   let canonicalParentSessionKey: string | undefined;
@@ -1114,6 +1127,11 @@ export async function createGatewaySession(params: {
         const requestedContextWindow = normalizeOptionalString(params.contextWindow);
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
         const requestedFastMode = params.fastMode;
+        const category = normalizeOptionalString(
+          params.category === undefined && params.inheritParentGroup === true && createdNewEntry
+            ? currentParentSessionEntry?.category
+            : params.category,
+        );
         if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
           const gateDefaultModel = resolveDefaultModelForAgent({
             cfg: params.cfg,
@@ -1164,7 +1182,7 @@ export async function createGatewaySession(params: {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
-            category: normalizeOptionalString(params.category),
+            category,
             ...((catalogModel ?? requestedModel) ? { model: catalogModel ?? requestedModel } : {}),
             ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
             ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),

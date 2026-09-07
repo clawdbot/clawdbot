@@ -554,6 +554,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       label: p.label,
       displayName: preparedDisplayName,
       category: p.category,
+      inheritParentGroup: p.inheritParentGroup,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
       personalModelSelection,
       personalAccountDefaults,
@@ -658,7 +659,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (created.postCommit.status === "failed") {
       runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
-    registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
+    const createdCategory =
+      p.category === undefined && p.inheritParentGroup === true
+        ? created.entry.category
+        : p.category;
+    registerCreatedSessionCategory(normalizeOptionalString(createdCategory), context);
     const createdWorktree = preparedWorktree?.worktree
       ? {
           id: preparedWorktree.worktree.id,

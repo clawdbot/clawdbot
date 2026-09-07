@@ -57,6 +57,23 @@ describe("sessions.create schema", () => {
     expect(validateSessionsCreateParams({ agentId: "main", idempotencyKey: "" })).toBe(false);
   });
 
+  it("accepts only a boolean parent-group inheritance opt-in", () => {
+    expect(
+      validateSessionsCreateParams({
+        agentId: "main",
+        inheritParentGroup: true,
+        parentSessionKey: "agent:main:main",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsCreateParams({
+        agentId: "main",
+        inheritParentGroup: "yes",
+        parentSessionKey: "agent:main:main",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts initial session tool overrides", () => {
     expect(
       validateSessionsCreateParams({

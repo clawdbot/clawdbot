@@ -606,6 +606,9 @@ describe("sessions_spawn tool", () => {
       "only an omitted or blank mountPath",
     );
     expect(schema.properties?.group?.description).toContain("leave it ungrouped");
+    expect(schema.properties?.inheritParentGroup?.description).toContain(
+      "later parent and child group changes are independent",
+    );
     expect(schema.properties?.mode?.enum).toEqual(["run"]);
     expect(schema.properties?.mode?.anyOf).toBeUndefined();
     expect(schema.properties?.worktree).toBeDefined();
@@ -752,8 +755,8 @@ describe("sessions_spawn tool", () => {
 
   it.each([
     { label: "omitted", optional: {} },
-    { label: "empty group", optional: { group: "" } },
-    { label: "whitespace group", optional: { group: " \t\n " } },
+    { label: "empty group", optional: { group: "", inheritParentGroup: true } },
+    { label: "whitespace group", optional: { group: " \t\n ", inheritParentGroup: true } },
     { label: "empty attachment hint", optional: { mode: "run", attachments: [], attachAs: {} } },
     {
       label: "empty attachment mount path",
@@ -787,8 +790,48 @@ describe("sessions_spawn tool", () => {
     expect(callGateway).toHaveBeenCalledOnce();
     expect(callGateway).toHaveBeenCalledWith(
       "sessions.create",
-      expect.not.objectContaining({ category: expect.anything() }),
+      expect.not.objectContaining({
+        category: expect.anything(),
+        inheritParentGroup: expect.anything(),
+      }),
     );
+  });
+
+  it("requests one-time parent group inheritance for a visible session", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:child",
+      runStarted: true,
+      runId: "run-visible",
+    }));
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway: callGateway as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    await tool.execute("visible-inherit-group", {
+      task: "inspect issue",
+      visible: true,
+      inheritParentGroup: true,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({ inheritParentGroup: true }),
+    );
+  });
+
+  it("rejects parent group inheritance for a hidden spawn", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute("hidden-inherit-group", {
+        task: "inspect issue",
+        inheritParentGroup: true,
+      }),
+    ).rejects.toThrow("Parameters require visible=true: inheritParentGroup");
   });
 
   it("explains an out-of-workspace visible cwd denial without suggesting a CLI fallback", async () => {

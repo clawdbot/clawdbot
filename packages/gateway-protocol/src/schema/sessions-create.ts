@@ -28,6 +28,12 @@ export const SessionsCreateParamsSchema = closedObject({
     }),
   ),
   category: Type.Optional(SessionLabelString),
+  inheritParentGroup: Type.Optional(
+    Type.Boolean({
+      description:
+        "Copy the parent session's group once for a visible spawn when category is omitted; an explicit category wins. Requires parentSessionKey.",
+    }),
+  ),
   model: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),

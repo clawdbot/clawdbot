@@ -115,7 +115,7 @@ reject the batch before mutation. To archive an eligible current session, use a 
 its archive is deferred until the run finishes, while a batch reports that
 current-session target as failed and continues with the others.
 
-Use `sessions_spawn` with `visible: true` to create a persistent dashboard session. Pass `group` to place it in a sidebar group atomically; omit `group` or pass an empty string to leave it ungrouped. This keeps session creation on the controlled spawn path, which enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
+Use `sessions_spawn` with `visible: true` to create a persistent dashboard session. Pass `group` to place it in a sidebar group atomically; omit `group` or pass an empty string to leave it ungrouped. To copy the parent's current group once, set `inheritParentGroup: true` and omit `group`. An explicit `group` always wins, including an empty or whitespace-only value that keeps the child ungrouped. Later parent and child group changes remain independent. This keeps session creation on the controlled spawn path, which enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
 
 If startup or registration fails, cleanup removes only the child created by that spawn. A session reset or replaced meanwhile is preserved. When cleanup cannot be confirmed, the error includes the child session key for inspection before retrying.
 
