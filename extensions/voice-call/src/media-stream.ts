@@ -24,9 +24,20 @@ import {
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
 import type { RawData } from "ws";
 import { canonicalizeVoiceCallMediaBase64 } from "./media-base64.js";
 import { WebSocket, WebSocketServer } from "./websocket.js";
+
+function rejectMediaStreamUpgrade(
+  socket: Duplex,
+  params: Parameters<typeof rejectWebSocketUpgrade>[1],
+): void {
+  // Unauthenticated rejects must swallow peer-reset errors so they cannot
+  // become process-level unhandled "error" events on the HTTP socket.
+  socket.once("error", () => {});
+  rejectWebSocketUpgrade(socket, params);
+}
 
 /**
  * Configuration for the media stream handler.
@@ -185,7 +196,13 @@ export class MediaStreamHandler {
    */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (this.closing) {
-      this.rejectUpgrade(socket, 503, "Media stream handler is shutting down");
+      rejectMediaStreamUpgrade(socket, {
+        status: 503,
+        body: {
+          contentType: "text/plain; charset=utf-8",
+          text: "Media stream handler is shutting down\n",
+        },
+      });
       return;
     }
 
@@ -202,7 +219,13 @@ export class MediaStreamHandler {
 
     const currentConnections = this.getCurrentConnectionCount();
     if (currentConnections >= this.maxConnections) {
-      this.rejectUpgrade(socket, 503, "Too many media stream connections");
+      rejectMediaStreamUpgrade(socket, {
+        status: 503,
+        body: {
+          contentType: "text/plain; charset=utf-8",
+          text: "Too many media stream connections\n",
+        },
+      });
       return;
     }
 
@@ -589,20 +612,6 @@ export class MediaStreamHandler {
       return;
     }
     this.pendingByIp.set(pending.ip, current - 1);
-  }
-
-  private rejectUpgrade(socket: Duplex, statusCode: 429 | 503, message: string): void {
-    const statusText = statusCode === 429 ? "Too Many Requests" : "Service Unavailable";
-    const body = `${message}\n`;
-    socket.write(
-      `HTTP/1.1 ${statusCode} ${statusText}\r\n` +
-        "Connection: close\r\n" +
-        "Content-Type: text/plain; charset=utf-8\r\n" +
-        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
-        "\r\n" +
-        body,
-    );
-    socket.destroy();
   }
 
   /**
