@@ -191,6 +191,16 @@ describe("bundled plugin build entries", () => {
     }
   });
 
+  it("keeps separately published Discord and Microsoft Teams runtimes out of the root bundle", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["discord", "msteams"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
   it("keeps Cohere bundled through the externalization transition", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
