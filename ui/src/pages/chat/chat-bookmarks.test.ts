@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UsersPrefsSetParams } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { ChatBookmarks, type ChatBookmarkScope } from "./chat-bookmarks.ts";
 
@@ -23,13 +24,6 @@ function scope(request: Parameters<typeof createTestGatewayClient>[0]): ChatBook
     canWrite: true,
     isCurrent: () => true,
   };
-}
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 function preferences(initial: Record<string, unknown> = {}) {
   const entries = { ...initial };
@@ -157,7 +151,7 @@ describe("chat bookmarks in existing personal preferences", () => {
   });
 
   it("never treats an unread library as empty or adopts a retired profile's delayed load", async () => {
-    const pending = deferred<unknown>();
+    const pending = createDeferred<unknown>();
     const state = new ChatBookmarks(vi.fn());
     state.bind(scope(() => pending.promise));
     state.toggle("source");
@@ -205,7 +199,7 @@ describe("chat bookmarks in existing personal preferences", () => {
   });
 
   it("does not let an old write completion close a replacement profile's editor", async () => {
-    const pending = deferred<unknown>();
+    const pending = createDeferred<unknown>();
     const state = await loaded(async (method) =>
       method === "users.prefs.set"
         ? pending.promise

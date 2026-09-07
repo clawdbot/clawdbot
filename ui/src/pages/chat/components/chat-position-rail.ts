@@ -8,7 +8,7 @@ import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import type { ChatBookmarkAccess } from "../chat-bookmarks.ts";
+import type { ChatBookmark, ChatBookmarkAccess } from "../chat-bookmarks.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
@@ -106,10 +106,10 @@ class ChatPositionRailDirective extends AsyncDirective {
       return nothing;
     }
     const interaction = this.interaction;
-    if (!candidates.some((candidate) => candidate.id === interaction.focusedId)) {
+    if (!candidateIndexes.has(interaction.focusedId ?? "")) {
       interaction.focusedId = null;
     }
-    if (!candidates.some((candidate) => candidate.id === interaction.hoveredId)) {
+    if (!candidateIndexes.has(interaction.hoveredId ?? "")) {
       interaction.hoveredId = null;
     }
     const indexes = Array.from({ length: count }, (_, index) =>
@@ -132,7 +132,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     }
     // Keep hit targets disjoint and bounded. Nearby bookmarks share a landmark;
     // its tooltip names the group, and successive activations cycle its sources.
-    const bookmarkBuckets: ChatBookmarkAccess["bookmarks"][number][][] = indexes.map(() => []);
+    const bookmarkBuckets: ChatBookmark[][] = indexes.map(() => []);
     for (const bookmark of bookmarkAccess?.bookmarks ?? []) {
       const candidateIndex = candidateIndexes.get(bookmark.messageId) ?? -1;
       // Older, not-yet-loaded sources share the first landmark and use the

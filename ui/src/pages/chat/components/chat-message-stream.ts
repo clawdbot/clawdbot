@@ -6,6 +6,7 @@ import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { ChatBookmarkAccess } from "../chat-bookmarks.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { resolveMessageActionDetails, type MessageReplyTarget } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
@@ -45,7 +46,7 @@ type StreamMessageOptions = Pick<
 >;
 
 export type StreamGroupOptions = StreamMessageOptions & {
-  bookmarkAccess?: import("../chat-bookmarks.ts").ChatBookmarkAccess;
+  bookmarkAccess?: ChatBookmarkAccess;
   onReply?: (target: MessageReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
