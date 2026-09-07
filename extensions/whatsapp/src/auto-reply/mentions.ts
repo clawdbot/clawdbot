@@ -41,6 +41,37 @@ function resolveMentionTargets(msg: AdmittedWebInboundMessage, authDir?: string)
   return { normalizedMentions, self };
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function renderAgentFacingMentionText(params: {
+  msg: AdmittedWebInboundMessage;
+  identityName?: string;
+  authDir?: string;
+}): string {
+  const targets = resolveMentionTargets(params.msg, params.authDir);
+  const selfMentionIds = targets.normalizedMentions
+    .filter((mention) => identitiesOverlap(targets.self, mention))
+    .flatMap((mention) => [mention.jid, mention.lid])
+    .filter((jid): jid is string => Boolean(jid))
+    .map((jid) => jid.split("@")[0]?.trim())
+    .filter((id): id is string => Boolean(id));
+  if (selfMentionIds.length === 0) {
+    return params.msg.payload.body;
+  }
+
+  const replacement = `@${params.identityName?.trim() || "assistant"}`;
+  return [...new Set(selfMentionIds)].reduce(
+    (body, id) =>
+      body.replace(
+        new RegExp(`@${escapeRegExp(id)}(?=$|[^\\p{L}\\p{N}_])`, "gu"),
+        () => replacement,
+      ),
+    params.msg.payload.body,
+  );
+}
+
 function isBotMentionedFromTargets(
   msg: AdmittedWebInboundMessage,
   mentionCfg: MentionConfig,
