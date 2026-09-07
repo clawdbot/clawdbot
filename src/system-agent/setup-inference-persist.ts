@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { RETAINED_MANAGED_NPM_INFERENCE_ACTIVATION_REASON } from "../plugins/managed-npm-retention-contract.js";
 import { prepareProviderAuthProfilesForPersistence } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -84,7 +85,7 @@ export async function retainUnownedCodexInstall(params: {
     const marked = await markRetained({
       packageDir: params.record.installPath,
       pluginId: "codex",
-      reason: "openclaw-inference-activation-not-committed",
+      reason: RETAINED_MANAGED_NPM_INFERENCE_ACTIVATION_REASON,
     });
     if (!marked) {
       setupInferenceLog.warn("Could not retain the uncommitted Codex runtime package generation.");

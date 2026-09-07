@@ -9,6 +9,7 @@ import {
   loadInstalledPluginIndexInstallRecords,
   type InstalledPluginIndexRecordStoreOptions,
 } from "../plugins/installed-plugin-index-records.js";
+import { RETAINED_MANAGED_NPM_DOCTOR_REPAIR_REASON } from "../plugins/managed-npm-retention-contract.js";
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -109,7 +110,7 @@ export async function maybeRepairStaleManagedNpmInstallGenerations(
       await markRetainedManagedNpmInstall({
         packageDir: generation.packageDir,
         pluginId: generation.pluginId,
-        reason: "doctor-repaired-stale-managed-npm-generation",
+        reason: RETAINED_MANAGED_NPM_DOCTOR_REPAIR_REASON,
       })
     ) {
       retired.push(generation);

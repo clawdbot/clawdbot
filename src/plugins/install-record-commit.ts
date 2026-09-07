@@ -37,7 +37,11 @@ import {
   type InstalledPluginIndexWriteReceipt,
 } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
-import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
+import {
+  RETAINED_MANAGED_NPM_GENERATION_UPDATE_REASON,
+  RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
+  RETAINED_MANAGED_NPM_PLUGIN_SOURCE_CHANGE_REASON,
+} from "./managed-npm-retention-contract.js";
 import {
   clearRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
@@ -303,9 +307,9 @@ async function markRetiredManagedNpmInstallRecords(params: {
       pluginId,
       reason:
         nextRecord?.source === "npm"
-          ? "replaced-by-managed-npm-generation-update"
+          ? RETAINED_MANAGED_NPM_GENERATION_UPDATE_REASON
           : nextRecord
-            ? "replaced-by-plugin-source-change"
+            ? RETAINED_MANAGED_NPM_PLUGIN_SOURCE_CHANGE_REASON
             : RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
     });
     if (marked && !markerAlreadyExisted) {

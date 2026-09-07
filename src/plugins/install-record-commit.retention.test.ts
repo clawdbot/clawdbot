@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resolvePluginNpmGenerationProjectDir } from "./install-paths.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import { listRecoveredManagedNpmInstallCandidates } from "./installed-plugin-index-record-reader.js";
 import {
@@ -136,6 +137,46 @@ describe("retained managed npm record commits", () => {
       ).resolves.toBe(1);
       expect(fs.existsSync(installPath)).toBe(false);
       expect(fs.existsSync(localInstallPath)).toBe(true);
+    });
+  });
+
+  it("keeps npm generation replacements cleanup-eligible", async () => {
+    await withOpenClawTestState({ label: "retained-generation-update" }, async (state) => {
+      const packageName = "@openclaw/updated-plugin";
+      const npmDir = state.statePath("npm");
+      const previousInstallPath = path.join(
+        resolvePluginNpmGenerationProjectDir({ npmDir, packageName, generationKey: "v1" }),
+        "node_modules",
+        "@openclaw",
+        "updated-plugin",
+      );
+      const nextInstallPath = path.join(
+        resolvePluginNpmGenerationProjectDir({ npmDir, packageName, generationKey: "v2" }),
+        "node_modules",
+        "@openclaw",
+        "updated-plugin",
+      );
+      fs.mkdirSync(previousInstallPath, { recursive: true });
+      fs.mkdirSync(nextInstallPath, { recursive: true });
+
+      await commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: {
+          "updated-plugin": npmRecord(packageName, previousInstallPath),
+        },
+        nextInstallRecords: {
+          "updated-plugin": npmRecord(packageName, nextInstallPath),
+        },
+        nextConfig: {},
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
+      await expect(
+        cleanupRetainedManagedNpmInstallGenerations({
+          activeInstallPaths: [nextInstallPath],
+        }),
+      ).resolves.toBe(1);
+      expect(fs.existsSync(previousInstallPath)).toBe(false);
+      expect(fs.existsSync(nextInstallPath)).toBe(true);
     });
   });
 });
