@@ -1,11 +1,17 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
+import {
+  runSqliteImmediateTransactionSync,
+  type SqliteTransactionOptions,
+} from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { VERSION } from "../version.js";
 import {
   LAZY_ADDITIVE_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -14,13 +20,20 @@ import {
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
+import { OpenClawStateOwnershipError } from "./openclaw-state-ownership.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+} from "./openclaw-state-schema-compatibility.js";
 import {
   readStateSchemaContentVersion,
+  readStateSchemaPublicationBlocker,
   resolveStateSchemaVersionToPublish,
 } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
 
 const STATE_V6_ADDITIVE_TABLES = [
   // v6-v12 databases may predate this former same-version lazy table.
@@ -464,3 +477,95 @@ export const versionedStateMigrations: ReadonlyArray<{
     applied: "Moved Skill Workshop ownership to per-agent directories (v16)",
   },
 ];
+
+export function runStateSchemaMigrationTransaction<T>(
+  db: DatabaseSync,
+  pathname: string,
+  migrate: () => T,
+  transactionOptions: SqliteTransactionOptions,
+): T {
+  return runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      const publishedVersion = readSqliteUserVersion(db);
+      const blocker =
+        publishedVersion < OPENCLAW_STATE_SCHEMA_VERSION
+          ? readStateSchemaPublicationBlocker(db)
+          : undefined;
+      if (!blocker) {
+        return migrate();
+      }
+      try {
+        // Check before canonical DDL could recreate the missing publication owner.
+        if (!tableExists(db, "config_machine_state")) {
+          throw new Error("Shared state schema publication requires config_machine_state.");
+        }
+        return migrate();
+      } catch (cause) {
+        if (cause instanceof OpenClawStateOwnershipError) {
+          throw cause;
+        }
+        throw new UpdateSchemaRefusalError(
+          [
+            {
+              kind: "state",
+              path: pathname,
+              foundVersion: publishedVersion,
+              supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+            },
+          ],
+          blocker.updaterVersion,
+          { cause },
+        );
+      }
+    },
+    transactionOptions,
+  );
+}
+
+export function writeCurrentStateSchemaMetadata(db: DatabaseSync, now: number): void {
+  const kysely = getNodeSqliteKysely<Pick<DB, "schema_meta">>(db);
+  const schemaVersion = resolveStateSchemaVersionToPublish(db);
+  db.exec(`PRAGMA user_version = ${schemaVersion};`);
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .insertInto("schema_meta")
+      .values({
+        meta_key: "primary",
+        role: "global",
+        schema_version: schemaVersion,
+        agent_id: null,
+        app_version: VERSION,
+        created_at: now,
+        updated_at: now,
+      })
+      .onConflict((conflict) =>
+        conflict
+          .column("meta_key")
+          .doUpdateSet({
+            role: "global",
+            schema_version: schemaVersion,
+            agent_id: null,
+            app_version: VERSION,
+            updated_at: now,
+          })
+          // updated_at tracks schema metadata changes; unconditional bumps dirty every
+          // open and defeat no-change backup detection.
+          .where((eb) =>
+            eb.or([
+              eb("schema_meta.schema_version", "!=", schemaVersion),
+              eb("schema_meta.app_version", "is not", VERSION),
+              eb("schema_meta.role", "!=", "global"),
+            ]),
+          ),
+      ),
+  );
+}
+
+export function executeCanonicalStateSchema(
+  database: DatabaseSync,
+  options: { includeVersionLazyAdditiveTables: boolean },
+): void {
+  database.exec(getOpenClawStateRuntimeSchema(options));
+}

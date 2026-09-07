@@ -2,11 +2,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   normalizeSqliteNonNegativeInteger,
@@ -37,7 +33,6 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { withStateSchemaFence } from "../infra/state-database-coordinator.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { VERSION } from "../version.js";
 import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import {
@@ -65,6 +60,9 @@ import {
   openClawStateMigrationAssertions,
   resolveDatabasePath,
   versionedStateMigrations,
+  runStateSchemaMigrationTransaction,
+  writeCurrentStateSchemaMetadata,
+  executeCanonicalStateSchema,
 } from "./openclaw-state-db-maintenance.js";
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
@@ -94,7 +92,6 @@ import {
   withOpenClawStateStartupCheckpointConnection,
 } from "./openclaw-state-db-startup-checkpoint.js";
 import * as retirements from "./openclaw-state-db-table-retirements.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
 import {
   assertOpenClawStateWriteAllowed,
@@ -106,7 +103,6 @@ import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibi
 import {
   readStateSchemaContentVersion,
   readStateSchemaPublicationBlocker,
-  resolveStateSchemaVersionToPublish,
   type StateSchemaPublicationBlocker,
 } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -140,61 +136,8 @@ function assertOpenClawStateDatabaseFreshOpenAllowed(
   stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(resolveDatabasePath(options), env);
 }
 
-type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 const stateDbLog = createSubsystemLogger("state/db");
 const deferredStateDatabases = new WeakSet<DatabaseSync>();
-
-function runStateSchemaMigrationTransaction<T>(
-  db: DatabaseSync,
-  pathname: string,
-  migrate: () => T,
-  transactionOptions: SqliteTransactionOptions,
-): T {
-  return runSqliteImmediateTransactionSync(
-    db,
-    () => {
-      const publishedVersion = readSqliteUserVersion(db);
-      const blocker =
-        publishedVersion < OPENCLAW_STATE_SCHEMA_VERSION
-          ? readStateSchemaPublicationBlocker(db)
-          : undefined;
-      if (!blocker) {
-        return migrate();
-      }
-      try {
-        // Check before canonical DDL could recreate the missing publication owner.
-        if (!tableExists(db, "config_machine_state")) {
-          throw new Error("Shared state schema publication requires config_machine_state.");
-        }
-        return migrate();
-      } catch (cause) {
-        if (cause instanceof OpenClawStateOwnershipError) {
-          throw cause;
-        }
-        throw new UpdateSchemaRefusalError(
-          [
-            {
-              kind: "state",
-              path: pathname,
-              foundVersion: publishedVersion,
-              supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-            },
-          ],
-          blocker.updaterVersion,
-          { cause },
-        );
-      }
-    },
-    transactionOptions,
-  );
-}
-
-function executeCanonicalStateSchema(
-  database: DatabaseSync,
-  options: { includeVersionLazyAdditiveTables: boolean },
-): void {
-  database.exec(getOpenClawStateRuntimeSchema(options));
-}
 
 function repairStateSchema(
   pathname: string,
@@ -431,7 +374,6 @@ function ensureSchema(
 
   withStateSchemaFence({ databasePath: pathname }, () => {
     const now = Date.now();
-    const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
     db.exec("PRAGMA foreign_keys = OFF;"); // Rebuilding referenced tables requires this before BEGIN.
     try {
       runStateSchemaMigrationTransaction(
@@ -489,42 +431,7 @@ function ensureSchema(
           repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             verifyPhysicalIntegrity: false,
           });
-          const schemaVersion = resolveStateSchemaVersionToPublish(db);
-          db.exec(`PRAGMA user_version = ${schemaVersion};`);
-          executeSqliteQuerySync(
-            db,
-            kysely
-              .insertInto("schema_meta")
-              .values({
-                meta_key: "primary",
-                role: "global",
-                schema_version: schemaVersion,
-                agent_id: null,
-                app_version: VERSION,
-                created_at: now,
-                updated_at: now,
-              })
-              .onConflict((conflict) =>
-                conflict
-                  .column("meta_key")
-                  .doUpdateSet({
-                    role: "global",
-                    schema_version: schemaVersion,
-                    agent_id: null,
-                    app_version: VERSION,
-                    updated_at: now,
-                  })
-                  // updated_at tracks schema metadata changes; unconditional bumps dirty every
-                  // open and defeat no-change backup detection.
-                  .where((eb) =>
-                    eb.or([
-                      eb("schema_meta.schema_version", "!=", schemaVersion),
-                      eb("schema_meta.app_version", "is not", VERSION),
-                      eb("schema_meta.role", "!=", "global"),
-                    ]),
-                  ),
-              ),
-          );
+          writeCurrentStateSchemaMetadata(db, now);
           assertOpenClawStateDatabaseForMaintenance(db, { pathname });
           warnAgentPathMigration(stateDbLog, pathMigration, pathname);
           return retirementMessages;
