@@ -141,6 +141,80 @@ async function captureWriteBinding(
   }
 }
 
+async function writeBoundRange(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  payload: Buffer,
+  offset: number,
+  length: number,
+  position: number,
+): Promise<void> {
+  let written = 0;
+  while (written < length) {
+    const { bytesWritten } = await handle.write(
+      payload,
+      offset + written,
+      length - written,
+      position + written,
+    );
+    if (bytesWritten <= 0) {
+      throw new Error(`bound target write made no progress at byte ${position + written}`);
+    }
+    written += bytesWritten;
+  }
+}
+
+async function readBoundPrefix(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  length: number,
+): Promise<Buffer> {
+  const prefix = Buffer.alloc(length);
+  let read = 0;
+  while (read < length) {
+    const { bytesRead } = await handle.read(prefix, read, length - read, read);
+    if (bytesRead <= 0) {
+      throw new Error(`bound target read made no progress at byte ${read}`);
+    }
+    read += bytesRead;
+  }
+  return prefix;
+}
+
+// The binding pins the target device+inode, so a tmp+rename swap is impossible.
+// Overwrite in place without a destructive truncate(0): snapshot the original
+// prefix, extend the tail first, touch original bytes last, and roll back the
+// prefix + size when a mid-write failure (ENOSPC/EFBIG) interrupts the copy.
+async function overwriteBoundTargetInPlace(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  payload: Buffer,
+  currentSize: number,
+): Promise<void> {
+  const prefixLength = Math.min(payload.length, currentSize);
+  const originalPrefix = await readBoundPrefix(handle, prefixLength);
+  let prefixStarted = false;
+  try {
+    if (payload.length > currentSize) {
+      await writeBoundRange(
+        handle,
+        payload,
+        currentSize,
+        payload.length - currentSize,
+        currentSize,
+      );
+    }
+    prefixStarted = true;
+    await writeBoundRange(handle, payload, 0, prefixLength, 0);
+    if (payload.length < currentSize) {
+      await handle.truncate(payload.length);
+    }
+  } catch (error) {
+    if (prefixStarted) {
+      await writeBoundRange(handle, originalPrefix, 0, prefixLength, 0).catch(() => undefined);
+    }
+    await handle.truncate(currentSize).catch(() => undefined);
+    throw error;
+  }
+}
+
 async function writeBoundTarget(input: {
   binding: Extract<PathBinding, { kind: "write" }>;
   buffer: Buffer;
@@ -172,8 +246,7 @@ async function writeBoundTarget(input: {
           input.canonicalTargetPath,
         );
       }
-      await handle.truncate(0);
-      await handle.writeFile(input.buffer);
+      await overwriteBoundTargetInPlace(handle, input.buffer, Number(stats.size));
       await handle.sync();
       return {
         ok: true,
