@@ -118,7 +118,12 @@ export function applySetupAccountConfigPatch(params: {
 
 /** Creates a setup adapter that turns validated setup input into an account config patch. */
 export function createPatchedAccountSetupAdapter<
-  Input extends { name?: string } = ChannelSetupInput,
+  Input extends {
+    name?: string;
+    token?: string;
+    tokenFile?: string;
+    useEnv?: boolean;
+  } = ChannelSetupInput,
 >(params: {
   channelKey: string;
   alwaysUseAccounts?: boolean;
@@ -126,6 +131,15 @@ export function createPatchedAccountSetupAdapter<
   ensureAccountEnabled?: boolean;
   validateInput?: ChannelSetupAdapter<Input>["validateInput"];
   buildPatch: (input: Input) => Record<string, unknown>;
+  /**
+   * Mutually exclusive credential-source fields (inline token, token file,
+   * service account blob, ...). When a setup write supplies credentials
+   * through the standard credential inputs (`token`, `tokenFile`, `useEnv`),
+   * every listed field is retired at the channel root and the default account
+   * before the patch re-adds the written source. Resolution precedence means
+   * a superseded source otherwise keeps winning over the rotated credential.
+   */
+  credentialSourceFields?: readonly string[];
 }): ChannelSetupAdapter<Input> {
   return {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
@@ -148,12 +162,17 @@ export function createPatchedAccountSetupAdapter<
         migrateBaseName: !params.alwaysUseAccounts,
       });
       const patch = params.buildPatch(input);
+      const credentialWrite = Boolean(input.useEnv || input.token || input.tokenFile);
       return patchScopedAccountConfig({
         cfg: next,
         channelKey: params.channelKey,
         accountId,
         patch,
         accountPatch: patch,
+        clearFields:
+          credentialWrite && params.credentialSourceFields?.length
+            ? params.credentialSourceFields
+            : undefined,
         ensureChannelEnabled: params.ensureChannelEnabled ?? !params.alwaysUseAccounts,
         ensureAccountEnabled: params.ensureAccountEnabled ?? true,
         scopeDefaultToAccounts: params.alwaysUseAccounts,
@@ -213,6 +232,7 @@ export function createEnvPatchedAccountSetupAdapter(params: {
   hasCredentials: (input: ChannelSetupInput) => boolean;
   validateInput?: ChannelSetupAdapter["validateInput"];
   buildPatch: (input: ChannelSetupInput) => Record<string, unknown>;
+  credentialSourceFields?: readonly string[];
 }): ChannelSetupAdapter {
   return createPatchedAccountSetupAdapter({
     channelKey: params.channelKey,
@@ -229,6 +249,7 @@ export function createEnvPatchedAccountSetupAdapter(params: {
       return params.validateInput?.(inputParams) ?? null;
     },
     buildPatch: params.buildPatch,
+    credentialSourceFields: params.credentialSourceFields,
   });
 }
 
@@ -262,8 +283,27 @@ export function patchScopedAccountConfig(params: {
   };
   if (accountId === DEFAULT_ACCOUNT_ID && !params.scopeDefaultToAccounts) {
     // Default accounts historically live at channel root unless the channel opts into accounts.default.
+    const clearedBase = clearFields(base ?? {});
+    const accounts = base?.accounts ?? {};
+    const defaultAccountKey = resolveExistingAccountKey(accounts, DEFAULT_ACCOUNT_ID);
+    const defaultAccount = accounts[defaultAccountKey];
+    // Resolvers read accounts.default ahead of root when the record exists
+    // (promoted single-account credentials), so a default-scope write has to
+    // retire the same fields there too; otherwise the stale account-scoped
+    // credential keeps winning over the rotated root value.
+    if (defaultAccount && params.clearFields?.length) {
+      return writeChannelSection(params.cfg, params.channelKey, {
+        ...clearedBase,
+        ...(ensureChannelEnabled ? { enabled: true } : {}),
+        ...patch,
+        accounts: {
+          ...accounts,
+          [defaultAccountKey]: clearFields(defaultAccount),
+        },
+      });
+    }
     return writeChannelSection(params.cfg, params.channelKey, {
-      ...clearFields(base ?? {}),
+      ...clearedBase,
       ...(ensureChannelEnabled ? { enabled: true } : {}),
       ...patch,
     });

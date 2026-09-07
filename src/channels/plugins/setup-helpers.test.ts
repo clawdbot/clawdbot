@@ -227,6 +227,35 @@ describe("patchScopedAccountConfig credential clearing", () => {
     });
   });
 
+  it("retires the promoted accounts.default credential that outranks a root rotation", () => {
+    const next = patchScopedAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "demo-setup": {
+            enabled: true,
+            webhookPath: "/keep",
+            accounts: {
+              default: { name: "Main", token: "promoted-stale-token", tokenFile: "/stale/token" },
+              work: { token: "work-token" },
+            },
+          },
+        },
+      }),
+      channelKey: "demo-setup",
+      accountId: DEFAULT_ACCOUNT_ID,
+      clearFields: ["token", "tokenFile"],
+      patch: { token: "new-token" },
+    });
+
+    const channel = channelRecord(next, "demo-setup");
+    expect(channel.token).toBe("new-token");
+    expect(channel.webhookPath).toBe("/keep");
+    // The stale account-scoped credential is retired while unrelated account
+    // fields and named accounts are preserved.
+    expect(accountRecord(channel, "default")).toEqual({ name: "Main" });
+    expect(accountRecord(channel, "work")).toEqual({ token: "work-token" });
+  });
+
   it("clears only selected named-account credentials and preserves disabled siblings", () => {
     const next = patchScopedAccountConfig({
       cfg: asConfig({
@@ -356,6 +385,72 @@ describe("createPatchedAccountSetupAdapter", () => {
     expect(defaultAccount.authDir).toBe("/tmp/auth");
     expect(next.channels?.["demo-accounts"]).not.toHaveProperty("enabled");
     expect(next.channels?.["demo-accounts"]).not.toHaveProperty("authDir");
+  });
+
+  it("retires credentialSourceFields before applying the replacement patch", () => {
+    const adapter = createPatchedAccountSetupAdapter({
+      channelKey: "demo-setup",
+      buildPatch: (input) =>
+        input.tokenFile
+          ? { tokenFile: input.tokenFile }
+          : input.token
+            ? { botToken: input.token }
+            : {},
+      credentialSourceFields: ["tokenFile", "botToken"],
+    });
+    const fromInline = adapter.applyAccountConfig({
+      cfg: asConfig({}),
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { token: "inline-tok" },
+    });
+
+    const rotated = adapter.applyAccountConfig({
+      cfg: fromInline,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { tokenFile: "/run/secrets/tok" },
+    });
+
+    const channel = channelRecord(rotated, "demo-setup");
+    expect(channel.tokenFile).toBe("/run/secrets/tok");
+    expect(channel).not.toHaveProperty("botToken");
+  });
+
+  it("retires credentialSourceFields on an env-selection write and skips non-credential writes", () => {
+    const adapter = createPatchedAccountSetupAdapter({
+      channelKey: "demo-setup",
+      buildPatch: (input) =>
+        input.tokenFile
+          ? { tokenFile: input.tokenFile }
+          : input.token
+            ? { botToken: input.token }
+            : {},
+      credentialSourceFields: ["tokenFile", "botToken"],
+    });
+    const fromInline = adapter.applyAccountConfig({
+      cfg: asConfig({ channels: { "demo-setup": { webhookPath: "/keep" } } }),
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { token: "inline-tok" },
+    });
+
+    // Selecting env counts as a credential write: both stored sources are
+    // retired so the environment variable wins resolution.
+    const envSelected = adapter.applyAccountConfig({
+      cfg: fromInline,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { useEnv: true },
+    });
+    const envChannel = channelRecord(envSelected, "demo-setup");
+    expect(envChannel).not.toHaveProperty("botToken");
+    expect(envChannel).not.toHaveProperty("tokenFile");
+
+    // A write without credential input must not touch stored credentials.
+    const untouched = adapter.applyAccountConfig({
+      cfg: fromInline,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: {},
+    });
+    const untouchedChannel = channelRecord(untouched, "demo-setup");
+    expect(untouchedChannel.botToken).toBe("inline-tok");
   });
 });
 

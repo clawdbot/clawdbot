@@ -217,10 +217,26 @@ function resolveGoogleChatAccountWithMode(params: {
   const merged = mergeGoogleChatAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
+  // The account merger overlays root fields ({...root, ...account}), so a named
+  // account that sets one credential source still inherits the root value of
+  // the other form. The resolver prefers inline over file, so a rotation that
+  // retires the account's inline override would silently fall back to the root
+  // identity (see #132231). When the account explicitly sets either credential
+  // source, treat the pair as one atomic override and drop the inherited root
+  // credential from credential selection; the returned config keeps the full
+  // merged shape.
+  const rawAccount = resolveAccountEntry(params.cfg.channels?.["googlechat"]?.accounts, accountId);
+  const accountSetsCredential =
+    rawAccount !== undefined &&
+    (Object.hasOwn(rawAccount, "serviceAccount") ||
+      Object.hasOwn(rawAccount, "serviceAccountFile"));
   const credentials = resolveCredentialsFromConfig({
     cfg: params.cfg,
     accountId,
-    account: merged,
+    account:
+      accountId !== DEFAULT_ACCOUNT_ID && accountSetsCredential
+        ? isolateAccountCredentials(merged, rawAccount)
+        : merged,
     mode: params.mode,
   });
 
@@ -235,6 +251,27 @@ function resolveGoogleChatAccountWithMode(params: {
     tokenStatus: credentials.status,
     ...(credentials.diagnostic ? { credentialDiagnostics: [credentials.diagnostic] } : {}),
   };
+}
+
+/**
+ * Treats a named account's explicit credential fields as one atomic override:
+ * a field the account did not set is dropped so a root-inherited credential of
+ * the other form cannot win credential selection. The inline value the account
+ * did set always beats any inherited file, and vice versa.
+ */
+function isolateAccountCredentials(
+  merged: GoogleChatAccountConfig,
+  rawAccount: Record<string, unknown>,
+): GoogleChatAccountConfig {
+  const isolated = { ...merged };
+  if (!Object.hasOwn(rawAccount, "serviceAccount")) {
+    delete isolated.serviceAccount;
+  }
+  if (!Object.hasOwn(rawAccount, "serviceAccountFile")) {
+    delete isolated.serviceAccountFile;
+  }
+  // SAFETY: deleted fields are optional on GoogleChatAccountConfig, so the object is still well-formed.
+  return isolated as GoogleChatAccountConfig;
 }
 
 export function resolveGoogleChatAccount(params: {
