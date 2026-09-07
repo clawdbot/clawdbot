@@ -1,5 +1,4 @@
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
-import { expectDefined } from "@openclaw/normalization-core";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -11,6 +10,12 @@ import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
 import { replacePatternBounded } from "./redact-bounded.js";
 import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
+import {
+  parseRedactPatternSource,
+  readRedactMatch,
+  redactPemBlock,
+  type RedactMatch,
+} from "./redact-pattern-runtime.js";
 import {
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
   AWS_SECRET_ACCESS_KEY_VALUE_PATTERN,
@@ -162,16 +167,7 @@ function parsePattern(raw: RedactPattern): RegExp | null {
       pattern = new RegExp(raw.source, `${raw.flags}g`);
     }
   } else if (raw.trim()) {
-    const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
-    if (match) {
-      const flags = expectDefined(match[2], "redact regex capture 2").includes("g")
-        ? match[2]
-        : `${match[2]}g`;
-      pattern =
-        compileConfigRegex(expectDefined(match[1], "redact regex capture 1"), flags)?.regex ?? null;
-    } else {
-      pattern = compileConfigRegex(raw, "gi")?.regex ?? null;
-    }
+    pattern = compileConfigRegex(...parseRedactPatternSource(raw))?.regex ?? null;
   }
   if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
     shellReferencePreservingPatterns.add(pattern);
@@ -577,14 +573,6 @@ function markFormBodyRedactions(text: string, bitmap: boolean[]): void {
   }
 }
 
-function redactPemBlock(block: string): string {
-  const lines = block.split(/\r?\n/).filter(Boolean);
-  if (lines.length < 2) {
-    return "***";
-  }
-  return `${lines[0]}\n…redacted…\n${lines[lines.length - 1]}`;
-}
-
 function isShellReferenceToKey(key: string, value: string): boolean {
   if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) {
     return false;
@@ -689,26 +677,20 @@ function getSecretCaptureStart(
 }
 
 function redactMatch(
-  match: string,
-  groups: string[],
+  { match, groups, input, offset }: RedactMatch,
   pattern: RegExp,
-  context?: {
-    input?: string;
-    offset?: number;
-    preserveSourceAssignment?: (text: string, offset: number) => boolean;
-  },
+  preserveSourceAssignment?: (text: string, offset: number) => boolean,
 ): string {
   if (match.includes("PRIVATE KEY-----")) {
-    return redactPemBlock(match);
+    return redactPemBlock(match, "…redacted…");
   }
   const selected = selectSecretCapture(match, groups);
   const token = selected.value;
   if (
     sourceAssignmentPatterns.has(pattern) &&
-    context?.preserveSourceAssignment?.(
-      context.input ?? "",
-      (context.offset ?? -1) +
-        getSecretCaptureStart(pattern, context.input ?? "", match, context.offset ?? -1, selected),
+    preserveSourceAssignment?.(
+      input,
+      offset + getSecretCaptureStart(pattern, input, match, offset, selected),
     )
   ) {
     return match;
@@ -737,7 +719,7 @@ function redactMatch(
   // Source goes through both the guard and SQLite. Full assignment masks keep
   // those copies identical; diagnostic hints otherwise shrink on the second pass.
   const masked =
-    context?.preserveSourceAssignment && sourceAssignmentPatterns.has(pattern)
+    preserveSourceAssignment && sourceAssignmentPatterns.has(pattern)
       ? maskSecretValue(token)
       : isShellReferencePattern
         ? maskToken(token)
@@ -745,13 +727,7 @@ function redactMatch(
   if (token === match) {
     return masked;
   }
-  const tokenIndex = getSecretCaptureStart(
-    pattern,
-    context?.input ?? "",
-    match,
-    context?.offset ?? -1,
-    selected,
-  );
+  const tokenIndex = getSecretCaptureStart(pattern, input, match, offset, selected);
   if (tokenIndex < 0) {
     return match;
   }
@@ -777,25 +753,8 @@ function redactText(
     next = redactFormBody(next);
   }
   for (const pattern of patterns) {
-    const replacer = (...args: unknown[]) => {
-      const hasNamedGroups =
-        args.length > 0 &&
-        typeof args[args.length - 1] === "object" &&
-        args[args.length - 1] !== null;
-      const inputIndex = hasNamedGroups ? args.length - 2 : args.length - 1;
-      const offsetIndex = inputIndex - 1;
-      const match = typeof args[0] === "string" ? args[0] : "";
-      const groups = args
-        .slice(1, offsetIndex)
-        .map((value) => (typeof value === "string" ? value : ""));
-      const offset = typeof args[offsetIndex] === "number" ? args[offsetIndex] : -1;
-      const input = typeof args[inputIndex] === "string" ? args[inputIndex] : "";
-      return redactMatch(match, groups, pattern, {
-        input,
-        offset,
-        preserveSourceAssignment: options?.preserveSourceAssignment,
-      });
-    };
+    const replacer = (...args: unknown[]) =>
+      redactMatch(readRedactMatch(args), pattern, options?.preserveSourceAssignment);
     next =
       options?.fullContext || chunkUnsafePatterns.has(pattern)
         ? next.replace(pattern, replacer)
@@ -882,9 +841,7 @@ function looksLikeAppSpecificPassword(candidate: string): boolean {
 
 function redactAppSpecificPasswords(text: string): string {
   return replacePatternBounded(text, APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
-    looksLikeAppSpecificPassword(token)
-      ? redactMatch(match, [token], APP_SPECIFIC_PASSWORD_RE)
-      : match,
+    looksLikeAppSpecificPassword(token) ? maskToken(token) : match,
   );
 }
 

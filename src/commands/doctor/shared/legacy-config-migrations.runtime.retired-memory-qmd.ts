@@ -2,10 +2,10 @@ import {
   defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
-  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import { normalizeConfiguredMemoryExtraPaths } from "../../../memory-host-sdk/host/config-utils.js";
 import type { MemoryExtraPath } from "../../../memory-host-sdk/host/types.js";
 import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";

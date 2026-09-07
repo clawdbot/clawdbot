@@ -269,82 +269,94 @@ describe("minimax video generation provider", () => {
     },
   );
 
-  it("downloads via file_id when the status response omits video_url", async () => {
-    const requestOverrides = {
-      allowPrivateNetwork: true,
-      headers: { "X-MiniMax-Video-Policy": "enabled" },
-    };
-    postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
-        task_id: "task-456",
-        base_resp: { status_code: 0 },
-      }),
-      release: vi.fn(async () => {}),
-    });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce(
-        jsonResponse({
+  it.each([
+    { name: "supplied", filename: " output_aigc.mp4 ", expectedFileName: "output_aigc.mp4" },
+    { name: "missing", filename: undefined, expectedFileName: "video-1.webm" },
+    { name: "blank", filename: "   ", expectedFileName: "video-1.webm" },
+  ])(
+    "downloads via file_id with a $name filename when status omits video_url",
+    async ({ filename, expectedFileName }) => {
+      const requestOverrides = {
+        allowPrivateNetwork: true,
+        headers: { "X-MiniMax-Video-Policy": "enabled" },
+      };
+      postJsonRequestMock.mockResolvedValue({
+        response: jsonResponse({
           task_id: "task-456",
-          status: "Success",
-          file_id: "file-9",
           base_resp: { status_code: 0 },
         }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          file: {
-            file_id: "file-9",
-            filename: "output_aigc.mp4",
-            download_url: "https://example.com/download.mp4",
-          },
-          base_resp: { status_code: 0 },
-        }),
-      )
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        release: vi.fn(async () => {}),
       });
+      fetchWithTimeoutMock
+        .mockResolvedValueOnce(
+          jsonResponse({
+            task_id: "task-456",
+            status: "Success",
+            file_id: "file-9",
+            base_resp: { status_code: 0 },
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            file: {
+              file_id: "file-9",
+              filename,
+              download_url: "https://example.com/download.mp4",
+            },
+            base_resp: { status_code: 0 },
+          }),
+        )
+        .mockResolvedValueOnce({
+          headers: new Headers({ "content-type": "video/webm" }),
+          arrayBuffer: async () => Buffer.from("webm-bytes"),
+        });
 
-    const provider = buildMinimaxVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "minimax",
-      model: "MiniMax-Hailuo-2.3",
-      prompt: "A fox sprints across snowy hills",
-      cfg: {
-        models: {
-          providers: {
-            minimax: {
-              baseUrl: "https://api.minimax.io",
-              models: [],
-              request: requestOverrides,
+      const provider = buildMinimaxVideoGenerationProvider();
+      const result = await provider.generateVideo({
+        provider: "minimax",
+        model: "MiniMax-Hailuo-2.3",
+        prompt: "A fox sprints across snowy hills",
+        cfg: {
+          models: {
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimax.io",
+                models: [],
+                request: requestOverrides,
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expectMinimaxFetchCall(1, "https://api.minimax.io/v1/files/retrieve?file_id=file-9");
-    expectMinimaxFetchCall(2, "https://example.com/download.mp4");
-    const statusFetch = expectMinimaxGuardedFetchCall(
-      0,
-      "https://api.minimax.io/v1/query/video_generation?task_id=task-456",
-    );
-    expect((statusFetch.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
-    expectAllowPrivateNetworkPolicy(statusFetch.options);
-    const metadataFetch = expectMinimaxGuardedFetchCall(
-      1,
-      "https://api.minimax.io/v1/files/retrieve?file_id=file-9",
-    );
-    expect((metadataFetch.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
-    expectAllowPrivateNetworkPolicy(metadataFetch.options);
-    expectAllowPrivateNetworkPolicy(
-      expectMinimaxGuardedFetchCall(2, "https://example.com/download.mp4").options,
-    );
-    expect(result.videos).toHaveLength(1);
-    expect(result.metadata?.taskId).toBe("task-456");
-    expect(result.metadata?.fileId).toBe("file-9");
-    expect(result.metadata?.videoUrl).toBeUndefined();
-  });
+      expectMinimaxFetchCall(1, "https://api.minimax.io/v1/files/retrieve?file_id=file-9");
+      expectMinimaxFetchCall(2, "https://example.com/download.mp4");
+      const statusFetch = expectMinimaxGuardedFetchCall(
+        0,
+        "https://api.minimax.io/v1/query/video_generation?task_id=task-456",
+      );
+      expect((statusFetch.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
+      expectAllowPrivateNetworkPolicy(statusFetch.options);
+      const metadataFetch = expectMinimaxGuardedFetchCall(
+        1,
+        "https://api.minimax.io/v1/files/retrieve?file_id=file-9",
+      );
+      expect((metadataFetch.init.headers as Headers).get("x-minimax-video-policy")).toBe("enabled");
+      expectAllowPrivateNetworkPolicy(metadataFetch.options);
+      expectAllowPrivateNetworkPolicy(
+        expectMinimaxGuardedFetchCall(2, "https://example.com/download.mp4").options,
+      );
+      expect(result.videos).toHaveLength(1);
+      expect(result.videos[0]).toMatchObject({
+        buffer: Buffer.from("webm-bytes"),
+        mimeType: "video/webm",
+        fileName: expectedFileName,
+      });
+      expect(result.metadata?.taskId).toBe("task-456");
+      expect(result.metadata?.fileId).toBe("file-9");
+      expect(result.metadata?.videoUrl).toBeUndefined();
+    },
+  );
 
   it("retries guarded video status polling while preserving request policy", async () => {
     const requestOverrides = {

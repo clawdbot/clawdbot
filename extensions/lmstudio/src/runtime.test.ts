@@ -62,7 +62,7 @@ describe("lmstudio-runtime", () => {
       resolveLmstudioRuntimeApiKey({
         config: buildLmstudioConfig({ auth: "api-key" }),
       }),
-    ).rejects.toThrow(/LM Studio API key is required/i);
+    ).rejects.toThrow('or run "openclaw models auth login --provider lmstudio".');
   });
 
   it("falls back to configured env marker key when profile resolution fails", async () => {

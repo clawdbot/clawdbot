@@ -891,6 +891,8 @@ describe("BrowserPanelController capture and input ownership", () => {
     const oldCapture = createDeferred<unknown>();
     const freshCapture = createDeferred<unknown>();
     const captures = [oldCapture, freshCapture];
+    const oldStarted = createDeferred();
+    const freshStarted = createDeferred();
     const url = "https://example.test/page";
     const { client, request } = createBrowserClient(async (envelope) => {
       if (envelope.path === "/tabs") {
@@ -904,6 +906,7 @@ describe("BrowserPanelController capture and input ownership", () => {
         if (!capture) {
           throw new Error("Unexpected screenshot capture");
         }
+        (capture === oldCapture ? oldStarted : freshStarted).resolve();
         return await capture.promise;
       }
       if (envelope.path === "/act") {
@@ -916,8 +919,9 @@ describe("BrowserPanelController capture and input ownership", () => {
     controller.activeTargetId = "tab-a";
 
     const oldRefresh = controller.refreshAll();
+    await oldStarted.promise;
     const freshRefresh = controller.refreshAll();
-    await flushBrowserResponses();
+    await freshStarted.promise;
     expect(
       request.mock.calls.filter(([, envelope]) => {
         return (envelope as BrowserRequestEnvelope).path === "/screenshot";

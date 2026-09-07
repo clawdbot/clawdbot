@@ -5,6 +5,7 @@
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type {
   OpenClawPluginApi,
@@ -21,8 +22,12 @@ import {
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import { splitSystemPromptCacheBoundary } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
-import { supportsBedrockPromptCaching } from "./bedrock-options.js";
+import {
+  supportsBedrockModelPromptCaching,
+  supportsBedrockPromptCaching,
+} from "./bedrock-options.js";
 import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
 import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
@@ -180,10 +185,6 @@ function createGuardrailWrapStreamFn(
   };
 }
 
-function sharedRuntimeWouldInjectCachePoints(modelId: string): boolean {
-  return supportsBedrockPromptCaching(modelId);
-}
-
 /**
  * Detect Bedrock application inference profile ARNs — these are the only IDs
  * where model-name-based checks fail because the ARN is opaque.
@@ -195,31 +196,6 @@ const BEDROCK_APP_INFERENCE_PROFILE_RE =
 
 function isBedrockAppInferenceProfile(modelId: string): boolean {
   return BEDROCK_APP_INFERENCE_PROFILE_RE.test(modelId);
-}
-
-/**
- * The shared runtime's `supportsPromptCaching` checks `model.id` for specific Claude
- * model name patterns, which fails for application inference profile ARNs (opaque
- * IDs that may not contain the model name). When OpenClaw's `isAnthropicBedrockModel`
- * identifies the model but the shared runtime won't inject cache points, we do it via onPayload.
- *
- * Gated to application inference profile ARNs only — regular Claude model IDs and
- * system-defined inference profiles (us.anthropic.claude-*) are left to the shared runtime.
- */
-function needsCachePointInjection(modelId: string): boolean {
-  // Only target application inference profile ARNs.
-  if (!isBedrockAppInferenceProfile(modelId)) {
-    return false;
-  }
-  // If the shared runtime would already inject cache points, skip.
-  if (sharedRuntimeWouldInjectCachePoints(modelId)) {
-    return false;
-  }
-  // Check if OpenClaw identifies this as an Anthropic model via the ARN heuristic.
-  if (isAnthropicBedrockModel(modelId)) {
-    return true;
-  }
-  return false;
 }
 
 /**
@@ -326,8 +302,10 @@ function makeCachePoint(cacheRetention: string | undefined): BedrockCachePoint {
 function injectBedrockCachePoints(
   payload: Record<string, unknown>,
   cacheRetention: string | undefined,
+  context: Context,
+  model: Model,
 ): void {
-  if (!cacheRetention || cacheRetention === "none") {
+  if (!cacheRetention || cacheRetention === "none" || supportsBedrockModelPromptCaching(model)) {
     return;
   }
   const point = makeCachePoint(cacheRetention);
@@ -335,7 +313,18 @@ function injectBedrockCachePoints(
   // Inject into system prompt if missing.
   const system = payload.system as BedrockContentBlock[] | undefined;
   if (Array.isArray(system) && system.length > 0 && !hasCachePoint(system)) {
-    system.push(point);
+    const split = context.systemPrompt && splitSystemPromptCacheBoundary(context.systemPrompt);
+    if (!split || split.stablePrefix) {
+      system.splice(split ? 1 : system.length, 0, point);
+    }
+  }
+
+  // Unresolved profiles use transient carriers. Conversion has removed their
+  // flags, so fallback injection cannot safely select a conversation anchor.
+  if (
+    context.messages.some((message) => message.role === "user" && message.runtimeContextCarrier)
+  ) {
+    return;
   }
 
   // Inject into the last user message if missing.
@@ -538,6 +527,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     normalizeResolvedModel: normalizeBedrockResolvedModel,
+    supportsSystemPromptCacheBoundary: true,
     createStreamFn: ({ model }) =>
       model.api === "bedrock-converse-stream" ? bedrockStreamFn : undefined,
     ...anthropicByModelReplayHooks,
@@ -583,7 +573,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         extractRegionFromBaseUrl(model?.baseUrl) ??
         currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =
-        isBedrockAppInferenceProfile(modelId) && !sharedRuntimeWouldInjectCachePoints(modelId);
+        isBedrockAppInferenceProfile(modelId) && !supportsBedrockPromptCaching(modelId);
       const shouldOmitTemperature =
         opus47OrNewer || fable5 || isLatestAdaptiveBedrockModelRef(modelId, model?.params);
       const shouldPatchMaxThinking = supportsNativeMax && thinkingLevel === "max";
@@ -591,7 +581,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
 
       // For known Anthropic models (heuristic match), enable injection immediately.
       // For opaque profile IDs, we'll resolve via GetInferenceProfile on first call.
-      const heuristicMatch = needsCachePointInjection(modelId);
+      const heuristicMatch = isAnthropicBedrockModel(modelId);
 
       if (!region && !mayNeedCacheInjection && !shouldOmitTemperature && !shouldPatchMaxThinking) {
         return createAwsCredentialRefreshStreamWrapper(wrapped);
@@ -659,7 +649,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
               onPayload: async (payload: unknown, payloadModel: unknown) => {
                 if (payload && typeof payload === "object") {
                   const payloadRecord = payload as Record<string, unknown>;
-                  injectBedrockCachePoints(payloadRecord, cacheRetention);
+                  injectBedrockCachePoints(payloadRecord, cacheRetention, context, streamModel);
                   if (shouldPatchMaxThinking) {
                     patchMaxThinkingEffort(payloadRecord);
                   }
@@ -690,7 +680,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
               if (payload && typeof payload === "object") {
                 const payloadRecord = payload as Record<string, unknown>;
                 if (traits.cacheEligible) {
-                  injectBedrockCachePoints(payloadRecord, cacheRetention);
+                  injectBedrockCachePoints(payloadRecord, cacheRetention, context, streamModel);
                 }
                 if (shouldPatchMaxThinking) {
                   patchMaxThinkingEffort(payloadRecord);

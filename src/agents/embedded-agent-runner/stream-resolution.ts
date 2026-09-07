@@ -134,10 +134,8 @@ export function resolveEmbeddedAgentStream(
       : context;
   if (params.providerStreamFn) {
     return {
-      streamFn: wrapEmbeddedAgentStreamFn(params.providerStreamFn, {
-        ...wrapOptions,
-        transformContext: stripCacheBoundary,
-      }),
+      // Provider stream creation owns the plugin's cache-boundary capability.
+      streamFn: wrapEmbeddedAgentStreamFn(params.providerStreamFn, wrapOptions),
       strategy: "provider",
     };
   }

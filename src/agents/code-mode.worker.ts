@@ -299,6 +299,9 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
   const deadlineReached = () => performance.now() - startedAt >= timeoutMs;
   const options = {
     wasm: input.wasmModule,
+    // Pinned pure-data extensions share the sandbox heap and must be supplied
+    // on restore so retained encoder/decoder instances keep their native methods.
+    extensions: input.wasmExtensions,
     memoryLimit: input.config.memoryLimitBytes,
     timezoneOffset: 0,
     onUnhandledRejection: trackPromiseRejection,
@@ -498,6 +501,16 @@ async function runVmExecution(params: {
     if (params.bridge.admissionFailure) {
       throw params.bridge.admissionFailure;
     }
+    const admissionError = params.vm.global
+      .getProp("__openclawAdmissionError")
+      .consume((read) =>
+        params.vm
+          .callFunction(read, params.vm.undefined)
+          .consume((error) => (error.isString ? error.toString() : undefined)),
+      );
+    if (admissionError) {
+      throw new CodeModeWorkerFailure("invalid_input", admissionError);
+    }
     params.vm.global
       .getProp("__openclawDrainQueuedRequests")
       .consume((drain) => params.vm.callFunction(drain, params.vm.undefined).dispose());
@@ -610,8 +623,25 @@ function isQuickJsWasmModule(value: unknown): value is WebAssembly.Module {
   return Object.prototype.toString.call(value) === "[object WebAssembly.Module]";
 }
 
+function isQuickJsWasmExtensions(value: unknown): value is CodeModeWorkerPayload["wasmExtensions"] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (extension) =>
+        isRecord(extension) &&
+        typeof extension.name === "string" &&
+        isQuickJsWasmModule(extension.wasm),
+    )
+  );
+}
+
 async function main(input: unknown): Promise<CodeModeWorkerThreadResult> {
-  if (!isRecord(input) || !isRecord(input.config) || !isQuickJsWasmModule(input.wasmModule)) {
+  if (
+    !isRecord(input) ||
+    !isRecord(input.config) ||
+    !isQuickJsWasmModule(input.wasmModule) ||
+    !isQuickJsWasmExtensions(input.wasmExtensions)
+  ) {
     return {
       ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
       output: EMPTY_CODE_MODE_OUTPUT,
@@ -627,6 +657,7 @@ async function main(input: unknown): Promise<CodeModeWorkerThreadResult> {
         await run({
           kind: "exec",
           wasmModule: input.wasmModule,
+          wasmExtensions: input.wasmExtensions,
           source: input.source,
           language: input.language as CodeModeLanguage | undefined,
           prelude: typeof input.prelude === "string" ? input.prelude : undefined,
@@ -652,6 +683,7 @@ async function main(input: unknown): Promise<CodeModeWorkerThreadResult> {
         await run({
           kind: "resume",
           wasmModule: input.wasmModule,
+          wasmExtensions: input.wasmExtensions,
           snapshot,
           config,
           settledRequests: Array.isArray(input.settledRequests)

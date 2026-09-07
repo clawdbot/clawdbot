@@ -1,4 +1,5 @@
 import type { RouteId } from "../../app-route-paths.ts";
+import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
 
 export const CONNECTION_SETTINGS_TARGET_IDS = {
@@ -22,9 +23,13 @@ export type SettingsSearchTarget = {
   readonly labelKey: string;
   readonly hash: string;
   readonly searchKeys: readonly string[];
+  readonly nativeSearchKeys?: Readonly<
+    Record<string, (snapshot: NativeDeviceSettingsSnapshot) => boolean>
+  >;
   readonly search?: string;
   readonly aliases?: string;
   readonly requiresIdentity?: true;
+  readonly requiresNativeDeviceSettings?: true;
 };
 
 // Keep destinations and translation keys together without importing page
@@ -49,17 +54,38 @@ export const SETTINGS_SEARCH_TARGETS = {
     routeId: "device",
     labelKey: "tabs.device",
     hash: "",
-    searchKeys: [
-      "configPage.deviceSettings.app",
-      "configPage.deviceSettings.showDockIcon",
-      "configPage.deviceSettings.launchAtLogin",
-      "configPage.deviceSettings.quickChat",
-      "configPage.deviceSettings.capabilities",
-      "configPage.deviceSettings.computerControl",
-      "configPage.deviceSettings.browser",
-      "configPage.deviceSettings.cookieSync",
-      "configPage.deviceSettings.developer",
-    ],
+    searchKeys: [],
+    nativeSearchKeys: {
+      "configPage.deviceSettings.app": (snapshot) => snapshot.app !== undefined,
+      "configPage.deviceSettings.appearance": (snapshot) => snapshot.app?.appearance !== undefined,
+      "configPage.deviceSettings.notificationsEnabled": (snapshot) =>
+        snapshot.app?.notificationsEnabled !== undefined,
+      "configPage.deviceSettings.showDockIcon": (snapshot) =>
+        snapshot.app?.showDockIcon !== undefined,
+      "configPage.deviceSettings.launchAtLogin": (snapshot) =>
+        snapshot.app?.launchAtLogin !== undefined,
+      "configPage.deviceSettings.quickChat": (snapshot) =>
+        snapshot.app?.quickChatEnabled !== undefined,
+      "configPage.deviceSettings.capabilities": (snapshot) => snapshot.capabilities !== undefined,
+      "configPage.deviceSettings.camera": (snapshot) =>
+        snapshot.capabilities?.cameraEnabled !== undefined,
+      "configPage.deviceSettings.keepAwake": (snapshot) =>
+        snapshot.capabilities?.keepAwakeEnabled !== undefined,
+      "configPage.deviceSettings.healthSummary": (snapshot) =>
+        snapshot.capabilities?.healthSummaryAvailable === true &&
+        snapshot.capabilities.healthSummaryEnabled !== undefined,
+      "configPage.deviceSettings.panels.diagnostics": (snapshot) =>
+        snapshot.device.platform === "ios",
+      "configPage.deviceSettings.panels.licenses": (snapshot) => snapshot.device.platform === "ios",
+      "configPage.deviceSettings.panels.about": (snapshot) => snapshot.device.platform === "ios",
+      "configPage.deviceSettings.panels.watch": (snapshot) => snapshot.device.platform === "ios",
+      "configPage.deviceSettings.computerControl": (snapshot) =>
+        snapshot.capabilities?.computerControlEnabled !== undefined,
+      "configPage.deviceSettings.browser": (snapshot) => snapshot.browser !== undefined,
+      "configPage.deviceSettings.cookieSync": (snapshot) => snapshot.browser !== undefined,
+      "configPage.deviceSettings.developer": (snapshot) =>
+        snapshot.app?.debugPaneEnabled !== undefined,
+    },
   },
   devicePermissions: {
     routeId: "device-permissions",
@@ -68,8 +94,36 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configPage.deviceSettings.systemAccess",
       "configPage.deviceSettings.location",
-      "configPage.deviceSettings.activePresence",
+      "configPage.deviceSettings.preciseLocation",
     ],
+    nativeSearchKeys: {
+      "configPage.deviceSettings.permissions.contacts.title": (snapshot) =>
+        snapshot.permissions.entries.some((entry) => entry.id === "contacts"),
+      "configPage.deviceSettings.permissions.calendars.title": (snapshot) =>
+        snapshot.permissions.entries.some((entry) => entry.id === "calendars"),
+      "configPage.deviceSettings.permissions.reminders.title": (snapshot) =>
+        snapshot.permissions.entries.some((entry) => entry.id === "reminders"),
+      "configPage.deviceSettings.permissions.photos.title": (snapshot) =>
+        snapshot.permissions.entries.some((entry) => entry.id === "photos"),
+      "configPage.deviceSettings.activePresence": (snapshot) =>
+        snapshot.capabilities?.activeComputerPresenceEnabled !== undefined,
+    },
+  },
+  deviceTalk: {
+    routeId: "talk",
+    labelKey: "configPage.deviceTalk.wakeEnabled",
+    hash: "",
+    requiresNativeDeviceSettings: true,
+    searchKeys: [],
+    nativeSearchKeys: {
+      "configPage.deviceTalk.talkEnabled": (snapshot) => snapshot.voice.talkEnabled !== undefined,
+      "configPage.deviceTalk.talkButtonEnabled": (snapshot) =>
+        snapshot.voice.talkButtonEnabled !== undefined,
+      "configPage.deviceTalk.talkBackgroundEnabled": (snapshot) =>
+        snapshot.voice.talkBackgroundEnabled !== undefined,
+      "configPage.deviceTalk.speakerphoneEnabled": (snapshot) =>
+        snapshot.voice.speakerphoneEnabled !== undefined,
+    },
   },
   updates: {
     routeId: "updates",
@@ -139,7 +193,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "githubConnections.forMe",
       "githubConnections.forSystem",
     ],
-    aliases: "github oauth account connection publication",
+    aliases:
+      "github oauth account connection publication authentication auth status dashboard actions",
   },
   modelBehavior: {
     ...SETTINGS_ROUTE_TARGETS.modelBehavior,

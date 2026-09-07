@@ -453,7 +453,9 @@ auto-injected.
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
-file entries are indexed exactly. The builtin engine skips symlinks.
+file entries are indexed exactly. The builtin engine skips symlinks. When a configured root is a
+symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
+configuring its canonical absolute directory instead.
 
 For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
 canonical path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event

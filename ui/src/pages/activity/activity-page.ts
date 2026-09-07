@@ -4,7 +4,6 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
-import type { EventLogEntry } from "../../api/event-log.ts";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -17,7 +16,6 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries, type PresencePayload } from "../../app/user-profile.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
@@ -26,11 +24,17 @@ import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectPresencePayload } from "../../lib/presence-users.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
-import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
+import {
+  isUiGlobalScopeConfigured,
+  resolveUiConfiguredMainKey,
+  resolveUiDefaultAgentId,
+} from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderCurrentWork } from "./current-work-view.ts";
+import type { LiveActivity } from "./live-activity.ts";
 import {
   activityRunInspectorSearch,
   mergeDecisionPage,
@@ -43,16 +47,8 @@ import {
 import { renderRunInspector } from "./run-inspector-view.ts";
 import { SessionActivityController } from "./session-activity-controller.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
-import {
-  parseActivityEvent,
-  updateToolActivity,
-  type ActivityEntry,
-  type ActivityStatus,
-} from "./tool-activity.ts";
+import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 import { renderActivity } from "./view.ts";
-
-// Clear survives navigation without retaining an evicted or retired payload.
-let activityClearBoundary: WeakRef<EventLogEntry> | undefined;
 
 function selectorKey(selector: RunInspectorSelector | null): string | null {
   return selector ? `${selector.kind}:${selector.id}` : null;
@@ -88,7 +84,7 @@ class ActivityPage extends OpenClawLightDomElement {
     selector: null,
   };
 
-  @state() private entries: ActivityEntry[] = [];
+  @state() private entries: readonly ActivityEntry[] = [];
   @state() private filterText = "";
   @state() private statusFilters: Record<ActivityStatus, boolean> = {
     running: true,
@@ -102,8 +98,10 @@ class ActivityPage extends OpenClawLightDomElement {
   @state() private runInspector: RunInspectorState = { status: "empty" };
   @state() private presencePayload: PresencePayload | undefined;
 
-  private sessionKey = "";
+  private liveActivitySource: LiveActivity | null = null;
+  private liveActivityRevision = -1;
   private readonly sessionActivity = new SessionActivityController(this);
+  private sessionActivityRevision = -1;
   private inspectorAbort: AbortController | null = null;
   private inspectorClient: GatewayBrowserClient | null = null;
   private inspectorEpoch = 0;
@@ -113,34 +111,43 @@ class ActivityPage extends OpenClawLightDomElement {
     selector: ".activity-stream",
     isEnabled: () => this.autoFollow,
   });
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.gateway,
-    (gateway) => {
-      let eventLogRevision = gateway.eventLogRevision;
-      this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
-      const stopEventLog = gateway.subscribeEventLog(() => {
-        const revision = gateway.eventLogRevision;
-        if (this.context.gateway !== gateway || revision === eventLogRevision) {
-          return;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.liveActivity,
+      (activity, notify) => activity.subscribe(notify),
+      (activity) => {
+        const snapshot = activity.snapshot;
+        const reset =
+          activity !== this.liveActivitySource || snapshot.revision !== this.liveActivityRevision;
+        this.liveActivitySource = activity;
+        this.liveActivityRevision = snapshot.revision;
+        this.entries = snapshot.entries;
+        if (reset) {
+          this.expandedIds = new Set();
+          this.streamFollow.atBottom = true;
         }
-        eventLogRevision = revision;
-        activityClearBoundary = undefined;
-        // Log notification precedes event delivery; replay would apply the next event twice.
-        this.resetEntries();
-      });
-      const stopEvents = gateway.subscribeEvents((event) => {
-        this.applyGatewayEvent(gateway, event, Date.now());
-      });
-      const stopGateway = gateway.subscribe((snapshot) =>
-        this.applyGatewaySnapshot(gateway, snapshot, false),
-      );
-      return () => {
-        stopGateway();
-        stopEvents();
-        stopEventLog();
-      };
-    },
-  );
+      },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
+        const stopEvents = gateway.subscribeEvents((event) => {
+          this.applyGatewayEvent(gateway, event);
+        });
+        const stopGateway = gateway.subscribe((snapshot) =>
+          this.applyGatewaySnapshot(gateway, snapshot, false),
+        );
+        return () => {
+          stopGateway();
+          stopEvents();
+        };
+      },
+    );
 
   override willUpdate(changed: PropertyValues) {
     if (changed.has("routeLocation")) {
@@ -148,13 +155,13 @@ class ActivityPage extends OpenClawLightDomElement {
         this.routeLocation.search,
         activityPersonFromPath(this.routeLocation.pathname, this.context?.basePath),
       );
+      this.syncSessionActivity();
     }
   }
 
   override updated(changed: PropertyValues) {
     if (changed.has("routeLocation")) {
       this.bindInspectorRoute();
-      this.syncSessionActivity();
     }
     const canonical = this.sessionActivity.canonicalLocation(
       this.routeLocation,
@@ -184,10 +191,9 @@ class ActivityPage extends OpenClawLightDomElement {
     snapshot: ApplicationGatewaySnapshot,
     sourceChanged: boolean,
   ) {
-    const previousSessionKey = this.sessionKey;
-    this.sessionKey = resolveSessionKey(loadSettings().sessionKey, snapshot.hello);
-    if (sourceChanged || this.sessionKey !== previousSessionKey) {
-      this.rebuildEntries(gateway, snapshot);
+    if (sourceChanged || gateway.eventLogRevision !== this.sessionActivityRevision) {
+      this.sessionActivityRevision = gateway.eventLogRevision;
+      this.sessionActivity.load(null, null);
     }
     if (sourceChanged || snapshot.client !== this.presenceClient) {
       this.presenceClient = snapshot.client;
@@ -205,7 +211,11 @@ class ActivityPage extends OpenClawLightDomElement {
     const snapshot = this.context?.gateway.snapshot;
     this.sessionActivity.load(
       snapshot?.phase === "connected" ? snapshot.client : null,
-      this.routeData.mode === "sessions" ? this.routeData.filters : null,
+      this.routeData.mode === "sessions"
+        ? this.routeData.filters
+        : this.routeData.mode === "live"
+          ? "current"
+          : null,
       reason,
     );
   }
@@ -490,95 +500,27 @@ class ActivityPage extends OpenClawLightDomElement {
     this.context.navigate("activity", { search: mode === "live" ? "?view=live" : "" });
   }
 
-  private rebuildEntries(
-    gateway: ApplicationContext["gateway"],
-    snapshot: ApplicationGatewaySnapshot,
-  ) {
-    let entries: ActivityEntry[] = [];
-    const eventLog = gateway.eventLog;
-    const clearBoundary = activityClearBoundary?.deref();
-    const clearIndex = clearBoundary ? eventLog.indexOf(clearBoundary) : -1;
-    const visibleEvents = clearIndex < 0 ? eventLog : eventLog.slice(0, clearIndex);
-    for (const event of visibleEvents.toReversed()) {
-      entries = this.reduceGatewayEvent(entries, snapshot, event.event, event.payload, event.ts);
-    }
-    if (entries.length > 0 || this.entries.length > 0) {
-      this.entries = entries;
-    }
-    if (this.expandedIds.size > 0) {
-      this.expandedIds = new Set();
-    }
-    this.streamFollow.atBottom = true;
-  }
-
-  private applyGatewayEvent(
-    gateway: ApplicationContext["gateway"],
-    event: GatewayEventFrame,
-    receivedAt: number,
-  ) {
+  private applyGatewayEvent(gateway: ApplicationContext["gateway"], event: GatewayEventFrame) {
     if (this.context.gateway !== gateway) {
       return;
     }
-    if (event.event === "sessions.changed") {
-      this.sessionActivity.invalidate();
+    const change =
+      event.event === "session.message" ? readSessionChangedEvent(event.payload) : null;
+    const terminalMessage =
+      change &&
+      (change.hasActiveRun === false ||
+        (change.status !== null && change.status !== "running" && change.status !== "queued"));
+    if (event.event === "sessions.changed" || (this.routeData.mode === "live" && terminalMessage)) {
+      this.sessionActivity.invalidate(event.payload);
     }
     if (event.event === "presence") {
       const presence = readPresenceEntries(event.payload);
       this.presencePayload = presence ? { presence } : undefined;
-      return;
     }
-    const nextEntries = this.reduceGatewayEvent(
-      this.entries,
-      gateway.snapshot,
-      event.event,
-      event.payload,
-      receivedAt,
-    );
-    if (nextEntries !== this.entries) {
-      this.entries = nextEntries;
-    }
-  }
-
-  private reduceGatewayEvent(
-    entries: ActivityEntry[],
-    gateway: ApplicationGatewaySnapshot,
-    eventName: string,
-    payload: unknown,
-    receivedAt: number,
-  ): ActivityEntry[] {
-    if (eventName !== "agent" && eventName !== "session.tool") {
-      return entries;
-    }
-    const event = parseActivityEvent(payload, receivedAt);
-    if (!event) {
-      return entries;
-    }
-    if (
-      !uiSessionEventMatches(
-        {
-          sessionKey: this.sessionKey,
-          assistantAgentId: gateway.assistantAgentId,
-          hello: gateway.hello,
-        },
-        event.sessionKey,
-        event.agentId,
-      )
-    ) {
-      return entries;
-    }
-    return updateToolActivity(entries, event);
   }
 
   private clearEntries() {
-    const boundary = this.context.gateway.eventLog[0];
-    activityClearBoundary = boundary ? new WeakRef(boundary) : undefined;
-    this.resetEntries();
-  }
-
-  private resetEntries() {
-    this.entries = [];
-    this.expandedIds = new Set();
-    this.streamFollow.atBottom = true;
+    this.context.liveActivity.clear();
   }
 
   private renderMode() {
@@ -637,7 +579,23 @@ class ActivityPage extends OpenClawLightDomElement {
             this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true),
         })}`;
     }
+    const sessionHost = {
+      agentsList: this.context.agents.state.agentsList,
+      hello: this.context.gateway.snapshot.hello,
+    };
     return html`<div id="activity-live-panel">
+      ${renderCurrentWork({
+        basePath: this.context.basePath,
+        fallbackAgentId: resolveUiDefaultAgentId(sessionHost),
+        mainKey: resolveUiConfiguredMainKey(sessionHost),
+        globalScope: isUiGlobalScopeConfigured(sessionHost),
+        navigate: this.context.navigate,
+        connected: this.context.gateway.snapshot.phase === "connected",
+        result: this.sessionActivity.result,
+        loading: this.sessionActivity.loading,
+        error: this.sessionActivity.error,
+        onRetry: () => this.syncSessionActivity("retry"),
+      })}
       ${renderActivity({
         basePath: this.context.basePath,
         entries: this.entries,

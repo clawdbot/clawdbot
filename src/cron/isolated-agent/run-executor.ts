@@ -570,7 +570,6 @@ function createCronPromptExecutor(
           sessionKey: params.runSessionKey,
           sessionEntry: params.cronSession.sessionEntry,
         });
-        assertCronExecutionRootRuntime(params.executionRoot, candidateRuntime);
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({
@@ -629,6 +628,12 @@ function createCronPromptExecutor(
                 modelId: modelOverride,
               }) ?? providerOverride));
         const cliExecution = isCliProvider(executionProvider, params.cfgWithAgentDefaults);
+        const rootedExecution = params.executionRoot ? { root: params.executionRoot } : undefined;
+        assertCronExecutionRootRuntime(
+          params.executionRoot,
+          candidateRuntime,
+          cliExecution && Boolean(rootedExecution),
+        );
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
           candidateRuntime,
@@ -689,7 +694,9 @@ function createCronPromptExecutor(
                 sessionFile,
                 storePath: params.cronSession.storePath,
                 persistAssistantTranscript: true,
-                workspaceDir: params.workspaceDir,
+                workspaceDir: params.executionRoot ?? params.workspaceDir,
+                bootstrapWorkspaceDir: params.workspaceDir,
+                rootedExecution,
                 config: params.cfgWithAgentDefaults,
                 prompt: promptText,
                 finalizePromptForResolvedTools,

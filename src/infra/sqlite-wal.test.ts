@@ -582,16 +582,17 @@ describe("sqlite WAL maintenance", () => {
 
           expect(await periodic.promise).toEqual([undefined, undefined]);
           expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
-          expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
+          expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(512);");
           expect(maintenance.close()).toBe(true);
           expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
           expect(requestScope.getStore()).toBe(request);
           expect(sessionScope.getStore()).toBe(session);
+          const statementsAfterClose = vi.mocked(db).exec.mock.calls.length;
 
           await new Promise<void>((resolve) => {
             setTimeout(resolve, 10);
           });
-          expect(db["exec"]).toHaveBeenCalledTimes(4);
+          expect(db["exec"]).toHaveBeenCalledTimes(statementsAfterClose);
         }),
       );
     } finally {
@@ -860,7 +861,7 @@ describe("sqlite WAL maintenance", () => {
 
     vi.advanceTimersByTime(100);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(FULL);");
-    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
+    expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(512);");
 
     expect(maintenance.close({ checkpointMode: "PASSIVE" })).toBe(true);
     expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(PASSIVE);");

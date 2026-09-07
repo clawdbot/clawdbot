@@ -136,6 +136,7 @@ export function startManagedGatewayConfigReloader(
   };
   const {
     applyHotReload,
+    getDeferredChannelReloads,
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
     hasOutstandingGatewayRestart,
@@ -526,6 +527,7 @@ export function startManagedGatewayConfigReloader(
       await configReloader.stop();
     },
     hotReloadStatus: configReloader.hotReloadStatus,
+    getDeferredChannelReloads,
     notifyPluginMetadataChanged: configReloader.notifyPluginMetadataChanged,
     // Equal config revisions can still owe a plugin/runtime restart.
     isConfigReloadSettled: () =>

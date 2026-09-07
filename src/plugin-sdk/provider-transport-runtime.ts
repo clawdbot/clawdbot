@@ -5,6 +5,7 @@ export { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
 export { buildOpenAICompletionsParams } from "../agents/openai-transport-stream.js";
 export {
   sortPromptCacheToolsByName,
+  splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 export { transformTransportMessages } from "../agents/transport-message-transform.js";

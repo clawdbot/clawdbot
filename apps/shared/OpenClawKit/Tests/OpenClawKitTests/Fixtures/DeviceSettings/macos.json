@@ -1,0 +1,43 @@
+{
+  "contract": 1,
+  "device": {"platform": "macos", "appVersion": "2026.9.3", "appBuild": "123", "profileName": null},
+  "app": {
+    "showDockIcon": true, "iconAnimationsEnabled": false, "launchAtLogin": true,
+    "iconStyle": {
+      "selectedId": "paper",
+      "available": [{"id": "paper", "name": "Original"}, {"id": "origami", "name": "Origami"}]
+    },
+    "launchAtLoginAvailable": false, "quickChatEnabled": true, "quickChatShortcut": null, "debugPaneEnabled": false
+  },
+  "capabilities": {
+    "canvasEnabled": true, "cameraEnabled": false, "computerControlEnabled": true,
+    "computerControlProvider": "cua", "cuaDriverBundled": true, "peekabooBridgeEnabled": false,
+    "activeComputerPresenceEnabled": true
+  },
+  "browser": {
+    "importAvailable": false,
+    "cookieSync": {
+      "available": true, "enabled": true, "domains": ["example.test"], "targetProfile": "fixture",
+      "state": "idle", "detail": null
+    }
+  },
+  "permissions": {
+    "entries": [
+      {"id": "notifications", "status": "granted"}, {"id": "accessibility", "status": "denied"},
+      {"id": "screenRecording", "status": "notDetermined"}, {"id": "microphone", "status": "unavailable"},
+      {"id": "camera", "status": "granted"}, {"id": "speechRecognition", "status": "denied"},
+      {"id": "location", "status": "notDetermined"}, {"id": "automation", "status": "unavailable"}
+    ],
+    "location": {"mode": "whileUsing", "precise": true}
+  },
+  "voice": {
+    "supported": true, "wakeEnabled": false, "wakeTriggersTalkMode": true, "pushToTalkEnabled": false,
+    "talkPhaseSoundsEnabled": true, "talkShiftToStopEnabled": false, "realtimeRelayEnabled": true,
+    "triggerChime": false, "sendChime": true,
+    "microphone": {"selectedId": null, "devices": [{"id": "fixture-mic", "name": "Fixture Microphone"}]},
+    "locale": {
+      "primary": "en-US", "additional": ["de-DE"], "available": [{"id": "en-US", "name": "English (United States)"}]
+    }
+  },
+  "updates": {"available": false, "automatic": true, "unavailableReason": null}
+}

@@ -164,6 +164,7 @@ openclaw [--dev] [--profile <name>] <command>
     audit
   secrets
     reload
+    store
     audit
     configure
     apply
@@ -209,6 +210,7 @@ openclaw [--dev] [--profile <name>] <command>
     doctor
     build
     validate
+    pack
     init
     registry
     marketplace list|entries|refresh
