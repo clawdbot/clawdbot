@@ -19,6 +19,13 @@ vi.mock("./management-uninstall.js", () => {
   throw new Error("Plugin policy changes must not load the removal implementation");
 });
 
+vi.mock("./install-persistence.js", () => {
+  throw new Error("Plugin policy changes must not load install persistence");
+});
+vi.mock("./status.js", () => {
+  throw new Error("Bundled plugin policy changes must not load runtime diagnostics");
+});
+
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
@@ -26,7 +33,7 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it("persists CLI plugin policy without loading installation or removal implementations", async () => {
+it("persists CLI plugin policy without loading installation, removal, or runtime diagnostics", async () => {
   const stateDir = makePluginLoaderTempDir();
   const bundledDir = makePluginLoaderTempDir();
   const pluginId = "policy-only";
