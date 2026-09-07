@@ -35,6 +35,8 @@ function buildReplyPromptBodies(params: {
 }): {
   mediaNote?: string;
   media?: MediaFact[];
+  /** Original ctx.media positions; preprojected additions have no inbound index. */
+  inboundMediaIndexes: readonly number[];
   prefixedCommandBody: string;
   queuedBody: string;
   transcriptCommandBody: string;
@@ -61,6 +63,7 @@ function buildReplyPromptBodies(params: {
       : "";
   return {
     mediaNote,
+    inboundMediaIndexes: generatedMedia.mediaIndexes,
     ...(media.length > 0 ? { media } : {}),
     prefixedCommandBody: annotateInterSessionPromptText(
       prefixedCommandBodyRaw,

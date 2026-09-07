@@ -20,7 +20,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 describe("Doctor CLI migration refusal", () => {
   it.each(["index.js", "entry.js"])(
-    "refuses the 2026.9.2 updater through %s with its running ledger row only in WAL",
+    "refuses missing deferral metadata through %s with the 2026.9.2 row only in WAL",
     (entry) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-doctor-update-wal-"));
       const stateDir = path.join(root, "state");
@@ -46,6 +46,7 @@ describe("Doctor CLI migration refusal", () => {
           PRAGMA wal_autocheckpoint = 0;
           PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
           UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
+          DROP TABLE config_machine_state;
           DELETE FROM update_runs;
           PRAGMA wal_checkpoint(TRUNCATE);
         `);

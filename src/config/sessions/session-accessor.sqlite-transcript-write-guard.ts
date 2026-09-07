@@ -1,4 +1,4 @@
-import { redactIdentifier } from "../../logging/redact-identifier.js";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptWriteScope,
