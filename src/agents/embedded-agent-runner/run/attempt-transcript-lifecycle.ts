@@ -174,7 +174,18 @@ export function createEmbeddedAttemptTranscriptLifecycle(
       return;
     }
     cleanupRequested = true;
-    cleanupDrain = settleWithinTeardownBudget(serializeLifecycle(() => {}));
+    // Release the owned AsyncLocalStorage only after the serialized drain actually
+    // settles, never when the bounded teardown budget merely expires. Disabling it
+    // early would make a still-running transcript callback lose its store (its
+    // nested writes would be rejected as disposed) and, once that callback finishes,
+    // the queued drain would re-run() the instance with no later disable to release
+    // it. Attaching the release to the drain itself keeps bounded teardown and only
+    // frees context that no admitted callback can still observe. See #141122.
+    cleanupDrain = settleWithinTeardownBudget(
+      serializeLifecycle(() => {
+        lifecycleOwner.disable();
+      }),
+    );
     await cleanupDrain;
   };
 
@@ -210,11 +221,6 @@ export function createEmbeddedAttemptTranscriptLifecycle(
       disposePromise ??= (async () => {
         await beginCleanup();
         disposed = true;
-        // This lifecycle owns a per-attempt AsyncLocalStorage. Without an explicit
-        // .disable() it stays strongly referenced by Node's global storageList for
-        // the life of the process, stamping a store symbol onto every later async
-        // resource and growing the cost of each await without bound (see #141122).
-        lifecycleOwner.disable();
       })();
       await disposePromise;
     },
