@@ -25,12 +25,14 @@ function cleanOptionalString(value: string | undefined): string | null {
  * Sanitize a skill name into a safe form for audit storage.
  * Skill names like "Daily Brief" are valid at runtime but contain characters
  * (spaces) that are not safe for audit field values. We replace unsafe
- * characters with hyphens and truncate to 128 chars.
+ * characters with hyphens, ensure the result starts with [A-Za-z0-9] as
+ * required by the audit projector, and truncate to 128 chars.
  */
 function sanitizeSkillName(value: string): string {
   const trimmed = value.trim();
-  const safe = trimmed.replace(/[^A-Za-z0-9._-]/gu, "-").replace(/^-+|-+$/g, "");
-  return safe.slice(0, 128) || "unknown";
+  const safe = trimmed.replace(/[^A-Za-z0-9._-]/gu, "-").replace(/^[^A-Za-z0-9]+/u, "");
+  const result = safe.slice(0, 128);
+  return result && /^[A-Za-z0-9]/u.test(result) ? result : "unknown";
 }
 
 export function buildRuntimeSkillSelectionMarker(params: {

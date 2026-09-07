@@ -45,7 +45,26 @@ describe("runtime skill selection marker", () => {
       skillSource: "workspace",
       activation: "read",
     });
-    expect(marker.selectedSkill).toBe("..-secret");
+    // Path prefix gets sanitized to hyphens then leading non-alphanumerics stripped
+    expect(marker.selectedSkill).toBe("secret");
+  });
+
+  it("strips leading punctuation so projector accepts the value", () => {
+    const marker = buildRuntimeSkillSelectionMarker({
+      skillName: "_helper",
+      skillSource: "workspace",
+      activation: "read",
+    });
+    expect(marker.selectedSkill).toBe("helper");
+  });
+
+  it("handles names that are all punctuation", () => {
+    const marker = buildRuntimeSkillSelectionMarker({
+      skillName: "___",
+      skillSource: "workspace",
+      activation: "read",
+    });
+    expect(marker.selectedSkill).toBe("unknown");
   });
 
   it("returns unknown for empty skill names", () => {
