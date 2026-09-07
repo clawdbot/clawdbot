@@ -323,6 +323,45 @@ describe("SessionManager stale-parent rebase", () => {
     expect(persisted).toMatchObject({ parentId: firstTail.messageId });
   });
 
+  it("retries a stale side append against its unchanged explicit parent", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const target = {
+      agentId: "main",
+      sessionId: "stale-side-append",
+      sessionKey: "agent:main:stale-side-append",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const base = await appendTranscriptMessage(target, {
+      eventId: "side-base",
+      message: { role: "user", content: "base", timestamp: 1 },
+      now: 1,
+    });
+    const manager = SessionManager.open(target, dir);
+    manager.appendLeafControl({
+      targetId: base.messageId,
+      appendParentId: base.messageId,
+      appendMode: "side",
+    });
+    await appendTranscriptMessage(target, {
+      eventId: "concurrent-tail",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "concurrent" }],
+        timestamp: 2,
+      },
+      now: 2,
+      parentId: base.messageId,
+    });
+
+    const sideId = manager.appendMessage({ role: "user", content: "side", timestamp: 3 });
+
+    const persisted = (
+      (await loadTranscriptEvents(target)) as Array<SessionMessageEntry & { type?: string }>
+    ).find((entry) => entry.type === "message" && entry.id === sideId);
+    expect(persisted).toMatchObject({ parentId: base.messageId });
+  });
+
   it("retries a stale deliberate branch against an unchanged explicit parent", async () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const target = {

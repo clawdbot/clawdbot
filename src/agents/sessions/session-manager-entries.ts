@@ -67,16 +67,16 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       ...options,
       ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
     });
-    const preparedAssistant =
+    const preparedTurnAppend =
       activeBranchAppend &&
       canonicalEntry.type === "message" &&
-      canonicalEntry.message.role === "assistant";
+      (canonicalEntry.message.role === "assistant" || canonicalEntry.message.role === "toolResult");
     let attemptOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
       persistenceOptions;
     const admittedUserId = this.persistenceTarget
       ? resolveSessionTranscriptReadFence(this.persistenceTarget)?.entryId
       : undefined;
-    if (preparedAssistant && this.persistenceTarget) {
+    if (preparedTurnAppend && this.persistenceTarget) {
       const validatedMutationAt = validatePreparedAssistantAppendSync(
         this.persistenceTarget,
         canonicalEntry.parentId,
@@ -95,26 +95,29 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       persistenceResult = this.persist(canonicalEntry, attemptOptions);
     } catch (error) {
       const deliberateBranchAppend = this.pendingDeliberateAppend;
+      const sideBranchAppend =
+        this.appendMode === "side" || isSessionTranscriptSideAppendEntry(canonicalEntry);
+      const retryableExplicitParentAppend = deliberateBranchAppend || sideBranchAppend;
       if (
-        (!activeBranchAppend && !deliberateBranchAppend) ||
+        (!activeBranchAppend && !retryableExplicitParentAppend) ||
         !(error instanceof Error) ||
         error.name !== "SqliteTranscriptMutationConflictError"
       ) {
         throw error;
       }
       const canRetryPreparedAppend =
-        deliberateBranchAppend ||
+        retryableExplicitParentAppend ||
         canonicalEntry.type !== "message" ||
         canonicalEntry.message.role === "user" ||
-        preparedAssistant;
+        preparedTurnAppend;
       if (!canRetryPreparedAppend) {
         throw error;
       }
       // Preserve the prepared parent so storage can distinguish a descendant tail from an
-      // unrelated branch. Assistant replies may follow only a descendant tail with no newer
-      // user turn; reset boundaries and reentrant assistant writes remain compatible.
+      // unrelated branch. Turn-bound assistant and tool-result messages may follow only a
+      // descendant tail with no newer user turn; compatible reset and reentrant writes remain.
       const retryOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
-        preparedAssistant
+        preparedTurnAppend
           ? (() => {
               const validatedMutationAt = this.persistenceTarget
                 ? validatePreparedAssistantAppendSync(
@@ -152,7 +155,10 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       persistenceResult.effectiveParentId !== canonicalEntry.parentId
     ) {
       if (admittedUserId) {
-        this.reloadPersistedTranscriptAfterAppend();
+        if (this.transcriptMutationAt === undefined) {
+          throw new Error("Session transcript append mutation fence was not returned");
+        }
+        this.reloadPersistedTranscriptAfterAppend(this.transcriptMutationAt);
       } else {
         this.reloadPersistedTranscript();
       }

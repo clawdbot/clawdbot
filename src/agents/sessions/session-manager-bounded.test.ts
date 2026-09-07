@@ -370,6 +370,45 @@ it("rejects a fenced assistant when a later hidden user has advanced the turn", 
   );
 });
 
+it("rejects a fenced tool result when a later hidden user has advanced the turn", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-fenced-tool-result-");
+  const scope = {
+    agentId: "main",
+    sessionId: "fenced-tool-result",
+    sessionKey: "agent:main:fenced-tool-result",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const manager = SessionManager.open(scope, dir);
+  manager.appendMessage({ role: "user", content: "previous", timestamp: 1 });
+  const admission = manager.appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "admitted",
+    timestamp: 2,
+  });
+  manager.appendMessage({ role: "user", content: "newer", timestamp: 3 });
+  if (!admission.anchor) {
+    throw new Error("missing current-turn anchor");
+  }
+
+  runWithSessionTranscriptReadFence(
+    { ...admission.anchor, logicalTurnId: "fenced-tool-result", role: "user" },
+    () => {
+      const fenced = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 8 });
+      expect(() =>
+        fenced.appendMessage({
+          role: "toolResult",
+          toolCallId: "stale-tool-call",
+          toolName: "test_tool",
+          content: [{ type: "text", text: "stale result" }],
+          isError: false,
+          timestamp: 4,
+        }),
+      ).toThrow("SQLite transcript changed while preparing rewrite");
+    },
+  );
+});
+
 it("rejects suffix cleanup when the admission fence hides later transcript rows", async () => {
   const dir = tempDirs.make("openclaw-session-manager-fenced-cleanup-");
   const scope = {
