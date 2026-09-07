@@ -1,3 +1,4 @@
+import type { CDPSession } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -6,6 +7,18 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({
   name: "Control UI chat composer focus",
 });
+
+async function pressDeadKey(cdp: CDPSession) {
+  const event = {
+    key: "Dead",
+    code: "Quote",
+    modifiers: 1,
+    windowsVirtualKeyCode: 222,
+    nativeVirtualKeyCode: 222,
+  } as const;
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...event });
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...event });
+}
 
 suite.define(() => {
   it("routes agent-menu letters and selection keys to their owners", async () => {
@@ -142,6 +155,49 @@ suite.define(() => {
       await expect
         .poll(() => composer.evaluate((element) => document.activeElement === element))
         .toBe(true);
+    });
+  });
+
+  it("keeps dead-key composition attached to the chat composer", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const transcript = page.locator(".chat-thread");
+      await transcript.evaluate((element) => {
+        element.tabIndex = -1;
+        element.focus();
+      });
+
+      const cdp = await page.context().newCDPSession(page);
+      await pressDeadKey(cdp);
+      await expect
+        .poll(() => composer.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+
+      const prompt = 'çãé "aspas"';
+      await page.keyboard.type(prompt);
+      await expect.poll(() => composer.inputValue()).toBe(prompt);
+      await composer.press("Enter");
+      const request = await gateway.waitForRequest("chat.send");
+      expect(request.params).toMatchObject({ message: prompt });
+
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      const newSessionComposer = page.locator(".new-session-page__message");
+      await newSessionComposer.waitFor({ state: "visible" });
+      await page.locator("main").evaluate((element) => {
+        element.tabIndex = -1;
+        element.focus();
+      });
+      await pressDeadKey(cdp);
+      await expect
+        .poll(() => newSessionComposer.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      await page.keyboard.type(prompt);
+      await expect.poll(() => newSessionComposer.inputValue()).toBe(prompt);
+      await cdp.detach();
     });
   });
 
