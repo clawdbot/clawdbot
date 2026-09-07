@@ -44,7 +44,11 @@ final class DeviceStatusService: DeviceStatusServicing {
         let wasMonitoring = device.isBatteryMonitoringEnabled
         device.isBatteryMonitoringEnabled = true
         defer { device.isBatteryMonitoringEnabled = wasMonitoring }
+        // UIDevice.batteryLevel is a normalized 0.0–1.0 fraction, matching the
+        // shared OpenClawBatteryStatusPayload.level contract. `levelPercent`
+        // mirrors it as an integer 0–100 percentage.
         let level = device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil
+        let levelPercent = level.map { Int(($0 * 100).rounded()) }
         let state: OpenClawBatteryState = switch device.batteryState {
         case .charging: .charging
         case .full: .full
@@ -55,7 +59,8 @@ final class DeviceStatusService: DeviceStatusServicing {
         return OpenClawBatteryStatusPayload(
             level: level,
             state: state,
-            lowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled)
+            lowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            levelPercent: levelPercent)
     }
 
     private func thermalStatus() -> OpenClawThermalStatusPayload {

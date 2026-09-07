@@ -2,8 +2,10 @@ package ai.openclaw.app.node
 
 import android.Manifest
 import android.app.Application
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.os.BatteryManager
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
@@ -84,7 +86,12 @@ class DeviceHandlerTest {
     val state = battery.getValue("state").jsonPrimitive.content
     assertTrue(state in setOf("unknown", "unplugged", "charging", "full"))
     battery["level"]?.jsonPrimitive?.double?.let { level ->
+      // level is a normalized 0.0–1.0 fraction of full charge, never a percentage.
       assertTrue(level in 0.0..1.0)
+    }
+    battery["levelPercent"]?.jsonPrimitive?.content?.toLong()?.let { levelPercent ->
+      // levelPercent mirrors level as an integer 0–100 percentage.
+      assertTrue(levelPercent in 0L..100L)
     }
     battery.getValue("lowPowerModeEnabled").jsonPrimitive.boolean
 
@@ -117,6 +124,28 @@ class DeviceHandlerTest {
     assertTrue(interfaces.all { it in setOf("wifi", "cellular", "wired", "other") })
 
     assertTrue(payload.getValue("uptimeSeconds").jsonPrimitive.double >= 0.0)
+  }
+
+  @Test
+  fun handleDeviceStatus_reportsBatteryLevelAsFractionAndPercent() {
+    val app = appContext()
+    val batteryIntent =
+      Intent(Intent.ACTION_BATTERY_CHANGED)
+        .putExtra(BatteryManager.EXTRA_LEVEL, 50)
+        .putExtra(BatteryManager.EXTRA_SCALE, 100)
+        .putExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_DISCHARGING)
+    shadowOf(app)
+      .sendStickyBroadcast(batteryIntent)
+    val handler = DeviceHandler(app)
+
+    val result = handler.handleDeviceStatus(null)
+
+    assertTrue(result.ok)
+    val battery = parsePayload(result.payloadJson).getValue("battery").jsonObject
+    // level is a normalized 0.0–1.0 fraction (50/100 -> 0.5), never a raw level (50).
+    assertEquals(0.5, battery.getValue("level").jsonPrimitive.double, 1.0e-9)
+    // levelPercent mirrors the fraction as an integer percentage (0.5 -> 50).
+    assertEquals(50L, battery.getValue("levelPercent").jsonPrimitive.content.toLong())
   }
 
   @Test

@@ -18,6 +18,7 @@ import android.os.Environment
 import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
+import kotlin.math.roundToInt
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObjectBuilder
@@ -194,7 +195,13 @@ class DeviceHandler internal constructor(
       put(
         "battery",
         buildJsonObject {
-          battery.levelFraction?.let { put("level", JsonPrimitive(it)) }
+          // `level` is a normalized 0.0–1.0 fraction of full charge (the shared
+          // OpenClawBatteryStatusPayload contract; matches iOS). It is NOT a percentage:
+          // 1.0 == fully charged. `levelPercent` mirrors it as an integer 0–100.
+          battery.levelFraction?.let {
+            put("level", JsonPrimitive(it))
+            put("levelPercent", JsonPrimitive((it * 100.0).roundToInt()))
+          }
           put("state", JsonPrimitive(mapBatteryState(battery.status)))
           put("lowPowerModeEnabled", JsonPrimitive(powerManager?.isPowerSaveMode == true))
         },

@@ -33,12 +33,22 @@ public enum OpenClawNetworkInterfaceType: String, Codable, Sendable {
 }
 
 public struct OpenClawBatteryStatusPayload: Codable, Sendable, Equatable {
+    /// Battery charge level as a normalized fraction of full charge, 0.0–1.0.
+    /// Not a percentage: 1.0 == fully charged. `nil` when unavailable.
     public var level: Double?
+    /// Convenience percentage view of `level`, 0–100 (rounded). `nil` when `level` is `nil`.
+    public var levelPercent: Int?
     public var state: OpenClawBatteryState
     public var lowPowerModeEnabled: Bool
 
-    public init(level: Double?, state: OpenClawBatteryState, lowPowerModeEnabled: Bool) {
+    public init(
+        level: Double?,
+        state: OpenClawBatteryState,
+        lowPowerModeEnabled: Bool,
+        levelPercent: Int? = nil
+    ) {
         self.level = level
+        self.levelPercent = levelPercent
         self.state = state
         self.lowPowerModeEnabled = lowPowerModeEnabled
     }
