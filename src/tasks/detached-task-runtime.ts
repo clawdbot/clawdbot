@@ -1,5 +1,6 @@
 // Provides the runtime adapter for detached task execution.
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
   DetachedTaskRecoveryAttemptParams,
   DetachedTaskRecoveryAttemptResult,
@@ -20,7 +21,8 @@ import {
   setDetachedTaskDeliveryStatusByRunIdCore,
   startTaskRunByRunIdCore,
 } from "./task-executor.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { bindTaskRecord, replaceTaskRunRowInDatabase } from "./task-registry.store.sqlite.js";
+import type { TaskRecord, TaskRuntime } from "./task-registry.types.js";
 import { findTaskByRunIdForStatus, listTasksForSessionKeyForStatus } from "./task-status-access.js";
 
 const log = createSubsystemLogger("tasks/detached-runtime");
@@ -50,6 +52,48 @@ function findCoreTaskRun(params: DetachedTaskFindParams): TaskRecord | undefined
   return listTasksForSessionKeyForStatus(params.sessionKey).find((task) =>
     taskMatchesFindScope(task, params),
   );
+}
+
+export function acceptDefaultPreparedTaskRunAtomically(params: {
+  runId: string;
+  runtime: TaskRuntime;
+  sessionKey: string;
+  acceptedAt: number;
+  preserveTaskState?: boolean;
+  commitPeer: () => void;
+}): TaskRecord | null {
+  if (getRegisteredDetachedTaskLifecycleRuntime()) {
+    return null;
+  }
+  const expected = findTaskByRunIdForStatus(params.runId);
+  if (
+    !expected ||
+    expected.runtime !== params.runtime ||
+    expected.childSessionKey !== params.sessionKey
+  ) {
+    throw new Error("prepared task row was unavailable at atomic acceptance");
+  }
+  const next = params.preserveTaskState
+    ? expected
+    : {
+        ...expected,
+        status: "running" as const,
+        startedAt: params.acceptedAt,
+        lastEventAt: params.acceptedAt,
+      };
+  runOpenClawStateWriteTransaction((database) => {
+    if (
+      !replaceTaskRunRowInDatabase({
+        database,
+        expected: bindTaskRecord(expected),
+        next: bindTaskRecord(next),
+      })
+    ) {
+      throw new Error("prepared task state changed before atomic acceptance");
+    }
+    params.commitPeer();
+  });
+  return next;
 }
 
 // Default runtime keeps detached task APIs usable before plugins install custom lifecycle hooks.

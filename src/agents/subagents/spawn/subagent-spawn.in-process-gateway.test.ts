@@ -39,16 +39,22 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../../tasks/detached-task-runtime.test-support.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
+import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
@@ -162,12 +168,14 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
     resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     subagentRegistryTesting.setDepsForTest({
       loadAgentRuntimePluginRegistryHandle: () => undefined,
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
+      persistSubagentRunsToDisk: saveSubagentRegistryToSqlite,
+      persistSubagentRunsToDiskOrThrow: saveSubagentRegistryToSqlite,
       restoreSubagentRunsFromDisk: () => 0,
     });
 
@@ -221,6 +229,9 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     resetDetachedTaskLifecycleRuntimeForTests();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     if (stateDir) {
       await rm(stateDir, { recursive: true, force: true });
