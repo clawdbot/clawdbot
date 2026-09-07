@@ -1108,6 +1108,7 @@ install_node() {
   fi
 
   if linked_node_is_usable; then
+    ln -sfn "$dir" "${PREFIX}/tools/node"
     emit_json step name node status skip path "$dir"
     return
   fi
@@ -1142,8 +1143,6 @@ install_node() {
   tar -xzf "$tmp/node.tgz" -C "$dir" --strip-components=1
   rm -rf "$tmp"
 
-  ln -sfn "$dir" "${PREFIX}/tools/node"
-
   if ! linked_node_is_usable; then
     local installed_version
     local required_version
@@ -1153,6 +1152,8 @@ install_node() {
     sqlite_version="$(linked_node_sqlite_version)"
     fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.19.0 (or newer)"
   fi
+  # Existing CLI wrappers use this alias; activate only a runtime that can start.
+  ln -sfn "$dir" "${PREFIX}/tools/node"
   emit_json step name node status ok version "$NODE_VERSION"
 }
 

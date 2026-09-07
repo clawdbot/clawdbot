@@ -17,9 +17,9 @@ node -v
 
 `v26.1.0` or newer is the recommended default. `v24.16.0` or newer 24.x is also supported and is the LTS line used by CI. Node 22, 23, 25, Node 24 before 24.16.0, and Node 26 before 26.1.0 are unsupported. If Node is missing or outside this range, pick an install method below.
 
-These floors preserve embedded NUL characters when `node:sqlite` reads TEXT values. Older Node bindings can silently shorten stored identities even when the linked SQLite version is WAL-reset-safe. Upgrade Node before updating OpenClaw. The rootless installer already provisions Node 24.19.0 on supported platforms.
+These floors preserve embedded NUL characters when `node:sqlite` reads TEXT values. Node 22.23.x, 24.15.0, 25.9.0, and 26.0.0 contain a broken TEXT decoder that silently truncates values at embedded NUL characters, even when the linked SQLite version is WAL-reset-safe. Node 24.16.0 and 26.1.0 are the first fixed releases on their respective lines. Upgrade Node before updating OpenClaw. The rootless installer already provisions Node 24.19.0 on supported platforms.
 
-Official Node 24+ binaries require macOS 13.5 or newer and do not provide Linux ARMv7 builds. On compatible ARM hardware, use a 64-bit operating system; otherwise use another supported host. The macOS companion app has its own [platform requirements](/platforms/macos).
+This drops supported Node-based CLI/Gateway installations on macOS 11 through 13.4 and official Linux ARMv7 provisioning: Node 24+ binaries require macOS 13.5 or newer and do not provide Linux ARMv7 builds. On compatible ARM hardware, use a 64-bit operating system; otherwise use another supported host. The macOS companion app has its own [platform requirements](/platforms/macos).
 
 ## Install Node
 

@@ -1900,75 +1900,127 @@ HOOK
     }
   });
 
-  it("rejects downloaded generic Node runtimes below the runtime floor", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-generic-old-node-"));
-    const prefix = join(tmp, "prefix");
-    const newNode = join(tmp, "new-node");
-    const newNpm = join(tmp, "new-npm");
+  it.each([
+    { existing: false, starts: true },
+    { existing: false, starts: false },
+    { existing: true, starts: true },
+    { existing: true, starts: false },
+  ])(
+    "keeps the active runtime until a downloaded replacement is usable ($existing, $starts)",
+    ({ existing, starts }) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-generic-old-node-"));
+      const prefix = join(tmp, "prefix");
+      const newNode = join(tmp, "new-node");
+      const newNpm = join(tmp, "new-npm");
+      const activeNode = join(prefix, "tools", "node");
+      const oldNodeDir = join(prefix, "tools", "node-v22.23.2");
+      const oldPackage = join(oldNodeDir, "lib", "node_modules", "openclaw", "package.json");
+      if (existing) {
+        mkdirSync(join(oldNodeDir, "bin"), { recursive: true });
+        writeFileSync(join(oldNodeDir, "bin", "node"), "#!/bin/bash\nprintf 'v22.23.2\\n'\n");
+        chmodSync(join(oldNodeDir, "bin", "node"), 0o755);
+        mkdirSync(join(oldPackage, ".."), { recursive: true });
+        writeFileSync(oldPackage, '{"name":"openclaw","version":"2026.9.2"}\n');
+        symlinkSync(oldNodeDir, activeNode);
+      }
 
-    writeFileSync(
-      newNode,
-      [
-        "#!/bin/bash",
-        'if [[ "${1:-}" == "-v" ]]; then',
-        "  printf 'v22.22.2\\n'",
-        "  exit 0",
-        "fi",
-        'if [[ "${1:-}" == "-e" ]]; then',
-        "  exit 0",
-        "fi",
-        "exit 0",
-        "",
-      ].join("\n"),
-    );
-    writeFileSync(newNpm, ["#!/bin/bash", "exit 0", ""].join("\n"));
-    chmodSync(newNode, 0o755);
-    chmodSync(newNpm, 0o755);
-
-    try {
-      const result = runInstallCliShell(
+      writeFileSync(
+        newNode,
         [
-          "set -euo pipefail",
-          `cd ${JSON.stringify(process.cwd())}`,
-          `source ${JSON.stringify(SCRIPT_PATH)}`,
-          "is_musl_linux() { return 1; }",
-          "detect_downloader() { :; }",
-          "require_bin() { :; }",
-          "download_file() {",
-          '  case "$1" in',
-          "    */SHASUMS256.txt) printf 'fixture-sha  node-v24.16.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
-          "    *) printf 'node tarball fixture\\n' > \"$2\" ;;",
-          "  esac",
-          "}",
-          "sha256_file() { printf 'fixture-sha\\n'; }",
-          "tar() {",
-          "  local dest=''",
-          "  while [[ $# -gt 0 ]]; do",
-          '    if [[ "$1" == \'-C\' ]]; then dest="$2"; shift 2; else shift; fi',
-          "  done",
-          '  mkdir -p "$dest/bin"',
-          '  cp "$NEW_NODE" "$dest/bin/node"',
-          '  cp "$NEW_NPM" "$dest/bin/npm"',
-          "}",
-          `PREFIX=${JSON.stringify(prefix)}`,
-          "NODE_VERSION=24.16.0",
-          "install_node linux x64",
+          "#!/bin/bash",
+          ...(starts ? [] : ["exit 126"]),
+          'if [[ "${1:-}" == "-v" ]]; then',
+          "  printf 'v22.22.2\\n'",
+          "  exit 0",
+          "fi",
+          'if [[ "${1:-}" == "-e" ]]; then',
+          "  exit 0",
+          "fi",
+          "exit 0",
+          "",
         ].join("\n"),
-        {
-          NEW_NODE: newNode,
-          NEW_NPM: newNpm,
-        },
       );
+      writeFileSync(newNpm, ["#!/bin/bash", "exit 0", ""].join("\n"));
+      chmodSync(newNode, 0o755);
+      chmodSync(newNpm, 0o755);
 
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain(
-        "Installed Node 24.16.0 must provide Node >= 24.16.0 with WAL-reset-safe SQLite",
-      );
-      expect(result.stdout).toContain("found Node v22.22.2, SQLite unavailable");
-    } finally {
-      rmSync(tmp, { force: true, recursive: true });
-    }
-  });
+      try {
+        const install = () =>
+          runInstallCliShell(
+            [
+              "set -euo pipefail",
+              `cd ${JSON.stringify(process.cwd())}`,
+              `source ${JSON.stringify(SCRIPT_PATH)}`,
+              "is_musl_linux() { return 1; }",
+              "detect_downloader() { :; }",
+              "require_bin() { :; }",
+              "download_file() {",
+              '  case "$1" in',
+              "    */SHASUMS256.txt) printf 'fixture-sha  node-v24.16.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
+              "    *) printf 'node tarball fixture\\n' > \"$2\" ;;",
+              "  esac",
+              "}",
+              "sha256_file() { printf 'fixture-sha\\n'; }",
+              "tar() {",
+              "  local dest=''",
+              "  while [[ $# -gt 0 ]]; do",
+              '    if [[ "$1" == \'-C\' ]]; then dest="$2"; shift 2; else shift; fi',
+              "  done",
+              '  mkdir -p "$dest/bin"',
+              '  cp "$NEW_NODE" "$dest/bin/node"',
+              '  cp "$NEW_NPM" "$dest/bin/npm"',
+              "}",
+              `PREFIX=${JSON.stringify(prefix)}`,
+              "NODE_VERSION=24.16.0",
+              "install_node linux x64",
+            ].join("\n"),
+            {
+              NEW_NODE: newNode,
+              NEW_NPM: newNpm,
+            },
+          );
+        const result = install();
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain(
+          "Installed Node 24.16.0 must provide Node >= 24.16.0 with WAL-reset-safe SQLite",
+        );
+        expect(result.stdout).toContain(
+          starts
+            ? "found Node v22.22.2, SQLite unavailable"
+            : "found Node unknown, SQLite unavailable",
+        );
+        if (existing) {
+          expect(readlinkSync(activeNode)).toBe(oldNodeDir);
+          expect(
+            spawnSync(join(activeNode, "bin", "node"), ["-v"], { encoding: "utf8" }).stdout,
+          ).toBe("v22.23.2\n");
+          expect(readFileSync(oldPackage, "utf8")).toBe(
+            '{"name":"openclaw","version":"2026.9.2"}\n',
+          );
+        } else {
+          expect(existsSync(activeNode)).toBe(false);
+        }
+
+        writeFileSync(
+          newNode,
+          "#!/bin/bash\nif [[ \"${1:-}\" == '-v' ]]; then printf 'v24.16.0\\n'; fi\nexit 0\n",
+        );
+        const retry = install();
+        expect(retry.status, retry.stdout + retry.stderr).toBe(0);
+        expect(readlinkSync(activeNode)).toBe(join(prefix, "tools", "node-v24.16.0"));
+        expect(
+          spawnSync(join(activeNode, "bin", "node"), ["-v"], { encoding: "utf8" }).stdout,
+        ).toBe("v24.16.0\n");
+        if (existing) {
+          expect(readFileSync(oldPackage, "utf8")).toBe(
+            '{"name":"openclaw","version":"2026.9.2"}\n',
+          );
+        }
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("removes the Node staging directory when download fails", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-node-cleanup-"));
