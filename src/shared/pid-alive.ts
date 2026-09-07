@@ -2,9 +2,13 @@
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
-import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
+import {
+  isWindowsProcessDefinitelyAbsentSync,
+  readWindowsProcessStartTimeSync,
+} from "../infra/windows-process-start.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
+const WINDOWS_DEFINITE_DEATH_TIMEOUT_MS = 2_000;
 // Cache only a successful self read: this identity lasts for the process.
 // Failed reads must retry, and foreign PIDs must stay fresh to detect PID reuse.
 let selfStartTime: number | null = null;
@@ -40,9 +44,8 @@ export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
   } catch (err) {
-    // EPERM means the PID exists but we cannot signal it. Treat that as a
-    // successful existence probe, then still apply the Linux zombie check.
-    // Keep parity with isPidDefinitelyDead (EPERM is not "definitely dead").
+    // EPERM conservatively means the PID may still exist. This predicate stays
+    // fail-open; isPidDefinitelyDead may perform a Windows-specific second probe.
     if ((err as NodeJS.ErrnoException).code !== "EPERM") {
       return false;
     }
@@ -58,7 +61,17 @@ export function isPidDefinitelyDead(pid: number): boolean {
   try {
     process.kill(pid, 0);
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH";
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") {
+      return true;
+    }
+    // Exited Windows PIDs can keep answering EPERM until the PID is reclaimed;
+    // only a proven zero-row CIM query may revoke such an owner. Query
+    // failures, timeouts, and live rows all stay fail-closed here.
+    if (code === "EPERM" && process.platform === "win32") {
+      return isWindowsProcessDefinitelyAbsentSync(pid, WINDOWS_DEFINITE_DEATH_TIMEOUT_MS);
+    }
+    return false;
   }
   return isZombieProcess(pid);
 }

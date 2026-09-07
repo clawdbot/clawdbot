@@ -5,6 +5,7 @@ import { resolveDiagnosticProcessEnv, resolveEnvironmentValue } from "./process-
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_PROCESS_START_TIMEOUT_MS = 10_000;
+const DEFAULT_PROCESS_ENUMERATION_TIMEOUT_MS = 2_000;
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
 function windowsSystemRoot(env: NodeJS.ProcessEnv): string {
@@ -75,6 +76,43 @@ function parseWindowsProcessStartTime(raw: Buffer | string): number | null {
   );
   const offsetMs = Number(offset) * 60_000 * (offsetSign === "+" ? 1 : -1);
   return localTimeMs - offsetMs;
+}
+
+/**
+ * Returns true only when a successful, diagnostic-free exact-PID CIM query
+ * proves the PID has no active process row. Query failures, timeouts, extra
+ * output, and live rows must all stay false: this predicate is the only
+ * Windows evidence allowed to revoke an EPERM lock owner, so it fails closed.
+ */
+export function isWindowsProcessDefinitelyAbsentSync(
+  pid: number,
+  timeoutMs = DEFAULT_PROCESS_ENUMERATION_TIMEOUT_MS,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  const powershell = spawnSync(
+    windowsPowerShellPath(env),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `$rows = @(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop); [Console]::Out.Write("COUNT=$($rows.Count)")`,
+    ],
+    {
+      env: resolveDiagnosticProcessEnv(env, "win32"),
+      encoding: "utf8",
+      timeout: Math.min(timeoutMs, DEFAULT_TIMEOUT_MS),
+      windowsHide: true,
+    },
+  );
+  return (
+    !powershell.error &&
+    powershell.status === 0 &&
+    decodeWindowsProcessOutput(powershell.stderr ?? "") === "" &&
+    decodeWindowsProcessOutput(powershell.stdout) === "COUNT=0"
+  );
 }
 
 /** Read a stable Windows process creation time for lock-owner identity checks. */
