@@ -390,6 +390,69 @@ Use `action: "cancel"` with a `taskId` returned by `action: "list"` to stop
 a task. Cancellation is confined to the controlled session tree; a leaf
 sub-agent cannot cancel work owned by another session.
 
+### Shared working directory advisory
+
+`action: "list"` reports a bounded `sharedCwdGroups` summary when two or more
+**live** sub-agent runs were spawned into the same working directory. Rows refer
+to a reported group by its small numeric id:
+
+```json
+{
+  "sharedCwdGroupTotal": 1,
+  "sharedCwdGroups": [
+    {
+      "id": 1,
+      "path": "/abs/path/to/directory",
+      "runCount": 5,
+      "runIds": ["…", "…", "…"]
+    }
+  ],
+  "active": [{ "runId": "…", "sharedCwdGroupId": 1 }]
+}
+```
+
+`path` is the resolved directory, shortened to 72 characters with a leading
+`...` when it is longer — grouping always uses the full path, so two sibling
+checkouts that differ only in their final segment stay separate groups.
+`runCount` is the exact number of live runs sharing the directory. `runIds` is
+a **bounded sample** of at most three runs, not a complete list; read
+`runCount` for the real total. At most eight groups are emitted, while
+`sharedCwdGroupTotal` reports the exact total. Only the sampled runs carry a
+group id; rows outside the sample or in omitted groups carry none. The
+human-readable view emits each reported path once in a matching
+`shared working directories` section; sampled rows carry only
+`[shared cwd group N]`.
+
+The group, sample, and path caps bound this advisory across the complete
+response. Earlier shapes repeated the directory and peers on every row, which
+reached roughly 7.5K tokens for 20 sharing children and roughly 33K tokens for
+the default 50-child swarm group.
+
+The field is **advisory only** — it never blocks or refuses a spawn. Two
+agents editing one checkout can overwrite each other's work, so treat it as
+a prompt to re-check before writing, or to give one of the runs its own
+directory.
+
+It is reported only when a caller passed an explicit `cwd`
+([tool parameters](/tools/subagents#tool-parameters)) to `sessions_spawn`.
+Runs that inherited the target agent workspace share it by
+design — the default for `collect` swarms — and are never flagged. Ended runs
+are excluded: the advisory covers concurrent writers, so a settled run leaves
+the directory to the survivor.
+
+Both spawn runtimes are covered: native children and `runtime: "acp"` children
+persist an explicit `cwd` through the same contract, so a native run and an ACP
+run in one directory are reported as peers of each other.
+
+Directories are matched by their canonical on-disk identity, so two runs still
+group together when one was spawned through a symlink to the other's path, or
+through a different letter case on a case-insensitive volume. `path` reports
+that canonical directory rather than whichever alias was named first. If a
+directory can no longer be resolved — deleted or unreadable while the run is
+still live — its rows fall back to lexical comparison, which can only split a
+group; the advisory under-reports in that case rather than inventing a
+collision.
+
 ## Thread-bound sessions
 
 When thread bindings are enabled for a channel, a sub-agent can stay bound
