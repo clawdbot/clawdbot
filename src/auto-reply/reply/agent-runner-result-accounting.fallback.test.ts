@@ -109,7 +109,12 @@ it.each([false, true])(
     };
     context.execution.resolved = { provider: "fallback-fixture", model: "plain" };
     context.execution.fallback.attempts = [
-      { provider: diagnostic.provider, model: diagnostic.model, error: "model not found" },
+      {
+        provider: diagnostic.provider,
+        model: diagnostic.model,
+        error: "model not found",
+        reason: "model_not_found",
+      },
     ];
 
     await fixture.account({ provider: "fallback-fixture", model: "plain" });
