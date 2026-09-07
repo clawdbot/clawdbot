@@ -65,7 +65,9 @@ you can turn the mode off. See [Sidebar navigation](/web/control-ui/sessions-and
 for row details and sorting.
 
 Activity and previews on the page and sidebar roster refresh on session events
-and Gateway reconnects. Each refresh reads at most 300 recent sessions; older
+and Gateway reconnects. When both are visible, they share one activity window and
+one refresh, so opening **See all** does not duplicate requests. Activity loading
+stops when neither roster is visible. Each refresh reads at most 300 recent sessions; older
 sessions outside that window do not contribute to the activity summaries. When a main session is absent from the window,
 its agent's most recent session supplies the preview.
 

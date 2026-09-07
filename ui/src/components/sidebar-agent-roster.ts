@@ -1,4 +1,3 @@
-import { TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -23,7 +22,7 @@ class SidebarAgentRoster extends AgentRosterElement {
   override render() {
     return this.avatars.withActiveRoutes(() => {
       const cards = this.cards();
-      const error = this.roster.status === TaskStatus.ERROR || this.subscriptionError;
+      const error = this.roster.error ?? this.roster.subscriptionError;
       return html`<section class="sidebar-agent-roster" aria-label=${t("agentChip.agents")}>
         <div class="sidebar-agent-roster__header">
           <span>${t("agentChip.agents")}</span>
@@ -50,7 +49,7 @@ class SidebarAgentRoster extends AgentRosterElement {
           (card) => card.id,
           (card) => {
             const unread = this.unreadCounts.get(card.id) ?? 0;
-            const activity = !this.gateway.connected
+            const activity = !this.connected
               ? t("agentsHome.disconnected")
               : card.activeNow
                 ? t("agentsHome.workingPreview", {
@@ -70,7 +69,7 @@ class SidebarAgentRoster extends AgentRosterElement {
                 ${card.avatar ? html`<img src=${card.avatar} alt="" loading="lazy" />` : card.fallback}
                 <span
                   class="sidebar-agent-roster__status"
-                  data-working=${String(this.gateway.connected && card.activeNow)}
+                  data-working=${String(this.connected && card.activeNow)}
                 ></span>
               </span>
               <span class="sidebar-agent-roster__copy"

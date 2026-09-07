@@ -1,8 +1,5 @@
-import { TaskStatus } from "@lit/task";
 import { html } from "lit";
-import { t } from "../../i18n/index.ts";
 import { AgentRosterElement } from "../../lib/agents/roster-element.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { renderAgentsHome } from "./view.ts";
 
@@ -12,14 +9,15 @@ export class AgentsHomePage extends AgentRosterElement {
       return renderAgentsHome({
         cards: this.cards(),
         context: this.context,
-        connected: this.gateway.connected,
-        loading: this.roster.status === TaskStatus.PENDING,
-        error:
-          this.roster.status === TaskStatus.ERROR
-            ? formatUiError(this.roster.error, t("agentsHome.loadFailed"))
-            : this.subscriptionError,
+        connected: this.connected,
+        loading: this.roster.loading,
+        error: this.roster.error ?? this.roster.subscriptionError,
         onRetry: () => void this.refresh(),
-        canCreate: canCallGatewayMethod(this.gateway.snapshot, "openclaw.chat", "operator.admin"),
+        canCreate: canCallGatewayMethod(
+          this.context.gateway.snapshot,
+          "openclaw.chat",
+          "operator.admin",
+        ),
       });
     });
   }
