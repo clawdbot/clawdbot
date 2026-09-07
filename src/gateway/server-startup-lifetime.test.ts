@@ -123,16 +123,26 @@ describe("Gateway startup lifetime", () => {
     });
     state.applyEnv();
     try {
-      const { startGatewayServerCore } = await import("./server-start.js");
-      await expect(
-        startGatewayServerCore(port, {
-          auth: { mode: "token", token },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        }),
-      ).rejects.toThrow("another gateway instance is already listening");
-      expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
+      const listenModule = await import("./server/http-listen.js");
+      const listen = listenModule.listenGatewayHttpServer;
+      // The owned blocker cannot leave; retry policy has its own listener tests.
+      const listenSpy = vi
+        .spyOn(listenModule, "listenGatewayHttpServer")
+        .mockImplementation((params) => listen({ ...params, retryEaddrinuse: false }));
+      try {
+        const { startGatewayServerCore } = await import("./server-start.js");
+        await expect(
+          startGatewayServerCore(port, {
+            auth: { mode: "token", token },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          }),
+        ).rejects.toThrow("another gateway instance is already listening");
+        expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
+      } finally {
+        listenSpy.mockRestore();
+      }
     } finally {
       await new Promise<void>((resolve) => {
         blocker.close(() => resolve());
