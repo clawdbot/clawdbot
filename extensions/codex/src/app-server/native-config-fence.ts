@@ -1,4 +1,8 @@
-/** Serializes this Gateway's native config writes with its config-loading requests. */
+/**
+ * Serializes this Gateway's native config writes with its config-loading
+ * requests, and serializes the Codex app-server POSIX registration sequence
+ * via a dedicated fence key. All fences are process-local FIFO async locks.
+ */
 
 type CodexNativeConfigFenceState = Map<string, Promise<void>>;
 

@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexAppServerStartOptions } from "./config.js";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
+  acquireCodexAppServerProcessRegistrationFence,
   createCodexAppServerProcessReaperService,
   prepareCodexAppServerProcessRegistration,
 } from "./transport-process-registration.js";
@@ -16,6 +18,7 @@ import {
   readCodexAppServerProcessSnapshot,
   type PosixProcess,
 } from "./transport-process-snapshot.js";
+import { createStdioTransport } from "./transport-stdio.js";
 
 vi.mock("./transport-process-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./transport-process-snapshot.js")>()),
@@ -26,6 +29,13 @@ vi.mock("./transport-process-snapshot.js", async (importOriginal) => ({
 vi.mock("./transport-process-containment.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./transport-process-containment.js")>()),
   terminateCodexAppServerOrphan: vi.fn(),
+}));
+
+const spawnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: spawnMock,
 }));
 
 const observer: PosixProcess = {
@@ -52,6 +62,45 @@ async function openStore() {
     maxEntries: 512,
     overflowPolicy: "reject-new",
   });
+}
+
+function startOptions(spawnCommand: string): CodexAppServerStartOptions {
+  return {
+    transport: "stdio",
+    command: spawnCommand,
+    args: ["app-server", "--listen", "stdio://"],
+    headers: {},
+  };
+}
+
+function buildSpawnedChild(pid: number): ChildProcess {
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const spawned = Object.assign(new ChildProcess(), {
+    pid,
+    stdin,
+    stdout,
+    stderr,
+    stdio: [stdin, stdout, stderr, null, null] as [
+      PassThrough,
+      PassThrough,
+      PassThrough,
+      null,
+      null,
+    ],
+  });
+  spawned.stdin.on("error", () => undefined);
+  spawned.stdout.on("error", () => undefined);
+  spawned.stderr.on("error", () => undefined);
+  return spawned;
+}
+
+function destroySpawnedChild(spawned: ChildProcess): void {
+  spawned.stdin?.destroy();
+  spawned.stdout?.destroy();
+  spawned.stderr?.destroy();
+  spawned.removeAllListeners();
 }
 
 describe("Codex process registration", () => {
@@ -291,4 +340,108 @@ describe("Codex process registration", () => {
       }
     },
   );
+
+  it("queues concurrent registration fence acquisitions without overlapping holders", async () => {
+    const release = await acquireCodexAppServerProcessRegistrationFence();
+    let secondAcquired = false;
+    const second = acquireCodexAppServerProcessRegistrationFence().then((releaseSecond) => {
+      secondAcquired = true;
+      return releaseSecond;
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    expect(secondAcquired).toBe(false);
+
+    release();
+    const releaseSecond = await second;
+    expect(secondAcquired).toBe(true);
+    releaseSecond();
+  });
+
+  it("serializes concurrent POSIX starts so process inspections never overlap", async (ctx) => {
+    const children: ChildProcess[] = [];
+    let activeInspections = 0;
+    let maxActiveInspections = 0;
+    spawnMock.mockReset().mockImplementation(() => {
+      const spawned = buildSpawnedChild(process.pid + 100 + children.length);
+      children.push(spawned);
+      setImmediate(() => spawned.emit("spawn"));
+      return spawned;
+    });
+    for (const spawned of children) {
+      ctx.onTestFinished(() => destroySpawnedChild(spawned));
+    }
+    vi.mocked(readCodexAppServerProcessSnapshot).mockImplementation(async () => {
+      activeInspections += 1;
+      maxActiveInspections = Math.max(maxActiveInspections, activeInspections);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 25);
+      });
+      activeInspections -= 1;
+      return [
+        observer,
+        ...children.map((spawned) =>
+          Object.assign({}, liveChild, { pid: spawned.pid!, ppid: process.pid }),
+        ),
+      ];
+    });
+    vi.mocked(readCodexAppServerProcessCommand).mockResolvedValue(command);
+    vi.mocked(terminateCodexAppServerOrphan).mockResolvedValue(true);
+
+    const starts = Array.from({ length: 5 }, () => createStdioTransport(startOptions("codex")));
+    const transports = await Promise.all(starts);
+
+    expect(transports).toHaveLength(5);
+    expect(store.entries()).toHaveLength(5);
+    // A burst of accepted starts must not inspect host processes concurrently
+    // and exhaust every registration deadline before model work begins.
+    expect(maxActiveInspections).toBe(1);
+  });
+
+  it("waits for an in-flight start registration before the boot sweep reaps", async (ctx) => {
+    const inspectionGate = createDeferred<void>();
+    let gatedFirstRead = true;
+    const spawned = buildSpawnedChild(process.pid + 200);
+    ctx.onTestFinished(() => destroySpawnedChild(spawned));
+    spawnMock.mockReset().mockImplementation(() => {
+      setImmediate(() => spawned.emit("spawn"));
+      return spawned;
+    });
+    vi.mocked(readCodexAppServerProcessSnapshot).mockImplementation(async () => {
+      if (gatedFirstRead) {
+        gatedFirstRead = false;
+        await inspectionGate.promise;
+      }
+      return [observer, Object.assign({}, liveChild, { pid: spawned.pid!, ppid: process.pid })];
+    });
+    vi.mocked(readCodexAppServerProcessCommand).mockResolvedValue(command);
+    vi.mocked(terminateCodexAppServerOrphan).mockResolvedValue(true);
+
+    const start = createStdioTransport(startOptions("codex"));
+    await vi.waitFor(() => expect(readCodexAppServerProcessSnapshot).toHaveBeenCalled());
+
+    // The start now holds the registration fence while its inspection is gated.
+    // A legacy orphan (no fingerprint) would be terminated by an uncoordinated sweep.
+    store.register("orphan", { parent, child });
+    const warn = vi.fn();
+    const service = createCodexAppServerProcessReaperService();
+    expect(
+      service.start({
+        config: {},
+        stateDir: root,
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+      }),
+    ).toBeUndefined();
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
+
+    inspectionGate.resolve();
+    await start;
+    await expect.poll(() => terminateCodexAppServerOrphan).toHaveBeenCalledExactlyOnceWith(child);
+    expect(warn).not.toHaveBeenCalled();
+  });
 });

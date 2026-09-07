@@ -5,15 +5,18 @@ import { createStdioTransport, resolveCodexAppServerSpawnEnv } from "./transport
 
 const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
 const prepareRegistration = vi.hoisted(() => vi.fn(async () => async () => {}));
+const acquireFence = vi.hoisted(() => vi.fn(async () => () => {}));
 
 vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 vi.mock("./transport-process-registration.js", () => ({
   prepareCodexAppServerProcessRegistration: prepareRegistration,
+  acquireCodexAppServerProcessRegistrationFence: acquireFence,
 }));
 
 beforeEach(() => {
   spawnMock.mockClear();
   prepareRegistration.mockReset().mockResolvedValue(async () => {});
+  acquireFence.mockReset().mockResolvedValue(() => {});
 });
 
 function startOptions(command: string): CodexAppServerStartOptions {
@@ -26,6 +29,77 @@ function startOptions(command: string): CodexAppServerStartOptions {
 }
 
 describe("createStdioTransport", () => {
+  it("holds the process registration fence across cleanup, spawn, and registration", async () => {
+    const events: string[] = [];
+    acquireFence.mockImplementationOnce(async () => {
+      events.push("acquire");
+      return () => events.push("release");
+    });
+    prepareRegistration.mockImplementationOnce(async () => {
+      events.push("prepare");
+      return async () => {
+        events.push("register");
+      };
+    });
+    spawnMock.mockImplementationOnce(() => {
+      events.push("spawn");
+      return { pid: 1234 };
+    });
+
+    await createStdioTransport(startOptions("codex"));
+
+    expect(events).toEqual(["acquire", "prepare", "spawn", "register", "release"]);
+  });
+
+  it("releases the process registration fence when the owner became stale in queue", async () => {
+    let active = true;
+    const release = vi.fn();
+    acquireFence.mockImplementationOnce(async () => release);
+    prepareRegistration.mockImplementationOnce(async () => {
+      active = false;
+      return async () => {};
+    });
+    await expect(
+      createStdioTransport(startOptions("codex"), {}, () => {
+        if (!active) {
+          throw new Error("owner closed");
+        }
+      }),
+    ).rejects.toThrow("owner closed");
+    expect(release).toHaveBeenCalledOnce();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an expired queued caller before running orphan cleanup", async () => {
+    let active = true;
+    let grantFence: () => void = () => {};
+    const queued = new Promise<void>((resolve) => {
+      grantFence = resolve;
+    });
+    acquireFence.mockImplementationOnce(async () => {
+      await queued;
+      return () => {};
+    });
+    prepareRegistration.mockImplementationOnce(async () => {
+      throw new Error("orphan cleanup must not run for an expired caller");
+    });
+    const start = createStdioTransport(startOptions("codex"), {}, () => {
+      if (!active) {
+        throw new Error("owner closed");
+      }
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    // The owner expires while this caller is still waiting in the fence queue.
+    active = false;
+    grantFence();
+
+    await expect(start).rejects.toThrow("owner closed");
+    expect(prepareRegistration).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("rechecks authority after orphan cleanup before spawning", async () => {
     let active = true;
     prepareRegistration.mockImplementationOnce(async () => {

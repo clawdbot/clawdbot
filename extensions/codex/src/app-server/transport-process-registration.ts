@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
+import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
   isDeadProcessState,
@@ -13,6 +14,24 @@ import {
 
 // Startup tolerates transient host load; signal containment retains its shorter budget.
 const PROCESS_REGISTRATION_INSPECTION_MS = 10_000;
+
+// The durable registration store is shared by every start in this Gateway
+// process, so the fence key must not vary per CODEX_HOME.
+const PROCESS_REGISTRATION_FENCE_KEY = "codex-app-server-process-registration";
+
+/**
+ * Acquires the process-local FIFO fence that serializes the POSIX stale
+ * cleanup, spawn, identity inspection, and durable registration sequence.
+ * Concurrent starts queue here instead of inspecting host processes all at
+ * once and exhausting every inspection deadline. Windows starts perform no
+ * cleanup or inspection and skip the fence.
+ */
+export async function acquireCodexAppServerProcessRegistrationFence(): Promise<() => void> {
+  if (process.platform === "win32") {
+    return () => undefined;
+  }
+  return acquireCodexNativeConfigFence(PROCESS_REGISTRATION_FENCE_KEY);
+}
 
 const processIdentity = z.object({
   pid: z.number().int().positive().safe(),
@@ -112,7 +131,12 @@ export function createCodexAppServerProcessReaperService(): OpenClawPluginServic
       // authoritative and fails closed without delaying Gateway startup.
       void (async () => {
         try {
-          await reapRegisteredCodexAppServerOrphans();
+          const release = await acquireCodexAppServerProcessRegistrationFence();
+          try {
+            await reapRegisteredCodexAppServerOrphans();
+          } finally {
+            release();
+          }
         } catch (error) {
           ctx.logger.warn(`Codex app-server orphan cleanup failed: ${String(error)}`);
         }

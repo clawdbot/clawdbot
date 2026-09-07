@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { normalizeCodexAppServerArgs } from "./launch-args.js";
-import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
+import {
+  acquireCodexAppServerProcessRegistrationFence,
+  prepareCodexAppServerProcessRegistration,
+} from "./transport-process-registration.js";
 import { closeCodexAppServerTransportAndWait } from "./transport.js";
 
 const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -139,27 +142,41 @@ export async function createStdioTransport(
     env,
     execPath: process.execPath,
   });
-  const register = await prepareCodexAppServerProcessRegistration();
-  assertCurrent?.();
-  const child = spawn(invocation.command, invocation.args, {
-    // Preserve the shipped Supervisor endpoint contract: relative commands and
-    // config discovery may depend on the endpoint's process working directory.
-    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-    env,
-    detached: resolveCodexAppServerDetachedMode(env),
-    shell: invocation.shell,
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: invocation.windowsHide,
-  });
+  // Serialize the POSIX registration sequence per Gateway process so a burst
+  // of accepted starts queues instead of inspecting host processes concurrently
+  // and exhausting every inspection deadline. The fence releases before Codex
+  // initialization or model work begins; each queued start still fails for a
+  // reason specific to itself via the post-queue ownership recheck.
+  const releaseRegistrationFence = await acquireCodexAppServerProcessRegistrationFence();
   try {
-    // Attach lifecycle observers before inspection can yield to an early exit.
-    onSpawn?.(child);
-    await register(child);
+    // Reject callers whose owner expired while queued before they spend the
+    // fence's inspection budget on orphan cleanup; the recheck after the
+    // asynchronous cleanup below remains authoritative for live callers.
     assertCurrent?.();
-    return child;
-  } catch (error) {
-    await closeCodexAppServerTransportAndWait(child, { drainStdio: true });
+    const register = await prepareCodexAppServerProcessRegistration();
     assertCurrent?.();
-    throw error;
+    const child = spawn(invocation.command, invocation.args, {
+      // Preserve the shipped Supervisor endpoint contract: relative commands and
+      // config discovery may depend on the endpoint's process working directory.
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      env,
+      detached: resolveCodexAppServerDetachedMode(env),
+      shell: invocation.shell,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: invocation.windowsHide,
+    });
+    try {
+      // Attach lifecycle observers before inspection can yield to an early exit.
+      onSpawn?.(child);
+      await register(child);
+      assertCurrent?.();
+      return child;
+    } catch (error) {
+      await closeCodexAppServerTransportAndWait(child, { drainStdio: true });
+      assertCurrent?.();
+      throw error;
+    }
+  } finally {
+    releaseRegistrationFence();
   }
 }
