@@ -18,20 +18,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-channels
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-channels empty)"
 DOCKER_ENV_ARGS=()
 capability_status=0
 openclaw_resolve_frozen_plugin_harness_capabilities \
   "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" || capability_status=$?
 [ "$capability_status" -eq 0 ] || exit "$capability_status"
-openclaw_resolve_frozen_mcp_channel_permission_mode \
-  "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" || capability_status=$?
-[ "$capability_status" -eq 0 ] || exit "$capability_status"
 openclaw_append_frozen_plugin_harness_docker_env
-if [ "$OPENCLAW_FROZEN_TARGET_MCP_CHANNEL_PERMISSION_MODE" = "legacy-any-user" ]; then
-  DOCKER_ENV_ARGS+=( -e "OPENCLAW_FROZEN_TARGET_MCP_CHANNEL_PERMISSION_MODE=legacy-any-user" )
-fi
-docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-channels
-OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-channels empty)"
 
 echo "Running in-container gateway + MCP smoke..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.

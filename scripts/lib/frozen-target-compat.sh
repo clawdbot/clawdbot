@@ -102,43 +102,6 @@ openclaw_append_frozen_plugin_harness_docker_env() {
   fi
 }
 
-openclaw_resolve_frozen_mcp_channel_permission_mode() {
-  local source_root="${1:?missing selected source root}" authorization_status=0
-
-  export OPENCLAW_FROZEN_TARGET_MCP_CHANNEL_PERMISSION_MODE="owner-required"
-
-  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
-  [ "$authorization_status" -eq 1 ] && return 0
-  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
-
-  local bridge_path="src/mcp/channel-bridge.ts" shared_path="src/mcp/channel-shared.ts"
-  local has_owner_guard=0 has_owner_payload=0 has_permission_machinery=0
-  if openclaw_frozen_target_source_contains "$source_root" "$bridge_path" 'CLAUDE_PERMISSION_REPLY_RE' &&
-    openclaw_frozen_target_source_contains "$source_root" "$bridge_path" 'pendingClaudePermissions.has(requestId)'; then
-    has_permission_machinery=1
-  fi
-  if openclaw_frozen_target_source_contains "$source_root" "$bridge_path" 'payload.senderIsOwner === true'; then
-    has_owner_guard=1
-  fi
-  if openclaw_frozen_target_source_contains "$source_root" "$shared_path" 'senderIsOwner?: boolean;'; then
-    has_owner_payload=1
-  fi
-  if [ "$has_permission_machinery" != "1" ]; then
-    echo "unable to resolve frozen MCP permission ownership contract from selected source" >&2
-    return 2
-  fi
-  case "$has_owner_guard:$has_owner_payload" in
-    1:1) ;;
-    0:0)
-      export OPENCLAW_FROZEN_TARGET_MCP_CHANNEL_PERMISSION_MODE="legacy-any-user"
-      ;;
-    *)
-      echo "unable to resolve frozen MCP permission ownership contract from selected source" >&2
-      return 2
-      ;;
-  esac
-}
-
 openclaw_resolve_frozen_core_harness_capabilities() {
   local source_root="${1:?missing selected source root}" authorization_status=0
 

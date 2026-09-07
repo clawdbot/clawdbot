@@ -102,14 +102,8 @@ async function main() {
   const gatewayUrl = process.env.GW_URL?.trim();
   const gatewayToken = process.env.GW_TOKEN?.trim();
   const frozenTarget = process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
-  const permissionMode =
-    process.env.OPENCLAW_FROZEN_TARGET_MCP_CHANNEL_PERMISSION_MODE ?? "owner-required";
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
-  assert(
-    permissionMode === "owner-required" || permissionMode === "legacy-any-user",
-    `invalid MCP channel permission mode: ${permissionMode}`,
-  );
 
   const gateway = await connectGateway({
     url: gatewayUrl,
@@ -424,48 +418,46 @@ async function main() {
       },
     });
 
-    if (permissionMode === "owner-required") {
-      nonOwnerGateway = await connectGateway({
-        url: gatewayUrl,
-        token: gatewayToken,
-        scopes: ["operator.read", "operator.write"],
-        client: {
-          id: "test",
-          displayName: "docker-mcp-channels-non-owner",
-          version: "1.0.0",
-          platform: process.platform,
-          mode: "test",
-        },
-        bindFreshDevice: true,
-      });
-      assertGatewayScopes(nonOwnerGateway, {
-        include: ["operator.read", "operator.write"],
-        exclude: ["operator.admin", "operator.pairing"],
-        label: "non-owner gateway",
-      });
-      await nonOwnerGateway.request("chat.send", {
-        sessionKey: "agent:main:main",
-        message: "yes abcde",
-        idempotencyKey: randomUUID(),
-      });
-      await waitFor(
-        "non-owner reply forwarded as an ordinary Claude channel message",
-        () =>
-          connectedMcp!.rawMessages
-            .map((entry) => ClaudeChannelNotificationSchema.safeParse(entry))
-            .flatMap((entry) => (entry.success ? [entry.data.params] : []))
-            .find(
-              (params) =>
-                params.meta.session_key === "agent:main:main" && params.content === "yes abcde",
-            ),
-        60_000,
-      );
-      await delay(NON_OWNER_PERMISSION_QUIET_WINDOW_MS);
-      const nonOwnerPermission = connectedMcp.rawMessages
-        .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
-        .find((entry) => entry.success && entry.data.params.request_id === "abcde");
-      assert(!nonOwnerPermission, "non-owner reply must not resolve the Claude permission");
-    }
+    nonOwnerGateway = await connectGateway({
+      url: gatewayUrl,
+      token: gatewayToken,
+      scopes: ["operator.read", "operator.write"],
+      client: {
+        id: "test",
+        displayName: "docker-mcp-channels-non-owner",
+        version: "1.0.0",
+        platform: process.platform,
+        mode: "test",
+      },
+      bindFreshDevice: true,
+    });
+    assertGatewayScopes(nonOwnerGateway, {
+      include: ["operator.read", "operator.write"],
+      exclude: ["operator.admin", "operator.pairing"],
+      label: "non-owner gateway",
+    });
+    await nonOwnerGateway.request("chat.send", {
+      sessionKey: "agent:main:main",
+      message: "yes abcde",
+      idempotencyKey: randomUUID(),
+    });
+    await waitFor(
+      "non-owner reply forwarded as an ordinary Claude channel message",
+      () =>
+        connectedMcp!.rawMessages
+          .map((entry) => ClaudeChannelNotificationSchema.safeParse(entry))
+          .flatMap((entry) => (entry.success ? [entry.data.params] : []))
+          .find(
+            (params) =>
+              params.meta.session_key === "agent:main:main" && params.content === "yes abcde",
+          ),
+      60_000,
+    );
+    await delay(NON_OWNER_PERMISSION_QUIET_WINDOW_MS);
+    const nonOwnerPermission = connectedMcp.rawMessages
+      .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
+      .find((entry) => entry.success && entry.data.params.request_id === "abcde");
+    assert(!nonOwnerPermission, "non-owner reply must not resolve the Claude permission");
 
     const ownerNotificationStart = connectedMcp.rawMessages.length;
     await gateway.request("chat.send", {
@@ -509,14 +501,8 @@ async function main() {
         {
           ok: true,
           sessionKey: "agent:main:main",
-          nonOwnerPermissionIsolation:
-            permissionMode === "owner-required" ? "verified" : "unsupported-by-selected-target",
-          ...(permissionMode === "owner-required"
-            ? {
-                nonOwnerReplyForwarded: true,
-                nonOwnerPermissionBlocked: true,
-              }
-            : {}),
+          nonOwnerReplyForwarded: true,
+          nonOwnerPermissionBlocked: true,
           ownerPermissionAllowed: permission.behavior === "allow",
           mediaAttachmentFound: true,
           rawNotifications: connectedMcp.rawMessages.filter(
