@@ -81,7 +81,7 @@ Minimal config:
 | `dmPolicy`  | DM access policy (`pairing` recommended)          |
 | `allowFrom` | Phone numbers or `uuid:<id>` values allowed to DM |
 
-Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. Each named account owns its `transport`; it does not inherit the top-level transport. The top-level transport belongs only to the implicit `default` account. See [Multi-account channels](/gateway/config-channels#multi-account-all-channels) for the shared pattern.
+Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. Each named account owns its `transport`; it does not inherit the top-level transport. The top-level transport belongs only to the implicit `default` account. See [Multi-account channels](/gateway/config-channels#multi-account-all-channels) for the shared pattern. Account settings are read under the normalized account id, so `openclaw doctor --fix` moves an authored key such as `"Work Phone"` onto `work-phone` when that key alone names the id. An existing exact or case-insensitive matching key stays selected, and keys that normalize to the same id stay as authored for you to rename.
 
 Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 

@@ -1,0 +1,589 @@
+// Signal tests cover doctor repair of account map keys that need canonicalization.
+import { expectDefined } from "@openclaw/normalization-core";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  resolveAccountEntry,
+} from "openclaw/plugin-sdk/account-resolution";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { describe, expect, it } from "vitest";
+import { SignalConfigSchema } from "../config-api.js";
+import { legacyConfigRules, normalizeCompatibilityConfig } from "../doctor-contract-api.js";
+import { listSignalAccountKeyCollisionWarnings } from "./account-key-repair.js";
+import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
+import { signalDoctor } from "./doctor.js";
+
+function signalConfig(entry: Record<string, unknown>): OpenClawConfig {
+  return { channels: { signal: entry } } as never;
+}
+
+function repairSignal(entry: Record<string, unknown>) {
+  const cfg = signalConfig(entry);
+  const authored = structuredClone(cfg);
+  const result = normalizeCompatibilityConfig({ cfg });
+  // Doctor keeps the authored config beside the repaired candidate as diagnostic evidence, so the
+  // repair must build a new map instead of editing the operator's parsed objects in place.
+  expect(cfg).toEqual(authored);
+  return {
+    changes: result.changes,
+    signal: expectDefined(result.config.channels?.signal, "repaired signal config"),
+  };
+}
+
+const MOVE_CHANGE =
+  /^Moved Signal account "(.+)" to its normalized key channels\.signal\.accounts\.([^.]+)\.$/;
+
+/** Reported moves must name exactly the keys the repaired map dropped, and land on present ids. */
+function expectChangesMatchMovedKeys(params: {
+  changes: string[];
+  authored: Record<string, unknown>;
+  repaired: Record<string, unknown>;
+}) {
+  const reported = params.changes.map((change) =>
+    expectDefined(MOVE_CHANGE.exec(change), `move change "${change}"`),
+  );
+  const byKey = (left: string | undefined, right: string | undefined) =>
+    String(left).localeCompare(String(right));
+  expect(reported.map((match) => match[1]).toSorted(byKey)).toEqual(
+    Object.keys(params.authored)
+      .filter((key) => !Object.hasOwn(params.repaired, key))
+      .toSorted(byKey),
+  );
+  for (const match of reported) {
+    expect(Object.hasOwn(params.repaired, expectDefined(match[2], "moved account id"))).toBe(true);
+  }
+}
+
+const repairRule = legacyConfigRules.find(
+  (rule) =>
+    rule.path.join(".") === "channels.signal.accounts" &&
+    rule.message.includes("normalized account id"),
+);
+const collisionRule = legacyConfigRules.find(
+  (rule) =>
+    rule.path.join(".") === "channels.signal.accounts" &&
+    rule.message.includes("same normalized account id"),
+);
+
+describe("signal account key repair", () => {
+  it("moves a unique authored key and preserves the whole account entry", () => {
+    const accounts = {
+      "Work Phone": {
+        account: "+15555550123",
+        name: "Work",
+        transport: { kind: "external-native", url: "http://127.0.0.1:9101" },
+        dmPolicy: "allowlist",
+        allowFrom: ["+15555550124"],
+        contextVisibility: "allowlist",
+        textChunkLimit: 123,
+        aliases: { boss: "+15555550124" },
+        groups: { "*": { tools: { allow: ["read"] } } },
+        unknownFutureKey: { nested: [0, false, { opaque: "${SIGNAL_OPAQUE_REF}" }] },
+      },
+    };
+    const authored = structuredClone(accounts);
+
+    const repaired = repairSignal({ accounts });
+
+    expect(repairRule?.match?.(accounts, {})).toBe(true);
+    expect(collisionRule?.match?.(accounts, {})).toBe(false);
+    expect(repaired.changes).toEqual([
+      'Moved Signal account "Work Phone" to its normalized key channels.signal.accounts.work-phone.',
+    ]);
+    expect(repaired.signal.accounts).toEqual({ "work-phone": authored["Work Phone"] });
+    // The repaired map only helps if it survives the config writer's serialize and reread.
+    const persisted = JSON.stringify(repaired.signal.accounts);
+    expect(JSON.parse(persisted)).toEqual({ "work-phone": authored["Work Phone"] });
+  });
+
+  it("moves every independent key in one run and reports exactly what moved", () => {
+    const accounts = {
+      "Work Phone": { name: "Work", textChunkLimit: 123 },
+      "Home.Phone": { name: "Home", allowFrom: ["+15555550124"] },
+      "team-phone": { name: "Team" },
+    };
+    const authored = structuredClone(accounts);
+
+    const repaired = repairSignal({ accounts });
+
+    expect(repaired.signal.accounts).toEqual({
+      "work-phone": authored["Work Phone"],
+      "home-phone": authored["Home.Phone"],
+      "team-phone": authored["team-phone"],
+    });
+    expect(repaired.changes).toEqual([
+      'Moved Signal account "Work Phone" to its normalized key channels.signal.accounts.work-phone.',
+      'Moved Signal account "Home.Phone" to its normalized key channels.signal.accounts.home-phone.',
+    ]);
+    expectChangesMatchMovedKeys({
+      changes: repaired.changes,
+      authored,
+      repaired: expectDefined(repaired.signal.accounts, "repaired accounts"),
+    });
+  });
+
+  it("repairs an unrelated key while leaving colliding keys exactly as authored", () => {
+    const accounts = {
+      "Work Phone": { name: "Alias A" },
+      "work.phone": { name: "Alias B" },
+      "Home Phone": { name: "Home", textChunkLimit: 321 },
+    };
+    const authored = structuredClone(accounts);
+
+    const repaired = repairSignal({ accounts });
+
+    expect(repairRule?.match?.(accounts, {})).toBe(true);
+    expect(collisionRule?.match?.(accounts, {})).toBe(true);
+    expect(repaired.signal.accounts).toEqual({
+      "Work Phone": authored["Work Phone"],
+      "work.phone": authored["work.phone"],
+      "home-phone": authored["Home Phone"],
+    });
+    expect(repaired.changes).toEqual([
+      'Moved Signal account "Home Phone" to its normalized key channels.signal.accounts.home-phone.',
+    ]);
+    expectChangesMatchMovedKeys({
+      changes: repaired.changes,
+      authored,
+      repaired: expectDefined(repaired.signal.accounts, "repaired accounts"),
+    });
+  });
+
+  it("makes the listed account resolvable only after the repair", () => {
+    const accounts = {
+      "Work Phone": {
+        account: "+15555550123",
+        transport: { kind: "external-native", url: "http://127.0.0.1:9101" },
+      },
+    };
+    const cfg = signalConfig({ accounts });
+
+    expect(listSignalAccountIds(cfg)).toEqual(["work-phone"]);
+    const before = resolveSignalAccount({ cfg, accountId: "work-phone" });
+    expect(before.configured).toBe(false);
+    expect(before.transport.kind).toBe("managed-native");
+
+    const after = resolveSignalAccount({
+      cfg: normalizeCompatibilityConfig({ cfg }).config,
+      accountId: "work-phone",
+    });
+    expect(after.configured).toBe(true);
+    expect(after.baseUrl).toBe("http://127.0.0.1:9101");
+  });
+
+  it.each([
+    {
+      shape: "an exact winner",
+      accounts: {
+        "work-phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9101" } },
+        "work.phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9102" } },
+      },
+      reportedKeys: '"work-phone", "work.phone"',
+    },
+    {
+      shape: "a case-folded winner",
+      accounts: {
+        "WORK-PHONE": { transport: { kind: "external-native", url: "http://127.0.0.1:9101" } },
+        "work.phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9102" } },
+      },
+      reportedKeys: '"WORK-PHONE", "work.phone"',
+    },
+    {
+      shape: "two authored keys for one id",
+      accounts: {
+        "work.phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9101" } },
+        "Work Phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9102" } },
+      },
+      reportedKeys: '"work.phone", "Work Phone"',
+    },
+  ])("keeps colliding keys as authored and reports them: $shape", ({ accounts, reportedKeys }) => {
+    const authored = structuredClone(accounts);
+
+    const repaired = repairSignal({ accounts });
+
+    expect(collisionRule?.match?.(accounts, {})).toBe(true);
+    expect(repairRule?.match?.(accounts, {})).toBe(false);
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.signal.accounts).toEqual(authored);
+    expect(
+      signalDoctor.collectPreviewWarnings?.({
+        cfg: signalConfig({ accounts }),
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toEqual([
+      `- channels.signal.accounts: ${reportedKeys} resolve to account id "work-phone". Doctor keeps them as authored; only an existing exact or case-insensitive matching key remains selected. Rename them so one key owns the account.`,
+    ]);
+  });
+
+  const caseFoldedTwins: {
+    shape: string;
+    accounts: Record<string, { transport: { kind: string; url: string } }>;
+    reportedKeys: string;
+    winner: string;
+    winnerUrl: string;
+  }[] = [
+    {
+      shape: "an exact key beside its case twin",
+      accounts: {
+        "work-phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9101" } },
+        "WORK-PHONE": { transport: { kind: "external-native", url: "http://127.0.0.1:9102" } },
+      },
+      reportedKeys: '"work-phone", "WORK-PHONE"',
+      winner: "work-phone",
+      winnerUrl: "http://127.0.0.1:9101",
+    },
+    {
+      shape: "two case variants with no exact key",
+      accounts: {
+        "Work-Phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9101" } },
+        "WORK-PHONE": { transport: { kind: "external-native", url: "http://127.0.0.1:9102" } },
+      },
+      reportedKeys: '"Work-Phone", "WORK-PHONE"',
+      winner: "Work-Phone",
+      winnerUrl: "http://127.0.0.1:9101",
+    },
+  ];
+
+  it.each(caseFoldedTwins)(
+    "reports keys that differ only in case and keeps the lookup winner: $shape",
+    ({ accounts, reportedKeys, winner, winnerUrl }) => {
+      const authored = structuredClone(accounts);
+      const cfg = signalConfig({ accounts });
+
+      const repaired = repairSignal({ accounts });
+
+      expect(collisionRule?.match?.(accounts, {})).toBe(true);
+      expect(repairRule?.match?.(accounts, {})).toBe(false);
+      expect(repaired.changes).toEqual([]);
+      expect(repaired.signal.accounts).toEqual(authored);
+      expect(
+        signalDoctor.collectPreviewWarnings?.({ cfg, doctorFixCommand: "openclaw doctor --fix" }),
+      ).toEqual([
+        `- channels.signal.accounts: ${reportedKeys} resolve to account id "work-phone". Doctor keeps them as authored; only an existing exact or case-insensitive matching key remains selected. Rename them so one key owns the account.`,
+      ]);
+      // Reporting must not change who owns the id. The exact key wins where there is one, else the
+      // first case-folded key in map order, before and after doctor runs.
+      expect(resolveAccountEntry(accounts, "work-phone")).toBe(accounts[winner]);
+      expect(resolveSignalAccount({ cfg, accountId: "work-phone" }).baseUrl).toBe(winnerUrl);
+      expect(
+        resolveSignalAccount({
+          cfg: normalizeCompatibilityConfig({ cfg }).config,
+          accountId: "work-phone",
+        }).baseUrl,
+      ).toBe(winnerUrl);
+    },
+  );
+
+  it("reports a pair whose folded spelling is no account id only under the id Signal lists", () => {
+    const accounts = {
+      "Work Phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9101" } },
+      "WORK PHONE": { transport: { kind: "external-native", url: "http://127.0.0.1:9102" } },
+    };
+    const authored = structuredClone(accounts);
+
+    const repaired = repairSignal({ accounts });
+
+    // Both keys fold to "work phone", which no reader looks up, and Signal lists both under
+    // "work-phone", so the pair belongs to that one collision and gets no second report.
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.signal.accounts).toEqual(authored);
+    expect(
+      signalDoctor.collectPreviewWarnings?.({
+        cfg: signalConfig({ accounts }),
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toEqual([
+      `- channels.signal.accounts: "Work Phone", "WORK PHONE" resolve to account id "work-phone". Doctor keeps them as authored; only an existing exact or case-insensitive matching key remains selected. Rename them so one key owns the account.`,
+    ]);
+  });
+
+  it("reports nothing and changes nothing when every key is already normalized", () => {
+    const accounts = { "work-phone": { account: "+15555550123" }, default: {} };
+
+    const repaired = repairSignal({ accounts });
+
+    expect(repairRule?.match?.(accounts, {})).toBe(false);
+    expect(collisionRule?.match?.(accounts, {})).toBe(false);
+    expect(repaired.changes).toEqual([]);
+    expect(
+      signalDoctor.collectPreviewWarnings?.({
+        cfg: signalConfig({ accounts }),
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports no further changes on a second doctor run", () => {
+    const cfg = signalConfig({ accounts: { "Work Phone": { account: "+15555550123" } } });
+
+    const first = normalizeCompatibilityConfig({ cfg });
+    const second = normalizeCompatibilityConfig({ cfg: first.config });
+
+    expect(first.changes).toHaveLength(1);
+    expect(second.changes).toEqual([]);
+    expect(second.config).toEqual(first.config);
+  });
+
+  it("keeps the effective account number and root transport across a default-key repair", () => {
+    const cfg = signalConfig({
+      account: "+15555550100",
+      transport: { kind: "container", url: "http://signal-container:8080" },
+      accounts: { "Default.": { account: "", name: "Primary" } },
+    });
+
+    expect(SignalConfigSchema.safeParse(cfg.channels?.signal).success).toBe(true);
+    const before = resolveSignalAccount({ cfg, accountId: "default" });
+    const repaired = normalizeCompatibilityConfig({ cfg });
+    const signal = expectDefined(repaired.config.channels?.signal, "repaired signal config");
+    const after = resolveSignalAccount({ cfg: repaired.config, accountId: "default" });
+
+    expect(signal.accounts).toEqual({ default: { name: "Primary" } });
+    expect(signal.account).toBe("+15555550100");
+    expect(signal.transport).toEqual({ kind: "container", url: "http://signal-container:8080" });
+    expect(after.config.account).toBe(before.config.account);
+    expect(after.transport).toEqual(before.transport);
+    expect(after.configured).toBe(true);
+    expect(SignalConfigSchema.safeParse(signal).success).toBe(true);
+  });
+
+  it("keeps the inherited root number effective across a named-key repair", () => {
+    const cfg = signalConfig({
+      account: "+15555550100",
+      accounts: { "Work Phone": { account: "", name: "Work" } },
+    });
+
+    // A named entry inherits the root number unless it overrides it, because the merge spreads the
+    // entry over the root (src/config/channel-account-config.ts:24), and the unselected alias never
+    // did. Keeping its empty override through the move would turn a configured account into an
+    // unconfigured one.
+    const before = resolveSignalAccount({ cfg, accountId: "work-phone" });
+    const repaired = normalizeCompatibilityConfig({ cfg });
+    const after = resolveSignalAccount({ cfg: repaired.config, accountId: "work-phone" });
+
+    expect(before.configured).toBe(true);
+    expect(before.config.account).toBe("+15555550100");
+    expect(repaired.config.channels?.signal?.accounts).toEqual({ "work-phone": { name: "Work" } });
+    expect(after.configured).toBe(true);
+    expect(after.config.account).toBe("+15555550100");
+    expect(after.name).toBe("Work");
+  });
+
+  it.each([
+    { alias: "Default.", accountId: "default" },
+    { alias: "Work Phone", accountId: "work-phone" },
+  ])(
+    "drops a whitespace-only account override like an empty one: $alias",
+    ({ alias, accountId }) => {
+      const repaired = repairSignal({
+        account: "+15555550100",
+        accounts: { [alias]: { account: "   ", name: "Primary" } },
+      });
+
+      expect(repaired.signal.accounts).toEqual({ [accountId]: { name: "Primary" } });
+    },
+  );
+
+  it.each([
+    { shape: "a number", account: 42 },
+    { shape: "null", account: null },
+    { shape: "false", account: false },
+    { shape: "an object", account: { number: "+15555550123" } },
+  ])("keeps a non-string default identity for the validator: $shape", ({ account }) => {
+    const repaired = repairSignal({
+      account: "+15555550100",
+      accounts: { "Default.": { account, name: "Primary" } },
+    });
+
+    expect(repaired.signal.accounts).toEqual({ default: { account, name: "Primary" } });
+  });
+
+  it("drops an empty account override on a named alias that inherited the root number", () => {
+    const repaired = repairSignal({
+      account: "+15555550100",
+      accounts: { "Work Phone": { account: "", name: "Work" } },
+    });
+
+    expect(repaired.signal.accounts).toEqual({ "work-phone": { name: "Work" } });
+  });
+
+  it("keeps an empty account override when no root number can be inherited", () => {
+    const repaired = repairSignal({ accounts: { "Default.": { account: "", name: "Work" } } });
+
+    expect(repaired.signal.accounts).toEqual({ default: { account: "", name: "Work" } });
+  });
+
+  it("keeps an empty named account override when no root number can be inherited", () => {
+    const repaired = repairSignal({ accounts: { "Work Phone": { account: "" } } });
+
+    expect(repaired.signal.accounts).toEqual({ "work-phone": { account: "" } });
+  });
+
+  it("moves a punctuation-only key onto default because Signal lists it there", () => {
+    const accounts = { "!!!": { account: "+15555550123", name: "Bang" } };
+    const cfg = signalConfig({ accounts });
+
+    // Signal lists every non-empty key under normalizeAccountId, which sends a key with no
+    // canonical form to default (listConfiguredAccountIds in
+    // src/channels/plugins/account-helpers.ts), while the account lookup selects an exact or
+    // case-folded key only, so the listed account reads as unconfigured until the key moves.
+    expect(listSignalAccountIds(cfg)).toEqual(["default"]);
+    expect(resolveSignalAccount({ cfg, accountId: "default" }).configured).toBe(false);
+
+    const repaired = repairSignal({ accounts });
+
+    expect(repairRule?.match?.(accounts, {})).toBe(true);
+    expect(collisionRule?.match?.(accounts, {})).toBe(false);
+    expect(repaired.changes).toEqual([
+      'Moved Signal account "!!!" to its normalized key channels.signal.accounts.default.',
+    ]);
+    expect(repaired.signal.accounts).toEqual({
+      default: { account: "+15555550123", name: "Bang" },
+    });
+    const after = resolveSignalAccount({
+      cfg: normalizeCompatibilityConfig({ cfg }).config,
+      accountId: "default",
+    });
+    expect(after.configured).toBe(true);
+    expect(after.config.account).toBe("+15555550123");
+  });
+
+  it.each([
+    {
+      shape: "two punctuation-only keys",
+      accounts: { "!!!": { name: "Bang" }, "???": { name: "Query" } },
+      reportedKeys: '"!!!", "???"',
+    },
+    {
+      shape: "a punctuation-only key beside the exact default key",
+      accounts: { default: { name: "Canon" }, "!!!": { name: "Bang" } },
+      reportedKeys: '"default", "!!!"',
+    },
+  ])(
+    "keeps keys Signal lists as default beside each other and reports them: $shape",
+    ({ accounts, reportedKeys }) => {
+      const authored = structuredClone(accounts);
+
+      const repaired = repairSignal({ accounts });
+
+      expect(collisionRule?.match?.(accounts, {})).toBe(true);
+      expect(repairRule?.match?.(accounts, {})).toBe(false);
+      expect(repaired.changes).toEqual([]);
+      expect(repaired.signal.accounts).toEqual(authored);
+      expect(
+        signalDoctor.collectPreviewWarnings?.({
+          cfg: signalConfig({ accounts }),
+          doctorFixCommand: "openclaw doctor --fix",
+        }),
+      ).toEqual([
+        `- channels.signal.accounts: ${reportedKeys} resolve to account id "default". Doctor keeps them as authored; only an existing exact or case-insensitive matching key remains selected. Rename them so one key owns the account.`,
+      ]);
+    },
+  );
+
+  it("leaves an empty key alone because Signal never lists it", () => {
+    const accounts = { "": { name: "Blank" } };
+
+    // The list helper drops an empty key before normalizing (listConfiguredAccountIds filters on
+    // Boolean), so no listed id names this entry and doctor has nothing to move it onto.
+    const repaired = repairSignal({ accounts });
+
+    expect(repairRule?.match?.(accounts, {})).toBe(false);
+    expect(collisionRule?.match?.(accounts, {})).toBe(false);
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.signal.accounts).toEqual({ "": { name: "Blank" } });
+  });
+
+  it("moves a prototype-named key onto default without touching the map's prototype", () => {
+    // The config loader parses `"__proto__"` as an own data property, which an object literal
+    // cannot express, so the fixture is parsed the same way.
+    const accounts = JSON.parse('{"__proto__":{"name":"Proto"}}') as Record<string, unknown>;
+    expect(Object.hasOwn(accounts, "__proto__")).toBe(true);
+    expect(listSignalAccountIds(signalConfig({ accounts }))).toEqual(["default"]);
+
+    const repaired = repairSignal({ accounts });
+    const repairedAccounts = repaired.signal.accounts as Record<string, unknown>;
+
+    expect(repaired.changes).toEqual([
+      'Moved Signal account "__proto__" to its normalized key channels.signal.accounts.default.',
+    ]);
+    expect(Object.getOwnPropertyNames(repairedAccounts)).toEqual(["default"]);
+    expect(Object.getPrototypeOf(repairedAccounts)).toBe(Object.prototype);
+    expect(repairedAccounts.default).toEqual({ name: "Proto" });
+    expect(JSON.stringify(repairedAccounts)).toBe('{"default":{"name":"Proto"}}');
+  });
+
+  it.each([
+    { shape: "an alias", accounts: { "Work Phone": { name: "Work" } } },
+    { shape: "a case variant", accounts: { "Work-Phone": { name: "Work" } } },
+    { shape: "a punctuation-only key", accounts: { "!!!": { name: "Bang" } } },
+    {
+      shape: "two punctuation-only keys",
+      accounts: { "!!!": { name: "Bang" }, "???": { name: "Query" } },
+    },
+    { shape: "an empty key", accounts: { "": { name: "Blank" } } },
+    { shape: "a whitespace-only key", accounts: { "  ": { name: "Blank" } } },
+    { shape: "a key longer than the id limit", accounts: { ["a".repeat(70)]: { name: "Long" } } },
+    {
+      shape: "a prototype-named key",
+      // An object literal with a `__proto__` key sets the prototype instead of adding a key.
+      accounts: JSON.parse('{"__proto__":{"name":"Proto"}}') as Record<string, unknown>,
+    },
+    { shape: "the exact default key", accounts: { default: { name: "Canon" } } },
+    { shape: "a default alias", accounts: { "Default.": { name: "Alias" } } },
+    {
+      shape: "a default alias beside the exact key",
+      accounts: { default: { name: "Canon" }, "Default.": { name: "Alias" } },
+    },
+    {
+      shape: "a mixed map",
+      accounts: {
+        "Work Phone": { name: "Alias A" },
+        "work.phone": { name: "Alias B" },
+        "Home Phone": { name: "Home" },
+        "!!!": { name: "Bang" },
+        "": { name: "Blank" },
+      },
+    },
+  ])("leaves every listed id resolvable or reported after the repair: $shape", ({ accounts }) => {
+    const repaired = normalizeCompatibilityConfig({ cfg: signalConfig({ accounts }) }).config;
+    const repairedAccounts = repaired.channels?.signal?.accounts ?? {};
+    const warnings = listSignalAccountKeyCollisionWarnings(repairedAccounts);
+
+    // The repair rebuilds the map from own keys, so a prototype-named key becomes an own `default`
+    // entry and never a prototype.
+    expect(Object.getPrototypeOf(repairedAccounts)).toBe(Object.prototype);
+    // The contract is that a key the list helper surfaces is either selected by the shared account
+    // lookup or named in a collision warning, never listed and then read as absent.
+    for (const accountId of listSignalAccountIds(repaired)) {
+      const listedKeys = Object.keys(repairedAccounts).filter(
+        (key) => key && normalizeAccountId(key) === accountId,
+      );
+      if (listedKeys.length === 0) {
+        // Only the fallback default is listed with no key behind it.
+        expect(accountId).toBe(DEFAULT_ACCOUNT_ID);
+        continue;
+      }
+      const resolvable = resolveAccountEntry(repairedAccounts, accountId) !== undefined;
+      const reported = warnings.some((warning) =>
+        warning.includes(`resolve to account id "${accountId}"`),
+      );
+      expect(
+        resolvable || reported,
+        `account id "${accountId}" is listed for ${JSON.stringify(listedKeys)} but neither resolvable nor reported`,
+      ).toBe(true);
+    }
+  });
+
+  it("repairs a config that the Signal schema rejects", () => {
+    const entry = {
+      dmPolicy: "open",
+      allowFrom: ["+15555550123"],
+      accounts: { "Work Phone": { account: "+15555550124" } },
+    };
+
+    expect(SignalConfigSchema.safeParse(entry).success).toBe(false);
+    expect(repairSignal(entry).signal.accounts).toEqual({
+      "work-phone": { account: "+15555550124" },
+    });
+  });
+});

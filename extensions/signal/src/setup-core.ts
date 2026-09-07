@@ -3,6 +3,7 @@ import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/acc
 import { parseAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "openclaw/plugin-sdk/setup";
 import {
   createCliPathTextInput,
   createDelegatedSetupWizardProxy,
@@ -26,6 +27,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { findSignalAccountKeySetupBlock } from "./account-key-repair.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
 import {
@@ -156,12 +158,35 @@ export function buildSignalSetupPatch(input: SignalSetupInput) {
   };
 }
 
+// A named add promotes single-account root keys into the map before the adapter writes
+// (src/channels/plugins/account-config-mutation.ts:141-147); the account-key guard asks this
+// writer what it would write instead of modeling which key it picks.
+function promoteSignalRootAccount(cfg: OpenClawConfig): OpenClawConfig {
+  return moveSingleAccountChannelSectionToDefaultAccount({
+    cfg,
+    channelKey: channel,
+    setupSurface: signalSetupAdapter,
+  });
+}
+
 async function prepareSignalSetupInput(params: {
   cfg: OpenClawConfig;
   accountId: string;
   input: SignalSetupInput;
 }): Promise<SignalSetupInput> {
   if (!params.input.httpUrl || params.input.signalTransport) {
+    return params.input;
+  }
+  // Transport discovery throws its own endpoint error, which would mask the account-key
+  // precondition; leave the input alone when validation is about to send the operator to doctor.
+  if (
+    findSignalAccountKeySetupBlock({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      name: params.input.name,
+      write: { kind: "account-config", promote: promoteSignalRootAccount },
+    })
+  ) {
     return params.input;
   }
   const account =
@@ -313,6 +338,15 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput
   channelKey: channel,
   validateInput: createSetupInputPresenceValidator<SignalSetupInput>({
     validate: ({ cfg, accountId, input }) => {
+      const accountKeyError = findSignalAccountKeySetupBlock({
+        cfg,
+        accountId,
+        name: input.name,
+        write: { kind: "account-config", promote: promoteSignalRootAccount },
+      });
+      if (accountKeyError) {
+        return accountKeyError;
+      }
       if (
         input.signalTransport &&
         input.signalTransport !== "external-native" &&
@@ -386,8 +420,20 @@ function restorePromotedSignalDefaultAccount(cfg: OpenClawConfig): OpenClawConfi
 
 export const signalSetupAdapter: ChannelSetupAdapter<SignalSetupInput> = {
   ...signalSetupAdapterBase,
+  // Guided naming reaches this writer without setup validation, and the generic name writer targets
+  // accounts[accountId], so an unguarded name would create the entry doctor exists to prevent.
+  applyAccountName: (params) => {
+    const accountKeyError = findSignalAccountKeySetupBlock({ ...params, write: { kind: "name" } });
+    if (accountKeyError) {
+      throw new Error(accountKeyError);
+    }
+    return signalSetupAdapterBase.applyAccountName?.(params) ?? params.cfg;
+  },
   prepareAccountConfigInput: ({ cfg, accountId, input }) =>
     prepareSignalSetupInput({ cfg, accountId, input }),
+  // The account resolver passes no normalizer to resolveMergedAccountConfig (accounts.ts:58-72), so
+  // it selects entries with the exact-or-case-folded lookup and promotion has to land there.
+  accountEntryLookup: "case-insensitive",
   singleAccountKeysToMove: [
     "signalNumber",
     "account",

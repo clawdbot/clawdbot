@@ -6,6 +6,11 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  hasRepairableSignalAccountKeys,
+  listSignalAccountKeyCollisionWarnings,
+  repairSignalAccountKeys,
+} from "./src/account-key-repair.js";
 import { migrateLegacySignalTransportConfigSync } from "./src/config-compat.js";
 
 const RETIRED_SIGNAL_ACCOUNT_TRANSPORT_FIELDS = [
@@ -58,6 +63,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'Signal transport config is now account-owned; run "openclaw doctor --fix" to migrate retired per-account transport fields.',
     match: hasRetiredSignalAccountMapTransportFields,
   },
+  {
+    path: ["channels", "signal", "accounts"],
+    message:
+      'Signal account settings are read under the normalized account id; run "openclaw doctor --fix" to move channels.signal.accounts keys that need canonicalization.',
+    match: hasRepairableSignalAccountKeys,
+  },
+  {
+    path: ["channels", "signal", "accounts"],
+    message:
+      "Several channels.signal.accounts keys name the same normalized account id; doctor keeps them as authored. Rename them so each Signal account has one normalized key.",
+    match: (value) => listSignalAccountKeyCollisionWarnings(value).length > 0,
+  },
 ];
 
 export function normalizeCompatibilityConfig({
@@ -65,11 +82,14 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const streaming = streamingAliasMigration.normalizeChannelConfig({ cfg });
+  // Canonical account keys first: the later migrations and every runtime reader select the
+  // account entry by its normalized id, so they must see the repaired map, not the authored one.
+  const accountKeys = repairSignalAccountKeys({ cfg });
+  const streaming = streamingAliasMigration.normalizeChannelConfig({ cfg: accountKeys.config });
   const transport = migrateLegacySignalTransportConfigSync(streaming.config);
   return {
     config: transport.config,
-    changes: [...streaming.changes, ...transport.changes],
+    changes: [...accountKeys.changes, ...streaming.changes, ...transport.changes],
     ...(transport.warnings?.length ? { warnings: transport.warnings } : {}),
   };
 }

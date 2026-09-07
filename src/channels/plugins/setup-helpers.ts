@@ -3,6 +3,7 @@
  *
  * Applies account names and validates setup results for channel onboarding adapters.
  */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { writeChannelSection } from "./config-helpers.js";
@@ -318,11 +319,29 @@ function moveSingleAccountKeysIntoAccount(params: {
 function resolveExistingAccountKey(
   accounts: Record<string, Record<string, unknown>>,
   targetAccountId: string,
+  accountEntryLookup: ChannelSetupAdapter["accountEntryLookup"],
 ): string {
-  return (
-    Object.keys(accounts).find((key) => normalizeAccountId(key) === targetAccountId) ??
-    targetAccountId
-  );
+  if (accountEntryLookup !== "case-insensitive") {
+    // A promotion aimed at a canonical id lands on that key even when an alias is listed first, and
+    // one aimed at an id that only an alias spells lands on that alias rather than seeding a
+    // canonical twin. Unlike the fallback scan in resolveNormalizedAccountEntry, this scan skips
+    // no blocked or canonical-less key, so accounts["!!!"] takes a promotion aimed at "default".
+    if (Object.hasOwn(accounts, targetAccountId)) {
+      return targetAccountId;
+    }
+    return (
+      Object.keys(accounts).find((key) => normalizeAccountId(key) === targetAccountId) ??
+      targetAccountId
+    );
+  }
+  const accountId = normalizeAccountId(targetAccountId);
+  // The channel's readers use resolveAccountEntry to select the exact key, else the first key in
+  // map order whose trimmed lowercase is the id, so the promotion lands on that key and otherwise
+  // on the canonical id. A key that only normalizes to the id is left as authored for doctor.
+  return Object.hasOwn(accounts, accountId)
+    ? accountId
+    : (Object.keys(accounts).find((key) => normalizeLowercaseStringOrEmpty(key) === accountId) ??
+        accountId);
 }
 
 function resolveSingleAccountPromotionTarget(params: {
@@ -341,11 +360,14 @@ function resolveSingleAccountPromotionTarget(params: {
       ? normalizeAccountId(params.channel.defaultAccount)
       : undefined;
   if (normalizedDefaultAccount) {
-    return (
-      Object.keys(accounts).find(
-        (accountId) => normalizeAccountId(accountId) === normalizedDefaultAccount,
-      ) ?? DEFAULT_ACCOUNT_ID
-    );
+    // A configured default names an id, not a spelling, so this branch returns the canonical id
+    // and leaves the choice of key to resolveExistingAccountKey, whose exact-first step picks the
+    // entry the channel's own reader takes when the map holds both spellings.
+    return Object.keys(accounts).some(
+      (accountId) => normalizeAccountId(accountId) === normalizedDefaultAccount,
+    )
+      ? normalizedDefaultAccount
+      : DEFAULT_ACCOUNT_ID;
   }
   const namedAccounts = Object.keys(accounts).filter(Boolean);
   return namedAccounts.length === 1 ? (namedAccounts[0] ?? DEFAULT_ACCOUNT_ID) : DEFAULT_ACCOUNT_ID;
@@ -383,8 +405,14 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   const targetAccountId = hasAccounts
     ? resolveSingleAccountPromotionTarget({ channel: base, setupSurface: params.setupSurface })
     : DEFAULT_ACCOUNT_ID;
-  // Reuse the existing account key spelling so configs like `accounts.Ops` keep their shape.
-  const resolvedTargetAccountKey = resolveExistingAccountKey(accounts, targetAccountId);
+  // The promotion takes the exact key when the map holds one, and otherwise the key each branch's
+  // own scan chooses, so a plain case variant such as `accounts.Ops` keeps its spelling under
+  // either declaration.
+  const resolvedTargetAccountKey = resolveExistingAccountKey(
+    accounts,
+    targetAccountId,
+    params.setupSurface?.accountEntryLookup,
+  );
   return moveSingleAccountKeysIntoAccount({
     cfg: params.cfg,
     channelKey: params.channelKey,

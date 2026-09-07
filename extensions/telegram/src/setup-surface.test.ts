@@ -1,7 +1,13 @@
 // Telegram tests cover setup surface plugin behavior.
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  type ChannelSetupAdapter,
+  DEFAULT_ACCOUNT_ID,
+  moveSingleAccountChannelSectionToDefaultAccount,
+} from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
+import { resolveTelegramAccount } from "./accounts.js";
 import {
   promptTelegramAllowFromForAccount,
   telegramSetupAdapter,
@@ -32,6 +38,117 @@ describe("Telegram setup promotion contract", () => {
     expect(cfg.channels?.telegram).toEqual({ enabled: true });
     expect(cfg.channels?.telegram?.botToken).toBeUndefined();
     expect(cfg.channels?.telegram?.tokenFile).toBeUndefined();
+  });
+
+  it("keeps an existing spaced account's own token and name when another account is added", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "123:ROOT_TEST_TOKEN",
+          defaultAccount: "ops-team",
+          accounts: { "Ops Team": { botToken: "456:OWN_TEST_TOKEN", name: "Original" } },
+        },
+      },
+    };
+
+    // A named add promotes the root token through the setup contract before the adapter writes
+    // (src/channels/plugins/account-config-mutation.ts:141-152). resolveTelegramAccount selects
+    // "Ops Team" for "ops-team" through resolveNormalizedAccountEntry, so the promotion has to
+    // land there. A case-folded writer would create an "ops-team" twin holding the root token,
+    // and that twin would win the lookup's exact-key branch and hide the account's own token and
+    // name.
+    const promoted = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg,
+      channelKey: "telegram",
+      setupSurface: telegramSetupContract as ChannelSetupAdapter,
+    });
+    const written = telegramSetupContract.applyAccountConfig({
+      cfg: promoted,
+      accountId: "new-account",
+      input: { token: "789:NEW_TEST_TOKEN" },
+    });
+    // The result only counts once it survives the config writer's serialize and reread.
+    const persisted = JSON.stringify(written);
+    const next = JSON.parse(persisted) as OpenClawConfig;
+
+    const account = resolveTelegramAccount({ cfg: next, accountId: "ops-team" });
+    expect(account.token).toBe("456:OWN_TEST_TOKEN");
+    expect(account.name).toBe("Original");
+    expect(Object.keys(next.channels?.telegram?.accounts ?? {})).toEqual([
+      "Ops Team",
+      "new-account",
+    ]);
+    expect(next.channels?.telegram?.botToken).toBeUndefined();
+  });
+
+  it("keeps the configured default's own entry when a shadowed alias is listed first", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "123:ROOT_TEST_TOKEN",
+          defaultAccount: "default",
+          accounts: { Default: { name: "Alias" }, default: { name: "Canon" } },
+        },
+      },
+    };
+
+    // The same named add as the row above, with the configured default naming the canonical id.
+    // resolveTelegramAccount takes the exact "default" key for that id
+    // (src/routing/account-lookup.ts:35-37), so a promotion into the alias listed first would
+    // leave the resolved account with no token.
+    const promoted = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg,
+      channelKey: "telegram",
+      setupSurface: telegramSetupContract as ChannelSetupAdapter,
+    });
+    const written = telegramSetupContract.applyAccountConfig({
+      cfg: promoted,
+      accountId: "new-account",
+      input: { token: "789:NEW_TEST_TOKEN" },
+    });
+    // The result only counts once it survives the config writer's serialize and reread.
+    const persisted = JSON.stringify(written);
+    const next = JSON.parse(persisted) as OpenClawConfig;
+
+    const account = resolveTelegramAccount({ cfg: next, accountId: "default" });
+    expect(account.token).toBe("123:ROOT_TEST_TOKEN");
+    expect(account.name).toBe("Canon");
+    expect(Object.keys(next.channels?.telegram?.accounts ?? {})).toEqual([
+      "Default",
+      "default",
+      "new-account",
+    ]);
+    expect(next.channels?.telegram?.botToken).toBeUndefined();
+  });
+
+  it("keeps the default token when the configured default matches no account during named setup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "root-tok",
+          defaultAccount: "missing",
+          accounts: { personal: { name: "P" } },
+        },
+      },
+    };
+    const promoted = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg,
+      channelKey: "telegram",
+      setupSurface: telegramSetupContract as ChannelSetupAdapter,
+    });
+    const written = telegramSetupContract.applyAccountConfig({
+      cfg: promoted,
+      accountId: "new-account",
+      input: { token: "789:NEW_TEST_TOKEN" },
+    });
+    // The result only counts once it survives the config writer's serialize and reread.
+    const persisted = JSON.stringify(written);
+    const next = JSON.parse(persisted) as OpenClawConfig;
+
+    expect(resolveTelegramAccount({ cfg: next, accountId: "default" }).token).toBe("root-tok");
+    expect(next.channels?.telegram?.accounts?.personal).toEqual({ name: "P" });
+    expect(next.channels?.telegram?.accounts?.missing).toBeUndefined();
+    expect(next.channels?.telegram?.botToken).toBeUndefined();
   });
 });
 

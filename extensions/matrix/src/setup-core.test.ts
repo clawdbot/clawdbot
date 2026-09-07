@@ -1,8 +1,17 @@
 // Matrix tests cover setup core plugin behavior.
-import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
+import {
+  type ChannelSetupAdapter,
+  type ChannelSetupWizardAdapter,
+  moveSingleAccountChannelSectionToDefaultAccount,
+} from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
+import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import type { MatrixSetupInput } from "./setup-config.js";
-import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
+import {
+  createMatrixSetupWizardProxy,
+  matrixSetupAdapter,
+  matrixSetupContract,
+} from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 function applyOpsAccountConfig(cfg: CoreConfig): CoreConfig {
@@ -281,6 +290,49 @@ describe("matrixSetupAdapter", () => {
       accessToken: "tok-support",
     });
     expectOpsAccount(next);
+  });
+
+  it("promotes root credentials into the alias the Matrix resolver selects", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          homeserver: "https://matrix.example.org",
+          userId: "@ops:example.org",
+          accessToken: "tok-ops",
+          accounts: { "Ops.": { enabled: true }, OPS: { enabled: true } },
+        },
+      },
+    } as CoreConfig;
+
+    // The plugin registers matrixSetupContract, which a named add hands to the promotion before
+    // the adapter writes (src/channels/plugins/account-config-mutation.ts:141-152).
+    // resolveMatrixAccountConfig reads the map through resolveNormalizedAccountEntry, which finds
+    // no exact "ops" key here and takes the first key normalizing to it, "Ops.". The credentials
+    // have to land there and not on the case variant a case-folded writer would pick.
+    const promoted = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg,
+      channelKey: "matrix",
+      setupSurface: matrixSetupContract as ChannelSetupAdapter,
+    });
+    // The result only counts once it survives the config writer's serialize and reread.
+    const persisted = JSON.stringify(promoted);
+    const next = JSON.parse(persisted) as CoreConfig;
+
+    const account = resolveMatrixAccountConfig({ cfg: next, accountId: "ops" });
+    expect(account.homeserver).toBe("https://matrix.example.org");
+    expect(account.userId).toBe("@ops:example.org");
+    expect(account.accessToken).toBe("tok-ops");
+    expectFields(next.channels?.matrix?.accounts?.["Ops."], {
+      enabled: true,
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
+      accessToken: "tok-ops",
+    });
+    expect(next.channels?.matrix?.accounts?.OPS).toEqual({ enabled: true });
+    expect(next.channels?.matrix?.accounts?.ops).toBeUndefined();
+    expect(next.channels?.matrix?.homeserver).toBeUndefined();
+    expect(next.channels?.matrix?.accessToken).toBeUndefined();
   });
 
   it("clears stored auth fields when switching an account to env-backed auth", () => {

@@ -64,6 +64,14 @@ const matrixSetupSurface = {
   namedAccountPromotionKeys: matrixNamedAccountPromotionKeys,
   resolveSingleAccountPromotionTarget: resolveMatrixSingleAccountPromotionTarget,
 } as ChannelSetupAdapter;
+// Signal declares `account` as a key to move and the case-insensitive lookup
+// (extensions/signal/src/setup-core.ts). A core test does not import the extension, so this
+// surface carries those two declarations.
+const signalSetupSurface = {
+  applyAccountConfig: ({ cfg }) => cfg,
+  accountEntryLookup: "case-insensitive",
+  singleAccountKeysToMove: ["account"],
+} as ChannelSetupAdapter;
 
 function collectNamedAccountIds(accounts: Record<string, unknown>): string[] {
   const ids: string[] = [];
@@ -509,6 +517,265 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     expect(next.channels?.matrix?.homeserver).toBeUndefined();
     expect(next.channels?.matrix?.userId).toBeUndefined();
     expect(next.channels?.matrix?.accessToken).toBeUndefined();
+  });
+
+  it("promotes root keys into the canonical id when a case-insensitive channel holds only an alias key", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          signal: { account: "+15555550100", accounts: { "Default.": { account: "" } } },
+        },
+      }),
+      channelKey: "signal",
+      setupSurface: signalSetupSurface,
+    });
+
+    // resolveAccountEntry takes the exact key, else the first case-folded key
+    // (src/routing/account-lookup.ts:8-23), so Signal's resolver never selects "Default.".
+    // Promoting into it would strand the number, and because that entry already carries an empty
+    // `account`, the root value would be deleted without being copied
+    // (moveSingleAccountKeysIntoAccount skips a present key and deletes the root key regardless).
+    const channel = channelRecord(next, "signal");
+    expect(accountRecord(channel, "default").account).toBe("+15555550100");
+    expect(accountRecord(channel, "Default.")).toEqual({ account: "" });
+    expect(channel.account).toBeUndefined();
+  });
+
+  it("case-folds a padded key the way the case-insensitive lookup does", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          signal: { account: "+15555550100", accounts: { " Default ": { name: "Primary" } } },
+        },
+      }),
+      channelKey: "signal",
+      setupSurface: signalSetupSurface,
+    });
+
+    // resolveAccountEntry compares keys through normalizeLowercaseStringOrEmpty, which trims
+    // before it lowercases (src/routing/account-lookup.ts:18-22,
+    // packages/normalization-core/src/string-coerce.ts:7-17,65-68), so Signal selects " Default "
+    // for the id "default". A writer that only lowercased would miss that key and seed a canonical
+    // twin holding the number, and the twin would win the reader's exact-key branch and hide the
+    // authored name.
+    const channel = channelRecord(next, "signal");
+    expect(accountRecord(channel, " Default ")).toEqual({
+      name: "Primary",
+      account: "+15555550100",
+    });
+    expect(accountsRecord(channel).default).toBeUndefined();
+    expect(channel.account).toBeUndefined();
+  });
+
+  it("keeps promoting into a key the normalized lookup selects when the channel declares nothing", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          telegram: { botToken: "root-tok", accounts: { "Work.Bot": { name: "Work" } } },
+        },
+      }),
+      channelKey: "telegram",
+      setupSurface: {
+        applyAccountConfig: ({ cfg }) => cfg,
+        singleAccountKeysToMove: ["botToken"],
+      } as ChannelSetupAdapter,
+    });
+
+    // Telegram reads its map with resolveNormalizedAccountEntry
+    // (extensions/telegram/src/account-config.ts:15, src/routing/account-lookup.ts:27-51), which
+    // selects "Work.Bot" for the id "work-bot". A canonical "work-bot" twin would win that
+    // lookup's exact-key branch and hide the authored name, so the token has to land in the
+    // authored key.
+    const channel = channelRecord(next, "telegram");
+    expect(accountRecord(channel, "Work.Bot")).toEqual({ name: "Work", botToken: "root-tok" });
+    expect(accountsRecord(channel)["work-bot"]).toBeUndefined();
+    expect(channel.botToken).toBeUndefined();
+  });
+
+  it("prefers the exact key over an alias listed first when the channel declares nothing", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          telegram: {
+            botToken: "root-tok",
+            accounts: { Default: { name: "Alias" }, default: { name: "Canon" } },
+          },
+        },
+      }),
+      channelKey: "telegram",
+      setupSurface: {
+        applyAccountConfig: ({ cfg }) => cfg,
+        singleAccountKeysToMove: ["botToken"],
+      } as ChannelSetupAdapter,
+    });
+
+    // resolveNormalizedAccountEntry returns the exact key before its normalized scan
+    // (src/routing/account-lookup.ts:35-37), so Telegram reads "default" for that id however
+    // late it is listed. A token moved into "Default" would leave the entry every reader takes
+    // without one.
+    const channel = channelRecord(next, "telegram");
+    expect(accountRecord(channel, "default")).toEqual({ name: "Canon", botToken: "root-tok" });
+    expect(accountRecord(channel, "Default")).toEqual({ name: "Alias" });
+    expect(channel.botToken).toBeUndefined();
+  });
+
+  it("targets the exact key when defaultAccount names a shadowed alias and the channel declares nothing", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          telegram: {
+            botToken: "root-tok",
+            defaultAccount: "default",
+            accounts: { Default: { name: "Alias" }, default: { name: "Canon" } },
+          },
+        },
+      }),
+      channelKey: "telegram",
+      setupSurface: {
+        applyAccountConfig: ({ cfg }) => cfg,
+        singleAccountKeysToMove: ["botToken"],
+      } as ChannelSetupAdapter,
+    });
+
+    // The configured defaultAccount names the canonical id, and Telegram reads that id with
+    // resolveNormalizedAccountEntry, which takes the exact "default" key before any scan
+    // (src/routing/account-lookup.ts:35-37). Targeting the raw alias listed first would move the
+    // token into "Default" and leave the entry every reader takes without one.
+    const channel = channelRecord(next, "telegram");
+    expect(accountRecord(channel, "default")).toEqual({ name: "Canon", botToken: "root-tok" });
+    expect(accountRecord(channel, "Default")).toEqual({ name: "Alias" });
+    expect(channel.botToken).toBeUndefined();
+  });
+
+  it("falls back to default when the configured default matches no account", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          telegram: {
+            botToken: "root-tok",
+            defaultAccount: "missing",
+            accounts: { personal: { name: "P" } },
+          },
+        },
+      }),
+      channelKey: "telegram",
+      setupSurface: {
+        applyAccountConfig: ({ cfg }) => cfg,
+        singleAccountKeysToMove: ["botToken"],
+      },
+    });
+
+    const channel = channelRecord(next, "telegram");
+    expect(accountsRecord(channel).default).toEqual({ botToken: "root-tok" });
+    expect(accountsRecord(channel).personal).toEqual({ name: "P" });
+    expect(accountsRecord(channel).missing).toBeUndefined();
+    expect(channel.botToken).toBeUndefined();
+  });
+
+  it("takes the exact key beside a dotted alias listed first when the channel declares nothing", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          matrix: {
+            defaultAccount: "ops",
+            homeserver: "https://matrix.example.org",
+            userId: "@ops:example.org",
+            accessToken: "token",
+            accounts: { "Ops.": { enabled: true }, ops: { enabled: true } },
+          },
+        },
+      }),
+      channelKey: "matrix",
+      setupSurface: matrixSetupSurface,
+    });
+
+    // Matrix's own target resolver names the first key normalizing to "ops", which is "Ops.",
+    // and the promotion normalizes that back to "ops". resolveNormalizedAccountEntry takes the
+    // exact "ops" key for that id, so the credentials land there and the alias stays as authored.
+    const channel = channelRecord(next, "matrix");
+    expect(accountRecord(channel, "ops")).toEqual({
+      enabled: true,
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
+      accessToken: "token",
+    });
+    expect(accountRecord(channel, "Ops.")).toEqual({ enabled: true });
+    expect(channel.homeserver).toBeUndefined();
+    expect(channel.userId).toBeUndefined();
+    expect(channel.accessToken).toBeUndefined();
+  });
+
+  it("prefers the exact key over its case variant under the case-insensitive lookup", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          signal: {
+            defaultAccount: "ops",
+            account: "+15555550100",
+            accounts: { Ops: { name: "Variant" }, ops: { name: "Exact" } },
+          },
+        },
+      }),
+      channelKey: "signal",
+      setupSurface: signalSetupSurface,
+    });
+
+    // resolveAccountEntry returns the exact key before scanning for a case-folded one
+    // (src/routing/account-lookup.ts:15-17), so the number lands on `ops` however late it is
+    // listed.
+    const channel = channelRecord(next, "signal");
+    expect(accountRecord(channel, "ops")).toEqual({ name: "Exact", account: "+15555550100" });
+    expect(accountRecord(channel, "Ops")).toEqual({ name: "Variant" });
+    expect(channel.account).toBeUndefined();
+  });
+
+  it("takes the first case-folded key in map order under the case-insensitive lookup", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          signal: {
+            defaultAccount: "ops",
+            account: "+15555550100",
+            accounts: { OPS: { name: "First" }, Ops: { name: "Second" } },
+          },
+        },
+      }),
+      channelKey: "signal",
+      setupSurface: signalSetupSurface,
+    });
+
+    // resolveAccountEntry scans with find (src/routing/account-lookup.ts:19-21), so the first key
+    // in map order wins and the promotion has to agree with it.
+    const channel = channelRecord(next, "signal");
+    expect(accountRecord(channel, "OPS")).toEqual({ name: "First", account: "+15555550100" });
+    expect(accountRecord(channel, "Ops")).toEqual({ name: "Second" });
+    expect(accountsRecord(channel).ops).toBeUndefined();
+    expect(channel.account).toBeUndefined();
+  });
+
+  it("passes over an alias for the case variant the case-insensitive lookup selects", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          signal: {
+            defaultAccount: "ops",
+            account: "+15555550100",
+            accounts: { "Ops.": { name: "Alias" }, OPS: { name: "Variant" } },
+          },
+        },
+      }),
+      channelKey: "signal",
+      setupSurface: signalSetupSurface,
+    });
+
+    // The configured default names the id "ops". Signal's declared writer selects "OPS" for it
+    // and leaves "Ops." untouched. Without the declaration, the normalized scan selects "Ops."
+    // in this map, which is also the key Matrix's normalized account lookup selects.
+    const channel = channelRecord(next, "signal");
+    expect(accountRecord(channel, "OPS")).toEqual({ name: "Variant", account: "+15555550100" });
+    expect(accountRecord(channel, "Ops.")).toEqual({ name: "Alias" });
+    expect(accountsRecord(channel).ops).toBeUndefined();
+    expect(channel.account).toBeUndefined();
   });
 });
 
