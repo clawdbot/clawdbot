@@ -2,6 +2,20 @@
 
 install_update_restart_systemctl_shim() {
   local shim_dir="$npm_config_prefix/bin"
+  local manager_env
+  manager_env="$(node <<'MANAGER_ENV'
+const keys = [
+  "CI", "OPENCLAW_NO_ONBOARD", "OPENCLAW_NO_PROMPT", "OPENCLAW_SKIP_PROVIDERS",
+  "OPENCLAW_SKIP_CHANNELS", "OPENCLAW_DISABLE_BONJOUR",
+];
+const captured = Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null]));
+const registry = process.env.NPM_CONFIG_REGISTRY || process.env.npm_config_registry || null;
+for (const key of ["NPM_CONFIG_REGISTRY", "npm_config_registry", "BUN_CONFIG_REGISTRY"]) {
+  captured[key] = registry;
+}
+process.stdout.write(JSON.stringify(captured));
+MANAGER_ENV
+  )" || return "$?"
   mkdir -p "$shim_dir"
   cp "$(dirname "${BASH_SOURCE[0]}")/systemd-fixture.mjs" "$shim_dir/systemd-fixture.mjs"
   cat >"$shim_dir/busctl" <<'BUSCTL'
@@ -14,7 +28,7 @@ BUSCTL
     printf 'log_file=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-$shim_dir/systemctl-shim.log}"
     printf 'pid_file=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-$shim_dir/systemctl-shim.pid}"
     printf 'daemon_log=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}"
-    printf 'registry_url=%q\n' "${NPM_CONFIG_REGISTRY:-${npm_config_registry:-}}"
+    printf 'manager_env=%q\n' "$manager_env"
     cat <<'SHIM'
 supervisor_script="${pid_file}.supervisor.mjs"
 manager_script="$(dirname "$0")/systemd-fixture.mjs"
@@ -103,11 +117,11 @@ const output = fs.openSync(daemonLog, "a");
 const childEnv = { ...process.env };
 delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
 delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG;
-const registry = childEnv.OPENCLAW_SYSTEMCTL_SHIM_REGISTRY;
-delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_REGISTRY;
-for (const key of ["NPM_CONFIG_REGISTRY", "npm_config_registry", "BUN_CONFIG_REGISTRY"]) {
+const managerEnv = JSON.parse(childEnv.OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV);
+delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV;
+for (const [key, value] of Object.entries(managerEnv)) {
   delete childEnv[key];
-  if (registry) childEnv[key] = registry;
+  if (value !== null) childEnv[key] = value;
 }
 // systemd does not pass transient systemctl-caller update state into the service.
 for (const key of Object.keys(childEnv)) {
@@ -246,7 +260,7 @@ SUPERVISOR
   # leaves Node in that terminal session and can strand its detached gateway.
   OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start" \
     OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG="$daemon_log" \
-    OPENCLAW_SYSTEMCTL_SHIM_REGISTRY="$registry_url" \
+    OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV="$manager_env" \
     node --input-type=module - "$supervisor_script" "$pid_file" "${daemon_log}.bootstrap.log" <<'START_SUPERVISOR'
 import fs from "node:fs";
 import { spawn } from "node:child_process";
