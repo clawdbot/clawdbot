@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -26,7 +26,7 @@ import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import {
-  replyRunRegistry as baseReplyRunRegistry,
+  replyRunRegistry,
   type ReplyBackendQueueMessageOptions,
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
@@ -50,7 +50,11 @@ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import {
+  getActiveSessionWorkAdmissionCount,
+  runExclusiveSessionLifecycleMutation,
+} from "../../sessions/session-lifecycle-admission.js";
+import { projectAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -61,9 +65,11 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
 import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
+import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -82,15 +88,6 @@ type TranscriptUpdate = Parameters<
 
 const TEST_TOOL_AUTHORITY_FINGERPRINT = "test-tool-authority";
 const TEST_TOOL_AUTHORITY_ROUTE = { provider: "openai", model: "gpt-5.6-sol" } as const;
-const replyRunRegistry = {
-  ...baseReplyRunRegistry,
-  begin(...args: Parameters<typeof baseReplyRunRegistry.begin>) {
-    const operation = baseReplyRunRegistry.begin(...args);
-    operation.bindToolAuthorityRoute(TEST_TOOL_AUTHORITY_ROUTE);
-    operation.bindToolAuthorityFingerprint(TEST_TOOL_AUTHORITY_FINGERPRINT);
-    return operation;
-  },
-};
 
 const mockState = vi.hoisted(() => {
   const createTestState = () => ({
@@ -132,6 +129,7 @@ const mockState = vi.hoisted(() => {
     emittedTranscriptUpdates: [] as TranscriptUpdate[],
     savedMediaResults: [] as Array<{ id?: string; path: string; contentType?: string }>,
     saveMediaError: null as Error | null,
+    steerDocumentRenderError: null as Error | null,
     savedMediaCalls: [] as Array<{ contentType?: string; subdir?: string; size: number }>,
     saveMediaWait: null as Promise<void> | null,
     activeSaveMediaCalls: 0,
@@ -237,6 +235,23 @@ const OFFLOAD_PNG_BASE64 =
 const TINY_JPEG_BASE64 =
   "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUXFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fICUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBEQACEQEDEQH/xAAXAAADAQAAAAAAAAAAAAAAAAAAAQMC/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEAMQAAAB6AAAAP/EABQQAQAAAAAAAAAAAAAAAAAAACD/2gAIAQEAAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQIBAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQMBAT8Af//Z";
 
+vi.mock("../../media-understanding/file-context.js", async () => {
+  const actual = await vi.importActual<typeof import("../../media-understanding/file-context.js")>(
+    "../../media-understanding/file-context.js",
+  );
+  return {
+    ...actual,
+    renderInboundDocumentContext: (
+      params: Parameters<typeof actual.renderInboundDocumentContext>[0],
+    ) => {
+      if (mockState.steerDocumentRenderError) {
+        return Promise.reject(mockState.steerDocumentRenderError);
+      }
+      return actual.renderInboundDocumentContext(params);
+    },
+  };
+});
+
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
@@ -255,19 +270,21 @@ vi.mock("../session-utils.js", async () => {
           sessionFile: mockState.transcriptPath,
           ...mockState.sessionEntry,
         };
-    return {
-      ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
-      cfg: {
-        ...mockState.config,
-        session: {
-          ...(mockState.config.session as Record<string, unknown> | undefined),
-          mainKey: mockState.mainSessionKey,
-        },
+    const cfg = {
+      ...mockState.config,
+      session: {
+        ...(mockState.config.session as Record<string, unknown> | undefined),
+        mainKey: mockState.mainSessionKey,
       },
+    };
+    return {
+      cfg,
+      agentId: resolveSessionStoreAgentId(cfg, rawKey, opts?.agentId),
       storePath: mockState.storePath,
       store: entry ? { [canonicalKey]: entry } : {},
       entry,
       canonicalKey,
+      storeKeys: [canonicalKey],
     };
   };
   return {
@@ -744,7 +761,7 @@ async function appendSourceReplyMirrorEntry(params: {
   });
 }
 
-async function readActiveAssistantTranscriptMessages(): Promise<Array<Record<string, unknown>>> {
+async function readRawActiveAssistantTranscriptMessages(): Promise<Array<Record<string, unknown>>> {
   return readTranscriptJsonLines(mockState.transcriptPath)
     .map((entry) => entry.message)
     .filter(
@@ -753,6 +770,10 @@ async function readActiveAssistantTranscriptMessages(): Promise<Array<Record<str
         message !== null &&
         (message as { role?: unknown }).role === "assistant",
     );
+}
+
+async function readActiveAssistantTranscriptMessages(): Promise<Array<Record<string, unknown>>> {
+  return (await readRawActiveAssistantTranscriptMessages()).map(projectAssistantDisplayContent);
 }
 
 function extractFirstTextBlock(payload: unknown): string | undefined {
@@ -830,16 +851,22 @@ function lastNodeSendCall(context: ChatContext) {
 }
 
 function findAssistantTranscriptUpdates() {
-  return mockState.emittedTranscriptUpdates.filter(
-    (update) =>
-      typeof update.message === "object" &&
-      update.message !== null &&
-      (update.message as { role?: unknown }).role === "assistant",
-  );
+  return mockState.emittedTranscriptUpdates
+    .filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    )
+    .map((update) => {
+      const message = update.message as Record<string, unknown>;
+      const projected = projectAssistantDisplayContent(message);
+      return projected === message ? update : Object.assign({}, update, { message: projected });
+    });
 }
 
 function findAssistantUpdateWithBlock(predicate: (block: Record<string, any>) => boolean) {
-  return mockState.emittedTranscriptUpdates.find((update) => {
+  return findAssistantTranscriptUpdates().find((update) => {
     const message = update.message as { role?: unknown; content?: unknown } | undefined;
     return (
       message?.role === "assistant" &&
@@ -1075,8 +1102,11 @@ function managedAudioBlocks(content: Array<Record<string, unknown>>) {
 }
 
 function bindTestToolAuthority(operation: ReplyOperation) {
-  operation.bindToolAuthorityProjector(() => TEST_TOOL_AUTHORITY_FINGERPRINT);
-  operation.bindToolAuthorityRoute({ provider: "anthropic", model: "test-model" });
+  operation.bindToolAuthoritySnapshot({
+    fingerprint: () => TEST_TOOL_AUTHORITY_FINGERPRINT,
+    project: () => TEST_TOOL_AUTHORITY_FINGERPRINT,
+  });
+  operation.bindToolAuthorityRoute(TEST_TOOL_AUTHORITY_ROUTE);
 }
 
 function beginActiveReplyOperation(params: {
@@ -1337,18 +1367,20 @@ async function runNonStreamingChatSend(params: {
   }
   if (waitFor === "dedupe") {
     await waitForAssertion(() => {
-      expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(true);
+      // Admission retains request identity before a terminal response exists.
+      expect(
+        readChatSendDedupeResponse(params.context.dedupe, params.idempotencyKey),
+      ).toBeDefined();
     });
     return undefined;
   }
 
-  await waitForAssertion(() => {
-    expect(params.context.broadcast.mock.calls.length).toBe(1);
-  });
-
-  const chatCall = mockCallAt(params.context.broadcast, 0);
-  expect(chatCall?.[0]).toBe("chat");
-  return chatCall?.[1] as Record<string, any> | undefined;
+  const terminalCalls = () =>
+    params.context.broadcast.mock.calls.filter(
+      ([event, payload]) => event === "chat" && asOptionalRecord(payload)?.state !== "delta",
+    );
+  await waitForAssertion(() => expect(terminalCalls()).toHaveLength(1));
+  return asOptionalRecord(terminalCalls()[0]?.[1]);
 }
 
 async function expectUnpersistedAgentRunFinal(params: {
@@ -1387,16 +1419,14 @@ async function expectUnpersistedAgentRunFinal(params: {
       (entry as { role?: string }).role === "assistant",
   );
   if (params.expectedMediaFailure) {
-    expect(assistantUpdates).toHaveLength(1);
-    expect(assistantUpdates[0]?.message).toMatchObject({
-      role: "assistant",
-      content: [
-        { type: "text", text: params.payload.text },
-        { type: "attachment_error", attachment: params.expectedMediaFailure },
-      ],
-    });
     expect(assistantEntries).toHaveLength(1);
+    const message = (assistantEntries[0] as { message?: Record<string, unknown> }).message;
+    const modelContent = Array.isArray(message?.content) ? message.content : [];
+    expect(JSON.stringify(assistantUpdates)).toContain('"type":"attachment_error"');
+    expect(JSON.stringify(assistantUpdates)).toContain(params.expectedMediaFailure.label);
     expect(JSON.stringify(assistantUpdates)).not.toContain(staleAudioPath);
+    expect(JSON.stringify(modelContent)).not.toContain("attachment_error");
+    expect(JSON.stringify(message?.openclawDisplayContent)).toContain("attachment_error");
     return;
   }
 
@@ -1445,6 +1475,15 @@ beforeAll(() => {
   });
 });
 
+afterEach(async () => {
+  // ACKs and terminal errors can precede detached transcript cleanup.
+  await waitForAssertion(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
+  replyRunRegistryTesting.resetReplyRunRegistry();
+  mockState.reset();
+  bindingMocks.resolveByConversation.mockReset();
+  bindingMocks.resolveByConversation.mockReturnValue(null);
+});
+
 afterAll(async () => {
   try {
     expect(getTotalPendingReplies()).toBe(0);
@@ -1461,13 +1500,6 @@ afterAll(async () => {
 });
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
-  afterEach(() => {
-    replyRunRegistryTesting.resetReplyRunRegistry();
-    mockState.reset();
-    bindingMocks.resolveByConversation.mockReset();
-    bindingMocks.resolveByConversation.mockReturnValue(null);
-  });
-
   it("carries an internal runtime tool cap into agent dispatch", async () => {
     const { send } = await createSqliteChatRequest("openclaw-chat-send-runtime-tools-");
 
@@ -2226,6 +2258,133 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("hands steered document attachments to the active run as extracted file context", async () => {
+    const { send } = await createSqliteChatRequest("openclaw-chat-send-steer-document-");
+    mockState.hasMessageReceivedHooks = true;
+    // Under the suite fixture root so the suite cleanup removes it; a bare
+    // tmpdir entry would leak on every run.
+    const documentDir = fs.mkdtempSync(path.join(suiteFixtureRoot, "openclaw-steer-doc-"));
+    const documentPath = path.join(documentDir, "notes.txt");
+    fs.writeFileSync(documentPath, "steered document body");
+    setSavedMediaResults([documentPath, "text/plain"]);
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
+      runId: "active-run",
+      supportsQueueMessageImages: true,
+      taskSuggestionDeliveryMode: "gateway",
+      queueMessage,
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-document",
+        requestParams: {
+          queueMode: "steer",
+          attachments: [
+            createFileAttachment(
+              "notes.txt",
+              "text/plain",
+              Buffer.from("steered document body", "utf8").toString("base64"),
+            ),
+          ],
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              version: "dev",
+              platform: "web",
+            },
+            caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+            scopes: ["operator.admin"],
+          },
+        },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(queueMessage).toHaveBeenCalledOnce();
+    const queueCall = vi.mocked(queueMessage).mock.calls[0];
+    if (!queueCall) {
+      throw new Error("expected queueMessage to receive the injected text");
+    }
+    const [injectedText] = queueCall;
+    // The active run never reaches reply dispatch, so the injection text must
+    // already carry the extracted document context.
+    expect(injectedText).toContain('<file name="notes.txt" mime="text/plain">');
+    expect(injectedText).toContain("steered document body");
+  });
+
+  it("keeps the raw steer when the lazy document render fails", async () => {
+    const { respond, send } = await createSqliteChatRequest("openclaw-chat-send-steer-doc-fail-");
+    mockState.hasMessageReceivedHooks = true;
+    const documentPath = path.join(suiteFixtureRoot, "openclaw-steer-doc-fail.txt");
+    fs.writeFileSync(documentPath, "steered document body");
+    setSavedMediaResults([documentPath, "text/plain"]);
+    mockState.steerDocumentRenderError = new Error("lazy media runtime unavailable");
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
+      runId: "active-run",
+      supportsQueueMessageImages: true,
+      taskSuggestionDeliveryMode: "gateway",
+      queueMessage,
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-document-render-failure",
+        requestParams: {
+          queueMode: "steer",
+          attachments: [
+            createFileAttachment(
+              "notes.txt",
+              "text/plain",
+              Buffer.from("steered document body", "utf8").toString("base64"),
+            ),
+          ],
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              version: "dev",
+              platform: "web",
+            },
+            caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+            scopes: ["operator.admin"],
+          },
+        },
+      });
+    } finally {
+      operation.complete();
+      mockState.steerDocumentRenderError = null;
+    }
+
+    // A failed render must not abort a steerable message: normal reply
+    // dispatch proceeds with raw content on media-understanding failure, so
+    // the steer injection keeps the same contract.
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(queueMessage).toHaveBeenCalledOnce();
+    const [injectedText] = vi.mocked(queueMessage).mock.calls[0] ?? [];
+    expect(injectedText).toBeDefined();
+    expect(injectedText).not.toContain('<file name="notes.txt"');
+    expect(injectedText).toContain("hello");
+  });
+
   it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-reply-steer-",
@@ -2450,29 +2609,41 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       queueMessage,
     });
 
-    await send({
+    const pendingSend = send({
       idempotencyKey: "idem-steer-reject",
       requestParams: { queueMode: "steer" },
       waitFor: "none",
     });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "started" }),
-      undefined,
-      expect.any(Object),
-    );
-    delivery.reject(new Error("native turn ended"));
-    operation.complete();
+    const rejection = new Error("native turn ended");
+    try {
+      await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
+      // A negative callback is provisional; only the terminal rejection permits fallback.
+      expect(respond).not.toHaveBeenCalled();
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
+      delivery.reject(rejection);
+      await pendingSend;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.any(Object),
+      );
+      operation.complete();
 
-    await waitForAssertion(() => {
-      expect(context.dedupe.get("chat:idem-steer-reject")?.payload).toEqual({
-        runId: "idem-steer-reject",
-        status: "ok",
+      await waitForAssertion(() => {
+        expect(context.dedupe.get("chat:idem-steer-reject")?.payload).toEqual({
+          runId: "idem-steer-reject",
+          status: "ok",
+        });
       });
-    });
-    expect(queueMessage).toHaveBeenCalledOnce();
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
-    expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello");
+      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
+      expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello");
+    } finally {
+      delivery.reject(rejection);
+      operation.complete();
+      await Promise.allSettled([pendingSend, delivery.promise]);
+    }
   });
 
   it("never aborts or replays onto a successor after unconfirmed acceptance", async () => {
@@ -2679,7 +2850,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       { agentId: "main", dropIfSlow: true },
     ]);
     await waitForAssertion(() => {
-      expect(context.dedupe.has("chat:idem-command-session-metadata")).toBe(true);
+      expect(
+        readChatSendDedupeResponse(context.dedupe, "idem-command-session-metadata"),
+      ).toBeDefined();
     });
   });
 
@@ -2844,7 +3017,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "hello from codex",
     });
 
-    const assistantEntries = await readActiveAssistantTranscriptMessages();
+    const rawAssistantEntries = await readRawActiveAssistantTranscriptMessages();
+    const assistantEntries = rawAssistantEntries.map(projectAssistantDisplayContent);
+    expect(JSON.stringify(rawAssistantEntries[0]?.content)).not.toContain("attachment_error");
     expect(JSON.stringify(assistantEntries[0])).toContain('"type":"attachment_error"');
     expect(JSON.stringify(assistantEntries[0])).toContain('"label":"report.7z"');
     expect(JSON.stringify(assistantEntries[0])).not.toContain("Media failed");
@@ -3205,7 +3380,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.loadSessionEntryCalls).toContainEqual({
       rawKey: "agent:work:main",
-      opts: { agentId: "work", clone: false, includeStoreChildEntries: true },
+      opts: { agentId: "work", clone: false, includeStoreChildEntries: true, projection: "list" },
     });
   });
 
@@ -3299,68 +3474,84 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("replaces reply-to-current with an explicit id on a runtime-owned media rewrite", async () => {
-    await withTranscriptFixtureState("openclaw-chat-send-owned-media-", async (fixtureDir) => {
-      const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-      writeSavedPng(fixtureDir, "reply.png");
-      await appendSourceReplyMirrorEntry({
-        idempotencyKey: "older-distinct-assistant",
-        text: "A distinct earlier reply.",
-        provider: "openai",
-        model: "codex",
-      });
-      await appendSourceReplyMirrorEntry({
-        idempotencyKey: "runtime-owned-assistant",
-        openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
-        text: `Dinner options\nMEDIA:${mediaUrl}`,
-        provider: "openai",
-        model: "codex",
-      });
-      setAgentRunReplies([
-        {
-          kind: "final",
-          payload: setReplyPayloadMetadata(
-            {
-              text: "Dinner options",
-              mediaUrl,
-              mediaUrls: [mediaUrl],
-              replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
-            },
-            {
-              assistantTranscriptOwned: true,
-              assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
-            },
-          ),
-        },
-      ]);
-      const { send } = createChatRequestFixture();
+  it.each([false, true])(
+    "replaces reply-to-current on a runtime-owned media rewrite (signed=%s)",
+    async (signed) => {
+      await withTranscriptFixtureState("openclaw-chat-send-owned-media-", async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        writeSavedPng(fixtureDir, "reply.png");
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: "older-distinct-assistant",
+          text: "A distinct earlier reply.",
+          provider: "openai",
+          model: "codex",
+        });
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: "runtime-owned-assistant",
+          openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
+          text: `Dinner options\nMEDIA:${mediaUrl}`,
+          ...(signed
+            ? {
+                content: [
+                  { type: "text", text: "Dinner options", textSignature: "msg_final" },
+                  { type: "text", text: `MEDIA:${mediaUrl}` },
+                ],
+              }
+            : {}),
+          provider: "openai",
+          model: "codex",
+        });
+        setAgentRunReplies([
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Dinner options",
+                mediaUrl,
+                mediaUrls: [mediaUrl],
+                replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+              },
+              {
+                assistantTranscriptOwned: true,
+                assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
+              },
+            ),
+          },
+        ]);
+        const { send } = createChatRequestFixture();
 
-      await send({
-        idempotencyKey: "idem-owned-media",
-        expectBroadcast: false,
-        waitFor: "dedupe",
-      });
+        await send({
+          idempotencyKey: "idem-owned-media",
+          expectBroadcast: false,
+          waitFor: "dedupe",
+        });
 
-      const messages = await readActiveAssistantTranscriptMessages();
-      expect(messages.map((message) => message.idempotencyKey)).toEqual([
-        "older-distinct-assistant",
-        "runtime-owned-assistant",
-      ]);
-      const rewritten = messages[1];
-      const content = Array.isArray(rewritten?.content)
-        ? (rewritten.content as Array<Record<string, unknown>>)
-        : [];
-      expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
-      expect(content.filter((block) => block.type === "image")).toHaveLength(1);
-      expect(rewritten?.openclawDelivery).toEqual({
-        audioAsVoice: true,
-        mediaUrls: [mediaUrl],
-        replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+        const messages = await readActiveAssistantTranscriptMessages();
+        expect(messages.map((message) => message.idempotencyKey)).toEqual([
+          "older-distinct-assistant",
+          "runtime-owned-assistant",
+        ]);
+        const rewritten = messages[1];
+        const content = Array.isArray(rewritten?.content)
+          ? (rewritten.content as Array<Record<string, unknown>>)
+          : [];
+        expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
+        expect(content.filter((block) => block.type === "image")).toHaveLength(1);
+        if (signed) {
+          expect((await readRawActiveAssistantTranscriptMessages())[1]?.content).toEqual([
+            { type: "text", text: "Dinner options", textSignature: "msg_final" },
+          ]);
+        }
+        expect(rewritten?.openclawDelivery).toEqual({
+          audioAsVoice: true,
+          mediaUrls: [mediaUrl],
+          replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+        });
+        expect(JSON.stringify(rewritten)).not.toContain("[[reply_to:");
+        expect(JSON.stringify(messages)).not.toContain(":assistant-media");
       });
-      expect(JSON.stringify(rewritten)).not.toContain("[[reply_to:");
-      expect(JSON.stringify(messages)).not.toContain(":assistant-media");
-    });
-  });
+    },
+  );
 
   it("persists agent media only after a disposed attempt transcript owner has unwound", async () => {
     await withTranscriptFixtureState(
@@ -3406,6 +3597,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         });
 
         const messages = await readActiveAssistantTranscriptMessages();
+        const rawMessages = await readRawActiveAssistantTranscriptMessages();
         expect(messages).toHaveLength(3);
         expect(messages[0]?.content).toEqual([
           { type: "text", text: `Stale reply\nMEDIA:${mediaUrl}` },
@@ -3414,18 +3606,24 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const content = Array.isArray(messages[1]?.content)
           ? (messages[1].content as Array<Record<string, unknown>>)
           : [];
-        expect(content[0]).toEqual({ type: "thinking", thinking: "preserve runtime reasoning" });
         expect(content.filter((block) => block.type === "text")).toEqual([
           { type: "text", text: "Earlier chunk" },
           { type: "text", text: "Image reply" },
         ]);
         expect(content.filter((block) => block.type === "image")).toHaveLength(1);
-        expect(content.at(-1)).toEqual({
-          type: "toolCall",
-          id: "call-1",
-          name: "read",
-          arguments: {},
-        });
+        expect(content.map((block) => block.type)).toEqual([
+          "thinking",
+          "text",
+          "text",
+          "image",
+          "toolCall",
+        ]);
+        expect(rawMessages[1]?.content).toEqual([
+          { type: "thinking", thinking: "preserve runtime reasoning" },
+          { type: "text", text: "Earlier chunk" },
+          { type: "text", text: "Image reply" },
+          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+        ]);
         expect(JSON.stringify(content)).toContain("artifact_managed_image_");
         expect(JSON.stringify(content)).not.toContain("MEDIA:");
         expect(messages[1]?.openclawDelivery).toEqual({ mediaUrls: [mediaUrl] });
@@ -3438,7 +3636,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("materializes each distinct assistant media row once", async () => {
+  it("materializes latest media payloads once in first-seen order", async () => {
     await withTranscriptFixtureState(
       "openclaw-chat-send-multiple-assistant-media-",
       async (fixtureDir) => {
@@ -3459,7 +3657,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           {
             kind: "block",
             payload: setReplyPayloadMetadata(
-              { text: "First image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
+              { text: "Draft first image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
               {
                 assistantMessageIndex: 1,
                 assistantTranscriptMediaUrls: [firstMediaUrl],
@@ -3473,6 +3671,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
               {
                 assistantMessageIndex: 2,
                 assistantTranscriptMediaUrls: [secondMediaUrl],
+              },
+            ),
+          },
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              { text: "First image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
+              {
+                assistantMessageIndex: 1,
+                assistantTranscriptMediaUrls: [firstMediaUrl],
               },
             ),
           },
@@ -3500,6 +3708,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           expect(JSON.stringify(content)).not.toContain("MEDIA:");
         }
         expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+        const mediaMessageIds = readTranscriptJsonLines(mockState.transcriptPath)
+          .filter((entry) => asOptionalRecord(entry.message)?.role === "assistant")
+          .slice(1)
+          .map((entry) => entry.id);
+        expect(
+          mockState.emittedTranscriptUpdates
+            .filter((update) => mediaMessageIds.includes(update.messageId))
+            .map((update) => update.messageId),
+        ).toEqual(mediaMessageIds);
       },
     );
   });
@@ -3551,7 +3768,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("persists a named failure when agent-run media disappears before delivery", async () => {
+  it("keeps text while excluding the failure card from durable history for agent-run media", async () => {
     await expectUnpersistedAgentRunFinal({
       transcriptPrefix: "openclaw-chat-send-agent-stale-tts-",
       idempotencyKey: "idem-stale-agent-media",
@@ -3914,7 +4131,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const assistantEntries = await readActiveAssistantTranscriptMessages();
         expect(assistantEntries).toHaveLength(1);
         expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
-        expect(JSON.stringify(assistantEntries[0])).toContain(replyText);
+        for (const message of [
+          assistantEntries[0],
+          ...(await readRawActiveAssistantTranscriptMessages()),
+        ]) {
+          expect(getMessageContent({ message }).filter((block) => block.type === "text")).toEqual([
+            { type: "text", text: replyText },
+          ]);
+        }
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
         expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
       },
@@ -4382,6 +4606,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ["recorded failure with source reply", true, "source", "failed"],
     ["recorded success with ordinary output", true, "ordinary", "completed"],
     ["recorded success with a recoverable warning", true, "warning", "completed"],
+    ["recorded success with only a tool warning", true, "warning-only", "completed"],
     ["recorded success with source reply plus warning", true, "source-warning", "completed"],
   ] as const)(
     "projects agent-run terminal: $0",
@@ -4392,7 +4617,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const runId = `idem-agent-terminal-${name.replaceAll(" ", "-")}`;
       const failed = outcome === "failed" || presentation === "error";
       const sourceReply = presentation === "source" || presentation === "source-warning";
-      const replyText = "Partial agent reply";
+      const replyText = presentation === "warning-only" ? "⚠️ Exec failed" : "Partial agent reply";
       const errorMessage =
         presentation === "error"
           ? agentStarted
@@ -4425,7 +4650,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             mediaUrls: [mediaUrl],
           }),
         ];
-      } else if (presentation === "empty") {
+      } else if (presentation === "empty" || presentation === "warning-only") {
         mockState.finalText = "";
       } else if (presentation === "error") {
         mockState.dispatchedReplies = [
@@ -4438,10 +4663,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         mockState.runtimeAssistantTextsBeforeDelivery = [replyText];
         mockState.dispatchedReplies = [{ kind: "final", payload: { text: replyText } }];
       }
-      if (presentation === "warning" || presentation === "source-warning") {
+      if (
+        presentation === "warning" ||
+        presentation === "warning-only" ||
+        presentation === "source-warning"
+      ) {
         mockState.dispatchedReplies.push({
           kind: "final",
-          payload: { text: "tool warning", isError: true },
+          payload: { text: "⚠️ Exec failed", isError: true },
         });
       }
       if (outcome) {
@@ -4497,7 +4726,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           }),
         ]);
         expect(broadcasts[0]).not.toHaveProperty("message");
-      } else if (sourceReply) {
+      } else if (sourceReply || presentation === "warning-only") {
         expect(broadcasts).toEqual([expect.objectContaining({ runId, state: "final" })]);
         expect(extractFirstTextBlock(broadcasts[0])).toBe(replyText);
       } else {
@@ -4597,6 +4826,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(broadcastText).toContain("Trajectory exports can include");
     expect(broadcastText).toContain("through exec approval");
     expect(broadcastText).toContain("Approve once");
+    await waitForAssertion(() =>
+      expect(context.chatRunState.runs.has("idem-command-block")).toBe(false),
+    );
   });
 
   it("keeps slash-command block text when the final payload only adds media", async () => {
@@ -6273,12 +6505,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           ?.replyToCurrent === true,
     );
     const transcriptMessage = transcriptUpdate?.message as Record<string, any> | undefined;
+    const displayContent = Array.isArray(transcriptMessage?.openclawDisplayContent)
+      ? transcriptMessage.openclawDisplayContent
+      : transcriptMessage?.content;
     expect(transcriptMessage?.role).toBe("assistant");
-    expect(transcriptMessage?.content?.[0]).toEqual({
+    expect(displayContent?.[0]).toEqual({
       type: "text",
       text: "Image reply",
     });
-    expect(transcriptMessage?.content?.[1]).toMatchObject({
+    expect(displayContent?.[1]).toMatchObject({
       type: "image",
       artifactId: expect.stringMatching(/^artifact_managed_image_/u),
       mimeType: "image/png",
@@ -7113,7 +7348,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(mockState.maxActiveSaveMediaCalls).toBe(1);
       expect(mockState.savedMediaCalls).toHaveLength(2);
-      expect(context.dedupe.has("chat:idem-image-serial-save")).toBe(true);
+      expect(readChatSendDedupeResponse(context.dedupe, "idem-image-serial-save")).toBeDefined();
     });
   });
 

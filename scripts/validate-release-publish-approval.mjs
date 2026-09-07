@@ -2,6 +2,8 @@
 // Validates that a referenced release-publish workflow run is usable for approval.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { verifyAndroidNativeCi } from "./android-native-ci.mjs";
+import { validateStablePluginNpmBootstrapApproval } from "./plugin-npm-bootstrap-approval.mjs";
 import {
   runReleaseToolingGh,
   validateReleasePublishParentRun,
@@ -48,8 +50,10 @@ function positiveRunAttempt(value) {
   return Number(value);
 }
 
-if (approvalKind === "clawhub-bootstrap" && !approvalPath) {
-  fail("ClawHub bootstrap approval requires an attested approval artifact.");
+if (["clawhub-bootstrap", "npm-stable-bootstrap"].includes(approvalKind) && !approvalPath) {
+  fail(
+    `${approvalKind === "clawhub-bootstrap" ? "ClawHub" : "Stable npm"} bootstrap approval requires an attested approval artifact.`,
+  );
 }
 
 if (approvalPath) {
@@ -58,7 +62,7 @@ if (approvalPath) {
   let mismatchMessage;
   if (approvalKind === "android") {
     expectedApproval = {
-      version: 2,
+      version: approval.version === 3 ? 3 : 2,
       repository: process.env.GITHUB_REPOSITORY,
       workflow: "OpenClaw Release Publish",
       parentRunId: releasePublishRunId,
@@ -68,6 +72,7 @@ if (approvalPath) {
       parentWorkflowSha: expectedWorkflowSha,
       releaseTag: process.env.RELEASE_TAG,
       targetSha: process.env.RELEASE_TARGET_SHA,
+      ...(approval.version === 3 ? { nativeCi: approval.nativeCi } : {}),
     };
     mismatchMessage = "Attested Android release approval does not match this run request.";
   } else if (approvalKind === "clawhub-bootstrap") {
@@ -90,6 +95,41 @@ if (approvalPath) {
     };
     mismatchMessage =
       "Attested ClawHub bootstrap approval does not match this release target and package set.";
+  } else if (approvalKind === "npm-stable-bootstrap") {
+    validateStablePluginNpmBootstrapApproval(approval, {
+      repository: process.env.GITHUB_REPOSITORY,
+      parentRunId: releasePublishRunId,
+      parentRunAttempt: positiveRunAttempt(expectedRunAttempt),
+      workflowBranch: expectedBranch,
+      workflowFullRef: expectedWorkflowFullRef,
+      parentWorkflowSha: expectedWorkflowSha,
+      targetSha: process.env.RELEASE_TARGET_SHA,
+      packageName: process.env.PACKAGE_NAME,
+      packageVersion: process.env.PACKAGE_VERSION,
+      publishTag: process.env.PUBLISH_TAG,
+    });
+    expectedApproval = approval;
+    mismatchMessage = "Stable npm bootstrap approval mismatch.";
+    const refs = execFileSync(
+      "git",
+      [
+        "ls-remote",
+        "--tags",
+        "origin",
+        `refs/tags/${approval.releaseTag}`,
+        `refs/tags/${approval.releaseTag}^{}`,
+      ],
+      { encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024 },
+    )
+      .trim()
+      .split("\n")
+      .map((line) => line.split(/\s+/u));
+    const tagSha =
+      refs.find(([, ref]) => ref === `refs/tags/${approval.releaseTag}^{}`)?.[0] ??
+      refs.find(([, ref]) => ref === `refs/tags/${approval.releaseTag}`)?.[0];
+    if (tagSha !== approval.targetSha) {
+      fail("Stable npm bootstrap release tag no longer matches the approved target.");
+    }
   } else {
     fail(`Unsupported release approval kind: ${approvalKind}`);
   }
@@ -143,8 +183,9 @@ if (approvalPath) {
       workflowRef: expectedBranch,
       workflowSha: expectedWorkflowSha,
     });
-    // Fetch parent authority last so target/tooling reads cannot retain an
-    // admission snapshot across a parent failure, cancellation, or rerun.
+    // Native qualification and parent authority must survive child queue/build
+    // time and every preceding target, tooling, and release-asset lookup.
+    verifyAndroidNativeCi(approval);
     const currentRun = JSON.parse(
       runReleaseToolingGh([
         "api",
@@ -153,6 +194,8 @@ if (approvalPath) {
         "GET",
       ]),
     );
+    // Apps may attach after npm and GitHub publication complete. Keep the exact
+    // approval binding valid for a successful parent without requiring it to wait.
     validateReleasePublishParentRun({
       identity,
       releasePublishFullRef: expectedWorkflowFullRef,

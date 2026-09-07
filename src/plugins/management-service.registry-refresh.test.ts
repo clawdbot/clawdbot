@@ -28,9 +28,12 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
-vi.mock("./install-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./install-persistence.js")>()),
+vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: (params: unknown) => mocks.persistInstall(params),
+}));
+
+vi.mock("./install-config-mutation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-config-mutation.js")>()),
   resolveInstallConfigMutationPreflights: () => ({
     hookMutation: { mode: "allowed" },
     pluginMutation: { mode: "allowed" },
@@ -67,14 +70,10 @@ vi.mock("./slot-selection.js", () => ({
   applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
 }));
 
-const {
-  clearManagedPluginOfficialCatalogCache,
-  installManagedPlugin,
-  installManagedPluginSource,
-  inspectManagedPlugin,
-  listManagedPlugins,
-  setManagedPluginEnabled,
-} = await import("./management-service.js");
+const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { installManagedPlugin, setManagedPluginEnabled } = await import("./management-mutations.js");
+const { installManagedPluginSource } = await import("./management-install.js");
+const { inspectManagedPlugin, listManagedPlugins } = await import("./management-service.js");
 
 const installSnapshot = {
   config: {},

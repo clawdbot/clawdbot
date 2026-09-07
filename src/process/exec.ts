@@ -1,5 +1,4 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-// Exec helpers run subprocesses with normalized output, timeout, and abort handling.
 import { danger, shouldLogVerbose } from "../globals.js";
 import {
   decodeWindowsOutputBuffer,
@@ -30,7 +29,13 @@ export type RunExecOptions = {
   signal?: AbortSignal;
 };
 
-// Simple promise-wrapped execFile with optional verbosity logging.
+function decodeExecOutput(buffer: Uint8Array, windowsEncoding: string | null): string {
+  return decodeWindowsOutputBuffer({
+    buffer: Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength),
+    windowsEncoding,
+  });
+}
+
 export async function runExec(
   command: string,
   args: string[],
@@ -73,14 +78,8 @@ export async function runExec(
     const releaseOutput = releaseChildProcessOutputAfterExit(subprocess.nodeChildProcess);
     const { stdout, stderr } = await subprocess.finally(releaseOutput);
     const windowsEncoding = resolveWindowsConsoleEncoding();
-    const decodedStdout = decodeWindowsOutputBuffer({
-      buffer: Buffer.from(stdout),
-      windowsEncoding,
-    });
-    const decodedStderr = decodeWindowsOutputBuffer({
-      buffer: Buffer.from(stderr),
-      windowsEncoding,
-    });
+    const decodedStdout = decodeExecOutput(stdout, windowsEncoding);
+    const decodedStderr = decodeExecOutput(stderr, windowsEncoding);
     if (resolvedOptions?.logOutput !== false && shouldLogVerbose()) {
       if (decodedStdout.trim()) {
         logDebug(decodedStdout.trim());
@@ -103,16 +102,10 @@ export async function runExec(
         errorWithOutput.code = errorWithOutput.exitCode;
       }
       if (errorWithOutput.stdout instanceof Uint8Array) {
-        errorWithOutput.stdout = decodeWindowsOutputBuffer({
-          buffer: Buffer.from(errorWithOutput.stdout),
-          windowsEncoding,
-        });
+        errorWithOutput.stdout = decodeExecOutput(errorWithOutput.stdout, windowsEncoding);
       }
       if (errorWithOutput.stderr instanceof Uint8Array) {
-        errorWithOutput.stderr = decodeWindowsOutputBuffer({
-          buffer: Buffer.from(errorWithOutput.stderr),
-          windowsEncoding,
-        });
+        errorWithOutput.stderr = decodeExecOutput(errorWithOutput.stderr, windowsEncoding);
       }
     }
     if (resolvedOptions?.logOutput !== false && shouldLogVerbose()) {

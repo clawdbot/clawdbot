@@ -12,6 +12,27 @@ type SqliteIntegrityChecks = {
   integrityCheck: "ok";
 };
 
+export type SqliteIntegrityOperation<T> = Generator<
+  { database: DatabaseSync; databaseLabel: string },
+  T,
+  void
+>;
+
+/** Run the same admission steps synchronously when the caller cannot yield. */
+export function runSqliteIntegrityOperationSync<T>(operation: SqliteIntegrityOperation<T>): T {
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      assertSqliteIntegrity(step.value.database, step.value.databaseLabel);
+    } catch (error) {
+      step = operation.throw(error);
+      continue;
+    }
+    step = operation.next();
+  }
+  return step.value;
+}
+
 type UnboundSqliteIntegrityConfirmation =
   | { status: "failed"; error: Error; terminal: boolean }
   | { status: "healthy" };
@@ -207,7 +228,7 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
     // table-valued pragma name and make a corrupt database appear clean.
     const statement = database.prepare("PRAGMA foreign_key_check;");
     statement.setReadBigInts(true);
-    // OpenClaw's Node >=22.22.3 floor includes iterate(), added in Node 22.13.
+    // OpenClaw's Node >=24.16.0 floor includes iterate(), added in Node 22.13.
     for (const violation of statement.iterate() as Iterable<SqliteForeignKeyViolation>) {
       violationCount += 1;
       retainSortedForeignKeyViolation(violations, violation);

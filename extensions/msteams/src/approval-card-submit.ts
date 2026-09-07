@@ -1,17 +1,10 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import {
-  resolveApprovalOverGateway,
-  type ApprovalResolveResult,
-} from "openclaw/plugin-sdk/approval-gateway-runtime";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import {
-  claimMSTeamsApprovalCardBinding,
-  completeMSTeamsApprovalCardBinding,
-  getMSTeamsApprovalCardBinding,
+  msTeamsApprovalControls,
   readMSTeamsApprovalActionToken,
-  releaseMSTeamsApprovalCardBinding,
 } from "./approval-card-actions.js";
 import { buildMSTeamsCanonicalApprovalTerminalCard } from "./approval-card.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
@@ -45,7 +38,7 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
     ignored("missing card token");
     return true;
   }
-  const binding = getMSTeamsApprovalCardBinding(token);
+  const binding = msTeamsApprovalControls.get(token);
   if (!binding) {
     ignored("unknown or expired card token");
     return true;
@@ -83,20 +76,8 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
     return true;
   }
 
-  const claim = claimMSTeamsApprovalCardBinding(token);
-  if (claim.kind !== "claimed") {
-    ignored(
-      claim.kind === "in-flight"
-        ? "card token resolve already in flight"
-        : "card token already consumed",
-    );
-    return true;
-  }
-
-  const consumed = claim.binding;
-  let result: ApprovalResolveResult;
-  try {
-    result = await resolveApprovalOverGateway({
+  const outcome = await msTeamsApprovalControls.settle(token, async (consumed) => {
+    const result = await resolveApprovalOverGateway({
       cfg: deps.cfg,
       approvalId: consumed.approvalId,
       approvalKind: consumed.approvalKind,
@@ -115,18 +96,20 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
         },
       ],
     });
-  } catch (error) {
-    if (isApprovalNotFoundError(error)) {
-      // Missing approvals cannot recover; retire the card instead of rearming its token.
-      completeMSTeamsApprovalCardBinding(token);
-      ignored(`approval expired or no longer exists id=${consumed.approvalId}`);
-      return true;
-    }
-    releaseMSTeamsApprovalCardBinding(token);
-    throw error;
+    return result;
+  });
+  if (outcome.kind !== "settled") {
+    ignored(
+      outcome.kind === "missing"
+        ? "card token already consumed"
+        : outcome.kind === "in-flight"
+          ? "card token resolve already in flight"
+          : `approval expired or no longer exists id=${outcome.binding.approvalId}`,
+    );
+    return true;
   }
 
-  completeMSTeamsApprovalCardBinding(token);
+  const { binding: consumed, result } = outcome;
   deps.log.info("msteams approval resolved", {
     approvalId: consumed.approvalId,
     approvalKind: consumed.approvalKind,

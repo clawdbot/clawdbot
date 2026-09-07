@@ -143,6 +143,7 @@ describe("plugin manifest backup resources", () => {
     });
     const config: OpenClawConfig = {
       plugins: {
+        allow: [enabled.id, disabled.id],
         load: { paths: [enabled.pluginRoot, disabled.pluginRoot] },
         entries: {
           [enabled.id]: { enabled: true },
@@ -197,9 +198,12 @@ describe("plugin manifest backup resources", () => {
         workspace: true,
         backupResources: [{ disposition: "include", scope: "state", relativePath: "../outside" }],
       });
-      const config: OpenClawConfig = activated
-        ? { plugins: { entries: { [fixture.id]: { enabled: true } } } }
-        : {};
+      const config: OpenClawConfig = {
+        plugins: {
+          allow: [fixture.id],
+          entries: { [fixture.id]: { enabled: activated } },
+        },
+      };
       const resolveInventory = () =>
         resolveActivatedPluginBackupInventory({
           config,

@@ -26,8 +26,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatQuestionTest {
   private val json = chatControllerTestJson
   private val ChatController.onlyQuestion: ChatQuestionPrompt
@@ -499,13 +502,18 @@ class ChatQuestionTest {
                 .content
             getCalls[id] = getCalls.getOrDefault(id, 0) + 1
             when (id) {
-              recoveredPending.id ->
+              recoveredPending.id -> {
                 json.encodeToString(
                   QuestionGetResult(
                     if (getCalls.getValue(id) == 1) recoveredPending else recoveredAnswered,
                   ),
                 )
-              newlyMissingPending.id -> json.encodeToString(QuestionGetResult(newlyMissingAnswered))
+              }
+
+              newlyMissingPending.id -> {
+                json.encodeToString(QuestionGetResult(newlyMissingAnswered))
+              }
+
               failingPending.id -> {
                 if (getCalls.getValue(id) == 1) {
                   fallbackFailed = true
@@ -513,7 +521,10 @@ class ChatQuestionTest {
                 }
                 json.encodeToString(QuestionGetResult(failingAnswered))
               }
-              else -> error("unexpected question id")
+
+              else -> {
+                error("unexpected question id")
+              }
             }
           }
         }

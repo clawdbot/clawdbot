@@ -18,6 +18,40 @@ vi.mock("./mattermost/runtime-api.js", async () => ({
   loadOutboundMediaFromUrl,
 }));
 
+async function sendPreparedMattermostLoopback(params: {
+  cfg: OpenClawConfig;
+  actionParams: Record<string, unknown>;
+}) {
+  const to = typeof params.actionParams.to === "string" ? params.actionParams.to.trim() : "";
+  const text = typeof params.actionParams.message === "string" ? params.actionParams.message : "";
+  const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
+  const sendPayload = mattermostPlugin.outbound?.sendPayload;
+  if (!to || !prepareSendPayload || !sendPayload) {
+    throw new Error("Mattermost prepared outbound send surface missing");
+  }
+  const payload = await prepareSendPayload({
+    ctx: {
+      channel: "mattermost",
+      action: "send",
+      params: params.actionParams,
+      cfg: params.cfg,
+      accountId: "default",
+    },
+    to,
+    payload: { text },
+  });
+  if (!payload) {
+    throw new Error("Mattermost send preparation declined");
+  }
+  return await sendPayload({
+    cfg: params.cfg,
+    to,
+    text,
+    payload,
+    accountId: "default",
+  });
+}
+
 describe("Mattermost send action loopback", () => {
   it("reuses the inbound provider channel when delivering a direct reply", async () => {
     const requests: Array<{ path: string; body?: unknown }> = [];
@@ -119,35 +153,21 @@ describe("Mattermost send action loopback", () => {
             },
           },
         } as OpenClawConfig;
-        const handleAction = mattermostPlugin.actions?.handleAction;
-        if (!handleAction) {
-          throw new Error("Mattermost send action missing");
-        }
-
-        const result = await handleAction({
-          channel: "mattermost",
-          action: "send",
-          params: {
+        const result = await sendPreparedMattermostLoopback({
+          cfg,
+          actionParams: {
             to: `channel:${CHANNEL_ID}`,
             message: "loopback proof",
             buffer: "",
             base64: "  ",
           },
-          cfg,
-          accountId: "default",
         });
 
-        expect(result.content).toEqual([
-          {
-            type: "text",
-            text: JSON.stringify({
-              ok: true,
-              channel: "mattermost",
-              messageId: "post-loopback",
-              channelId: CHANNEL_ID,
-            }),
-          },
-        ]);
+        expect(result).toMatchObject({
+          channel: "mattermost",
+          messageId: "post-loopback",
+          target: { kind: "channel", id: CHANNEL_ID },
+        });
         expect(requests).toEqual([
           {
             path: "/api/v4/posts",
@@ -156,16 +176,13 @@ describe("Mattermost send action loopback", () => {
         ]);
 
         await expect(
-          handleAction({
-            channel: "mattermost",
-            action: "send",
-            params: {
+          sendPreparedMattermostLoopback({
+            cfg,
+            actionParams: {
               to: `channel:${CHANNEL_ID}`,
               message: "must not send",
               base64: "cmVwb3J0",
             },
-            cfg,
-            accountId: "default",
           }),
         ).rejects.toThrow("buffer/base64 payloads are not supported");
         expect(requests).toHaveLength(1);
@@ -198,7 +215,7 @@ describe("Mattermost send action loopback", () => {
         setMattermostRuntime(createPluginRuntimeMock());
         loadOutboundMediaFromUrl.mockReset();
         loadOutboundMediaFromUrl.mockResolvedValueOnce({
-          buffer: Buffer.from("unnamed-image"),
+          buffer: Buffer.from("!unnamed-image?").subarray(1, -1),
           contentType: "image/png",
           kind: "image",
         });
@@ -211,21 +228,13 @@ describe("Mattermost send action loopback", () => {
             },
           },
         } as OpenClawConfig;
-        const handleAction = mattermostPlugin.actions?.handleAction;
-        if (!handleAction) {
-          throw new Error("Mattermost send action missing");
-        }
-
-        await handleAction({
-          channel: "mattermost",
-          action: "send",
-          params: {
+        await sendPreparedMattermostLoopback({
+          cfg,
+          actionParams: {
             to: `channel:${CHANNEL_ID}`,
             message: "loopback media proof",
             mediaUrl: "https://media.example.test/unnamed",
           },
-          cfg,
-          accountId: "default",
         });
       },
     );
@@ -233,5 +242,6 @@ describe("Mattermost send action loopback", () => {
     expect(uploads).toHaveLength(1);
     expect(uploads[0]).toContain('filename="upload.png"');
     expect(uploads[0]).toContain("Content-Type: image/png");
+    expect(uploads[0]).toContain("\r\n\r\nunnamed-image\r\n");
   });
 });

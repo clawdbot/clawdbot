@@ -50,17 +50,6 @@ function selectRouterOutletState<TRouteId extends string, TModule, TData>(
   };
 }
 
-function equalRouterOutletState(
-  previous: RouterOutletStateSlice,
-  next: RouterOutletStateSlice,
-): boolean {
-  return (
-    previous.status === next.status &&
-    previous.active === next.active &&
-    previous.pending === next.pending
-  );
-}
-
 function idleSnapshot<TRouteId extends string, TModule, TData>(): RouterOutletSnapshot<
   TRouteId,
   TModule,
@@ -170,10 +159,10 @@ export class RouterOutletController<
       return;
     }
     this.applySelection(selectRouterOutletState(router.getState()), notify);
-    this.unsubscribe = router.subscribeSelector(
-      selectRouterOutletState,
-      (selection) => this.applySelection(selection),
-      equalRouterOutletState,
+    // An earlier subscriber can navigate during this notification. Read the
+    // current route so its superseded not-found snapshot cannot trigger recovery.
+    this.unsubscribe = router.subscribe(() =>
+      this.applySelection(selectRouterOutletState(router.getState())),
     );
   }
 

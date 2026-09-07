@@ -180,24 +180,11 @@ const CUBE_VALUES = [0, 95, 135, 175, 215, 255];
 // Grayscale ramp values (indices 232-255, 24 grays from 8 to 238)
 const GRAY_VALUES = Array.from({ length: 24 }, (_, i) => 8 + i * 10);
 
-function findClosestCubeIndex(value: number): number {
+function findClosestPaletteIndex(value: number, palette: readonly number[]): number {
   let minDist = Infinity;
   let minIdx = 0;
-  for (const [i, cubeValue] of CUBE_VALUES.entries()) {
-    const dist = Math.abs(value - cubeValue);
-    if (dist < minDist) {
-      minDist = dist;
-      minIdx = i;
-    }
-  }
-  return minIdx;
-}
-
-function findClosestGrayIndex(gray: number): number {
-  let minDist = Infinity;
-  let minIdx = 0;
-  for (const [i, grayValue] of GRAY_VALUES.entries()) {
-    const dist = Math.abs(gray - grayValue);
+  for (const [i, paletteValue] of palette.entries()) {
+    const dist = Math.abs(value - paletteValue);
     if (dist < minDist) {
       minDist = dist;
       minIdx = i;
@@ -223,9 +210,9 @@ function colorDistance(
 
 function rgbTo256(r: number, g: number, b: number): number {
   // Find closest color in the 6x6x6 cube
-  const rIdx = findClosestCubeIndex(r);
-  const gIdx = findClosestCubeIndex(g);
-  const bIdx = findClosestCubeIndex(b);
+  const rIdx = findClosestPaletteIndex(r, CUBE_VALUES);
+  const gIdx = findClosestPaletteIndex(g, CUBE_VALUES);
+  const bIdx = findClosestPaletteIndex(b, CUBE_VALUES);
   const cubeR = CUBE_VALUES[rIdx];
   const cubeG = CUBE_VALUES[gIdx];
   const cubeB = CUBE_VALUES[bIdx];
@@ -237,7 +224,7 @@ function rgbTo256(r: number, g: number, b: number): number {
 
   // Find closest grayscale
   const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-  const grayIdx = findClosestGrayIndex(gray);
+  const grayIdx = findClosestPaletteIndex(gray, GRAY_VALUES);
   const grayValue = GRAY_VALUES[grayIdx];
   if (grayValue === undefined) {
     throw new Error("Invalid 256-color grayscale index");

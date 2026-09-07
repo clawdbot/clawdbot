@@ -5,7 +5,7 @@ openclaw-assistant-panel {
   font-family: var(--font-body);
 }
 
-.cp {
+.assistant-panel {
   position: fixed;
   display: flex;
   min-width: 0;
@@ -15,82 +15,82 @@ openclaw-assistant-panel {
   background: var(--bg);
 }
 
-.cp--bottom {
+.assistant-panel--bottom {
   right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
   bottom: calc(var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px));
   left: var(--shell-nav-width, 0);
 }
 
-.cp--right {
+.assistant-panel--right {
   top: var(--shell-topbar-height, 0);
   right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
   bottom: calc(var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px));
 }
 
-.cp-resizer {
+.assistant-panel-resizer {
   position: absolute;
   z-index: 2;
 }
 
-.cp-resizer--bottom {
+.assistant-panel-resizer--bottom {
   --resize-handle-line-block: 0;
   top: 0;
   right: 0;
   left: 0;
 }
 
-.cp-resizer--right {
+.assistant-panel-resizer--right {
   --resize-handle-line-inline: 0;
   top: 0;
   bottom: 0;
   left: 0;
 }
 
-.cp-title,
-.cp-actions {
+.assistant-panel-title,
+.assistant-panel-actions {
   display: flex;
   align-items: center;
 }
 
-.cp-title {
+.assistant-panel-title {
   min-width: 0;
   gap: 7px;
   color: var(--text-strong);
   font-size: 12px;
 }
 
-.cp-actions {
+.assistant-panel-actions {
   gap: var(--rail-header-action-gap);
 }
 
-.cp-icon {
+.assistant-panel-icon {
   flex: 0 0 auto;
 }
 
-.cp > openclaw-custodian-surface,
-.cp > openclaw-home-session {
+.assistant-panel > openclaw-custodian-surface,
+.assistant-panel > openclaw-home-session {
   display: flex;
   min-height: 0;
   flex: 1 1 0;
 }
 
-.cp .custodian-surface {
+.assistant-panel .custodian-surface {
   width: 100%;
   min-height: 0;
   padding: 0 12px 12px;
 }
 
-.cp .custodian__messages {
+.assistant-panel .custodian__messages {
   padding-block: 16px;
 }
 
-.cp .custodian__option-card {
+.assistant-panel .custodian__option-card {
   margin-right: 0;
   margin-left: 42px;
 }
 
 @media (max-width: 640px) {
-  .cp--right {
+  .assistant-panel--right {
     top: var(--shell-topbar-height, 0);
     right: 0;
     bottom: 0;
@@ -99,7 +99,7 @@ openclaw-assistant-panel {
   }
 }
 
-.cp-tab {
+.assistant-panel-tab {
   border: 0;
   padding: 4px;
   background: transparent;
@@ -108,12 +108,12 @@ openclaw-assistant-panel {
   white-space: nowrap;
 }
 
-.cp-tab[aria-pressed="true"] {
+.assistant-panel-tab[aria-pressed="true"] {
   color: var(--text-strong);
   font-weight: 600;
 }
 
-.cp > openclaw-home-session {
+.assistant-panel > openclaw-home-session {
   flex-direction: column;
   min-width: 0;
 }

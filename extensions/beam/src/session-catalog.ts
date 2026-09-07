@@ -57,6 +57,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
   return {
     id: "beam",
     label: "Beam",
+    audience: "gateway-operators",
     shareRoute: BEAM_SESSION_SHARE_ROUTE,
     supportsProcessHomeIsolation: true,
     async list(params) {
@@ -93,8 +94,8 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             recencyAt: session.receivedAt,
             source: session.source,
             archived: false,
-            canContinue: false,
-            canArchive: false,
+            canContinue: true,
+            canArchive: true,
           })),
           ...(offset + page.length < sessions.length
             ? { nextCursor: String(offset + page.length) }
@@ -138,6 +139,30 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
           }))
           .toReversed(),
         ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
+      };
+    },
+    async archive(params) {
+      if (params.hostId !== BEAM_HOST_ID) {
+        throw new Error(`unknown Beam host: ${params.hostId}`);
+      }
+      if (!(await store.delete(params.threadId))) {
+        throw new Error(`unknown Beam session: ${params.threadId}`);
+      }
+      return { ok: true };
+    },
+    async copyToGatewaySession(params) {
+      if (params.hostId !== BEAM_HOST_ID) {
+        throw new Error(`unknown Beam host: ${params.hostId}`);
+      }
+      const session = await store.get(params.threadId);
+      if (!session) {
+        throw new Error(`unknown Beam session: ${params.threadId}`);
+      }
+      return {
+        displayName: session.title,
+        ...(session.sourceModel
+          ? { preferredModel: `${session.sourceModel.provider}/${session.sourceModel.model}` }
+          : {}),
       };
     },
   };

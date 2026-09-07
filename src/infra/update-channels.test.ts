@@ -84,9 +84,17 @@ describe("resolveEffectiveUpdateChannel", () => {
       expected: { channel: "beta", source: "config" },
     },
     {
-      name: "uses installed beta version over stale stable config",
+      name: "keeps configured stable after a one-off beta package update",
       params: {
         configChannel: "stable" as const,
+        currentVersion: "2026.5.2-beta.1",
+        installKind: "package" as const,
+      },
+      expected: { channel: "stable", source: "config" },
+    },
+    {
+      name: "uses installed beta version without a configured channel",
+      params: {
         currentVersion: "2026.5.2-beta.1",
         installKind: "package" as const,
       },
@@ -182,7 +190,7 @@ describe("resolveUpdateChannelDisplay labels", () => {
 });
 
 describe("resolveUpdateChannelDisplay", () => {
-  it("labels stale stable config on a beta install from the installed version", () => {
+  it("shows the configured stable channel after a one-off beta package update", () => {
     expect(
       resolveUpdateChannelDisplay({
         configChannel: "stable",
@@ -190,9 +198,9 @@ describe("resolveUpdateChannelDisplay", () => {
         installKind: "package",
       }),
     ).toEqual({
-      channel: "beta",
-      source: "installed-version",
-      label: "beta (installed version)",
+      channel: "stable",
+      source: "config",
+      label: "stable (config)",
     });
   });
 

@@ -8,6 +8,10 @@ import {
   NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
   NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
 } from "../infra/node-commands.js";
+import {
+  createPluginToolAllowlist,
+  type PluginToolAllowlist,
+} from "../plugins/tool-grant-allowlist.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sanitizeNodeIdFragment, sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
@@ -16,7 +20,7 @@ import {
   setMcpCodeModeGuestResultFromAgentResult,
 } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -60,15 +64,11 @@ function mapMcpPayloadToAgentToolResult(
   });
 }
 
-function normalizePolicyNames(values: readonly string[] | undefined): Set<string> {
-  return new Set((values ?? []).map((value) => normalizeToolPolicyName(value)).filter(Boolean));
-}
-
 function toolPolicyAllows(params: {
   pluginId: string;
   toolName: string;
   exposedToolName?: string;
-  allowlist: Set<string>;
+  allowlist: PluginToolAllowlist;
   denylist: ReturnType<typeof compileGlobPatterns>;
   registered: boolean;
 }): boolean {
@@ -83,7 +83,7 @@ function toolPolicyAllows(params: {
   ) {
     return false;
   }
-  if (params.allowlist.size === 0 || params.allowlist.has(DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY)) {
+  if (params.allowlist.includesDefaults) {
     return true;
   }
   // pluginId is node-supplied for unregistered descriptors, so it must not
@@ -91,11 +91,9 @@ function toolPolicyAllows(params: {
   // The reserved node-mcp id is safe: real plugins can never register it.
   const pluginIdTrusted = params.registered || pluginId === "node-mcp";
   return (
-    params.allowlist.has("*") ||
-    params.allowlist.has("group:plugins") ||
-    (pluginIdTrusted && params.allowlist.has(pluginId)) ||
-    params.allowlist.has(toolName) ||
-    params.allowlist.has(exposedToolName)
+    (pluginIdTrusted && params.allowlist.allowsPlugin(pluginId)) ||
+    params.allowlist.allowsToolName(toolName) ||
+    params.allowlist.allowsToolName(exposedToolName)
   );
 }
 
@@ -156,7 +154,7 @@ export function createNodePluginTools(params: {
   const existingNormalized = new Set(
     [...(params.existingToolNames ?? [])].map((name) => normalizeToolPolicyName(name)),
   );
-  const allowlist = normalizePolicyNames(params.toolAllowlist);
+  const allowlist = createPluginToolAllowlist(params.toolAllowlist);
   const denylist = compileGlobPatterns({
     raw: params.toolDenylist,
     normalize: normalizeToolPolicyName,

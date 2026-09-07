@@ -22,6 +22,7 @@ export type SubagentAdminKillResult =
 /** Admin cancellation hook for ACP sessions owned by task records. */
 type CancelAcpSessionAdmin = (params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   reason: string;
   expectedRunId?: string;
@@ -40,6 +41,8 @@ export type TaskRegistryControlRuntime = {
     sessionKey: string;
     agentId?: string;
     expectedRunId?: string;
+    /** Stable task identity; resolves once to the current execution before cancellation. */
+    expectedTaskRunId?: string;
     expectedGeneration?: number;
     expectedOwnerKey?: string;
     /** Consume the result synchronously while its exact run ownership is still held. */

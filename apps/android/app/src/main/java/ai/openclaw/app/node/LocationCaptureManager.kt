@@ -13,8 +13,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import java.time.Instant
-import java.time.format.DateTimeFormatter
 
 /**
  * Android LocationManager-backed capture used by gateway location commands.
@@ -22,16 +20,11 @@ import java.time.format.DateTimeFormatter
 class LocationCaptureManager(
   private val context: Context,
 ) {
-  data class Payload(
-    val payloadJson: String,
-  )
-
   suspend fun getLocation(
     desiredProviders: List<String>,
     maxAgeMs: Long?,
     timeoutMs: Long,
-    isPrecise: Boolean,
-  ): Payload =
+  ): Location =
     withContext(Dispatchers.Main) {
       val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
       if (!manager.isProviderEnabled(LocationManager.GPS_PROVIDER) &&
@@ -41,32 +34,8 @@ class LocationCaptureManager(
       }
 
       // Prefer a recent cached fix before waking GPS/network providers.
-      val location =
-        bestLastKnown(manager, desiredProviders, maxAgeMs)
-          ?: requestCurrent(manager, desiredProviders, timeoutMs, maxAgeMs)
-
-      val timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(location.time))
-      val source = location.provider
-      val altitudeMeters = if (location.hasAltitude()) location.altitude else null
-      val speedMps = if (location.hasSpeed()) location.speed.toDouble() else null
-      val headingDeg = if (location.hasBearing()) location.bearing.toDouble() else null
-      Payload(
-        buildString {
-          append("{\"lat\":")
-          append(location.latitude)
-          append(",\"lon\":")
-          append(location.longitude)
-          append(",\"accuracyMeters\":")
-          append(location.accuracy.toDouble())
-          if (altitudeMeters != null) append(",\"altitudeMeters\":").append(altitudeMeters)
-          if (speedMps != null) append(",\"speedMps\":").append(speedMps)
-          if (headingDeg != null) append(",\"headingDeg\":").append(headingDeg)
-          append(",\"timestamp\":\"").append(timestamp).append('"')
-          append(",\"isPrecise\":").append(isPrecise)
-          append(",\"source\":\"").append(source).append('"')
-          append('}')
-        },
-      )
+      bestLastKnown(manager, desiredProviders, maxAgeMs)
+        ?: requestCurrent(manager, desiredProviders, timeoutMs, maxAgeMs)
     }
 
   private fun bestLastKnown(

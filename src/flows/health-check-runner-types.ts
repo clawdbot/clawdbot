@@ -28,6 +28,7 @@ export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes"
 /** Internal runner selection metadata. This is intentionally not part of the public SDK type. */
 interface HealthCheckSelectionOptions {
   readonly defaultEnabled?: boolean;
+  readonly updateReadiness?: "post-plugin";
 }
 
 export type SplitHealthCheckDefinition = HealthCheck & HealthCheckSelectionOptions;

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runPluginPayloadSmokeCheck } from "../cli/update-cli/plugin-payload-validation.js";
+import { runPluginPayloadSmokeCheck } from "../plugins/payload-verification.js";
 import {
   buildDegradedPluginsFromVerificationFailures,
   listActiveDegradedPlugins,

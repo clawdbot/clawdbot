@@ -20,7 +20,13 @@ export function cronFailureDetailLines(
   failureNotificationDetail?: CronFailureNotificationDetail,
 ): string[] {
   if (errorReason) {
-    return [`Cause: ${errorReason}`];
+    return errorReason === "model_not_found"
+      ? [
+          `Cause: ${errorReason}`,
+          "Run `openclaw doctor --fix` to repair provider-declared retired model references.",
+          "Choose a supported model for this automation or remove its model override to use the agent default. If the agent default is unavailable, update it too.",
+        ]
+      : [`Cause: ${errorReason}`];
   }
   if (!failureNotificationDetail) {
     return [GENERIC_FAILURE_DETAIL];

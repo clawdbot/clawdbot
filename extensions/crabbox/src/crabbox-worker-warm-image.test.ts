@@ -12,6 +12,7 @@ import {
   captureWarmImage,
   commandResult,
   createWarmProvider,
+  openWarmImageStore,
   provisionWarmProfile,
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,
@@ -332,73 +333,80 @@ describe("Crabbox profile warm images", () => {
       LEASE_ID,
       "--mode",
       "native",
-      "--wait=false",
+      "--wait",
       "--json",
     ]);
     calls.length = 0;
     await provisionWarmProfile(provider, PROFILE, `provision:v2:${"2".repeat(64)}`);
-    expect(calls.some(({ argv }) => argv[2] === "inspect")).toBe(true);
+    expect(calls.some(({ argv }) => argv[2] === "inspect")).toBe(false);
     expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
     expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
   });
 
-  it("captures and reuses machine0 images with native ACTIVE state", async () => {
-    const profile = { ...PROFILE, provider: "machine0" };
-    const { provider, calls } = createWarmProvider(({ argv }) => {
-      if (argv[2] === "create") {
-        return commandResult({
-          stdout: JSON.stringify({
-            id: CHECKPOINT_ID,
-            kind: "machine0-image",
-            leaseId: LEASE_ID,
-            native: { state: "ACTIVE" },
-          }),
-        });
-      }
-      if (argv[2] === "inspect") {
-        return commandResult({
-          stdout: JSON.stringify({
-            localState: "metadata_available",
-            providerState: "ACTIVE",
-            nextAction: "fork_or_delete",
-          }),
-        });
-      }
-      return undefined;
-    });
-    await captureWarmImage(provider, profile);
+  it.each([
+    { backend: "aws", kind: "aws-ebs-snapshot", nativeState: "completed" },
+    { backend: "machine0", kind: "machine0-image", nativeState: "ACTIVE" },
+  ])(
+    "reuses waited $backend images without repeating readiness inspection",
+    async ({ backend, kind, nativeState }) => {
+      const profile = { ...PROFILE, provider: backend };
+      const { provider, calls } = createWarmProvider(({ argv }) => {
+        if (argv[2] === "create") {
+          return commandResult({
+            stdout: JSON.stringify({
+              id: CHECKPOINT_ID,
+              kind,
+              leaseId: LEASE_ID,
+              native: { state: nativeState },
+            }),
+          });
+        }
+        if (argv[2] === "inspect") {
+          return commandResult({
+            stdout: JSON.stringify({
+              localState: "metadata_available",
+              providerState: nativeState,
+              nextAction: "fork_or_delete",
+            }),
+          });
+        }
+        return undefined;
+      });
+      await captureWarmImage(provider, profile);
 
-    const create = calls.find(({ argv }) => argv[2] === "create");
-    expect(create?.argv).toEqual([
-      expect.any(String),
-      "checkpoint",
-      "create",
-      "--provider",
-      "machine0",
-      "--id",
-      LEASE_ID,
-      "--mode",
-      "native",
-      "--wait=false",
-      "--json",
-      "--strategy",
-      "image",
-    ]);
-    expect(create?.options.timeoutMs).toBe(600_000);
-    const scrub = calls.find(({ options }) =>
-      options.input?.toString().includes("CRABBOX_SCRUB_NODE_SCRIPT"),
-    );
-    expect(scrub?.options.timeoutMs).toBe(180_000);
-    const teardownCalls = calls.slice(calls.indexOf(scrub!));
-    // Include stop after capture: the caller must not time out while either still owns the lease.
-    expect(provider.resolveDestroyTimeoutMs?.(profile)).toBeGreaterThanOrEqual(
-      teardownCalls.reduce((total, call) => total + call.options.timeoutMs, 0),
-    );
-    calls.length = 0;
-    await provisionWarmProfile(provider, profile, `provision:v2:${"2".repeat(64)}`);
-    expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
-  });
+      const create = calls.find(({ argv }) => argv[2] === "create");
+      expect(create?.argv).toEqual([
+        expect.any(String),
+        "checkpoint",
+        "create",
+        "--provider",
+        backend,
+        "--id",
+        LEASE_ID,
+        "--mode",
+        "native",
+        "--wait",
+        "--json",
+        ...(backend === "machine0" ? ["--strategy", "image"] : []),
+      ]);
+      expect(create?.options.timeoutMs).toBe(backend === "machine0" ? 600_000 : 180_000);
+      const scrub = calls.find(({ options }) =>
+        options.input?.toString().includes("CRABBOX_SCRUB_NODE_SCRIPT"),
+      );
+      expect(scrub?.options.timeoutMs).toBe(180_000);
+      const teardownCalls = calls.slice(calls.indexOf(scrub!));
+      // Include stop after capture: the caller must not time out while either still owns the lease.
+      expect(provider.resolveDestroyTimeoutMs?.(profile)).toBeGreaterThanOrEqual(
+        teardownCalls.reduce((total, call) => total + call.options.timeoutMs, 0),
+      );
+      expect(listCrabboxWarmImages()[0]?.state).toBe("available");
+      calls.length = 0;
+      await provisionWarmProfile(provider, profile, `provision:v2:${"2".repeat(64)}`);
+      expect(calls.some(({ argv }) => argv[2] === "inspect")).toBe(false);
+      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+      expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+    },
+  );
 
   it.each([
     { action: "run", name: "scrub fails", result: { code: 7, stderr: "scrub failed" } },
@@ -659,6 +667,10 @@ describe("Crabbox profile warm images", () => {
           : undefined,
       );
       await captureWarmImage(provider);
+      // Older captures can retain a pending projection; verify that stored state on reuse.
+      const store = openWarmImageStore();
+      const { key, value } = store.entries()[0]!;
+      store.update(key, () => ({ ...value, image: { ...value.image!, state: "pending" } }));
       calls.length = 0;
 
       const lease = await provisionWarmProfile(provider);

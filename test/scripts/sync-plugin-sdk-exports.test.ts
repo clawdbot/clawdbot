@@ -215,10 +215,10 @@ describe("plugin SDK registration CLI", () => {
     expect(readOutputs(root)).toEqual(synced);
   });
 
-  it.each(literalEntries)("packs %s without private types or test-only exports", (entry) => {
+  it("packs literal entry names without private types or test-only exports", () => {
     const root = createFixture({
-      entries: ["public-entry", entry, "test-fixtures"],
-      privateEntries: [entry, "test-fixtures", "qa-lab"],
+      entries: ["public-entry", ...literalEntries, "test-fixtures"],
+      privateEntries: [...literalEntries, "test-fixtures", "qa-lab"],
     });
     const included = [
       "assets/public.txt",
@@ -226,7 +226,7 @@ describe("plugin SDK registration CLI", () => {
       "dist/plugin-sdk/owner-extra.d.ts",
       "dist/plugin-sdk/public-entry.js",
       "dist/plugin-sdk/public-entry.d.ts",
-      `dist/plugin-sdk/${entry}.js`,
+      ...literalEntries.map((entry) => `dist/plugin-sdk/${entry}.js`),
     ];
     const excluded = [
       "assets/internal.txt",
@@ -236,7 +236,7 @@ describe("plugin SDK registration CLI", () => {
       "dist/plugin-sdk/.tsbuildinfo",
       "dist/plugin-sdk/qa-lab.js",
       "dist/plugin-sdk/owner_entry.json",
-      `dist/plugin-sdk/${entry}.d.ts`,
+      ...literalEntries.map((entry) => `dist/plugin-sdk/${entry}.d.ts`),
       "dist/plugin-sdk/test-fixtures.js",
       "dist/plugin-sdk/test-fixtures.d.ts",
     ];
@@ -259,7 +259,7 @@ describe("plugin SDK registration CLI", () => {
     );
     expect(readPackage(root).files).toEqual([
       ...fixtureFiles,
-      `!dist/plugin-sdk/${entry}.d.ts`,
+      ...literalEntries.map((entry) => `!dist/plugin-sdk/${entry}.d.ts`),
       "!dist/plugin-sdk/test-fixtures.d.ts",
       "!dist/plugin-sdk/test-fixtures.js",
     ]);
@@ -269,7 +269,12 @@ describe("plugin SDK registration CLI", () => {
         types: "./dist/plugin-sdk/public-entry.d.ts",
         default: "./dist/plugin-sdk/public-entry.js",
       },
-      [`./plugin-sdk/${entry}`]: { default: `./dist/plugin-sdk/${entry}.js` },
+      ...Object.fromEntries(
+        literalEntries.map((entry) => [
+          `./plugin-sdk/${entry}`,
+          { default: `./dist/plugin-sdk/${entry}.js` },
+        ]),
+      ),
     });
     for (const { file, prefix } of declarationConfigs) {
       expect(readConfig(root, file).compilerOptions.paths).toEqual({
@@ -278,9 +283,12 @@ describe("plugin SDK registration CLI", () => {
           `${prefix}packages/plugin-sdk/dist/src/plugin-sdk/custom.d.ts`,
           "./override.d.ts",
         ],
-        [`openclaw/plugin-sdk/${entry}`]: [
-          `${prefix}packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
-        ],
+        ...Object.fromEntries(
+          literalEntries.map((entry) => [
+            `openclaw/plugin-sdk/${entry}`,
+            [`${prefix}packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`],
+          ]),
+        ),
         "openclaw/plugin-sdk/test-fixtures": [
           `${prefix}packages/plugin-sdk/dist/src/plugin-sdk/test-fixtures.d.ts`,
         ],
@@ -289,21 +297,19 @@ describe("plugin SDK registration CLI", () => {
     expectStableSync(root);
   });
 
-  it.each(
-    literalEntries.flatMap((entry) => ["removed", "public"].map((kind) => ({ entry, kind }))),
-  )(
-    "prunes generated aliases and exclusions when $entry becomes $kind, then re-registers it",
-    ({ entry, kind }) => {
-      const formerEntry = `former-${entry}`;
+  it.each(["removed", "public"])(
+    "prunes generated aliases and exclusions when private entries become %s, then re-registers them",
+    (kind) => {
+      const formerEntries = literalEntries.map((entry) => `former-${entry}`);
       const root = createFixture({
-        entries: ["private-entry", "test-fixtures", formerEntry],
-        privateEntries: ["private-entry", "test-fixtures", formerEntry],
+        entries: ["private-entry", "test-fixtures", ...formerEntries],
+        privateEntries: ["private-entry", "test-fixtures", ...formerEntries],
       });
       expect(runSync(root).status).toBe(0);
       writeJson(root, entryList, [
         "private-entry",
         "test-fixtures",
-        ...(kind === "public" ? [formerEntry] : []),
+        ...(kind === "public" ? formerEntries : []),
       ]);
       writeJson(root, privateList, ["private-entry", "test-fixtures"]);
       const manifest = readPackage(root);
@@ -317,8 +323,10 @@ describe("plugin SDK registration CLI", () => {
         ...retained,
         "!dist/plugin-sdk/private-entry.js",
         "!dist/plugin-sdk/private-entry.d.ts",
-        `!dist/plugin-sdk/${formerEntry}.js`,
-        `!dist/plugin-sdk/${formerEntry}.d.ts`,
+        ...formerEntries.flatMap((entry) => [
+          `!dist/plugin-sdk/${entry}.js`,
+          `!dist/plugin-sdk/${entry}.d.ts`,
+        ]),
       ];
       writeJson(root, "package.json", manifest);
 
@@ -342,30 +350,36 @@ describe("plugin SDK registration CLI", () => {
         });
       }
       const exports = readPackage(root).exports;
-      expect(exports[`./plugin-sdk/${formerEntry}`]).toEqual(
-        kind === "public"
-          ? {
-              types: `./dist/plugin-sdk/${formerEntry}.d.ts`,
-              default: `./dist/plugin-sdk/${formerEntry}.js`,
-            }
-          : undefined,
-      );
+      for (const entry of formerEntries) {
+        expect(exports[`./plugin-sdk/${entry}`]).toEqual(
+          kind === "public"
+            ? {
+                types: `./dist/plugin-sdk/${entry}.d.ts`,
+                default: `./dist/plugin-sdk/${entry}.js`,
+              }
+            : undefined,
+        );
+      }
       expectStableSync(root);
-      writeJson(root, entryList, ["private-entry", "test-fixtures", formerEntry]);
-      writeJson(root, privateList, ["private-entry", "test-fixtures", formerEntry]);
+      writeJson(root, entryList, ["private-entry", "test-fixtures", ...formerEntries]);
+      writeJson(root, privateList, ["private-entry", "test-fixtures", ...formerEntries]);
       expect(runSync(root).status).toBe(0);
       expect(readPackage(root).files).toEqual([
         ...retained,
-        `!dist/plugin-sdk/${formerEntry}.d.ts`,
+        ...formerEntries.map((entry) => `!dist/plugin-sdk/${entry}.d.ts`),
       ]);
       for (const { file, prefix } of declarationConfigs) {
-        expect(
-          readConfig(root, file).compilerOptions.paths[`openclaw/plugin-sdk/${formerEntry}`],
-        ).toEqual([`${prefix}packages/plugin-sdk/dist/src/plugin-sdk/${formerEntry}.d.ts`]);
+        for (const entry of formerEntries) {
+          expect(
+            readConfig(root, file).compilerOptions.paths[`openclaw/plugin-sdk/${entry}`],
+          ).toEqual([`${prefix}packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`]);
+        }
       }
-      expect(readPackage(root).exports[`./plugin-sdk/${formerEntry}`]).toEqual({
-        default: `./dist/plugin-sdk/${formerEntry}.js`,
-      });
+      for (const entry of formerEntries) {
+        expect(readPackage(root).exports[`./plugin-sdk/${entry}`]).toEqual({
+          default: `./dist/plugin-sdk/${entry}.js`,
+        });
+      }
       expectStableSync(root);
     },
   );

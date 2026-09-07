@@ -4,7 +4,7 @@ import type {
   EvaluatedModuleNode as ViteEvaluatedModuleNode,
   EvaluatedModules as ViteEvaluatedModules,
 } from "vite/module-runner";
-import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
+import { TestRunner, type RunnerTask, type RunnerTestFile, type TestTryOptions, vi } from "vitest";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
@@ -480,10 +480,10 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     await super.onBeforeRunTask(test);
   }
 
-  override onBeforeTryTask(test: RunnerTask) {
+  override onBeforeTryTask(test: RunnerTask, options: TestTryOptions) {
     restoreRealTimers();
     restoreNativeTimerGlobals();
-    super.onBeforeTryTask(test);
+    super.onBeforeTryTask(test, options);
   }
 
   // Cross-file cleanup lives in onAfterRunFiles, not onAfterRunSuite: vitest
@@ -493,8 +493,8 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
   // the next file's vi.mock factories silently never applied. The worker loop
   // calls startTests per file, so this hook runs after every file regardless
   // of its collect/run outcome.
-  override async onAfterRunFiles() {
-    await super.onAfterRunFiles();
+  override async onAfterRunFiles(files: RunnerTestFile[]) {
+    super.onAfterRunFiles(files);
     if (this.config.isolate) {
       return;
     }

@@ -96,22 +96,25 @@ Docs: https://docs.openclaw.ai
 `);
   });
 
-  it("uses Unreleased only as a prerelease fallback when no release heading exists", () => {
-    const source = changelog`
+  it.each(["Unreleased", "2026.5.30 (Unreleased)"])(
+    "uses %s only as a prerelease fallback when no release heading exists",
+    (heading) => {
+      const source = changelog`
 # Changelog
-## Unreleased
+## ${heading}
 - Pending beta package notes with enough release detail.
 ## 2026.5.27
 - Older stable.
 `;
 
-    expect(extractCurrentPackageChangelog(source, "2026.5.28-beta.1")).toBe(changelog`
+      expect(extractCurrentPackageChangelog(source, "2026.5.28-beta.1")).toBe(changelog`
 # Changelog
 
-## Unreleased
+## ${heading}
 - Pending beta package notes with enough release detail.
 `);
-  });
+    },
+  );
 
   it("extracts exact correction release sections", () => {
     const source = changelog`
@@ -130,35 +133,43 @@ Docs: https://docs.openclaw.ai
 `);
   });
 
-  it("fails closed when package version has no matching release section", () => {
-    expect(() => extractCurrentPackageChangelog(cumulativeChangelog, "2026.5.29")).toThrow(
-      "CHANGELOG.md does not contain a release section for 2026.5.29.",
-    );
-  });
+  it.each(["Unreleased", "2026.5.30 (Unreleased)", "2026.5.30 (Release notes)"])(
+    "fails closed without a matching release section even with %s notes",
+    (heading) => {
+      const source = cumulativeChangelog.replace("## Unreleased", `## ${heading}`);
+      expect(() => extractCurrentPackageChangelog(source, "2026.5.29")).toThrow(
+        "CHANGELOG.md does not contain a release section for 2026.5.29.",
+      );
+    },
+  );
 
-  it("allows Unreleased notes for explicitly non-publish stable artifacts", () => {
-    const unreleasedChangelog = cumulativeChangelog.replace(
-      "- Pending note.",
-      "- Pending release note with enough detail.",
-    );
-    expect(
-      extractCurrentPackageChangelog(unreleasedChangelog, "2026.5.29", {
-        allowUnreleased: true,
-      }),
-    ).toBe(changelog`
+  it.each(["Unreleased", "2026.5.30 (Unreleased)"])(
+    "allows %s notes for explicitly non-publish stable artifacts",
+    (heading) => {
+      const unreleasedChangelog = cumulativeChangelog
+        .replace("## Unreleased", `## ${heading}`)
+        .replace("- Pending note.", "- Pending release note with enough detail.");
+      expect(
+        extractCurrentPackageChangelog(unreleasedChangelog, "2026.5.29", {
+          allowUnreleased: true,
+        }),
+      ).toBe(changelog`
 # Changelog
 Docs: https://docs.openclaw.ai
 
-## Unreleased
+## ${heading}
 ### Fixes
 - Pending release note with enough detail.
 `);
-  });
+    },
+  );
 
-  it("does not fall back when exact non-publish notes fail safety checks", () => {
-    const source = changelog`
+  it.each(["Unreleased", "2026.5.30 (Unreleased)"])(
+    "does not fall back to %s when exact non-publish notes fail safety checks",
+    (heading) => {
+      const source = changelog`
 # Changelog
-## Unreleased
+## ${heading}
 - Pending development package notes with enough release detail.
 ## 2026.5.29
 - Tiny.
@@ -166,10 +177,11 @@ Docs: https://docs.openclaw.ai
 - Older stable release notes with enough detail.
 `;
 
-    expect(() =>
-      extractCurrentPackageChangelog(source, "2026.5.29", { allowUnreleased: true }),
-    ).toThrow("Packaged changelog section for 2026.5.29 is only 7 body bytes");
-  });
+      expect(() =>
+        extractCurrentPackageChangelog(source, "2026.5.29", { allowUnreleased: true }),
+      ).toThrow("Packaged changelog section for 2026.5.29 is only 7 body bytes");
+    },
+  );
 
   it.each(["", oversizedContributionRecord])(
     "refuses oversized editorial notes even with a contribution record (%#)",
@@ -244,23 +256,25 @@ Docs: https://docs.openclaw.ai
     },
   );
 
-  it("recovers an interrupted ephemeral QA package with the default restore path", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-package-changelog-"));
-    const unreleasedChangelog = cumulativeChangelog.replace(
-      "- Pending note.",
-      "- Pending release note with enough detail.",
-    );
-    try {
-      writeFileSync(path.join(root, "package.json"), '{"version":"2026.5.29"}\n', "utf8");
-      writeFileSync(path.join(root, "CHANGELOG.md"), unreleasedChangelog, "utf8");
+  it.each(["Unreleased", "2026.5.30 (Unreleased)"])(
+    "recovers interrupted %s QA packaging with the default restore path",
+    async (heading) => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-package-changelog-"));
+      const unreleasedChangelog = cumulativeChangelog
+        .replace("## Unreleased", `## ${heading}`)
+        .replace("- Pending note.", "- Pending release note with enough detail.");
+      try {
+        writeFileSync(path.join(root, "package.json"), '{"version":"2026.5.29"}\n', "utf8");
+        writeFileSync(path.join(root, "CHANGELOG.md"), unreleasedChangelog, "utf8");
 
-      await expect(preparePackageChangelog(root, { allowUnreleased: true })).resolves.toBe(true);
-      await expect(restorePackageChangelog(root)).resolves.toBe(true);
-      expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(unreleasedChangelog);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+        await expect(preparePackageChangelog(root, { allowUnreleased: true })).resolves.toBe(true);
+        await expect(restorePackageChangelog(root)).resolves.toBe(true);
+        expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(unreleasedChangelog);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([cumulativeChangelog, oversizedChangelog])(
     "refuses to restore over edits after package preparation (%#)",

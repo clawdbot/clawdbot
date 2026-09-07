@@ -119,10 +119,6 @@ function isMissingGitForNpmDependencyError(error: string): boolean {
   return /\bspawn\s+git\b/u.test(normalized) && /\benoent\b/u.test(normalized);
 }
 
-export function logHookPackRestartHint(runtime: RuntimeEnv = defaultRuntime) {
-  runtime.log("Restart the gateway to load hooks.");
-}
-
 export function logSlotWarnings(warnings: string[], runtime: RuntimeEnv = defaultRuntime) {
   if (warnings.length === 0) {
     return;

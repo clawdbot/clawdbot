@@ -2,6 +2,10 @@ import { expect, it, vi } from "vitest";
 
 const metadata = vi.hoisted(() => vi.fn());
 
+vi.mock("./install.js", () => {
+  throw new Error("Plugin inventory must not load source installers");
+});
+
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => metadata(...args),
   resolvePluginMetadataSnapshot: (...args: unknown[]) => metadata(...args),
@@ -25,8 +29,9 @@ it("loads plugin metadata from the explicit system-owner workspace", async () =>
     normalizePluginId: (pluginId: string) => pluginId,
   });
 
-  await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
+  const catalog = await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
 
+  expect(catalog).toMatchObject({ plugins: [], diagnostics: [] });
   expect(metadata).toHaveBeenCalledWith({
     config,
     env,

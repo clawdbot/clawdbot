@@ -1,4 +1,3 @@
-// Terminal Core module implements prompt select styled params behavior.
 import { stylePromptHint, stylePromptMessage } from "./prompt-style.js";
 
 // Pure prompt parameter styler used by interactive prompts and tests.

@@ -34,11 +34,11 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
-import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import {
   CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
   CLAUDE_CLI_OFF_THINKING_PROFILE,
   CLAUDE_CLI_PROFILE_ID,
+  CLAUDE_MODEL_ID_ALIASES,
 } from "./cli-constants.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -52,7 +52,7 @@ import {
 import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
+import anthropicProviderDiscovery from "./provider-discovery.js";
 import {
   createClaudeSessionNodeInvokePolicies,
   registerClaudeSessionDiscovery,
@@ -88,26 +88,6 @@ const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_1M_CONTEXT_TOKENS = 1_000_000;
 const ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS = 128_000;
-const ANTHROPIC_OPUS_5_COST = {
-  input: 5,
-  output: 25,
-  cacheRead: 0.5,
-  cacheWrite: 6.25,
-};
-// Anthropic's introductory rate expires at the documented UTC month boundary.
-const ANTHROPIC_SONNET_5_STANDARD_PRICING_START_MS = Date.UTC(2026, 8, 1);
-const ANTHROPIC_SONNET_5_PROMOTIONAL_COST = {
-  input: 2,
-  output: 10,
-  cacheRead: 0.2,
-  cacheWrite: 2.5,
-};
-const ANTHROPIC_SONNET_5_STANDARD_COST = {
-  input: 3,
-  output: 15,
-  cacheRead: 0.3,
-  cacheWrite: 3.75,
-};
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
@@ -160,6 +140,7 @@ function restoreUnpublishedAnthropicModels(result: ProviderCatalogResult): Provi
   // Discovered rows arrive id-sorted; keep the appended tail sorted too so the
   // catalog stays byte-stable for prompt caching.
   return {
+    ...result,
     provider: {
       ...result.provider,
       models: [...discovered, ...unpublished.toSorted((a, b) => a.id.localeCompare(b.id))],
@@ -167,10 +148,12 @@ function restoreUnpublishedAnthropicModels(result: ProviderCatalogResult): Provi
   };
 }
 
-function resolveAnthropicSonnet5Cost(nowMs: number = Date.now()) {
-  return nowMs >= ANTHROPIC_SONNET_5_STANDARD_PRICING_START_MS
-    ? ANTHROPIC_SONNET_5_STANDARD_COST
-    : ANTHROPIC_SONNET_5_PROMOTIONAL_COST;
+function resolveAnthropicModelCost(modelId: string) {
+  // Snapshots share their dateless model's price; unlisted deployments retain
+  // their discovered cost instead of inheriting a different version's pricing.
+  const normalized = resolveClaudeModelIdentity({ id: modelId }).replace(/-\d{8}$/, "");
+  const id = CLAUDE_MODEL_ID_ALIASES.get(normalized) ?? normalized;
+  return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost;
 }
 
 const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
@@ -371,13 +354,12 @@ function buildAnthropicForwardCompatModel(
     baseUrl: "https://api.anthropic.com",
     reasoning: true,
     input: ["text", "image"],
-    cost: isAnthropicMandatoryClaude5Model(trimmedModelId)
-      ? { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }
-      : isAnthropicOpus5Model(trimmedModelId) && provider === PROVIDER_ID
-        ? ANTHROPIC_OPUS_5_COST
-        : isAnthropicSonnet5Model(trimmedModelId) && provider === PROVIDER_ID
-          ? resolveAnthropicSonnet5Cost()
-          : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: (provider === PROVIDER_ID ? resolveAnthropicModelCost(trimmedModelId) : undefined) ?? {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
     contextWindow: resolveAnthropicFixedContextWindow(provider, trimmedModelId) ?? 200_000,
     maxTokens: isAnthropic128kOutputModel(trimmedModelId)
       ? ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS
@@ -671,33 +653,6 @@ function applyAnthropicImageInputCapability(params: {
   };
 }
 
-function applyAnthropicOpus5Cost(params: {
-  modelId: string;
-  model: ProviderRuntimeModel;
-}): ProviderRuntimeModel | undefined {
-  if (!isAnthropicOpus5Model(params.modelId)) {
-    return undefined;
-  }
-  if (modelCostsEqual(params.model.cost, ANTHROPIC_OPUS_5_COST)) {
-    return undefined;
-  }
-  return { ...params.model, cost: ANTHROPIC_OPUS_5_COST };
-}
-
-function applyAnthropicSonnet5Cost(params: {
-  modelId: string;
-  model: ProviderRuntimeModel;
-}): ProviderRuntimeModel | undefined {
-  if (!isAnthropicSonnet5Model(params.modelId)) {
-    return undefined;
-  }
-  const cost = resolveAnthropicSonnet5Cost();
-  if (modelCostsEqual(params.model.cost, cost)) {
-    return undefined;
-  }
-  return { ...params.model, cost };
-}
-
 function normalizeAnthropicResolvedModel(
   ctx: ProviderNormalizeResolvedModelContext,
 ): ProviderRuntimeModel | undefined {
@@ -753,18 +708,13 @@ function normalizeAnthropicResolvedModel(
       model: thinkingLevelModel,
     }) ?? thinkingLevelModel;
   // Provider catalog defaults must not replace explicit operator pricing.
+  const cost = resolveAnthropicModelCost(contractModelId);
   const pricingModel =
     normalizeLowercaseStringOrEmpty(ctx.provider) === PROVIDER_ID &&
-    !hasConfiguredModelOverride(ctx.config, ctx.provider, ctx.modelId, "cost")
-      ? (applyAnthropicOpus5Cost({
-          modelId: contractModelId,
-          model: contextWindowModel,
-        }) ??
-        applyAnthropicSonnet5Cost({
-          modelId: contractModelId,
-          model: contextWindowModel,
-        }) ??
-        contextWindowModel)
+    !hasConfiguredModelOverride(ctx.config, ctx.provider, ctx.modelId, "cost") &&
+    cost &&
+    !modelCostsEqual(contextWindowModel.cost, cost)
+      ? { ...contextWindowModel, cost }
       : contextWindowModel;
   return pricingModel === ctx.model ? undefined : pricingModel;
 }
@@ -865,6 +815,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
       run: async (ctx) =>
         restoreUnpublishedAnthropicModels(
           await buildOpenAICompatibleProviderCatalog({
+            discoveryMode: "strict",
             ctx,
             providerId,
             buildProvider: buildAnthropicCatalogProvider,
@@ -901,12 +852,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
-    resolveSyntheticAuth: ({ config, provider }) =>
-      normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
-        ? resolveClaudeCliSyntheticAuth(config)
-        : undefined,
-    // Publish Claude CLI rows through the provider catalog hook.
-    augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
+    prepareSyntheticAuth: anthropicProviderDiscovery.prepareSyntheticAuth,
     ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
     isModernModelRef: ({ provider, modelId }) =>
       matchesAnthropicModernModel(modelId) &&

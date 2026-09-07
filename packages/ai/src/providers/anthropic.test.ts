@@ -24,6 +24,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
+import { createZeroUsage } from "../usage.test-support.js";
 import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
 
 function createSseResponse(events: Record<string, unknown>[] = []): Response {
@@ -73,14 +74,7 @@ function makeAnthropicAssistantMessage(
     model: "claude-sonnet-4-6",
     stopReason: "stop",
     timestamp: 0,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     content,
     ...overrides,
   };
@@ -278,6 +272,28 @@ describe("Anthropic provider", () => {
       expect(config.fetch).toBe(hostFetch);
     }
   });
+
+  it.each(["none", "short", "long"] as const)(
+    "sends the OpenCode session header with %s cache retention",
+    async (cacheRetention) => {
+      streamAnthropic(
+        makeAnthropicModel({ baseUrl: "https://opencode.ai/zen/go" }),
+        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        { apiKey: "sk-ant-provider", sessionId: "session-123", cacheRetention },
+      );
+      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+      const config = anthropicMockState.configs[0] as {
+        defaultHeaders?: Record<string, string | null>;
+      };
+      expect(
+        Object.fromEntries(
+          Object.entries(config.defaultHeaders ?? {}).filter(
+            ([key]) => key.startsWith("x-") || key === "session_id",
+          ),
+        ),
+      ).toEqual({ "x-opencode-session": "session-123" });
+    },
+  );
 
   it("puts Claude subscription billing identity first for OAuth requests", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
@@ -516,6 +532,7 @@ describe("Anthropic provider", () => {
       cacheRead: 3,
       cacheWrite: 4,
       totalTokens: 19,
+      contextUsage: { state: "available", promptTokens: 19, totalTokens: 19 },
     });
     expect(result.usage.cost.input).toBeCloseTo(0.00006, 10);
     expect(result.usage.cost.total).toBeGreaterThan(0);
@@ -563,20 +580,14 @@ describe("Anthropic provider", () => {
     expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });
 
-  it.each([
-    [undefined, 0],
-    [2, 2],
-  ])("uses Anthropic SDK maxRetries=%s", async (maxRetries, expected) => {
+  it("pins Anthropic SDK retries to zero", async () => {
     const model = makeAnthropicModel();
-    await streamAnthropic(
-      model,
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      { maxRetries },
-    ).result();
+    await streamAnthropic(model, {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+    }).result();
 
-    expect(anthropicMockState.requestOptions).toEqual([
-      expect.objectContaining({ maxRetries: expected }),
-    ]);
+    expect(anthropicMockState.requestOptions).toEqual([expect.objectContaining({ maxRetries: 0 })]);
+    expect(anthropicMockState.configs.at(-1)).toMatchObject({ maxRetries: 0 });
   });
 
   it.each([
@@ -2277,8 +2288,10 @@ describe("Anthropic provider", () => {
             description: "healthy schema",
             parameters: {
               type: "object",
-              properties: { query: { type: "string" } },
+              properties: { query: { $ref: "#/$defs/Query" } },
+              $defs: { Query: { type: "string", minLength: 1 } },
               required: ["query"],
+              additionalProperties: false,
             },
           } as Tool,
         ],
@@ -2291,9 +2304,12 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect(payload.tools?.map((tool) => tool.name)).toEqual(["healthy_tool"]);
-    expect(payload.tools?.[0]?.input_schema).toMatchObject({
-      properties: { query: { type: "string" } },
+    expect(payload.tools?.[0]?.input_schema).toEqual({
+      type: "object",
+      properties: { query: { $ref: "#/$defs/Query" } },
+      $defs: { Query: { type: "string", minLength: 1 } },
       required: ["query"],
+      additionalProperties: false,
     });
   });
 
@@ -2399,7 +2415,7 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("anchors the message cache breakpoint on the last stable user turn, skipping a trailing runtime-context carrier", async () => {
+  it("anchors the message cache breakpoint on an append-only runtime-context carrier", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
       {},
       { stopBeforeNetwork: true },
@@ -2409,7 +2425,7 @@ describe("Anthropic provider", () => {
           { role: "user", content: "stable question", timestamp: 0 },
           {
             role: "user",
-            content: "volatile current-turn metadata",
+            content: "retained current-turn metadata",
             timestamp: 1,
             runtimeContextCarrier: true,
           },
@@ -2419,13 +2435,14 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    // Deepest breakpoint anchors on the stable user turn (converted to a block
-    // array with cache_control) so it stays a cacheable prefix next turn...
-    expect(messages[0]?.content).toEqual([
-      { type: "text", text: "stable question", cache_control: { type: "ephemeral" } },
+    expect(messages[0]?.content).toBe("stable question");
+    expect(messages[1]?.content).toEqual([
+      {
+        type: "text",
+        text: "retained current-turn metadata",
+        cache_control: { type: "ephemeral" },
+      },
     ]);
-    // ...and NOT on the trailing volatile carrier, which is left uncached.
-    expect(messages[1]?.content).toBe("volatile current-turn metadata");
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

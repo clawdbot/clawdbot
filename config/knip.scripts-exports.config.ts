@@ -28,6 +28,7 @@ const repositoryToolEntries = [
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
+  "scripts/check-openclaw-package-tarball.mts!",
 ] as const;
 
 const config = {
@@ -56,6 +57,8 @@ const config = {
     ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
+    // Vitest consumes this required default export through the reporter CLI path.
+    "scripts/lib/vitest-resource-reporter.mts": ["exports"],
     // Wrangler consumes the Worker default export and instantiates the Durable
     // Object class by name from wrangler.jsonc; Knip cannot resolve either.
     "scripts/cloudflare/src/index.ts": ["exports"],
@@ -71,6 +74,8 @@ const config = {
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+        // Core bootstrap packaging consumes the scripts' dist-import scanner.
+        "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
       ],
       project: [
@@ -81,6 +86,7 @@ const config = {
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
       ],
     },

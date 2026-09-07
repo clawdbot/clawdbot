@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
 import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
-import { testing } from "../infra/session-delivery-queue-runtime.test-support.js";
 import {
   enqueueClaimedSessionDelivery,
   loadPendingSessionDeliveries,
@@ -84,7 +83,6 @@ async function closeProofProvider(server: http.Server): Promise<void> {
 }
 
 afterEach(() => {
-  testing.reset();
   resetGatewayTestState();
   vi.restoreAllMocks();
 });
@@ -101,6 +99,7 @@ describe("session delivery clock-jump integration", () => {
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       let providerServer: http.Server | undefined;
+      let deliveryId = "";
       const providerRequests: string[] = [];
 
       try {
@@ -153,7 +152,7 @@ describe("session delivery clock-jump integration", () => {
             route: { channel: "webchat", to: sessionKey, chatType: "direct" },
             inputProvenance: {
               kind: "inter_session",
-              sourceChannel: "webchat",
+              sourceChannel: "internal",
               sourceTool: "image_generate",
             },
             sourceReplyDeliveryMode: "automatic",
@@ -161,6 +160,7 @@ describe("session delivery clock-jump integration", () => {
           60_000,
         );
 
+        deliveryId = id;
         gateway = await startGatewayWithClient({
           cfg,
           configPath,
@@ -184,12 +184,15 @@ describe("session delivery clock-jump integration", () => {
         await scheduleSessionDelivery(id);
 
         await vi.waitFor(
-          async () => expect(await loadPendingSessionDeliveries()).toStrictEqual([]),
+          async () => {
+            expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
+            // Queue settlement can precede the client's WebSocket event callback.
+            expect(chatEvents.join("\n")).toContain("CLOCK_JUMP DELIVERED");
+          },
           { timeout: 15_000, interval: 50 },
         );
         expect(providerRequests).toHaveLength(1);
         expect(providerRequests[0]).toContain("clock-jump proof marker");
-        expect(chatEvents.join("\n")).toContain("CLOCK_JUMP DELIVERED");
         expect(await loadPendingSessionDeliveries()).toStrictEqual([]);
         expect(getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id)).toBe("completed");
       } finally {
@@ -200,6 +203,7 @@ describe("session delivery clock-jump integration", () => {
               await disconnectGatewayClient(gateway.client);
             } finally {
               await gateway.server.close({ reason: "session delivery clock-jump proof complete" });
+              await expect(scheduleSessionDelivery(deliveryId)).resolves.toBe(false);
             }
           }
         } finally {

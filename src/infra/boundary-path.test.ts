@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   resolveIdentityPathViaExistingAncestorSync,
+  resolveRealpathOrAbsolute,
   resolveRootPath,
   resolveRootPathSync,
 } from "./boundary-path.js";
@@ -22,6 +23,31 @@ function createSeededRandom(seed: number): () => number {
     return state / 0x100000000;
   };
 }
+
+describe("resolveRealpathOrAbsolute", () => {
+  it("canonicalizes existing symlinks", async () => {
+    await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+      const target = path.join(base, "target");
+      const alias = path.join(base, "alias");
+      await fs.mkdir(target);
+      await fs.symlink(target, alias);
+      expect(resolveRealpathOrAbsolute(alias)).toBe(await fs.realpath(target));
+    });
+  });
+
+  it("keeps missing paths lexical and falls back on non-missing errors", async () => {
+    await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+      const alias = path.join(base, "alias");
+      await fs.symlink(path.join(base, "target"), alias);
+      const missing = path.join(alias, "missing");
+      expect(resolveRealpathOrAbsolute(missing)).toBe(path.resolve(missing));
+      vi.spyOn(fsSync, "realpathSync").mockImplementation(() => {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      });
+      expect(resolveRealpathOrAbsolute("denied")).toBe(path.resolve("denied"));
+    });
+  });
+});
 
 describe("resolveIdentityPathViaExistingAncestorSync", () => {
   it("continues through native realpath failures to preserve ancestor identity", () => {

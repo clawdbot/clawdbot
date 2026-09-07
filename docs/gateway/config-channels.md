@@ -40,7 +40,7 @@ If a provider block is missing entirely (`channels.<provider>` absent), runtime 
 
 ### Channel model overrides
 
-Use `channels.modelByChannel` to pin specific channel IDs or direct-message peers to a model. Values accept `provider/model` or configured model aliases. The channel mapping only applies when a session does not already have an active model override (for example, one set via `/model`).
+Use `channels.modelByChannel` to pin specific channel IDs or direct-message peers to a model. Values accept `provider/model` or configured model aliases. The channel mapping only applies when a session does not already have an active model override (for example, one set via `/model`). Changes refresh loaded channel runtimes without restarting the Gateway; manually stopped accounts stay stopped.
 
 For group/thread conversations, keys are channel-specific group IDs, topic IDs, or channel names. For direct-message (DM) conversations, keys are peer identifiers derived from the channel's sender identity (`nativeDirectUserId`, `origin.from`, `origin.to`, `OriginatingTo`, `From`, or `SenderId`). The exact key form depends on the channel:
 
@@ -78,7 +78,7 @@ DM-specific keys only match in direct-message conversations; they do not affect 
 
 ### Channel defaults and heartbeat
 
-Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat behavior across providers:
+Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat behavior across providers. Changes refresh loaded channel runtimes without restarting the Gateway; manually stopped accounts stay stopped:
 
 ```json5
 {
@@ -471,7 +471,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
 - `channels.slack.joinIntro` defaults to `true`. When the bot joins an allowed channel, it posts one introduction using the channel name, purpose or topic, and available recent messages. Set this option to `false` to disable introductions, or use `channels.slack.accounts.<accountId>.joinIntro` for an account-specific override. Up to 100 recent messages are read, once per channel; see [group join introductions](/channels#group-join-introductions). Introductions never run in direct messages.
-- **User identity** (`postAs: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
+- **User identity** (`postAs: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack/setup#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
 - Slack detects Enterprise Grid org-wide installations automatically from the
   bot token with `auth.test`; no installation-mode setting is required.
   Enterprise DMs support `disabled`, `open`, `allowlist`, and workspace-scoped
@@ -487,7 +487,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   workspace-qualified turns are supported. Relay, channel-ID-change events,
   App Home, Agent and Assistant lifecycle events, configured ACP bindings, and
   runtime current-conversation bindings remain unavailable. See
-  [Enterprise Grid org-wide installs](/channels/slack#enterprise-grid-org-wide-installs)
+  [Enterprise Grid org-wide installs](/channels/slack/enterprise-grid#enterprise-grid-org-wide-installs)
   for the least-privilege manifest, setup workflow, and complete restrictions.
 - The retired `enterpriseOrgInstall` key is removed by `openclaw doctor --fix`
   at the Slack root and account levels.
@@ -501,7 +501,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   resolve the secret value.
 - `configWrites: false` blocks Slack-initiated config writes.
 - Optional `channels.slack.defaultAccount` overrides default account selection when it matches a configured account id.
-- `dm.groupEnabled` and `dm.groupChannels` only filter Slack group DMs (MPDMs) the app is already a member of. They cannot make the app see an existing group DM it never joined; convert the group DM to a private channel and invite the app, or have the app open a new MPDM with `conversations.open`. See [Group DMs (MPDMs) and bots](/channels/slack#group-dms-mpdms-and-bots).
+- `dm.groupEnabled` and `dm.groupChannels` only filter Slack group DMs (MPDMs) the app is already a member of. They cannot make the app see an existing group DM it never joined; convert the group DM to a private channel and invite the app, or have the app open a new MPDM with `conversations.open`. See [Group DMs (MPDMs) and bots](/channels/slack/access-control#group-dms-mpdms-and-bots).
 - `channels.slack.streaming.mode` is the canonical Slack stream mode key (default `"progress"`). `channels.slack.streaming.nativeTransport` controls Slack's native streaming transport (default `true`). Legacy `streamMode`, boolean `streaming`, `chunkMode`, `blockStreaming`, `blockStreamingCoalesce`, and `nativeStreaming` values are no longer read at runtime; run `openclaw doctor --fix` to migrate persisted config to `streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}`.
 - `unfurlLinks` and `unfurlMedia` pass Slack's `chat.postMessage` link and media unfurl booleans through for bot replies. `unfurlLinks` defaults to `false` so outbound bot links do not expand inline unless enabled; `unfurlMedia` is omitted unless configured. Set either value at `channels.slack.accounts.<accountId>` to override the top-level value for one account.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.

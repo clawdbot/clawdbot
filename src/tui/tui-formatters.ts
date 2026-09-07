@@ -2,6 +2,7 @@ import { asOptionalObjectRecord as asMessageRecord } from "@openclaw/normalizati
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Formats terminal-safe strings for TUI messages and status surfaces.
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { hasTerminalControl } from "../../packages/terminal-core/src/safe-text.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { appendReplyMediaFailures, type ReplyMediaFailure } from "../auto-reply/reply-payload.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
@@ -11,10 +12,15 @@ import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
-import { formatTokenCount } from "../utils/usage-format.js";
+import { formatTokenCount } from "../utils/token-format.js";
 import type { SessionInfo } from "./tui-types.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
+// Preserve TAB, LF, and CR for Markdown layout; remove every other C0/DEL/C1 control.
+const RENDER_CONTROL_CHARS_RE = new RegExp(
+  String.raw`[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]`,
+  "g",
+);
 const MAX_TOKEN_CHARS = 32;
 const LONG_TOKEN_RE = /\S{33,}/g;
 const LONG_TOKEN_TEST_RE = /\S{33,}/;
@@ -82,40 +88,10 @@ export function formatTuiFooter(params: {
   return sanitizeRenderableLine(footer);
 }
 
-function hasControlChars(text: string): boolean {
-  for (const char of text) {
-    const code = char.charCodeAt(0);
-    const isAsciiControl = code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
-    const isC1Control = code >= 0x7f && code <= 0x9f;
-    if (isAsciiControl || isC1Control) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function stripControlChars(text: string): string {
-  if (!hasControlChars(text)) {
-    return text;
-  }
-  let sanitized = "";
-  for (const char of text) {
-    const code = char.charCodeAt(0);
-    const isAsciiControl = code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
-    const isC1Control = code >= 0x7f && code <= 0x9f;
-    if (!isAsciiControl && !isC1Control) {
-      sanitized += char;
-    }
-  }
-  return sanitized;
-}
-
 function sanitizeTerminalControlsAndBinary(text: string): string {
   const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
   const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
-  const withoutControlChars = hasControlChars(withoutAnsi)
-    ? stripControlChars(withoutAnsi)
-    : withoutAnsi;
+  const withoutControlChars = withoutAnsi.replace(RENDER_CONTROL_CHARS_RE, "");
   const withoutBidiControls = BIDI_CONTROL_RE.test(withoutControlChars)
     ? withoutControlChars.replace(BIDI_CONTROL_GLOBAL_RE, "")
     : withoutControlChars;
@@ -128,13 +104,7 @@ function sanitizeTerminalControlsAndBinary(text: string): string {
 }
 
 export function isTerminalSafeAutocompleteValue(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f) || BIDI_CONTROL_RE.test(char)) {
-      return false;
-    }
-  }
-  return true;
+  return !hasTerminalControl(value) && !BIDI_CONTROL_RE.test(value);
 }
 
 function isCopySensitiveToken(token: string): boolean {
@@ -331,18 +301,11 @@ export function composeThinkingAndContent(params: {
   contentText?: string;
   showThinking?: boolean;
 }) {
-  const thinkingText = params.thinkingText?.trim() ?? "";
+  const thinkingText = params.showThinking ? (params.thinkingText?.trim() ?? "") : "";
   const contentText = params.contentText?.trim() ?? "";
-  const parts: string[] = [];
-
-  if (params.showThinking && thinkingText) {
-    parts.push(`[thinking]\n${thinkingText}`);
-  }
-  if (contentText) {
-    parts.push(contentText);
-  }
-
-  return parts.join("\n\n").trim();
+  return thinkingText
+    ? `[thinking]\n${thinkingText}${contentText ? `\n\n${contentText}` : ""}`
+    : contentText;
 }
 
 type TuiAttachmentKind = "image" | "audio" | "video" | "file" | "media";
@@ -654,7 +617,8 @@ export function extractTextFromMessage(
   if (record.role === "assistant") {
     const contentText = extractAssistantRenderableContent(record);
     return composeThinkingAndContent({
-      thinkingText: extractThinkingFromMessage(record),
+      // History is stateless; the stream assembler retains hidden thinking for later toggles.
+      thinkingText: opts?.includeThinking ? extractThinkingFromMessage(record) : "",
       contentText:
         opts?.includeAttachments !== false
           ? formatTuiAssistantContent(record, contentText)

@@ -6,6 +6,8 @@
 
 openclaw-sidebar-attention.sidebar-attention--floating {
   --sidebar-bg: var(--bg-content, var(--bg));
+  --sidebar-issues-border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  --sidebar-issues-background: color-mix(in srgb, var(--panel) 92%, transparent);
 
   position: fixed;
   top: 10px;
@@ -34,20 +36,14 @@ html.openclaw-native-web-chrome openclaw-sidebar-attention.sidebar-attention--fl
   );
 }
 
-:is(.shell--onboarding, .shell--settings) openclaw-sidebar-attention.sidebar-attention--floating {
-  inset: auto auto max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
-}
-
 /* A stale-client refresh card shares the collapsed overlay strip's row; drop it
    below the fixed attention cluster instead of rendering both at the origin. */
 .sidebar-attention--floating ~ .sidebar-update-card--floating .sidebar-update-card {
   margin-top: 50px;
 }
 
-/* Footer buttons need opaque chrome when they float over arbitrary page content. */
+/* Inherited chrome survives late entry CSS; direct hover/expanded fills still win. */
 :where(openclaw-sidebar-attention.sidebar-attention--floating) .sidebar-issues-button {
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);

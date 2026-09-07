@@ -1,9 +1,14 @@
 // Control UI tests cover shared Settings control styling through the mocked Gateway.
 import { Buffer } from "node:buffer";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -95,18 +100,119 @@ async function captureBrowserSettingProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
-  });
+  if (page.video()) {
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-desktop.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
+    });
+  }
   await page.setViewportSize({ height: 844, width: 390 });
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
-  });
+  if (page.video()) {
+    await waitForControlUiProofSurface(page.locator(".shell.shell--mobile-nav"), [
+      section.locator(".settings-row").first(),
+    ]);
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-narrow.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
+    });
+  }
 }
 
 suite.define(() => {
+  it.each(["light", "dark"] as const)(
+    "keeps selected Usage accents at rest and on hover in %s mode",
+    async (colorScheme) => {
+      await suite.withPage(
+        { colorScheme, locale: "en-US", viewport: { width: 1280, height: 900 } },
+        async ({ page }) => {
+          const totals = {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            totalCost: 0,
+            inputCost: 0,
+            outputCost: 0,
+            cacheReadCost: 0,
+            cacheWriteCost: 0,
+            missingCostEntries: 0,
+          };
+          const gateway = await installMockGateway(page, {
+            methodResponses: {
+              "sessions.usage": {
+                updatedAt: Date.now(),
+                startDate: "2026-09-01",
+                endDate: "2026-09-07",
+                sessions: [],
+                totals,
+                aggregates: {
+                  messages: {
+                    total: 0,
+                    user: 0,
+                    assistant: 0,
+                    toolCalls: 0,
+                    toolResults: 0,
+                    errors: 0,
+                  },
+                  tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+                  byModel: [],
+                  byProvider: [],
+                  byAgent: [],
+                  byChannel: [],
+                  daily: [],
+                },
+              },
+              "usage.cost": { updatedAt: Date.now(), days: 7, daily: [], totals },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}usage`);
+          await gateway.waitForRequest("sessions.usage");
+          await expect
+            .poll(() => page.locator("html").getAttribute("data-theme-mode"))
+            .toBe(colorScheme);
+          const expected = await resolvedBackground(page, "var(--accent-subtle)");
+          const filters = page.locator(".usage-controls");
+          for (const label of ["Cost", "Tokens"]) {
+            const selected = filters.getByRole("button", { name: label, exact: true });
+            await selected.click();
+            await page.mouse.move(0, 0);
+            for (const state of ["rest", "hover"]) {
+              if (state === "hover") {
+                await selected.hover();
+              }
+              if (captureUiProofEnabled) {
+                await filters.screenshot({
+                  animations: "disabled",
+                  path: path.join(uiProofArtifactDir, `usage-${colorScheme}-${label}-${state}.png`),
+                });
+              }
+              await expect
+                .poll(() =>
+                  selected.evaluate((element) => getComputedStyle(element).backgroundColor),
+                )
+                .toBe(expected);
+            }
+          }
+        },
+      );
+    },
+  );
+
   it("keeps selected segmented options distinct in forced colors", async () => {
     const cases = [
       {
@@ -320,7 +426,11 @@ suite.define(() => {
               const messages: unknown[] = [];
               const appWindow = window as Window & {
                 openclawNativeLinkMessages?: unknown[];
-                webkit?: unknown;
+                webkit?: {
+                  messageHandlers?: {
+                    openclawLink?: { postMessage: (message: unknown) => void };
+                  };
+                };
               };
               appWindow.openclawNativeLinkMessages = messages;
               appWindow.webkit = {

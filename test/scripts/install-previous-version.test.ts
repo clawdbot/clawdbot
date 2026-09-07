@@ -14,27 +14,37 @@ function runInstallerVersionSelection(
 ) {
   const root = tempDirs.make("openclaw-install-previous-");
   const binDir = path.join(root, "bin");
-  const callsFile = path.join(root, "calls.jsonl");
+  const callsFile = path.join(root, "calls.argv");
   mkdirSync(binDir);
   writeFileSync(callsFile, "");
   writeFileSync(
     path.join(binDir, "npm"),
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-while (args[0]?.startsWith("--")) args.shift();
-fs.appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(args) + "\\n");
-if (args[0] === "install") process.exit(${fixtureStop});
-if (args[0] !== "view") process.exit(74);
-process.stdout.write(args.includes("versions") ? process.env.FIXTURE_VERSIONS : process.env.FIXTURE_TARGET);
+    `#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+  case "$1" in --*) shift ;; *) break ;; esac
+done
+printf '%s\\0' "$#" "$@" >> "$FIXTURE_CALLS"
+[ "$#" -gt 0 ] || exit 74
+case "$1" in
+  install) exit ${fixtureStop} ;;
+  view)
+    for arg do
+      if [ "$arg" = versions ]; then printf '%s' "$FIXTURE_VERSIONS"; exit 0; fi
+    done
+    printf '%s' "$FIXTURE_TARGET"
+    ;;
+  *) exit 74 ;;
+esac
 `,
     { mode: 0o755 },
   );
   writeFileSync(
     path.join(binDir, "curl"),
-    `#!/usr/bin/env node
-require("node:fs").appendFileSync(process.env.FIXTURE_CALLS, '["installer"]\\n');
-process.exit(${fixtureStop});
+    `#!/bin/sh
+set -eu
+printf '%s\\0' 1 installer >> "$FIXTURE_CALLS"
+exit ${fixtureStop}
 `,
     { mode: 0o755 },
   );
@@ -61,11 +71,12 @@ process.exit(${fixtureStop});
       OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL: "0",
     },
   });
-  const calls = readFileSync(callsFile, "utf8")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as string[]);
+  const fields = readFileSync(callsFile, "utf8").split("\0").slice(0, -1);
+  const calls: string[][] = [];
+  while (fields.length > 0) {
+    const count = Number(fields.shift());
+    calls.push(fields.splice(0, count));
+  }
   return { ...result, calls };
 }
 

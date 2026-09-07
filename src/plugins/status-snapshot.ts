@@ -16,6 +16,7 @@ import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-inde
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
@@ -77,7 +78,11 @@ export function collectPluginCapabilityConsentDiagnostics(params: {
   }
   const currentAcceptanceByOwner = new Map<string, boolean>();
   for (const plugin of params.index.plugins) {
-    if (!plugin.enabled || plugin.origin === "bundled") {
+    if (
+      !plugin.enabled ||
+      plugin.origin === "bundled" ||
+      params.manifests.get(plugin.pluginId)?.trustedOfficialInstall
+    ) {
       continue;
     }
     const installOwner = resolveInstalledPluginIndexInstallOwner(plugin);
@@ -120,10 +125,13 @@ function buildPluginRecordFromInstalledIndex(
     ...(manifest?.description ? { description: manifest.description } : {}),
     format,
     ...(bundleFormat ? { bundleFormat } : {}),
+    bundleCapabilities: manifest?.bundleCapabilities,
     ...(manifest?.kind ? { kind: manifest.kind } : {}),
     source: plugin.source ?? plugin.manifestPath,
     rootDir: plugin.rootDir,
     origin: plugin.origin,
+    trustedOfficialInstall: manifest?.trustedOfficialInstall,
+    trust: manifest?.trust,
     enabled: plugin.enabled,
     compat: plugin.compat,
     syntheticAuthRefs: [...(plugin.syntheticAuthRefs ?? manifest?.syntheticAuthRefs ?? [])],
@@ -156,14 +164,18 @@ function buildPluginRecordFromInstalledIndex(
     hookCount: 0,
     configSchema: Boolean(manifest?.configSchema),
     contracts: manifest?.contracts,
-    dependencyStatus:
-      plugin.origin === "bundled"
-        ? undefined
-        : buildPluginDependencyStatus({
-            rootDir: plugin.rootDir,
-            dependencies: manifest?.packageDependencies,
-            optionalDependencies: manifest?.packageOptionalDependencies,
-          }),
+    dependencyStatus: tracksPluginDependencyStatus({
+      origin: plugin.origin,
+      pluginId: plugin.pluginId,
+      packageName: plugin.packageName,
+      packageBuild: plugin.packageBuild,
+    })
+      ? buildPluginDependencyStatus({
+          rootDir: plugin.rootDir,
+          dependencies: manifest?.packageDependencies,
+          optionalDependencies: manifest?.packageOptionalDependencies,
+        })
+      : undefined,
   };
 }
 

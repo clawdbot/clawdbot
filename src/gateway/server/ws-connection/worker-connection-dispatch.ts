@@ -4,7 +4,6 @@ import {
   type RequestFrame,
   type WorkerConnectParams,
   type WorkerErrorShape,
-  type WorkerGitHubPublishParams,
   type WorkerHeartbeatResult,
   type WorkerLiveEventErrorDetails,
   type WorkerLiveEventErrorShape,
@@ -19,14 +18,12 @@ import {
   type WorkerTranscriptCommitErrorShape,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitResult,
-  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_METHODS,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
-  validateWorkerGitHubPublishParams,
   validateWorkerComputerParams,
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
@@ -49,6 +46,11 @@ import {
   validateWorkerInferenceCancelParams,
   validateWorkerInferenceStartParams,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WORKER_SKILL_WORKSHOP_FEATURE,
+  validateWorkerSkillWorkshopParams,
+  type WorkerSkillWorkshopParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import {
   workerInferenceError,
@@ -95,11 +97,11 @@ export type WorkerConnectionService = {
   >;
   executeSessionTool?: (
     identity: WorkerConnectionIdentity,
-    toolName: "sessions_spawn" | "sessions_send" | "github_publish" | "portal",
+    toolName: "sessions_spawn" | "sessions_send" | "portal" | "skill_workshop",
     request:
+      | WorkerSkillWorkshopParams
       | WorkerSessionsSpawnParams
       | WorkerSessionsSendParams
-      | WorkerGitHubPublishParams
       | WorkerPortalParams,
     signal?: AbortSignal,
   ) => Promise<WorkerServiceResult<WorkerSessionToolResult, { reason: WorkerProtocolCloseReason }>>;
@@ -296,17 +298,17 @@ export async function dispatchWorkerRequest(params: {
     return;
   }
   if (
-    params.request.method === WORKER_PROTOCOL_METHODS[3] ||
-    params.request.method === WORKER_PROTOCOL_METHODS[4] ||
-    params.request.method === WORKER_PROTOCOL_METHODS[5] ||
-    params.request.method === WORKER_PROTOCOL_METHODS[6]
+    params.request.method === "worker.sessions.spawn" ||
+    params.request.method === "worker.sessions.send" ||
+    params.request.method === "worker.portal" ||
+    params.request.method === "worker.skill-workshop"
   ) {
-    const isGitHubPublish = params.request.method === WORKER_PROTOCOL_METHODS[5];
-    const isPortal = params.request.method === WORKER_PROTOCOL_METHODS[6];
-    const requiredFeature = isPortal
-      ? WORKER_PORTAL_PROTOCOL_FEATURE
-      : isGitHubPublish
-        ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
+    const isSkillWorkshop = params.request.method === "worker.skill-workshop";
+    const isPortal = params.request.method === "worker.portal";
+    const requiredFeature = isSkillWorkshop
+      ? WORKER_SKILL_WORKSHOP_FEATURE
+      : isPortal
+        ? WORKER_PORTAL_PROTOCOL_FEATURE
         : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
     if (!params.identity.protocolFeatures.includes(requiredFeature)) {
       rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
@@ -316,13 +318,13 @@ export async function dispatchWorkerRequest(params: {
       rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
       return;
     }
-    const isSpawn = params.request.method === WORKER_PROTOCOL_METHODS[3];
-    const requestValid = isPortal
-      ? validateWorkerPortalParams(params.request.params)
-      : isSpawn
-        ? validateWorkerSessionsSpawnParams(params.request.params)
-        : isGitHubPublish
-          ? validateWorkerGitHubPublishParams(params.request.params)
+    const isSpawn = params.request.method === "worker.sessions.spawn";
+    const requestValid = isSkillWorkshop
+      ? validateWorkerSkillWorkshopParams(params.request.params)
+      : isPortal
+        ? validateWorkerPortalParams(params.request.params)
+        : isSpawn
+          ? validateWorkerSessionsSpawnParams(params.request.params)
           : validateWorkerSessionsSendParams(params.request.params);
     if (!requestValid) {
       params.respond(false, undefined, workerProtocolError("invalid-frame"));
@@ -330,18 +332,18 @@ export async function dispatchWorkerRequest(params: {
     }
     const outcome = await service.executeSessionTool(
       params.identity,
-      isPortal
-        ? "portal"
-        : isSpawn
-          ? "sessions_spawn"
-          : isGitHubPublish
-            ? "github_publish"
+      isSkillWorkshop
+        ? "skill_workshop"
+        : isPortal
+          ? "portal"
+          : isSpawn
+            ? "sessions_spawn"
             : "sessions_send",
       // SAFETY: The selected tool's matching protocol validator accepted these request params.
       params.request.params as
+        | WorkerSkillWorkshopParams
         | WorkerSessionsSpawnParams
         | WorkerSessionsSendParams
-        | WorkerGitHubPublishParams
         | WorkerPortalParams,
       params.signal,
     );

@@ -1,5 +1,6 @@
 // Provider tool tests cover tool schema conversion and provider payload compatibility.
 import { describe, expect, it } from "vitest";
+import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import {
   buildProviderToolCompatFamilyHooks,
   inspectDeepSeekToolSchemas,
@@ -80,6 +81,18 @@ describe("buildProviderToolCompatFamilyHooks", () => {
   function normalizeOpenAIParameters(parameters: unknown): unknown {
     return normalizeOpenAITools([tool(parameters)])[0]?.parameters;
   }
+
+  it("keeps schema helpers outside eager AI transports", () => {
+    expect(
+      findSourceImportBackedges("src/plugin-sdk/provider-tools.ts", [
+        "packages/ai/src/providers/azure-openai-responses.ts",
+        "packages/ai/src/providers/openai-completions.ts",
+        "packages/ai/src/providers/openai-responses.ts",
+        "packages/ai/src/transports/openai-completions-transport.ts",
+        "packages/ai/src/transports/openai-responses-transport.ts",
+      ]),
+    ).toEqual([]);
+  });
 
   it("covers the tool compat family matrix", () => {
     const cases = [

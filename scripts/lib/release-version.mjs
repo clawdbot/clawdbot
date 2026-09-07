@@ -123,6 +123,15 @@ export function parseReleaseVersion(version) {
 }
 
 /**
+ * @param {string} version
+ * @returns {string | null}
+ */
+export function parsePinnedReleaseVersion(version) {
+  const parsed = parseReleaseVersion(version);
+  return parsed && parsed.version === parsed.baseVersion ? parsed.baseVersion : null;
+}
+
+/**
  * Patch 33 and later final releases belong to the trailing-month
  * extended-stable line; correction suffixes are not valid on that line.
  *
@@ -139,6 +148,45 @@ export function classifyReleaseTrain(parsedVersion) {
   return parsedVersion.correctionNumber === undefined
     ? "extended-stable"
     : "unsupported-extended-stable-correction";
+}
+
+/**
+ * A returned baseTag requires callers to prove that tag resolves to the source
+ * SHA. Matching version strings alone do not authorize same-source correction evidence.
+ * @param {string} releaseTag
+ * @param {string} packageVersion
+ * @returns {{ releaseTag: string, baseTag: string | null }}
+ */
+export function resolveReleaseTagPackageIdentity(releaseTag, packageVersion) {
+  const packaged = parseReleaseVersion(packageVersion);
+  const tagged = releaseTag.startsWith("v") ? parseReleaseVersion(releaseTag.slice(1)) : null;
+  if (
+    !packaged ||
+    packaged.version !== packageVersion ||
+    !tagged ||
+    releaseTag !== `v${tagged.version}`
+  ) {
+    throw new Error(`Invalid release tag or package version: ${releaseTag}, ${packageVersion}.`);
+  }
+  if (
+    classifyReleaseTrain(tagged) === "unsupported-extended-stable-correction" ||
+    classifyReleaseTrain(packaged) === "unsupported-extended-stable-correction"
+  ) {
+    throw new Error("Extended-stable releases do not allow correction suffixes.");
+  }
+  const baseTag =
+    tagged.correctionNumber !== undefined &&
+    packaged.channel === "stable" &&
+    packaged.correctionNumber === undefined &&
+    tagged.baseVersion === packaged.version
+      ? `v${packaged.version}`
+      : null;
+  if (tagged.version !== packaged.version && !baseTag) {
+    throw new Error(
+      `Target package version ${packageVersion} does not match release tag ${releaseTag}.`,
+    );
+  }
+  return { releaseTag, baseTag };
 }
 
 /**

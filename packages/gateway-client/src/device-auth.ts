@@ -1,4 +1,3 @@
-// Gateway Client module implements device auth behavior.
 export function normalizeDeviceMetadataForAuth(value?: string | null): string {
   if (typeof value !== "string") {
     return "";

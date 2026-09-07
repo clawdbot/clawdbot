@@ -4,6 +4,11 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const getPluginRuntimeGatewayRequestScopeMock = vi.fn();
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => getPluginRuntimeGatewayRequestScopeMock(),
+}));
+
 const getBrowserControlStateMock = vi.fn();
 const startBrowserControlServiceFromConfigMock = vi.fn();
 vi.mock("../../control-service.js", () => ({
@@ -85,6 +90,10 @@ function fakeSocket() {
       writes.push(chunk);
       return true;
     },
+    end: (chunk: string, callback: () => void) => {
+      writes.push(chunk);
+      callback();
+    },
     destroy: () => {
       destroyed = true;
     },
@@ -126,6 +135,7 @@ function stateWithExtensionProfile() {
 
 beforeEach(() => {
   configState.allowLegacyAuth = true;
+  getPluginRuntimeGatewayRequestScopeMock.mockReturnValue(undefined);
   readExtensionRelayTokenMock.mockReturnValue(TOKEN);
 });
 
@@ -270,6 +280,9 @@ describe("handleGatewayExtensionUpgrade", () => {
   });
 
   it("does not lazy-start or attach v2 before the in-band client proof succeeds", async () => {
+    getPluginRuntimeGatewayRequestScopeMock.mockReturnValue({
+      client: { clientIp: "203.0.113.20" },
+    });
     getBrowserControlStateMock.mockReturnValue(null);
     startBrowserControlServiceFromConfigMock.mockResolvedValue(stateWithExtensionProfile());
     primeProfile();
@@ -291,8 +304,10 @@ describe("handleGatewayExtensionUpgrade", () => {
     const authParams = authenticateExtensionWebSocketMock.mock.calls[0]?.[0] as {
       prepareAuthenticated: () => Promise<() => void>;
       resource: string;
+      source: string;
     };
     expect(authParams.resource).toBe("/browser/extension");
+    expect(authParams.source).toBe("203.0.113.20");
     const attach = await authParams.prepareAuthenticated();
     expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();

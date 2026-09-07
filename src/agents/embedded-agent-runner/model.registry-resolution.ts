@@ -4,12 +4,13 @@ import type { Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
+import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
-  shouldSuppressBuiltInModelCore,
+  buildSuppressedBuiltInModelError,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
@@ -38,7 +39,7 @@ import {
 type ExplicitModelResolution =
   | { kind: "resolved"; model: Model; source: "configured" }
   | { kind: "resolved"; dropOnRuntimeMiss: boolean; model: Model; source: "registry" }
-  | { kind: "suppressed" };
+  | { kind: "suppressed"; error?: string };
 
 function getRegistryProviderMetadataOwners(
   modelRegistry: CoreModelRegistry,
@@ -143,16 +144,15 @@ export function resolveExplicitModelWithRegistry(params: {
         ? (model as { baseUrl: string }).baseUrl
         : undefined;
     const effectiveBaseUrl = configuredBaseUrl ?? discoveredBaseUrl;
-    if (
-      shouldSuppressBuiltInModelCore({
-        provider,
-        id: modelId,
-        ...(cfg ? { config: cfg } : {}),
-        ...(effectiveBaseUrl ? { baseUrl: effectiveBaseUrl } : {}),
-        ...(workspaceDir ? { workspaceDir } : {}),
-      })
-    ) {
-      return { kind: "suppressed" };
+    const error = buildSuppressedBuiltInModelError({
+      provider,
+      id: modelId,
+      config: cfg,
+      baseUrl: effectiveBaseUrl,
+      workspaceDir,
+    });
+    if (error) {
+      return { kind: "suppressed", error };
     }
     return {
       kind: "resolved",
@@ -188,18 +188,14 @@ export function resolveExplicitModelWithRegistry(params: {
   if (inlineMatch) {
     return undefined;
   }
-  if (
-    shouldSuppressBuiltInModelCore({
-      provider,
-      id: modelId,
-      ...(cfg ? { config: cfg } : {}),
-      ...(providerConfig?.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    })
-  ) {
-    return { kind: "suppressed" };
-  }
-  return undefined;
+  const error = buildSuppressedBuiltInModelError({
+    provider,
+    id: modelId,
+    config: cfg,
+    baseUrl: providerConfig?.baseUrl,
+    workspaceDir,
+  });
+  return error ? { kind: "suppressed", error } : undefined;
 }
 
 export function resolveDynamicModelAuthProfile(params: {
@@ -222,7 +218,10 @@ export function resolveDynamicModelAuthProfile(params: {
       authProfileMode: params.authProfileMode,
     };
   }
-  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+    profileId: explicitProfileId,
+  });
   const profileId =
     explicitProfileId ??
     listOpenAIAuthProfileProvidersForAgentRuntime({
@@ -242,6 +241,14 @@ export function resolveDynamicModelAuthProfile(params: {
   }
   const credential = store.profiles[profileId];
   const configuredMode = params.cfg?.auth?.profiles?.[profileId]?.mode;
+  if (explicitProfileId && !credential && configuredMode !== "aws-sdk") {
+    // Credential-scoped discovery cannot distinguish a missing model after its profile is removed.
+    throw createSelectedAuthProfileUnavailableError({
+      provider: params.provider,
+      modelId: params.modelId,
+      profileId,
+    });
+  }
   return {
     authProfileId: profileId,
     ...(credential?.type || configuredMode

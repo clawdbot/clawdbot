@@ -2,14 +2,13 @@ import {
   defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
-  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import { normalizeConfiguredMemoryExtraPaths } from "../../../memory-host-sdk/host/config-utils.js";
 import type { MemoryExtraPath } from "../../../memory-host-sdk/host/types.js";
-import { visitAgentConfigScopes } from "./legacy-config-migrations.runtime.tier-eval.js";
-import { deleteRetiredPath } from "./legacy-config-record-shared.js";
+import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],

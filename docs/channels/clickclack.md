@@ -258,7 +258,7 @@ ownership is keyed by ClickClack server and channel id, so renaming the local
 account cannot turn a managed channel into an ordinary one.
 
 For narrower session access, explicitly set `tools.sessions.visibility` to
-`tree` rather than the agent-wide default. The plugin
+`tree` rather than the default `all`. The plugin
 installs a host-scoped grant only between each side session and its attached
 main session, plus a tool-policy hook that blocks session discovery and
 cross-session targets. It allows `sessions_history`, `session_status`, and

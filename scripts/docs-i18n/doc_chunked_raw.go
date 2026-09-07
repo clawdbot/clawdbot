@@ -156,6 +156,10 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	if err == nil {
 		err = validatePlaceholders(translated, placeholdersInText(normalizedSource, protectedPlaceholders))
 	}
+	if err != nil && os.Getenv("OPENCLAW_DOCS_I18N_LOG_REJECTED_BODY") == "1" {
+		// Capture the rejected translator boundary before normalization or leaf fallback loses it.
+		log.Printf("docs-i18n: rejected raw chunk %s input=%q output=%q err=%v", chunkID, normalizedSource, translated, err)
+	}
 	if err == nil {
 		translated = sanitizeDocChunkProtocolWrappers(source, translated)
 		translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
@@ -175,6 +179,8 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	if len(blocks) <= 1 {
 		if fallback, fallbackErr := translateDocLeafBlock(ctx, translator, chunkID, source, protectedPlaceholders, listPlaceholders, srcLang, tgtLang); fallbackErr == nil {
 			return fallback, nil
+		} else if os.Getenv("OPENCLAW_DOCS_I18N_LOG_REJECTED_BODY") == "1" {
+			log.Printf("docs-i18n: chunk leaf-fallback failed %s err=%v", chunkID, fallbackErr)
 		}
 		if plan, ok := planSingletonDocChunkRetry(source, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
 			logDocChunkPlanSplit(chunkID, plan, source)
@@ -616,7 +622,6 @@ var contextualProductDestinations = map[string]contextualProductDestinationRule{
 	"fal":         {hosts: []string{"fal.ai"}, routes: []string{"/providers/fal", "/plugins/reference/fal"}},
 	"Fal":         {hosts: []string{"fal.ai"}, routes: []string{"/providers/fal", "/plugins/reference/fal"}},
 	"Fireworks":   {hosts: []string{"fireworks.ai"}, routes: []string{"/providers/fireworks", "/plugins/reference/fireworks"}},
-	"Inferrs":     {routes: []string{"/providers/inferrs", "/ericcurtin/inferrs"}},
 	"Meta":        {hosts: []string{"meta.ai", "meta.com"}, routes: []string{"/providers/meta", "/plugins/reference/meta"}},
 	"Runway":      {hosts: []string{"runwayml.com"}, routes: []string{"/providers/runway", "/plugins/reference/runway"}},
 	"Synthetic":   {hosts: []string{"synthetic.new"}, routes: []string{"/providers/synthetic"}},
@@ -1124,9 +1129,9 @@ func stripCommonIndent(text string) (string, string) {
 		indent := leadingIndent(trimmed)
 		if common == "" {
 			common = indent
-			continue
+		} else {
+			common = commonIndentPrefix(common, indent)
 		}
-		common = commonIndentPrefix(common, indent)
 		if common == "" {
 			return text, ""
 		}

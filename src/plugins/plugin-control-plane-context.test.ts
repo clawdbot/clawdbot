@@ -105,6 +105,14 @@ describe("plugin control-plane context", () => {
       doctorContractHash: "contract-a",
       packageBuild: { openclawVersion: "next", bundledDist: false },
     });
+    const buildOnlyIndex = createIndex("demo", {
+      doctorContractHash: "contract-a",
+      packageBuild: { openclawVersion: "test" },
+    });
+    const withoutBuildIndex: InstalledPluginIndex = {
+      ...buildOnlyIndex,
+      plugins: buildOnlyIndex.plugins.map(({ packageBuild: _packageBuild, ...plugin }) => plugin),
+    };
     const bundledDistIndex = createIndex("demo", {
       doctorContractHash: "contract-a",
       packageBuild: { openclawVersion: "test", bundledDist: true },
@@ -138,6 +146,9 @@ describe("plugin control-plane context", () => {
     expect(resolveInstalledManifestRegistryIndexFingerprint(rebuiltIndex)).toBe(
       inventoryFingerprint,
     );
+    expect(resolveInstalledManifestRegistryIndexFingerprint(withoutBuildIndex)).toBe(
+      resolveInstalledManifestRegistryIndexFingerprint(buildOnlyIndex),
+    );
     expect(resolveInstalledManifestRegistryIndexFingerprint(bundledDistIndex)).not.toBe(
       inventoryFingerprint,
     );
@@ -150,6 +161,9 @@ describe("plugin control-plane context", () => {
     expect(resolveControlPlaneFingerprint(regeneratedIndex)).toBe(controlPlaneFingerprint);
     expect(resolveControlPlaneFingerprint(retimedContractIndex)).toBe(controlPlaneFingerprint);
     expect(resolveControlPlaneFingerprint(rebuiltIndex)).toBe(controlPlaneFingerprint);
+    expect(resolveControlPlaneFingerprint(withoutBuildIndex)).toBe(
+      resolveControlPlaneFingerprint(buildOnlyIndex),
+    );
     expect(resolveControlPlaneFingerprint(bundledDistIndex)).not.toBe(controlPlaneFingerprint);
     expect(resolveControlPlaneFingerprint(reorderedIndex)).toBe(controlPlaneFingerprint);
   });

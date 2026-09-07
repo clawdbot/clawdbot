@@ -41,6 +41,7 @@ import {
   validateDockerCandidateEnvironment,
   writeRunSummary,
 } from "../../scripts/test-docker-all.mts";
+import { waitForChildClose } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -335,20 +336,6 @@ async function runReadyTimedCommand<T>(
     fireDeadline();
     await command;
   }
-}
-
-async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
-  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("child did not close before timeout"));
-      }, timeoutMs);
-      child.once("close", (code, signal) => {
-        clearTimeout(timeout);
-        resolve({ code, signal });
-      });
-    },
-  );
 }
 
 describe("scripts/test-docker-all scheduler", () => {
@@ -659,13 +646,19 @@ describe("scripts/test-docker-all scheduler", () => {
           ...process.env,
           OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL: "1",
           OPENCLAW_DOCKER_ALL_PROFILE: "release-path",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "base legacy-operator-state",
           OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: process.cwd(),
         },
       },
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ profile: "release-path" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      profile: "release-path",
+      lanes: expect.arrayContaining([
+        expect.objectContaining({ name: "published-upgrade-survivor-legacy-operator-state" }),
+      ]),
+    });
   });
 
   it("rejects loose numeric runner env vars without a stack trace", () => {
@@ -907,8 +900,11 @@ describe("scripts/test-docker-all scheduler", () => {
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
       expect(summary.status).toBe("failed");
       expect(summary.lanes).toEqual([]);
-      expect(summary.omittedUnsupportedLanes).toHaveLength(12);
+      expect(summary.omittedUnsupportedLanes).toHaveLength(13);
       expect(summary.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
+      expect(summary.omittedUnsupportedLanes).toContain(
+        "published-upgrade-survivor-legacy-operator-state",
+      );
       expect(summary.omittedUnsupportedLanes).toContain(
         "published-upgrade-survivor-versioned-runtime-deps",
       );
@@ -951,7 +947,10 @@ describe("scripts/test-docker-all scheduler", () => {
       } else {
         const plan = JSON.parse(result.stdout);
         expect(plan.lanes).toEqual([]);
-        expect(plan.omittedUnsupportedLanes).toHaveLength(12);
+        expect(plan.omittedUnsupportedLanes).toHaveLength(13);
+        expect(plan.omittedUnsupportedLanes).toContain(
+          "published-upgrade-survivor-legacy-operator-state",
+        );
       }
       expect(existsSync(path.join(logDir, "summary.json"))).toBe(false);
       expect(existsSync(path.join(logDir, "failures.json"))).toBe(false);

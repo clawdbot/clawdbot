@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveMemorySearchConfig } from "../../../agents/memory-search.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace-default.js";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
@@ -15,7 +16,12 @@ describe("legacy config migration end to end", () => {
       },
     });
     expect(duplicate.next).toEqual({
-      agents: { entries: { main: { name: "first" }, "main-2": { name: "second" } } },
+      agents: {
+        entries: {
+          main: { name: "first", workspace: resolveDefaultAgentWorkspaceDir() },
+          "main-2": { name: "second" },
+        },
+      },
     });
     expect(applyLegacyDoctorMigrations(duplicate.next)).toEqual({ next: null, changes: [] });
 
@@ -248,6 +254,22 @@ describe("legacy config migration end to end", () => {
     ]) {
       expect(serialized).not.toContain(`"${key}"`);
     }
+  });
+
+  it("loads WhatsApp-owned acknowledgement migration guidance", () => {
+    const result = migrateLegacyConfig({
+      channels: {
+        whatsapp: {
+          ackReaction: { emoji: "👀", direct: true, group: "mentions" },
+        },
+      },
+    });
+
+    expect(result.sourceConfig?.messages).toEqual({ ackReaction: "👀" });
+    expect(result.config?.channels?.whatsapp?.ackReaction).toBeUndefined();
+    expect(result.changes.join("\n")).toContain(
+      "cannot preserve both direct-message and mentioned-group acknowledgements",
+    );
   });
 
   it("preserves canonical OpenAI personality over the retired prompt overlay", () => {

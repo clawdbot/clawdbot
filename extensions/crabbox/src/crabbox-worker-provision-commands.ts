@@ -147,7 +147,7 @@ function assertProvisionSecurityPolicy(params: { inspect: ParsedInspect; provide
 export async function waitForProvisionReady(
   params: ProvisionInspectContext & {
     refresh?: boolean;
-    sleep: (milliseconds: number) => Promise<void>;
+    sleep: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   },
 ): Promise<ParsedInspect> {
   let inspect = params.inspect;
@@ -173,12 +173,17 @@ export async function waitForProvisionReady(
   };
   try {
     inspect = params.refresh ? await inspectAgain() : params.inspect;
+    params.signal?.throwIfAborted();
     // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isNonRunnableState(inspect.state)) {
       params.signal?.throwIfAborted();
       const remaining = remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS);
-      await params.sleep(Math.min(resolveCrabboxReadyPollIntervalMs(params.provider), remaining));
+      await params.sleep(
+        Math.min(resolveCrabboxReadyPollIntervalMs(params.provider), remaining),
+        params.signal,
+      );
+      params.signal?.throwIfAborted();
       inspect = await inspectAgain();
       assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     }
@@ -238,7 +243,7 @@ export async function runProvisionSetup(
 
 export async function runProvisionSetupAndWaitReady(
   params: Parameters<typeof runProvisionSetup>[0] & {
-    sleep: (milliseconds: number) => Promise<void>;
+    sleep: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   },
 ): Promise<ParsedInspect> {
   await runProvisionSetup(params);

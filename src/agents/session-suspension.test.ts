@@ -54,6 +54,7 @@ describe("session suspension", () => {
       update({}),
     );
 
+    const maxConcurrent = getCommandLaneSnapshot(CommandLane.Main).maxConcurrent;
     await recordSuspension(Number.MAX_SAFE_INTEGER);
 
     const buildPatch = sessionAccessorMocks.patchSessionEntryCore.mock.calls[0]?.[1] as (_entry: {
@@ -74,7 +75,7 @@ describe("session suspension", () => {
         state: "suspended",
       }),
     );
-    expect(getCommandLaneSnapshot(CommandLane.Main).maxConcurrent).toBe(1);
+    expect(getCommandLaneSnapshot(CommandLane.Main).maxConcurrent).toBe(maxConcurrent);
     await expect(
       enqueueCommandInLane(CommandLane.Main, async () => "unrelated-provider-ok"),
     ).resolves.toBe("unrelated-provider-ok");

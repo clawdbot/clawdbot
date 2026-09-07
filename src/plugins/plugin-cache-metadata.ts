@@ -1,10 +1,12 @@
-import type { ManifestModelIdNormalizationRecord } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { BundledStaticCatalogState } from "../agents/embedded-agent-runner/model.static-catalog.types.js";
 import type { BundledChannelCatalogEntry } from "../channels/bundled-channel-catalog.types.js";
 import type { ManifestChannelPlugin } from "../channels/plugins/manifest-channel-plugin.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDiscoveryResult } from "./discovery.types.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
+import type {
+  InstalledPluginIndex,
+  InstalledPluginIndexFacts,
+} from "./installed-plugin-index-types.js";
 import type { ManifestModelSuppressionResolver } from "./manifest-model-suppression.types.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
@@ -13,9 +15,10 @@ type CurrentPluginMetadataCacheState = {
   snapshot: unknown;
   owner: "gateway" | "operation";
   configFingerprint: string | undefined;
+  envFingerprint: string | undefined;
+  defaultDiscoveryCompatible: boolean;
   compatiblePolicyHashes: readonly string[] | undefined;
   compatibleConfigFingerprints: readonly string[] | undefined;
-  manifestModelIdNormalizationRecords: readonly ManifestModelIdNormalizationRecord[] | undefined;
   revision: symbol;
   configIdentities: WeakSet<OpenClawConfig>;
 };
@@ -31,7 +34,7 @@ export type PluginCacheMetadata = {
     projections: WeakMap<PluginMetadataSnapshot, Map<string, PluginMetadataSnapshot>>;
     projectionSources: WeakMap<PluginMetadataSnapshot, PluginMetadataSnapshot>;
     completions: WeakMap<PluginMetadataSnapshot, PluginMetadataSnapshot>;
-    indexFingerprints: WeakMap<InstalledPluginIndex, string>;
+    indexFacts: WeakMap<InstalledPluginIndex, InstalledPluginIndexFacts>;
     channelAdapters: WeakMap<PluginManifestRecord, Map<string, ManifestChannelPlugin | undefined>>;
     bundledChannelCatalogs: Map<string, BundledChannelCatalogEntry[]>;
     staticCatalogStates: WeakMap<object, WeakMap<OpenClawConfig, BundledStaticCatalogState>>;
@@ -52,9 +55,10 @@ export function createPluginCacheMetadata(): PluginCacheMetadata {
         snapshot: undefined,
         owner: "operation",
         configFingerprint: undefined,
+        envFingerprint: undefined,
+        defaultDiscoveryCompatible: false,
         compatiblePolicyHashes: undefined,
         compatibleConfigFingerprints: undefined,
-        manifestModelIdNormalizationRecords: undefined,
         revision: Symbol("plugin-metadata-snapshot"),
         configIdentities: new WeakSet(),
       },
@@ -63,7 +67,7 @@ export function createPluginCacheMetadata(): PluginCacheMetadata {
       projections: new WeakMap(),
       projectionSources: new WeakMap(),
       completions: new WeakMap(),
-      indexFingerprints: new WeakMap(),
+      indexFacts: new WeakMap(),
       channelAdapters: new WeakMap(),
       bundledChannelCatalogs: new Map(),
       staticCatalogStates: new WeakMap(),

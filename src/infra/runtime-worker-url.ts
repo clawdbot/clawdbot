@@ -2,12 +2,16 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 
-/** Resolve a source worker sibling or its stable packaged path under dist. */
+/** Resolve an explicit installed root, source sibling, or stable packaged worker path. */
 export function resolveRuntimeWorkerUrl(params: {
   currentModuleUrl: string;
   sourceWorkerName: string;
   distWorkerPath: string;
+  root?: string;
 }): URL {
+  if (params.root !== undefined) {
+    return pathToFileURL(path.join(params.root, "dist", params.distWorkerPath));
+  }
   const currentPath = fileURLToPath(params.currentModuleUrl);
   const normalized = currentPath.replaceAll(path.sep, "/");
   const distMarker = "/dist/";
@@ -22,5 +26,8 @@ export function resolveRuntimeWorkerUrl(params: {
 
 export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
   const entry = fileURLToPath(url);
-  return /\.[cm]?ts$/.test(entry) && !isBunRuntime(execPath) ? ["--import", "tsx", entry] : [entry];
+  // Resolve the preload here: Node resolves bare imports from the child cwd.
+  return /\.[cm]?ts$/.test(entry) && !isBunRuntime(execPath)
+    ? ["--import", import.meta.resolve("tsx"), entry]
+    : [entry];
 }

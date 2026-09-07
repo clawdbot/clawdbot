@@ -18,6 +18,7 @@ export async function publishSessionPatchEffects(params: {
   callerCanManageCron: boolean;
   category: SessionsPatchParams["category"];
   targets: Array<{
+    accessChanged: boolean;
     entry: SessionEntry;
     target: {
       canonicalKey: string;
@@ -28,7 +29,7 @@ export async function publishSessionPatchEffects(params: {
   }>;
 }): Promise<void> {
   const archivedSessionKeys = new Set<string>();
-  for (const { target, entry } of params.targets) {
+  for (const { target, entry, accessChanged } of params.targets) {
     triggerSessionPatchHook({
       cfg: params.cfg,
       sessionEntry: entry,
@@ -43,11 +44,15 @@ export async function publishSessionPatchEffects(params: {
       sessionKey: target.canonicalKey,
       targetAgentId: target.targetAgentId,
     });
-    emitSessionsChanged(params.context, {
-      sessionKey: target.canonicalKey,
-      ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
-      reason: "patch",
-    });
+    emitSessionsChanged(
+      params.context,
+      {
+        sessionKey: target.canonicalKey,
+        ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
+        reason: "patch",
+      },
+      { accessChanged },
+    );
     if (target.fullPatch.archived === true) {
       archivedSessionKeys.add(target.canonicalKey);
     }
@@ -58,7 +63,7 @@ export async function publishSessionPatchEffects(params: {
     // A first-use category is a group-catalog mutation: clients reload the
     // catalog only on reason "groups" (the sessions.groups.* siblings emit it).
     if (ensureSessionGroupRegistered(category)) {
-      emitSessionsChanged(params.context, { reason: "groups" });
+      emitSessionsChanged(params.context, { reason: "groups" }, { accessChanged: false });
     }
   }
   if (params.callerCanManageCron && archivedSessionKeys.size > 0) {

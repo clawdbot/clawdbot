@@ -1,4 +1,5 @@
 // Codex tests cover sandbox exec server plugin behavior.
+import { useIsolatedStateGuard, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
@@ -20,8 +21,9 @@ import {
   waitForSocketClose,
 } from "./sandbox-exec-server.test-helpers.js";
 
+useIsolatedStateGuard();
+
 afterEach(async () => {
-  vi.unstubAllEnvs();
   await sandboxExecServerRegistry.closeAll();
 });
 
@@ -639,49 +641,52 @@ describe("OpenClaw Codex sandbox exec-server", () => {
   });
 
   it("does not let Codex env policy inherit host secret variables", async () => {
-    vi.stubEnv("HOME", "/gateway-home");
-    vi.stubEnv("USER", "gateway-user");
-    vi.stubEnv("TMPDIR", "/gateway-tmp");
-    vi.stubEnv("OPENCLAW_TEST_SECRET_TOKEN", "host-secret");
-    vi.stubEnv("OPENCLAW_TEST_DATABASE_PASSWORD", "host-password");
-    vi.stubEnv("OPENCLAW_TEST_PRIVATE_KEY", "host-private-key");
-    const buildExecSpec = vi.fn(async () => ({
-      argv: [process.execPath, "-e", ""],
-      env: {},
-      stdinMode: "pipe-closed" as const,
-    }));
-    const sandbox = createSandboxContext({ buildExecSpec });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-
-    await rpc(socket, "process/start", {
-      processId: "proc-secret-env",
-      argv: ["/bin/sh", "-lc", "true"],
-      cwd: "file:///workspace",
-      env: {},
-      envPolicy: {
-        inherit: "all",
-        ignoreDefaultExcludes: true,
-        exclude: [],
-        set: {},
-        includeOnly: [],
+    await withEnvAsync(
+      {
+        OPENCLAW_TEST_SECRET_TOKEN: "host-secret",
+        OPENCLAW_TEST_DATABASE_PASSWORD: "host-password",
+        OPENCLAW_TEST_PRIVATE_KEY: "host-private-key",
       },
-      tty: false,
-      pipeStdin: false,
-      arg0: null,
-    });
+      async () => {
+        const buildExecSpec = vi.fn(async () => ({
+          argv: [process.execPath, "-e", ""],
+          env: {},
+          stdinMode: "pipe-closed" as const,
+        }));
+        const sandbox = createSandboxContext({ buildExecSpec });
+        const client = createClient();
+        await ensureCodexSandboxExecServerEnvironment({
+          client: client as never,
+          sandbox,
+        });
+        const socket = await openSocket(execServerUrlFromClient(client));
+        await rpc(socket, "initialize", { clientName: "test" });
+        socket.send(JSON.stringify({ method: "initialized" }));
 
-    const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
-      { env: Record<string, string> },
-    ];
-    expect(execEnv).toEqual({ CODEX_SANDBOX_EXEC_ID: expect.any(String) });
-    socket.close();
+        await rpc(socket, "process/start", {
+          processId: "proc-secret-env",
+          argv: ["/bin/sh", "-lc", "true"],
+          cwd: "file:///workspace",
+          env: {},
+          envPolicy: {
+            inherit: "all",
+            ignoreDefaultExcludes: true,
+            exclude: [],
+            set: {},
+            includeOnly: [],
+          },
+          tty: false,
+          pipeStdin: false,
+          arg0: null,
+        });
+
+        const [{ env: execEnv }] = buildExecSpec.mock.calls[0] as unknown as [
+          { env: Record<string, string> },
+        ];
+        expect(execEnv).toEqual({ CODEX_SANDBOX_EXEC_ID: expect.any(String) });
+        socket.close();
+      },
+    );
   });
 
   it("keeps process/read cursors at the last returned byte-limited chunk", async () => {

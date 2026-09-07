@@ -50,10 +50,19 @@ function createSecretPipe(): SecretPipe {
   return createPipe();
 }
 
+type SecretDeliveryOptions = {
+  abortSignal?: AbortSignal;
+};
+
 export function prepareSecretInputStdio(
   stdio: SpawnStdioEntry[],
   secretInput: SpawnSecretInput | undefined,
-): { deliverTo: (child: ChildProcess) => Promise<void>; [Symbol.dispose]: () => void } | undefined {
+):
+  | {
+      deliverTo: (child: ChildProcess, options?: SecretDeliveryOptions) => Promise<void>;
+      [Symbol.dispose]: () => void;
+    }
+  | undefined {
   if (!secretInput) {
     return undefined;
   }
@@ -83,7 +92,7 @@ export function prepareSecretInputStdio(
         writeFd = undefined;
       }
     },
-    async deliverTo(child) {
+    async deliverTo(child, options) {
       closeRead();
       const stream =
         writeFd === undefined
@@ -108,6 +117,11 @@ export function prepareSecretInputStdio(
       if (!stream || typeof stream.end !== "function") {
         throw new Error(`secret input file descriptor ${secretInput.fd} is unavailable`);
       }
+      const abortSignal = options?.abortSignal;
+      if (abortSignal?.aborted) {
+        stream.destroy();
+        throw new Error("secret delivery aborted");
+      }
       let data: Buffer | undefined;
       try {
         data = secretInput.createData();
@@ -119,15 +133,21 @@ export function prepareSecretInputStdio(
               return;
             }
             settled = true;
+            abortSignal?.removeEventListener("abort", onAbort);
             if (error) {
               reject(error);
             } else {
               resolve();
             }
           };
+          const onAbort = () => {
+            stream.destroy();
+            settle(new Error("secret delivery aborted"));
+          };
           const onError = (error: Error) => settle(error);
           // A pipe can emit its terminal error after end's callback. Retain the
           // handler until close while only the first outcome settles delivery.
+          abortSignal?.addEventListener("abort", onAbort, { once: true });
           stream.on("error", onError);
           stream.once("close", () => stream.off("error", onError));
           stream.end(data, settle);

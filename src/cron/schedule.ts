@@ -348,32 +348,3 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
     ? normalizedPreviousMs
     : undefined;
 }
-
-/** Clears the Croner expression cache for deterministic tests. */
-function clearCronScheduleCacheForTest(): void {
-  cronEvalCache.clear();
-}
-
-/** Returns the Croner expression cache size for tests. */
-function getCronScheduleCacheSizeForTest(): number {
-  return cronEvalCache.size;
-}
-
-/** Returns the Croner expression cache capacity for tests. */
-function getCronScheduleCacheMaxForTest(): number {
-  return CRON_EVAL_CACHE_MAX;
-}
-
-/** Returns whether an expression/timezone pair is present in the Croner cache for tests. */
-function hasCronInCacheForTest(expr: string, tz: string): boolean {
-  return cronEvalCache.has(`${tz}\u0000${expr}`);
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronScheduleTestApi")] = {
-    clearCronScheduleCacheForTest,
-    getCronScheduleCacheSizeForTest,
-    getCronScheduleCacheMaxForTest,
-    hasCronInCacheForTest,
-  };
-}

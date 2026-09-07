@@ -144,21 +144,6 @@ function readOptionalInspectString(value: unknown): string | undefined {
   return value;
 }
 
-function readLabels(value: unknown): Record<string, string> {
-  if (value === undefined || value === null) {
-    return {};
-  }
-  const record = requireRecord(value);
-  const labels: Record<string, string> = {};
-  for (const [key, label] of Object.entries(record)) {
-    if (typeof label !== "string") {
-      throw new InvalidInspectOutputError();
-    }
-    labels[key] = label;
-  }
-  return labels;
-}
-
 function readStringRecord(value: unknown): Record<string, string> {
   if (value === undefined || value === null) {
     return {};
@@ -238,14 +223,8 @@ function readNetworkAttachments(value: unknown): Array<{ id: string; name?: stri
 }
 
 function readEnvironment(value: unknown): Record<string, string> {
-  if (value === undefined || value === null) {
-    return {};
-  }
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
-    throw new InvalidInspectOutputError();
-  }
   const environment: Record<string, string> = {};
-  for (const assignment of value) {
+  for (const assignment of readStringArray(value)) {
     const separator = assignment.indexOf("=");
     if (separator <= 0) {
       throw new InvalidInspectOutputError();
@@ -265,7 +244,7 @@ function readPidsLimit(value: unknown): number | undefined {
   return value;
 }
 
-function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult, { kind: "ok" }> {
+function parseInspectRecord(stdout: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -275,7 +254,11 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   if (!Array.isArray(parsed) || parsed.length !== 1) {
     throw new InvalidInspectOutputError();
   }
-  const inspected = requireRecord(parsed[0]);
+  return requireRecord(parsed[0]);
+}
+
+function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult, { kind: "ok" }> {
+  const inspected = parseInspectRecord(stdout);
   const state = requireRecord(inspected.State);
   const config = requireRecord(inspected.Config);
   const hostConfig = requireRecord(inspected.HostConfig);
@@ -288,7 +271,8 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
     containerId: requireString(inspected.Id),
     state: requireString(state.Status),
     running: requireBoolean(state.Running),
-    labels: readLabels(config.Labels),
+    // Preserve ordinary-object assignment semantics for JSON "__proto__" labels.
+    labels: Object.assign({}, readStringRecord(config.Labels)),
     environment: readEnvironment(config.Env),
     imageId: requireString(inspected.Image),
     memory: String(requireNonNegativeNumber(hostConfig.Memory)),
@@ -310,37 +294,18 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
 function parseNetworkInspectOutput(
   stdout: string,
 ): Extract<FleetNetworkInspectResult, { kind: "ok" }> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new InvalidInspectOutputError();
-  }
-  if (!Array.isArray(parsed) || parsed.length !== 1) {
-    throw new InvalidInspectOutputError();
-  }
-
-  const inspected = requireRecord(parsed[0]);
+  const inspected = parseInspectRecord(stdout);
   return {
     kind: "ok",
-    labels: readLabels(inspected.Labels ?? inspected.labels),
+    labels: Object.assign({}, readStringRecord(inspected.Labels ?? inspected.labels)),
     attachedContainers: readNetworkAttachments(inspected.Containers ?? inspected.containers),
     internal: readOptionalBoolean(inspected.Internal ?? inspected.internal) ?? false,
   };
 }
 
 function parseDockerContextEndpoint(stdout: string): string {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error("docker context inspect returned an invalid response");
-  }
-  if (!Array.isArray(parsed) || parsed.length !== 1) {
-    throw new Error("docker context inspect returned an invalid response");
-  }
-  try {
-    const context = requireRecord(parsed[0]);
+    const context = parseInspectRecord(stdout);
     const endpoints = requireRecord(context.Endpoints);
     const docker = requireRecord(endpoints.docker);
     return requireString(docker.Host);
@@ -364,20 +329,10 @@ function isLocalDockerEndpoint(endpoint: string): boolean {
 }
 
 function parsePodmanServiceIsRemote(stdout: string): boolean {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error("podman info returned an invalid response");
-  }
-  try {
-    const info = requireRecord(parsed);
+    const info = requireRecord(JSON.parse(stdout));
     const host = requireRecord(info.host);
-    const serviceIsRemote = host.serviceIsRemote;
-    if (typeof serviceIsRemote !== "boolean") {
-      throw new Error();
-    }
-    return serviceIsRemote;
+    return requireBoolean(host.serviceIsRemote);
   } catch {
     throw new Error("podman info returned an invalid response");
   }
@@ -798,4 +753,3 @@ export function createFleetContainerRuntime(
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

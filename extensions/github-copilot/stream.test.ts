@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { wrapCopilotProviderStream } from "./stream.js";
 
@@ -419,14 +420,7 @@ describe("wrapCopilotAnthropicStream", () => {
             name: "read",
             arguments: {},
           })),
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
           stopReason: "toolUse",
           timestamp: 2,
         },
@@ -444,7 +438,6 @@ describe("wrapCopilotAnthropicStream", () => {
     try {
       const stream = await requireStreamFn(wrapCopilotTestStream(streamSimple))(model, context, {
         apiKey: "copilot-token",
-        maxRetries: 0,
         headers: { "COPILOT-INTEGRATION-ID": "caller-identity" },
       });
       const result = await stream.result();

@@ -170,6 +170,7 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     connection: { gatewayUrl: "ws://localhost", token: "", password: "", bootstrapToken: "" },
     connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -312,6 +313,18 @@ export async function mountPage(
   document.body.append(provider);
   await page.updateComplete;
   return { page, provider };
+}
+
+export async function mountClawHubSearchPage(client: GatewayBrowserClient) {
+  const harness = createGateway(client);
+  return mountPage(
+    createContext(harness.gateway),
+    createPluginsRouteData(
+      harness.gateway,
+      createResult(),
+      createPluginsRouteLocation("/settings/plugins/discover"),
+    ),
+  );
 }
 
 export function deferred<T>() {

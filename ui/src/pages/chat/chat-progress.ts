@@ -4,7 +4,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import type { RunOutputUsage } from "./tool-stream-contract.ts";
+import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
 
 type WorkingProgress = {
   key: string;
@@ -16,32 +16,20 @@ type WorkingProgressCache = WorkingProgress;
 
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
 
-export function isContextCompactionActivity(message: unknown): boolean {
-  return asRecord(asRecord(message)?.["__openclaw"])?.runtimeActivityKind === "context_compaction";
+export function isContextCompactionMessage(message: unknown): boolean {
+  const record = asRecord(message);
+  return record?.role === "custom" && record.customType === CONTEXT_COMPACTION_CUSTOM_TYPE;
 }
 
-export function projectContextCompactionActivity(message: unknown): unknown {
+export function matchesCompactionOperation(message: unknown, status: CompactionStatus): boolean {
   const record = asRecord(message);
-  if (record?.role !== "custom" || record.customType !== CONTEXT_COMPACTION_CUSTOM_TYPE) {
-    return message;
-  }
-  const metadata = asRecord(record["__openclaw"]);
-  const details = asRecord(record.details);
-  const { idempotencyKey: _activityId, ...activity } = record;
-  return {
-    ...activity,
-    role: "assistant",
-    content: [{ type: "text", text: t("chat.composer.contextCompacted") }],
-    ...(typeof metadata?.runId === "string"
-      ? { runId: metadata.runId }
-      : typeof details?.runId === "string"
-        ? { runId: details.runId }
-        : {}),
-    __openclaw: {
-      ...metadata,
-      runtimeActivityKind: "context_compaction",
-    },
-  };
+  const marker = asRecord(record?.["__openclaw"]);
+  return Boolean(
+    (marker?.kind === "compaction" || isContextCompactionMessage(message)) &&
+    status.runId &&
+    marker?.runId === status.runId &&
+    (!status.itemId || marker.itemId === status.itemId),
+  );
 }
 
 const workingProgressBySession = new Map<string, WorkingProgressCache>();
@@ -112,6 +100,7 @@ export function buildCompactionDividerItem(
   marker: Record<string, unknown>,
   timestamp: number,
   index: number,
+  phase: "active" | "complete" = "complete",
 ): Extract<ChatItem, { kind: "divider" }> {
   const tokensBefore = marker.tokensBefore;
   const tokensAfter = marker.tokensAfter;
@@ -129,8 +118,10 @@ export function buildCompactionDividerItem(
       typeof marker.id === "string"
         ? `divider:compaction:${marker.id}`
         : `divider:compaction:${timestamp}:${index}`,
-    label: t("chat.compaction.label"),
-    icon: "foldVertical",
+    label: t(
+      phase === "active" ? "chat.composer.compactingContext" : "chat.composer.contextCompacted",
+    ),
+    compaction: phase,
     ...(tokensSaved === null
       ? {}
       : {
@@ -138,8 +129,15 @@ export function buildCompactionDividerItem(
             count: formatCompactTokenCount(tokensSaved),
           }),
         }),
-    description: t("chat.compaction.description"),
-    action: { kind: "session-checkpoints", label: t("chat.compaction.openCheckpoints") },
+    ...(phase === "complete" && marker.kind === "compaction"
+      ? {
+          description: t("chat.compaction.description"),
+          action: {
+            kind: "session-checkpoints" as const,
+            label: t("chat.compaction.openCheckpoints"),
+          },
+        }
+      : {}),
     timestamp,
   };
 }
@@ -195,40 +193,47 @@ export function resolveWorkingProgress(
   streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
 ): WorkingProgress {
+  const visibleSends = queue.filter(shouldRenderQueuedSendInThread);
+  const pendingSends = visibleSends.filter((item) => !isQueuedSendInlineState(item));
   const queuedProgress =
-    queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item)) ??
-    queue.find(shouldRenderQueuedSendInThread);
+    pendingSends.find((item) => item.sendState === "sending") ?? pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
   const segmentRunId = streamSegments
     .map((segment) => segment.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  const toolRunId = toolMessages
-    .map((message) => (message as Record<string, unknown> | null)?.runId)
+  const toolProgress = toolMessages.map(asRecord);
+  const toolRunId = toolProgress
+    .map((message) => message?.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  // Stream and tool facts describe work already observed in this row. Queue
-  // identity is only a pre-run fallback and must not claim an active tail.
-  const explicitRunId = runId ?? segmentRunId ?? toolRunId ?? queuedRunId;
+  // A submitted send owns the acknowledgment gap; delayed activity from an
+  // earlier run must not claim it. Future queued sends remain a fallback.
+  const submittedRunId = queuedProgress?.sendState === "sending" ? queuedRunId : undefined;
+  const explicitRunId = runId ?? submittedRunId ?? segmentRunId ?? toolRunId ?? queuedRunId;
   const cached = workingProgressBySession.get(sessionKey);
   const compatibleCached =
     cached && (!explicitRunId || !cached.runId || cached.runId === explicitRunId) ? cached : null;
   const candidates = [
     compatibleCached?.startedAt,
     streamStartedAt,
-    ...queue
-      .filter(shouldRenderQueuedSendInThread)
+    // Recovery rows cannot identify work, but matching durable timing survives reconnects.
+    ...visibleSends
+      .filter((item) =>
+        explicitRunId
+          ? (item.sendRunId ?? item.pendingRunId) === explicitRunId
+          : item === queuedProgress,
+      )
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),
-    ...streamSegments.map((segment) => segment.ts),
-    ...toolMessages.map((message) => {
-      const receivedAt = (message as Record<string, unknown> | null)?.[
-        "__openclawToolStreamReceivedAt"
-      ];
-      return typeof receivedAt === "number" ? receivedAt : null;
-    }),
+    ...streamSegments
+      .filter((segment) => !explicitRunId || segment.runId === explicitRunId)
+      .map((segment) => segment.ts),
+    ...toolProgress
+      .filter((message) => !explicitRunId || message?.runId === explicitRunId)
+      .map((message) => message?.["__openclawToolStreamReceivedAt"]),
   ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const startedAt = candidates.length > 0 ? Math.min(...candidates) : Date.now();
   const key =

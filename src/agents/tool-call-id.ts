@@ -84,7 +84,7 @@ export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolRes
   return extractPairingToolResultIds(msg);
 }
 
-function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
+export function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;

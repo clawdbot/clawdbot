@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -204,21 +205,31 @@ afterEach(() => {
 });
 
 describe("config application settlement", () => {
-  it("does not acknowledge a persisted write before its runtime application", async () => {
+  it.each(
+    (["config.patch", "config.apply"] as const).flatMap((method) =>
+      [
+        { name: "hooks", config: { hooks: { enabled: true } } },
+        {
+          name: "new Gateway HTTP settings",
+          config: { gateway: { http: { endpoints: { responses: { enabled: true } } } } },
+        },
+      ].map(({ name, config }) => ({ method, name, config })),
+    ),
+  )("waits for $method application of $name before acknowledging", async ({ method, config }) => {
     let settleApplication!: (status: "applied") => void;
     const application = new Promise<"applied">((resolve) => {
       settleApplication = resolve;
     });
-    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => ({
+    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async (params) => ({
       path: "/tmp/openclaw.json",
-      config: { hooks: { enabled: true } },
+      config,
       hash: "settled-hash",
-      application,
+      application: params.awaitRuntimeApplication ? application : undefined,
       queueFollowUp: vi.fn(),
     }));
 
-    const { harness, operation } = startConfigWrite("config.patch", {
-      raw: { hooks: { enabled: true } },
+    const { harness, operation } = startConfigWrite(method, {
+      raw: config,
       baseHash: "base-hash",
     });
     await vi.waitFor(() =>
@@ -354,7 +365,7 @@ describe("config.openFile", () => {
 
   it("returns a detailed error and logs details when the opener fails", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
-      mockOpenPathError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
+      mockOpenPathError(Object.assign(new Error("spawn xdg-open EACCES"), { code: "EACCES" }));
 
       const { respond, logGateway } = await invokeConfigOpenFile();
 
@@ -363,15 +374,40 @@ describe("config.openFile", () => {
         {
           ok: false,
           path: "/tmp/config.json",
-          error: "Failed to open config file: spawn xdg-open ENOENT",
+          error: "Failed to open config file: spawn xdg-open EACCES",
         },
         undefined,
       );
       expect(logGateway.warn).toHaveBeenCalledWith(
-        "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+        "config.openFile failed path=/tmp/config.json: spawn xdg-open EACCES",
       );
     });
   });
+
+  it.runIf(process.platform === "linux")(
+    "returns actionable headless environment error when xdg-open is missing",
+    async () => {
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
+        mockOpenPathError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
+
+        const { respond, logGateway } = await invokeConfigOpenFile();
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            ok: false,
+            path: "/tmp/config.json",
+            error:
+              "Cannot open file in headless environment. File path: /tmp/config.json. This environment appears to lack a graphical or terminal browser handler.",
+          },
+          undefined,
+        );
+        expect(logGateway.warn).toHaveBeenCalledWith(
+          "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+        );
+      });
+    },
+  );
 
   it("does not split surrogate pairs when truncating the failed config path", async () => {
     const pathPrefix = `/tmp/${"a".repeat(111)}`;
@@ -735,9 +771,10 @@ describe("config.patch ID-keyed arrays", () => {
 
 describe("config.patch model input normalization", () => {
   it("uses write-snapshot policies before merging manifest-backed model IDs", async () => {
-    modelNormalizationPluginMetadata = {
+    modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture({
       plugins: [
         {
+          id: "myproxy-normalizer",
           modelIdNormalization: {
             providers: {
               myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
@@ -745,7 +782,7 @@ describe("config.patch model input normalization", () => {
           },
         },
       ],
-    } as unknown as PluginMetadataSnapshot;
+    });
     storedConfig = {
       models: {
         providers: {

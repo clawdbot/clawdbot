@@ -1,15 +1,10 @@
 // Stores meeting-capture transcripts in the shared SQLite state database.
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  iterateSqliteQuerySync,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -17,7 +12,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceLocator,
+  TranscriptUtterance,
+} from "./provider-types.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import {
   isCaseSensitiveDirectory,
@@ -30,17 +29,21 @@ import {
   transcriptSessionSelector,
   writeTranscriptArtifact,
 } from "./store-artifacts.js";
-import { writeTranscriptJsonlArtifact } from "./store-export-jsonl.js";
+import { transcriptJsonlDigest, writeTranscriptJsonlArtifact } from "./store-export-jsonl.js";
 import {
   assertTranscriptExportPathAvailable,
   hasAliasedCanonicalTranscriptExportPathOwner,
 } from "./store-export-ownership.js";
+import * as read from "./store-read.js";
 import {
   appendMeetingTranscriptUtterance,
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
   meetingTranscriptUtteranceQuery,
   type MeetingTranscriptSessionRow,
+  readRecentStoppedTranscriptSession,
+  readTranscriptSummaryKeys,
+  readTranscriptSummaryInputRevision,
   sessionFromRow,
   summaryFromRow,
   utteranceFromRow,
@@ -51,6 +54,12 @@ import { renderTranscriptsMarkdown } from "./summary.js";
 
 export type * from "./store-types.js";
 export { safeTranscriptPathSegment, transcriptSessionExportKey, transcriptSessionSelector };
+
+export class TranscriptsSummaryChangedError extends Error {
+  constructor() {
+    super("Transcript changed while generating notes; summarize it again.");
+  }
+}
 
 /** Canonical meeting-capture transcript store. Files are explicit exports only. */
 export class TranscriptsStore {
@@ -88,16 +97,6 @@ export class TranscriptsStore {
       summaryPath: path.join(sessionDir, "summary.md"),
       hasSummary,
     };
-  }
-
-  private readSummaryKeys(database: OpenClawStateDatabase): Set<string> {
-    const rows = executeSqliteQuerySync(
-      database.db,
-      meetingTranscriptDb(database.db)
-        .selectFrom("meeting_transcript_summaries")
-        .select(["session_id", "session_started_at"]),
-    ).rows;
-    return new Set(rows.map((row) => `${row.session_id}\0${row.session_started_at}`));
   }
 
   private hasSummary(database: OpenClawStateDatabase, row: MeetingTranscriptSessionRow): boolean {
@@ -145,25 +144,6 @@ export class TranscriptsStore {
     return row ? sessionFromRow(row) : undefined;
   }
 
-  private transcriptRows(session: TranscriptSessionDescriptor) {
-    const database = this.database();
-    return {
-      database,
-      query: meetingTranscriptUtteranceQuery(database.db, session)
-        .selectAll()
-        .orderBy("sequence", "asc"),
-    };
-  }
-
-  private transcriptJsonlDigest(session: TranscriptSessionDescriptor): string {
-    const { database, query } = this.transcriptRows(session);
-    const digest = createHash("sha256");
-    for (const row of iterateSqliteQuerySync(database.db, query)) {
-      digest.update(`${JSON.stringify(utteranceFromRow(row))}\n`);
-    }
-    return digest.digest("hex");
-  }
-
   private async expectedExportHashes(
     session: TranscriptSessionDescriptor,
   ): Promise<Record<string, string>> {
@@ -173,7 +153,7 @@ export class TranscriptsStore {
     }
     const hashes: Record<string, string> = {
       "metadata.json": sha256Hex(`${JSON.stringify(storedSession, null, 2)}\n`),
-      "transcript.jsonl": this.transcriptJsonlDigest(storedSession),
+      "transcript.jsonl": transcriptJsonlDigest(this.database().db, storedSession),
     };
     const summary = await this.readSummary(storedSession);
     if (summary.summary) {
@@ -308,10 +288,59 @@ export class TranscriptsStore {
         .orderBy("started_at", "desc")
         .orderBy("session_id", "asc"),
     ).rows;
-    const summaryKeys = this.readSummaryKeys(database);
+    const summaryKeys = readTranscriptSummaryKeys(database.db);
     return rows.map((row) =>
       this.entryFromRow(row, summaryKeys.has(`${row.session_id}\0${row.started_at}`)),
     );
+  }
+
+  iterateReadEntries(options: read.TranscriptReadOptions = {}) {
+    return read.iterateTranscriptReadEntries(this.database().db, options);
+  }
+
+  readEntry(selector: string, purpose: read.TranscriptReadPurpose = "page") {
+    return read.readTranscriptEntry(this.database().db, selector, purpose);
+  }
+
+  readLatestEntry() {
+    return read.readLatestTranscriptEntry(this.database().db);
+  }
+
+  readNotes(session: TranscriptSessionDescriptor, purpose: read.TranscriptReadPurpose = "page") {
+    return read.readStoredTranscriptNotes(this.database().db, session, purpose);
+  }
+
+  readUtterancePage(
+    session: TranscriptSessionDescriptor,
+    options: { limit?: number; after?: number; query?: string } = {},
+    purpose: "page" | "legacy" = "page",
+  ) {
+    return read.readTranscriptUtterancePage(this.database().db, session, options, purpose);
+  }
+
+  iterateUtterances(session: TranscriptSessionDescriptor) {
+    return read.iterateTranscriptUtterances(this.database().db, session);
+  }
+
+  readRecentStoppedSession(
+    source: TranscriptSourceLocator,
+    stoppedAfter: string,
+    stoppedBefore: string,
+  ) {
+    return readRecentStoppedTranscriptSession(
+      this.database().db,
+      source,
+      stoppedAfter,
+      stoppedBefore,
+    );
+  }
+
+  readSummaryInputRevision(session: TranscriptSessionDescriptor): string | undefined {
+    return readTranscriptSummaryInputRevision(this.database().db, session);
+  }
+
+  listReadEntries(options: read.TranscriptReadOptions) {
+    return read.queryTranscriptReadEntries(this.database().db, options);
   }
 
   async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
@@ -353,6 +382,21 @@ export class TranscriptsStore {
     };
     const now = Date.now();
     this.transaction("meeting-transcripts.session.write", ({ db: database }) => {
+      const previous = executeSqliteQueryTakeFirstSync(
+        database,
+        meetingTranscriptSessionQuery(database, session).selectAll(),
+      );
+      if (previous) {
+        // ID origin belongs to admission, including the absence of that fact in legacy rows.
+        const admittedMetadata = sessionFromRow(previous).metadata;
+        let metadata = session.metadata ? { ...session.metadata } : undefined;
+        if (admittedMetadata && Object.hasOwn(admittedMetadata, "sessionIdOrigin")) {
+          metadata = { ...metadata, sessionIdOrigin: admittedMetadata.sessionIdOrigin };
+        } else if (metadata) {
+          delete metadata.sessionIdOrigin;
+        }
+        sessionValues.metadata_json = metadata ? JSON.stringify(metadata) : null;
+      }
       executeSqliteQuerySync(
         database,
         meetingTranscriptDb(database)
@@ -480,6 +524,7 @@ export class TranscriptsStore {
   async writeSummary(
     summary: TranscriptsSummary,
     session: TranscriptSessionDescriptor,
+    expectedInputRevision?: string,
   ): Promise<string> {
     const summaryJson = JSON.stringify(summary);
     const markdown = renderTranscriptsMarkdown(summary);
@@ -491,6 +536,14 @@ export class TranscriptsStore {
     };
     ensureMeetingTranscriptsSchema(this.databaseOptions);
     this.transaction("meeting-transcripts.summary.write", ({ db: database }) => {
+      // Recheck under the writer lock; a concurrent writer can change the
+      // transcript after the caller's pre-check but before this commit.
+      if (
+        expectedInputRevision !== undefined &&
+        readTranscriptSummaryInputRevision(database, session) !== expectedInputRevision
+      ) {
+        throw new TranscriptsSummaryChangedError();
+      }
       executeSqliteQuerySync(
         database,
         meetingTranscriptDb(database)

@@ -10,8 +10,11 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRefOwnership } from "../../plugins/providers.js";
+import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import {
   isHostScopedAgentToolActive,
@@ -20,6 +23,7 @@ import {
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
+import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -363,12 +367,6 @@ function selectAgentHarnessDecision(
   });
 }
 
-export async function runAgentHarnessAttempt(
-  params: EmbeddedRunAttemptParams,
-): Promise<EmbeddedRunAttemptResult> {
-  return runSelectedAgentHarnessAttempt(params);
-}
-
 /** Runs the selected harness's fail-closed settled-turn finalization operation. */
 export async function runAgentHarnessSettledTurnFinalization(
   params: EmbeddedRunAttemptParams,
@@ -401,14 +399,33 @@ export async function runAgentHarnessSettledTurnFinalization(
   );
 }
 
-async function runSelectedAgentHarnessAttempt(
+export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
+  nativeSessionRuntime?: import("../embedded-agent-runner/run/model-setup.js").PreparedNativeSessionRuntime,
 ): Promise<EmbeddedRunAttemptResult> {
   let internalParams = params as EmbeddedRunAttemptParams & {
     systemAgentTool?: SystemAgentToolOptions;
   };
-  const selection = selectPreparedAgentHarness(params);
+  if (nativeSessionRuntime) {
+    await nativeSessionRuntime.assertCurrent();
+  }
+  // A bound native connection owns the real route. Outer model config cannot
+  // redirect its transcript or credentials through a second support decision.
+  const selection =
+    nativeSessionRuntime?.auth === "native"
+      ? buildSelectionDecision({
+          harness: nativeSessionRuntime.harness,
+          policy: { runtime: nativeSessionRuntime.harness.id, runtimeSource: "model" },
+          selectedReason: "forced_plugin",
+          candidates: [],
+        })
+      : selectPreparedAgentHarness(params);
   const harness = selection.harness;
+  if (nativeSessionRuntime && harness !== nativeSessionRuntime.harness) {
+    throw new AgentHarnessPreflightError(
+      "Native session runtime changed before dispatch. Reattach the original native session before retrying.",
+    );
+  }
   if (internalParams.contextEngineLogicalTurnLease) {
     selectContextEngineForTranscriptHost({
       lease: internalParams.contextEngineLogicalTurnLease,
@@ -443,6 +460,28 @@ async function runSelectedAgentHarnessAttempt(
         ),
       ]
     : [];
+  if (
+    !selection.builtIn &&
+    !internalParams.suppressNextUserMessagePersistence &&
+    internalParams.userTurnTranscriptRecorder
+  ) {
+    const assertCurrent = resolveAdmittedRunActiveAssertion(
+      internalParams.admittedRunContext,
+      internalParams.abortSignal,
+    );
+    if (!assertCurrent) {
+      throw new Error("agent harness requires active admitted run authority");
+    }
+    assertCurrent();
+    // Promote approved input before the host binds annotation to its exact stored row.
+    await internalParams.userTurnTranscriptRecorder.persistApproved({
+      cwd: internalParams.cwd ?? internalParams.workspaceDir,
+    });
+    assertCurrent();
+  }
+  if (nativeSessionRuntime) {
+    await nativeSessionRuntime.assertCurrent();
+  }
   const attemptParams = withoutHarnessSetupAuthority(internalParams);
   const pluginAttempt = withoutInternalHarnessAuthority(
     attemptParams,
@@ -476,8 +515,54 @@ async function runSelectedAgentHarnessAttempt(
           harness,
           effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true,
         );
-        return pluginAttempt.runWithHostScope(() =>
-          runAgentHarnessLifecycleAttempt(harness, effectiveAttemptParams),
+        // Load the calculator only after admission and final host policy preparation.
+        return import("./tool-authority.runtime.js").then(
+          ({ withPreparedEmbeddedRunToolAuthority }) =>
+            withPreparedEmbeddedRunToolAuthority(
+              internalParams,
+              effectiveAttemptParams,
+              selection.builtIn
+                ? undefined
+                : (input) => {
+                    const policies = resolvePluginHarnessToolPolicies({
+                      ...input.run,
+                      modelId: input.run.model,
+                      sandboxSessionKey: input.run.runtimePolicySessionKey,
+                      messageChannel: input.originatingChannel,
+                      toolsAllow: input.toolsAllow,
+                      disableTools: input.disableTools,
+                    });
+                    return resolvePluginHarnessDenyAllToolPolicyPrompt(policies)
+                      ? { ...input, toolsAllow: [] }
+                      : input;
+                  },
+              (prepared) =>
+                pluginAttempt.runWithHostScope(() => {
+                  if (prepared.trigger !== "user" || !prepared.sessionKey) {
+                    return runAgentHarnessLifecycleAttempt(harness, prepared);
+                  }
+                  const note = claimHeartbeatContextForUserRun({
+                    ...prepared,
+                    agentId: resolveSessionAgentIds(prepared).sessionAgentId,
+                    storePath: prepared.sessionTarget?.storePath,
+                    detached: prepared.sessionPersistence === "detached",
+                    assertCurrent: resolveAdmittedRunActiveAssertion(
+                      internalParams.admittedRunContext,
+                      prepared.abortSignal,
+                    ),
+                  });
+                  if (!note) {
+                    return runAgentHarnessLifecycleAttempt(harness, prepared);
+                  }
+                  return runAgentHarnessLifecycleAttempt(harness, {
+                    ...prepared,
+                    currentInboundContext: appendCurrentInboundContext(
+                      prepared.currentInboundContext,
+                      [{ kind: "heartbeat-outcome", text: note }],
+                    ),
+                  });
+                }),
+            ),
         );
       }),
     );
@@ -646,9 +731,10 @@ function withoutPluginHarnessPrivateState(
   // separate projections can drift and expose authority on less common operations.
   const {
     admittedRunContext: _admittedRunContext,
-    codeModeRecovery: _codeModeRecovery,
+    assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,
     onContextAccountingEvent: _onContextAccountingEvent,
+    onCompactionRequestBudget: _onCompactionRequestBudget,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
     hostCapabilities: _hostCapabilities,
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
@@ -770,7 +856,7 @@ function resolvePluginHarnessDenyAllToolPolicyPrompt(
     : undefined;
 }
 
-function resolvePluginHarnessToolPolicies(
+export function resolvePluginHarnessToolPolicies(
   params: PluginHarnessToolPolicyContext,
   safeDenyToolNames?: readonly string[],
 ): ResolvedPluginHarnessToolPolicies {

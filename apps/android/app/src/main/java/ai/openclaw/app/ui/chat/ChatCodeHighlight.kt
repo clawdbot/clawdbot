@@ -438,11 +438,15 @@ private fun scanBlockComment(
         i += close.length
         if (depth == 0) return i
       }
+
       nested && code.startsWith(open, i) -> {
         depth++
         i += open.length
       }
-      else -> i++
+
+      else -> {
+        i++
+      }
     }
   }
   return code.length
@@ -469,7 +473,9 @@ private fun scanString(
     when (code[i]) {
       // Python/TS single-quoted strings keep backslash escapes; only shell 'strings' have none.
       '\\' -> if (spec.singleQuoteEscapes || quote != '\'') i++
+
       quote -> return i + 1
+
       // TS/JS template literals and shell strings are multiline; other quotes end at end of line.
       '\n' -> if (quote != '`' && !spec.multilineStrings) return i
     }

@@ -171,8 +171,12 @@ before login startup files run. Bash reads `/etc/profile` and the first availabl
 profile (`~/.bash_profile`, `~/.bash_login`, or `~/.profile`); many login profiles also source
 `~/.bashrc`. Keep those files quiet and bounded because their output, long-running work, or
 failures can affect OpenClaw startup. Other shells use noninteractive login startup (`-l -c`).
+The probe runs in its own session, detached from your terminal, so startup files get no job
+control and cannot take over the terminal that runs OpenClaw.
 This interactive Bash mode is limited to explicit shell env imports; automatic executable PATH
 discovery during ordinary Gateway commands remains noninteractive.
+
+Successful probes are cached. If a probe fails, the next shell environment or PATH lookup tries again.
 
 ## Exec shell snapshots
 
@@ -182,6 +186,13 @@ Values `false`, `no`, and `off` also disable it. Per-call `exec.env` values cann
 snapshots or redirect the snapshot cache.
 
 ## Runtime-injected env vars
+
+Gateway port-listener diagnostics and lock-owner identity probes run native utilities with
+a limited environment containing executable paths, OS bootstrap and account directories,
+temporary directories, and known locale and timezone settings. These children do not inherit provider credentials,
+application tokens, proxies, runtime injection variables, or arbitrary application settings.
+This boundary leaves the parent environment and normal agent, Gateway, and updater payload
+environments unchanged.
 
 OpenClaw also injects context markers into spawned child processes:
 
@@ -217,7 +228,7 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
 
 A missing or empty variable remains visible as `${VAR_NAME}` and emits a warning. Consumers that require the value treat it as unavailable. Use `$${VAR_NAME}` when the literal `${VAR_NAME}` text is intended.
 
-See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
+See [Configuration: Env var substitution](/gateway/config-secrets-env#env-var-substitution) for full details.
 
 This applies to string values in `openclaw.json` and in any file it pulls in through `$include`, because substitution runs over the config tree after includes resolve. OpenClaw's dotenv loader does not expand environment variable values. For example, `OPENCLAW_WORKSPACE_DIR=${XDG_CONFIG_HOME}/workspace` in a runtime `.env` file remains literal when OpenClaw loads it.
 

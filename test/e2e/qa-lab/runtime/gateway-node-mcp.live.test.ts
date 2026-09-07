@@ -44,45 +44,6 @@ function stdioServer(
     },
   };
 }
-function modelConfig(workspace: string): OpenClawConfig {
-  return {
-    secrets: { providers: { default: { source: "env" } } },
-    models: {
-      mode: "replace",
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-responses",
-          apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-          models: [
-            {
-              id: MODEL_ID,
-              name: MODEL_ID,
-              api: "openai-responses",
-              reasoning: true,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 48_000,
-              contextTokens: 48_000,
-              maxTokens: 8_192,
-            },
-          ],
-        },
-      },
-    },
-    agents: {
-      defaults: {
-        workspace,
-        model: { primary: MODEL_REF },
-        timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1_000),
-      },
-    },
-    tools: { profile: "full", toolSearch: false, codeMode: false },
-    memory: { search: { enabled: false } },
-    plugins: { enabled: false },
-    channels: {},
-  };
-}
 function expectCompletedTool(
   messages: HistoryMessage[],
   params: { name: string; marker: string; label: string },
@@ -98,7 +59,10 @@ function expectCompletedTool(
       return JSON.stringify(block.arguments ?? block.input).includes(params.marker);
     });
   });
-  expect(called, `chat.history omitted tool call ${params.name}`).toBe(true);
+  expect(
+    called,
+    `chat.history omitted tool call ${params.name}: ${JSON.stringify(messages).slice(-16_384)}`,
+  ).toBe(true);
   const result = messages.find(
     (candidate) =>
       candidate.role === "toolResult" &&
@@ -182,19 +146,27 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
           },
           transportBaseUrl: "http://127.0.0.1",
           controlUiEnabled: false,
+          providerMode: "live-frontier",
+          primaryModel: MODEL_REF,
+          alternateModel: MODEL_REF,
+          enabledPluginIds: ["codex"],
           runtimeEnvPatch: {
             OPENAI_API_KEY,
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
           },
           mutateConfig: (cfg) => {
-            const live = modelConfig(cfg.agents?.defaults?.workspace ?? gatewayParent);
             return {
-              ...live,
+              ...cfg,
               agents: {
                 ...cfg.agents,
-                ...live.agents,
-                defaults: { ...cfg.agents?.defaults, ...live.agents?.defaults },
+                defaults: {
+                  ...cfg.agents?.defaults,
+                  timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1_000),
+                  mediaModels: undefined,
+                  // Authored QA transport params select the built-in runtime.
+                  // Keep the official route unmodified to prove the default Codex harness.
+                  models: { [MODEL_REF]: {} },
+                },
                 entries: {
                   ...cfg.agents?.entries,
                   qa: {
@@ -203,6 +175,13 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
                     tools: { ...cfg.agents?.entries?.qa?.tools, profile: "full" },
                   },
                 },
+              },
+              tools: { ...cfg.tools, profile: "full", toolSearch: false, codeMode: false },
+              memory: { search: { enabled: false } },
+              plugins: {
+                ...cfg.plugins,
+                slots: { ...cfg.plugins?.slots, memory: "none" },
+                entries: { ...cfg.plugins?.entries, "memory-core": { enabled: false } },
               },
               mcp: { servers: gatewayServers },
               gateway: {
@@ -245,18 +224,22 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
         const sessionKey = `agent:qa:mcp-live-${randomUUID()}`;
         const idempotencyKey = randomUUID();
         const prompt =
-          `Call gatewayLive__parity_probe with marker ${gatewayMarker}. ` +
+          `Call parity_probe on MCP server gatewayLive with marker ${gatewayMarker}. ` +
           `Call nodeLive_parity_probe with marker ${nodeMarker}. ` +
           `Only after both calls return successfully, reply with exactly ${expectedToken} and nothing else.`;
-        const started = (await gateway.call(
+        const completed = (await gateway.call(
           "agent",
           { sessionKey, message: prompt, deliver: false, idempotencyKey },
-          { timeoutMs: 30_000 },
+          { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
         )) as { runId?: unknown; status?: unknown };
-        if (started.status !== "accepted" || typeof started.runId !== "string") {
-          throw new Error(`live Gateway run did not start: ${JSON.stringify(started)}`);
+        expect(completed, gateway.logs()).toMatchObject({
+          status: "ok",
+          result: { meta: { agentMeta: { agentHarnessId: "codex" } } },
+        });
+        if (typeof completed.runId !== "string") {
+          throw new Error(`live Gateway run omitted its identity: ${JSON.stringify(completed)}`);
         }
-        const runId = started.runId;
+        const runId = completed.runId;
         const terminal = await gateway.call(
           "agent.wait",
           { runId, timeoutMs: REQUEST_TIMEOUT_MS },
@@ -269,7 +252,8 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
         })) as { messages?: HistoryMessage[] };
         const messages = history.messages ?? [];
         expectCompletedTool(messages, {
-          name: "gatewayLive__parity_probe",
+          // Codex owns configured Gateway MCP and records its native server.tool name.
+          name: "gatewayLive.parity_probe",
           marker: gatewayMarker,
           label: "gateway-live",
         });

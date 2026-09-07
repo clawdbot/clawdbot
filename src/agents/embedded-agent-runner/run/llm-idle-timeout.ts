@@ -1,4 +1,4 @@
-import { onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+import { getEventStreamCompletion, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 /**
  * Wraps LLM streams with idle-timeout detection and diagnostics.
@@ -458,8 +458,8 @@ export function streamWithIdleTimeout(
       (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
         function () {
           const iterator = originalAsyncIterator();
+          const producerCompletion = getEventStreamCompletion(stream);
           let idleTimer: NodeJS.Timeout | null = null;
-          let waitingForProvider = false;
           let rejectIdleTimeout: ((error: Error) => void) | undefined;
           let firstArmPending = true;
           // Pre-stream tool timestamps are consumed after the first bridged wait
@@ -467,6 +467,13 @@ export function streamWithIdleTimeout(
           // Without this guard a stale pre-stream timestamp would shorten every
           // per-chunk wait, eventually aborting a legitimately slow active stream.
           let streamFirstArmDone = false;
+          // The watchdog polices provider silence, not consumer position: once
+          // iteration starts it stays armed until the producer settles or the
+          // iterator closes, and every delivered event, provider activity
+          // notification, or run-scoped tool heartbeat restores the full budget.
+          // A consumer parked between next() calls (for example awaiting an
+          // event handler) must not leave a dead provider connection unpoliced.
+          let settled = false;
 
           const clearTimer = () => {
             if (idleTimer) {
@@ -476,7 +483,7 @@ export function streamWithIdleTimeout(
           };
           const armTimer = () => {
             clearTimer();
-            if (!guardIterationGaps || !waitingForProvider) {
+            if (!guardIterationGaps || settled || (!producerCompletion && !rejectIdleTimeout)) {
               return;
             }
             const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
@@ -499,11 +506,6 @@ export function streamWithIdleTimeout(
             }, effectiveTimeout);
             idleTimer.unref?.();
           };
-          const stopWaiting = () => {
-            waitingForProvider = false;
-            rejectIdleTimeout = undefined;
-            clearTimer();
-          };
           const unsubscribeLlmActivity = onLlmRequestActivity(streamAbortController.signal, () => {
             armTimer();
             if (runId && areDiagnosticsEnabledForProcess()) {
@@ -511,17 +513,26 @@ export function streamWithIdleTimeout(
             }
           });
           const unsubscribeStreamToolActivity = runId ? onToolActivity(runId, armTimer) : undefined;
-          const cleanupIterator = () => {
-            stopWaiting();
+          const settle = () => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            rejectIdleTimeout = undefined;
+            clearTimer();
             unsubscribeLlmActivity();
             unsubscribeStreamToolActivity?.();
             cleanupSourceSignal();
           };
+          // Producer completion must not invoke result() decorators: they may
+          // clear repair state that queued events still need when consumed.
+          // Without native completion, preserve structural streams' historical
+          // pending-next guard: a parked consumer cannot prove producer silence.
+          void producerCompletion?.then(settle, settle);
 
           return createStreamIteratorWrapper({
             iterator,
             next: async (streamIterator) => {
-              waitingForProvider = true;
               try {
                 const timeoutPromise = new Promise<never>((_, reject) => {
                   rejectIdleTimeout = reject;
@@ -535,23 +546,26 @@ export function streamWithIdleTimeout(
                 );
 
                 if (result.done) {
-                  cleanupIterator();
+                  settle();
                   return result;
                 }
 
-                stopWaiting();
+                rejectIdleTimeout = undefined;
+                // Native producer completion lets us safely police parked consumers.
+                // Structural streams retain their pending-next-only guard.
+                armTimer();
                 return result;
               } catch (error) {
-                cleanupIterator();
+                settle();
                 throw error;
               }
             },
             onReturn(streamIterator) {
-              cleanupIterator();
+              settle();
               return streamIterator.return?.() ?? Promise.resolve({ done: true, value: undefined });
             },
             onThrow(streamIterator, error) {
-              cleanupIterator();
+              settle();
               return (
                 streamIterator.throw?.(error) ??
                 Promise.reject(toErrorObject(error, "Non-Error rejection"))

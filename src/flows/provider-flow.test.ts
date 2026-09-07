@@ -1,5 +1,5 @@
 // Provider flow tests cover provider setup prompts and config mutations.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ResolveProviderInstallCatalogEntries =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntries;
@@ -58,8 +58,13 @@ function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: str
 }
 
 describe("provider flow install catalog contributions", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
+    ({ resolveProviderSetupFlowContributions } = await import("./provider-flow.js"));
+    ({ resolveProviderModelPickerFlowContributions } = await import("./provider-flow.runtime.js"));
+  });
+
+  beforeEach(() => {
     resolveManifestProviderAuthChoices.mockReset();
     resolveManifestProviderAuthChoices.mockReturnValue([]);
     resolveProviderInstallCatalogEntries.mockReset();
@@ -70,8 +75,6 @@ describe("provider flow install catalog contributions", () => {
     resolveProviderModelPickerEntries.mockReturnValue([]);
     resolvePluginProvidersCore.mockReset();
     resolvePluginProvidersCore.mockReturnValue([]);
-    ({ resolveProviderSetupFlowContributions } = await import("./provider-flow.js"));
-    ({ resolveProviderModelPickerFlowContributions } = await import("./provider-flow.runtime.js"));
   });
 
   it("surfaces manifest provider auth choices before setup runtime loads", () => {

@@ -1,4 +1,5 @@
 import {
+  parseRemoteModelCatalogBundle,
   validateAndSanitizeRemoteModelCatalogBundle,
   type RemoteModelCatalogBundle,
 } from "@openclaw/model-catalog-core";
@@ -39,7 +40,7 @@ function bundleCounts(bundle: RemoteModelCatalogBundle): RefreshCounts {
 }
 
 function storedCounts(bundleJson: string): RefreshCounts & { generatedAt: number } {
-  const bundle = validateAndSanitizeRemoteModelCatalogBundle(JSON.parse(bundleJson));
+  const bundle = parseRemoteModelCatalogBundle(JSON.parse(bundleJson));
   return { ...bundleCounts(bundle), generatedAt: bundle.generatedAt };
 }
 

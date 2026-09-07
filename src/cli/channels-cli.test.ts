@@ -20,7 +20,21 @@ const channelsAddCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const channelsLogsCommandMock = vi.hoisted(() =>
   vi.fn(async (_options: { channel?: string }, _runtime: unknown) => undefined),
 );
+const channelsDeadLettersMocks = vi.hoisted(() => ({
+  channelsDeadLettersListCommand: vi.fn(
+    async (_options: { account?: string }, _runtime: unknown) => undefined,
+  ),
+  channelsDeadLettersResubmitCommand: vi.fn(
+    async (_eventId: string, _options: { account?: string }, _runtime: unknown) => undefined,
+  ),
+}));
 const channelsResolveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const channelsCapabilitiesCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const channelsRemoveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const channelAuthMocks = vi.hoisted(() => ({
+  runChannelLogin: vi.fn(async () => undefined),
+  runChannelLogout: vi.fn(async () => undefined),
+}));
 const runtimeMock = vi.hoisted(() => ({
   log: vi.fn(),
   error: vi.fn(),
@@ -39,7 +53,13 @@ vi.mock("../commands/channels.js", () => ({
   channelsAddCommand: channelsAddCommandMock,
   channelsLogsCommand: channelsLogsCommandMock,
   channelsResolveCommand: channelsResolveCommandMock,
+  channelsCapabilitiesCommand: channelsCapabilitiesCommandMock,
+  channelsRemoveCommand: channelsRemoveCommandMock,
 }));
+
+vi.mock("../commands/channels/dead-letters.js", () => channelsDeadLettersMocks);
+
+vi.mock("./channel-auth.js", () => channelAuthMocks);
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: runtimeMock,
@@ -95,6 +115,45 @@ describe("registerChannelsCli", () => {
     expect(getChannelSubcommandNames(program, "dead-letters")).toEqual(["list", "resubmit"]);
   });
 
+  it.each(
+    [
+      { expected: "ops", label: "parent", leafAccount: undefined, parentAccount: "ops" },
+      { expected: "ops", label: "leaf", leafAccount: "ops", parentAccount: undefined },
+      { expected: "leaf", label: "leaf precedence", leafAccount: "leaf", parentAccount: "parent" },
+      { expected: "", label: "blank parent", leafAccount: undefined, parentAccount: "" },
+      { expected: "", label: "blank leaf", leafAccount: "", parentAccount: undefined },
+    ].flatMap((accountCase) => [
+      { ...accountCase, leaf: "list" as const },
+      { ...accountCase, leaf: "resubmit" as const },
+    ]),
+  )(
+    "passes a $label --account to dead-letters $leaf",
+    async ({ expected, leaf, leafAccount, parentAccount }) => {
+      const args = ["channels", "dead-letters"];
+      if (parentAccount !== undefined) {
+        args.push("--account", parentAccount);
+      }
+      args.push(leaf);
+      if (leaf === "resubmit") {
+        args.push("event-1");
+      }
+      args.push("--channel", "telegram");
+      if (leafAccount !== undefined) {
+        args.push("--account", leafAccount);
+      }
+      const program = new Command().name("openclaw").enablePositionalOptions().exitOverride();
+
+      await registerChannelsCli(program, ["node", "openclaw", ...args]);
+      await program.parseAsync(args, { from: "user" });
+
+      const options =
+        leaf === "list"
+          ? channelsDeadLettersMocks.channelsDeadLettersListCommand.mock.calls[0]?.[0]
+          : channelsDeadLettersMocks.channelsDeadLettersResubmitCommand.mock.calls[0]?.[1];
+      expect(options?.account).toBe(expected);
+    },
+  );
+
   it.each([
     ["omitted", ["channels", "logs"], undefined],
     ["explicit all", ["channels", "logs", "--channel", "all"], "all"],
@@ -124,18 +183,35 @@ describe("registerChannelsCli", () => {
     },
   );
 
-  it.each([
-    ["parent", ["channels", "--agent", "ops", "resolve", "room"]],
-    ["leaf", ["channels", "resolve", "--agent", "ops", "room"]],
-  ])("forwards the %s --agent option to channel resolution", async (_label, args) => {
+  it.each(
+    ["add", "capabilities", "login", "logout", "remove", "resolve"].flatMap((leaf) =>
+      ["parent", "leaf", "both"].map((position) => ({ leaf, position })),
+    ),
+  )("forwards the $position --agent option to channels $leaf", async ({ leaf, position }) => {
+    const parentArgs =
+      position === "leaf" ? [] : ["--agent", position === "both" ? "research" : "ops"];
+    const leafArgs = position === "parent" ? [] : ["--agent", "ops"];
+    const args = ["channels", ...parentArgs, leaf, ...leafArgs, "--channel", "telegram"];
+    if (leaf === "resolve") {
+      args.push("room");
+    }
     const program = new Command().name("openclaw").enablePositionalOptions().exitOverride();
 
     await registerChannelsCli(program, ["node", "openclaw", ...args]);
     await program.parseAsync(args, { from: "user" });
 
-    expect(channelsResolveCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: "ops", entries: ["room"] }),
+    const command = {
+      add: channelsAddCommandMock,
+      capabilities: channelsCapabilitiesCommandMock,
+      login: channelAuthMocks.runChannelLogin,
+      logout: channelAuthMocks.runChannelLogout,
+      remove: channelsRemoveCommandMock,
+      resolve: channelsResolveCommandMock,
+    }[leaf];
+    expect(command).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "ops" }),
       runtimeMock,
+      ...(leaf === "add" ? [{ hasFlags: false }] : leaf === "remove" ? [{ hasFlags: true }] : []),
     );
   });
 
@@ -427,6 +503,7 @@ describe("registerChannelsCli", () => {
 
       expect(getChannelAddOptionFlags(program)).toEqual([
         "--channel <name>",
+        "--agent <id>",
         "--account <id>",
         "--name <name>",
       ]);
@@ -629,6 +706,27 @@ describe("registerChannelsCli", () => {
       { hasFlags: true },
     );
   });
+
+  it.each([{ parentArgs: ["--agent", "add"] }, { parentArgs: ["--agent=add"] }])(
+    "registers setup flags after parent owner options $parentArgs",
+    async ({ parentArgs }) => {
+      await runChannelsAddCli([
+        "channels",
+        ...parentArgs,
+        "add",
+        "--channel",
+        "telegram",
+        "--token",
+        "fixture-token",
+      ]);
+
+      expect(channelsAddCommandMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "add", channel: "telegram", token: "fixture-token" }),
+        runtimeMock,
+        { hasFlags: true },
+      );
+    },
+  );
 
   it("prefers modern contract options when a channel also publishes cliAddOptions", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValue([

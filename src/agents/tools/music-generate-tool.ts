@@ -127,24 +127,6 @@ const MusicGenerateToolSchema = Type.Object({
   ),
 });
 
-function resolveMusicGenerationModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  modelOverride?: string;
-}): ToolModelConfig | null {
-  return resolveCapabilityModelConfigForTool({
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.music,
-    modelOverride: params.modelOverride,
-    providers: () => listRuntimeMusicGenerationProviders({ config: params.cfg }),
-  });
-}
-
 function resolveSelectedMusicGenerationProvider(params: {
   config?: OpenClawConfig;
   providers?: MusicGenerationProvider[];
@@ -571,12 +553,14 @@ export function createMusicGenerateTool(options?: {
       }
 
       const model = readToolStringParam(args, "model");
-      const musicGenerationModelConfig = resolveMusicGenerationModelConfigForTool({
+      const musicGenerationModelConfig = resolveCapabilityModelConfigForTool({
         cfg,
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
+        modelConfig: cfg.agents?.defaults?.mediaModels?.music,
         modelOverride: model,
+        providers: () => listRuntimeMusicGenerationProviders({ config: cfg }),
       });
       if (!musicGenerationModelConfig) {
         throw new ToolInputError("No music-generation model configured.");
@@ -729,4 +713,3 @@ export function createMusicGenerateTool(options?: {
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -82,6 +82,7 @@ export const AgentDefaultsSchema = z
     models: AgentModelMapSchema.optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     workspace: z.string().optional(),
+    cwd: z.string().optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),
@@ -232,7 +233,7 @@ export const AgentDefaultsSchema = z
           .max(5)
           .optional()
           .describe(
-            "Maximum nesting depth for sub-agent spawning. 1 = no nesting (default), 2 = sub-agents can spawn sub-sub-agents.",
+            "Maximum nesting depth for sub-agent spawning. Default: 5; 1 makes direct children leaves.",
           ),
         maxChildrenPerAgent: z
           .number()

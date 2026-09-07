@@ -31,11 +31,7 @@ export {
   resolveExecApprovalSessionTarget,
   type ExecApprovalSessionTarget,
 } from "../infra/exec-approval-session-target.js";
-export {
-  doesApprovalRequestMatchChannelAccount,
-  resolveApprovalRequestAccountId,
-  resolveApprovalRequestChannelAccountId,
-} from "../infra/approval-request-account-binding.js";
+export { doesApprovalRequestMatchChannelAccount } from "../infra/approval-request-account-binding.js";
 export {
   buildPluginApprovalExpiredMessage,
   buildPluginApprovalRequestMessage,
@@ -46,6 +42,11 @@ export {
   type PluginApprovalRequestPayload,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
+export type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalRequestPayload,
+  SystemAgentApprovalResolved,
+} from "../infra/system-agent-approvals.js";
 export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
 export {
   createChannelExecApprovalProfile,
@@ -62,7 +63,6 @@ export {
 export { resolveApprovalApprovers } from "./approval-approvers.js";
 export {
   matchesApprovalRequestFilters,
-  matchesApprovalRequestSessionFilter,
   type ApprovalRequestFilterInput,
 } from "../infra/approval-request-filters.js";
 export {
@@ -71,3 +71,9 @@ export {
   buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
 } from "./approval-renderers.js";
+export {
+  buildSystemAgentApprovalResolvedText,
+  formatApprovalDecisionLabel,
+  formatChannelApprovalResolvedLabel,
+} from "./approval-terminal.js";
+export { createNativeApprovalControlRegistry } from "./approval-native-controls.js";

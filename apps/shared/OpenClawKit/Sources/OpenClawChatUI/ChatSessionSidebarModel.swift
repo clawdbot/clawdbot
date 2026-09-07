@@ -619,35 +619,12 @@ public enum ChatSessionSidebarModel {
         {
             // Sessions can lag behind a fresh switch/new-session; keep the
             // active row selectable instead of showing an empty selection.
-            entries.append(self.placeholder(key: currentSessionKey))
+            entries.append(OpenClawChatSessionEntry.placeholder(key: currentSessionKey))
         }
         // Gateway, cached lists, iOS, and macOS must share the same pin
         // chronology, stable key ties, and searchable session fields.
         return OpenClawChatSessionListOrganizer.filter(
             OpenClawChatSessionListOrganizer.organize(entries),
             search: query)
-    }
-
-    private static func placeholder(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
-            key: key,
-            kind: nil,
-            displayName: nil,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
-            updatedAt: nil,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
-            modelProvider: nil,
-            model: nil,
-            contextTokens: nil)
     }
 }

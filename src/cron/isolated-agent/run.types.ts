@@ -1,3 +1,4 @@
+import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 /** Result types returned by isolated cron agent runs. */
 import type {
@@ -19,6 +20,8 @@ export type RunCronAgentTurnResult = {
   deliveryState?: CronResolvedDeliveryState;
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
+  /** Terminal model-reply fact without exposing reply text. */
+  replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
   /** Confirmed target delivery, including matching message-tool sends; unknown is omitted. */
   delivered?: boolean;
   /**

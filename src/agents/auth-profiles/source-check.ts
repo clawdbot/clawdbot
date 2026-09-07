@@ -9,6 +9,7 @@ import { coercePersistedAuthProfileStore } from "./persisted.js";
 import {
   getRuntimeAuthProfileStoreSnapshotCore,
   hasAnyRuntimeAuthProfileStoreSource,
+  hasRuntimeAuthProfileStoreSource,
 } from "./runtime-snapshots.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
@@ -119,8 +120,7 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
 
 /** Returns true when the requested agent dir has a local auth profile source. */
 export function hasLocalAuthProfileStoreSource(agentDir?: string): boolean {
-  const runtimeStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-  if (runtimeStore && Object.keys(runtimeStore.profiles).length > 0) {
+  if (hasRuntimeAuthProfileStoreSource(agentDir)) {
     return true;
   }
   if (hasLegacyAuthProfileCredentialSource(agentDir)) {

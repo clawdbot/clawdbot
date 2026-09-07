@@ -40,10 +40,14 @@ export type SpawnSubagentParams = {
 };
 
 export type SpawnSubagentContext = SpawnedToolContext & {
+  onSpawnEffectsStart?: () => void;
   agentSessionKey?: string;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
+  /** Active requester sandbox classification, preserved separately from the durable lineage key.
+   * Hidden native spawn derives sandbox admission from this when set, mirroring visible/ACP paths. */
+  sandboxed?: boolean;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -63,6 +67,7 @@ export type SpawnSubagentResult = {
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  expectsCompletionMessage?: boolean;
   note?: string;
   /** Fully resolved model ref applied to the spawned child session. */
   resolvedModel?: string;

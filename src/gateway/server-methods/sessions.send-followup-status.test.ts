@@ -15,6 +15,7 @@ const loadGatewaySessionRowMock =
 const resolveDeletedAgentIdFromSessionKeyMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
+const terminateAcceptedCollectorRunMock = vi.fn();
 const chatSendMock = vi.fn();
 const chatSendWithAdmissionOwnedMock = vi.fn();
 
@@ -41,6 +42,10 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () =>
 
 vi.mock("../../agents/subagents/registry/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
+}));
+
+vi.mock("../../agents/subagents/spawn/subagent-spawn-cleanup.js", () => ({
+  terminateAcceptedCollectorRun: (...args: unknown[]) => terminateAcceptedCollectorRunMock(...args),
 }));
 
 vi.mock("./chat.js", () => ({
@@ -79,6 +84,7 @@ describe("sessions.send completed subagent follow-up status", () => {
     resolveDeletedAgentIdFromSessionKeyMock.mockReset().mockReturnValue(null);
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
+    terminateAcceptedCollectorRunMock.mockReset();
     chatSendMock.mockReset();
     chatSendWithAdmissionOwnedMock
       .mockReset()
@@ -206,6 +212,49 @@ describe("sessions.send completed subagent follow-up status", () => {
     });
   });
 
+  it("terminates a started follow-up when its completed owner cannot be replaced", async () => {
+    const childSessionKey = "agent:main:subagent:followup-rejected";
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: childSessionKey,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-followup-rejected" },
+    });
+    getLatestSubagentRunByChildSessionKeyMock.mockReturnValue({
+      runId: "run-old",
+      childSessionKey,
+      task: "initial task",
+      cleanup: "keep",
+      createdAt: 1,
+      execution: { status: "terminal", startedAt: 2, endedAt: 3 },
+    });
+    replaceSubagentRunAfterSteerMock.mockRejectedValueOnce(new Error("database unavailable"));
+    terminateAcceptedCollectorRunMock.mockResolvedValueOnce(undefined);
+    chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
+      respond(true, { runId: "run-new", status: "started" }, undefined, undefined);
+    });
+
+    await expect(
+      expectDefined(
+        sessionMessagingHandlers["sessions.send"],
+        'sessionMessagingHandlers["sessions.send"] test invariant',
+      )({
+        req: { id: "req-rejected" } as never,
+        params: { key: childSessionKey, message: "follow-up" },
+        respond: vi.fn() as unknown as RespondFn,
+        context: createRequestContext(),
+        client: null,
+        isWebchatConnect: () => false,
+      }),
+    ).rejects.toThrow("database unavailable");
+
+    expect(terminateAcceptedCollectorRunMock).toHaveBeenCalledWith({
+      childSessionKey,
+      gatewayRunId: "run-new",
+      sessionCleanup: "preserve",
+    });
+  });
+
   it.each(["sessions.send", "sessions.steer"] as const)(
     "%s forwards committed receipt facts and preserves direct interrupt authority",
     async (method) => {
@@ -227,6 +276,7 @@ describe("sessions.send completed subagent follow-up status", () => {
             expect(params).toMatchObject({
               sessionKey,
               idempotencyKey: "source-send",
+              mentions: [{ profileId: "bob", start: 0, end: 4 }],
               ...(method === "sessions.steer" ? { queueMode: "interrupt" } : {}),
             });
             respond(true, payload);
@@ -238,7 +288,12 @@ describe("sessions.send completed subagent follow-up status", () => {
           method,
         )({
           req: { id: "receipt" } as never,
-          params: { key: sessionKey, message: "same prompt", idempotencyKey: "source-send" },
+          params: {
+            key: sessionKey,
+            message: "@Bob same prompt",
+            mentions: [{ profileId: "bob", start: 0, end: 4 }],
+            idempotencyKey: "source-send",
+          },
           respond,
           context: createRequestContext(),
           client: null,

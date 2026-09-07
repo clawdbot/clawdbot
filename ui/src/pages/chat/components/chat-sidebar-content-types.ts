@@ -55,9 +55,11 @@ type AttachmentSidebarSource = {
 };
 
 export type AttachmentSidebarRuntime = {
+  sessionKey?: string;
+  agentId?: string;
+  policyKey?: string;
   connectionEpoch?: number;
   authToken?: string | null;
-  localMediaPreviewRoots: readonly string[];
   resourceBasePath?: string;
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };

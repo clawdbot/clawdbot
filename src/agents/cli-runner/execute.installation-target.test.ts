@@ -5,8 +5,15 @@ import {
 } from "../../infra/installation-target-context.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
-import { executePreparedCliRun } from "./execute.js";
-import { createManagedRun, supervisorSpawnMock } from "./execute.test-support.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
+import {
+  createManagedRun,
+  createSuccessfulProcessExit,
+  supervisorSpawnMock,
+  wrapPreparedCliRunWithTestAdmission,
+} from "./execute.test-support.js";
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
 afterEach(() => supervisorSpawnMock.mockReset());
 
@@ -43,14 +50,9 @@ describe("CLI installation target", () => {
       }
       supervisorSpawnMock.mockResolvedValue(
         createManagedRun({
-          reason: "exit",
-          exitCode: 0,
-          exitSignal: null,
+          ...createSuccessfulProcessExit(),
           durationMs: 1,
           stdout: "done",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
         }),
       );
       await withEnvAsync(

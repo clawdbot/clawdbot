@@ -73,29 +73,31 @@ export function renderModelPicker(params: ModelPickerParams) {
           params.onChange(value);
         },
       })}
-      ${params.custom
-        ? html`<input
-            id=${params.custom.id ?? nothing}
-            class="settings-input model-picker__custom"
-            aria-label=${params.custom.label}
-            aria-invalid=${params.custom.invalid ? "true" : "false"}
-            aria-describedby=${params.custom.describedBy ?? nothing}
-            placeholder=${params.custom.placeholder ?? ""}
-            .value=${params.value}
-            ?hidden=${currentIsKnown}
-            ?disabled=${params.disabled}
-            @input=${(event: InputEvent) => {
-              if (params.custom?.commit !== "change") {
-                params.onChange((event.currentTarget as HTMLInputElement).value);
-              }
-            }}
-            @change=${(event: Event) => {
-              if (params.custom?.commit === "change") {
-                params.onChange((event.currentTarget as HTMLInputElement).value);
-              }
-            }}
-          />`
-        : nothing}
+      ${
+        params.custom
+          ? html`<input
+              id=${params.custom.id ?? nothing}
+              class="settings-input model-picker__custom"
+              aria-label=${params.custom.label}
+              aria-invalid=${params.custom.invalid ? "true" : "false"}
+              aria-describedby=${params.custom.describedBy ?? nothing}
+              placeholder=${params.custom.placeholder ?? ""}
+              .value=${params.value}
+              ?hidden=${currentIsKnown}
+              ?disabled=${params.disabled}
+              @input=${(event: InputEvent) => {
+                if (params.custom?.commit !== "change") {
+                  params.onChange((event.currentTarget as HTMLInputElement).value);
+                }
+              }}
+              @change=${(event: Event) => {
+                if (params.custom?.commit === "change") {
+                  params.onChange((event.currentTarget as HTMLInputElement).value);
+                }
+              }}
+            />`
+          : nothing
+      }
     </div>
   `;
 }

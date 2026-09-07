@@ -31,7 +31,7 @@ import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createFixedWindowBudget } from "../infra/fixed-window-rate-limit.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { createInMemoryAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
+import type { AcpEventLedger } from "./event-ledger.js";
 import type { AcpPendingApprovalRelay } from "./translator.prompt-state.js";
 import { AcpTranslatorPromptStream } from "./translator.prompt-stream.js";
 import { AcpTranslatorSessionLifecycle } from "./translator.session-lifecycle.js";
@@ -45,7 +45,7 @@ const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
 
 type AcpGatewayAgentOptions = AcpServerOptions & {
-  eventLedger?: AcpEventLedger;
+  eventLedger: AcpEventLedger;
   sessionStore?: AcpSessionStore;
 };
 
@@ -61,7 +61,7 @@ export class AcpGatewayAgent implements Agent {
   constructor(
     connection: AgentSideConnection,
     gateway: GatewayClient,
-    opts: AcpGatewayAgentOptions = {},
+    opts: AcpGatewayAgentOptions,
   ) {
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
     // Injected stores remain caller-owned; only the agent-created registry follows shutdown.
@@ -75,7 +75,7 @@ export class AcpGatewayAgent implements Agent {
     }
     this.sessionUpdates = new AcpTranslatorSessionUpdates({
       connection,
-      eventLedger: opts.eventLedger ?? createInMemoryAcpEventLedger(),
+      eventLedger: opts.eventLedger,
       log: this.log,
     });
     const sessionState = new AcpTranslatorSessionState(gateway, this.sessionUpdates, this.log);

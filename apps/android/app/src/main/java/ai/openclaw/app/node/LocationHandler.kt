@@ -5,12 +5,17 @@ import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Location
 import android.location.LocationManager
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.time.Instant
+import java.time.format.DateTimeFormatter
 
 /**
  * Injectable location facade for command tests and Android runtime access.
@@ -26,8 +31,7 @@ internal interface LocationDataSource {
     desiredProviders: List<String>,
     maxAgeMs: Long?,
     timeoutMs: Long,
-    isPrecise: Boolean,
-  ): LocationCaptureManager.Payload
+  ): Location
 }
 
 private class DefaultLocationDataSource(
@@ -49,13 +53,11 @@ private class DefaultLocationDataSource(
     desiredProviders: List<String>,
     maxAgeMs: Long?,
     timeoutMs: Long,
-    isPrecise: Boolean,
-  ): LocationCaptureManager.Payload =
+  ): Location =
     capture.getLocation(
       desiredProviders = desiredProviders,
       maxAgeMs = maxAgeMs,
       timeoutMs = timeoutMs,
-      isPrecise = isPrecise,
     )
 }
 
@@ -68,6 +70,8 @@ class LocationHandler private constructor(
   private val backgroundLocationEnabled: () -> Boolean,
   private val locationPreciseEnabled: () -> Boolean,
 ) {
+  private val coarsener by lazy { LocationCoarsener() }
+
   constructor(
     appContext: Context,
     location: LocationCaptureManager,
@@ -131,31 +135,34 @@ class LocationHandler private constructor(
       )
     }
     val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)
-    val preciseEnabled = locationPreciseEnabled()
-    // Gateway requests are advisory; Android permission and user settings decide
-    // whether precise capture is actually allowed for this invocation.
-    val accuracy =
-      when (desiredAccuracy) {
-        "precise" -> if (preciseEnabled && dataSource.hasFinePermission(appContext)) "precise" else "balanced"
-        "coarse" -> "coarse"
-        else -> if (preciseEnabled && dataSource.hasFinePermission(appContext)) "precise" else "balanced"
-      }
+    // A request may ask for less precision, but cannot override the user's limits.
+    val initiallyPrecise =
+      desiredAccuracy != "coarse" && locationPreciseEnabled() && dataSource.hasFinePermission(appContext)
     val providers =
-      when (accuracy) {
-        // Provider order is part of the accuracy policy: GPS first for precise, network first otherwise.
-        "precise" -> listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-        "coarse" -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
-        else -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+      if (initiallyPrecise) {
+        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+      } else {
+        listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
       }
     try {
+      val fix = dataSource.fetchLocation(providers, maxAgeMs, timeoutMs)
+      // Capture can suspend and switch dispatchers. Recheck at the response producer,
+      // without another suspension, and never upgrade a request that began approximate.
+      val isPrecise = initiallyPrecise && locationPreciseEnabled() && dataSource.hasFinePermission(appContext)
+      val location = if (isPrecise) fix else coarsener.coarsen(fix)
       val payload =
-        dataSource.fetchLocation(
-          desiredProviders = providers,
-          maxAgeMs = maxAgeMs,
-          timeoutMs = timeoutMs,
-          isPrecise = accuracy == "precise",
-        )
-      return GatewaySession.InvokeResult.ok(payload.payloadJson)
+        buildJsonObject {
+          put("lat", location.latitude)
+          put("lon", location.longitude)
+          put("accuracyMeters", location.accuracy.toDouble())
+          if (location.hasAltitude()) put("altitudeMeters", location.altitude)
+          if (location.hasSpeed()) put("speedMps", location.speed.toDouble())
+          if (location.hasBearing()) put("headingDeg", location.bearing.toDouble())
+          put("timestamp", DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(location.time)))
+          put("isPrecise", isPrecise)
+          put("source", location.provider)
+        }
+      return GatewaySession.InvokeResult.ok(payload.toString())
     } catch (err: TimeoutCancellationException) {
       return GatewaySession.InvokeResult.error(
         code = "LOCATION_TIMEOUT",

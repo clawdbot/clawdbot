@@ -1,16 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
-} from "./app-server/auth-start-options.js";
-import {
-  readCodexPluginConfig,
   resolveCodexAppServerUserHomeDir,
-  resolveCodexSupervisionAppServerRuntimeOptions,
-} from "./app-server/config.js";
+} from "./app-server/auth-start-options.js";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import type { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import {
   buildCodexAppServerConnectionFingerprint,
   replaceCodexCatalogConnectionHomes,
@@ -45,11 +43,12 @@ function resolveCodexCatalogHomes(params: {
   pluginConfig: unknown;
   ownerAgentId: string;
   env: NodeJS.ProcessEnv;
+  resolveRuntimeOptions: typeof resolveCodexSupervisionAppServerRuntimeOptions;
 }): CodexCatalogHome[] {
   const { config, env, ownerAgentId, pluginConfig } = params;
   const ownerAgentDir = resolveAgentDir(config, ownerAgentId, env);
   const configuredHomes = readCodexPluginConfig(pluginConfig).sessionCatalog?.homes ?? [];
-  const base = resolveCodexSupervisionAppServerRuntimeOptions({
+  const base = params.resolveRuntimeOptions({
     pluginConfig,
     env,
     agentDir: ownerAgentDir,
@@ -140,6 +139,7 @@ export function createCodexCatalogHomeResolver(params: {
   config: OpenClawConfig;
   getRuntimeConfig: () => OpenClawConfig | undefined;
   getPluginConfig: () => unknown;
+  resolveRuntimeOptions: typeof resolveCodexSupervisionAppServerRuntimeOptions;
   env?: NodeJS.ProcessEnv;
 }): CodexCatalogHomeResolver {
   const env = params.env ?? process.env;
@@ -154,6 +154,7 @@ export function createCodexCatalogHomeResolver(params: {
           pluginConfig,
           ownerAgentId: agentId,
           env,
+          resolveRuntimeOptions: params.resolveRuntimeOptions,
         }),
       ]),
     );

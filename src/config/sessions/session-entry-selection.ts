@@ -64,7 +64,10 @@ export function inheritSessionSelection(
   }
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(parentEntry);
   const inheritModelSelection = !hasSessionActiveAutoModelFallback(parentEntry);
-  const inheritAuthProfile = inheritModelSelection || authProfileOverrideSource === "user";
+  const inheritAuthProfile =
+    inheritModelSelection ||
+    authProfileOverrideSource === "user" ||
+    authProfileOverrideSource === "user-link";
   return {
     ...(inheritModelSelection && parentEntry.providerOverride
       ? { providerOverride: parentEntry.providerOverride }

@@ -65,9 +65,14 @@ describe("changed path facts", () => {
   });
 
   it("keeps normalization separate from classification", () => {
-    expect(normalizeChangedPath("  .\\extensions\\slack\\src\\index.test.ts  ")).toBe(
+    expect(normalizeChangedPath("  .\\extensions\\slack\\src\\index.test.ts  ", "win32")).toBe(
       "extensions/slack/src/index.test.ts",
     );
+    expect(normalizeChangedPath(String.raw`.\extensions\slack\src\index.test.ts`, "darwin")).toBe(
+      String.raw`.\extensions\slack\src\index.test.ts`,
+    );
     expect(getChangedPathFacts("./src/config/defaults.ts").surface).toBe("unknown");
+    expect(getChangedPathFacts(" src/config/defaults.ts").surface).toBe("unknown");
+    expect(getChangedPathFacts(String.raw`src\config\defaults.ts`).surface).toBe("unknown");
   });
 });

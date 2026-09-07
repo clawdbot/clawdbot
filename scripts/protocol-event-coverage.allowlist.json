@@ -1,7 +1,6 @@
 {
   "$comment": "Gateway events each mobile client intentionally does not handle yet, with a one-line reason. Consumed by scripts/check-protocol-event-coverage.mjs (pnpm check:protocol-coverage). Adding a gateway event without a client handler requires either handling it or adding an entry here; the check also fails when an entry goes stale (event removed or now handled).",
   "ios": {
-    "chat.metadata.changed": "iOS has no model-availability auth gate; chat transport refreshes metadata capabilities during swarm bootstrap, while model choices load on demand.",
     "controlUi.sessionPullRequests.changed": "Sidebar PR indicators are a Control UI surface; native apps do not render session PR chips.",
     "cron": "Cron run activity is not surfaced in the iOS app.",
     "device.pair.changed": "Device label projection refresh is a Control UI surface; iOS does not render the Gateway Devices page.",
@@ -9,7 +8,10 @@
     "device.pair.resolved": "Device pairing flows poll via device.pair.* methods on iOS.",
     "device.pair.setup.completed": "Generated setup lifecycle is a Control UI surface; iOS direct Watch setup completes through Watch connectivity.",
     "device.pair.setup.deliveryUncertain": "Generated setup recovery is a Control UI surface; native clients receive the handoff response directly.",
+    "gateway.suspension": "Gateway suspension account-footer presentation is a Control UI surface; iOS does not render this footer.",
     "heartbeat": "iOS liveness uses tick and WebSocket-level ping; heartbeat is unused.",
+    "mentions.changed": "Personal Inbox invalidation is a Control UI surface; iOS does not expose the temporary mentions Inbox.",
+    "node.hostStats": "Host resource meters are a Control UI surface; iOS does not render them.",
     "node.pair.requested": "Node pairing state is fetched on demand; no push consumer on iOS yet.",
     "node.pair.resolved": "Node pairing state is fetched on demand; no push consumer on iOS yet.",
     "node.presence": "Node activity is reported by macOS nodes and consumed by gateway routing; iOS has no presence reporter yet.",
@@ -18,6 +20,7 @@
     "openclaw.approval.resolved": "OpenClaw system-agent config approvals are a web/desktop operator surface; iOS has no operator-approval prompt.",
     "plugin.approval.requested": "Plugin approval prompts are not implemented on iOS.",
     "plugin.approval.resolved": "Plugin approval prompts are not implemented on iOS.",
+    "plugins.controlUi.changed": "Plugin browser-module catalog changes are consumed by the web Control UI; iOS does not load those modules.",
     "portal.changed": "Control-UI-only surface; native apps have no portal viewer yet.",
     "presence": "Presence roster is a control-UI (web/desktop) surface; iOS does not render it.",
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
@@ -34,6 +37,7 @@
     "terminal.exit": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "ui.command": "Web Control UI-only layout commands; iOS does not consume them.",
     "update.available": "Gateway self-update notices do not apply to iOS; app updates ship via the App Store.",
+    "update.run.changed": "Gateway update-run progress is an operator surface; iOS has no update-run history view.",
     "voicewake.routing.changed": "iOS only consumes voicewake.changed trigger updates; routing changes are not surfaced."
   },
   "android": {
@@ -44,7 +48,10 @@
     "device.pair.resolved": "Device pairing flows poll via device.pair.* methods on Android.",
     "device.pair.setup.completed": "Generated setup lifecycle is a Control UI surface; Android consumes setup codes but does not issue or track them.",
     "device.pair.setup.deliveryUncertain": "Generated setup recovery is a Control UI surface; Android consumes setup codes but does not issue or track them.",
+    "gateway.suspension": "Gateway suspension account-footer presentation is a Control UI surface; Android does not render this footer.",
     "heartbeat": "Android liveness uses tick and WebSocket-level ping; heartbeat is unused.",
+    "mentions.changed": "Personal Inbox invalidation is a Control UI surface; Android does not expose the temporary mentions Inbox.",
+    "node.hostStats": "Host resource meters are a Control UI surface; Android does not render them.",
     "node.invoke.cancel": "Cancel targets streaming agent.cli.claude.run.v1 invokes; app nodes never advertise agent runs, so no cancel can address them.",
     "node.invoke.input": "Carries terminal keystrokes/resize to a node PTY relay invoke; the relay runs on gateway/CLI node hosts and app nodes never host it, so Android has no consumer.",
     "node.pair.requested": "Android's bounded operator session lacks operator.pairing; onboarding refreshes node approval with explicit node.list requests.",
@@ -55,6 +62,7 @@
     "openclaw.approval.resolved": "OpenClaw system-agent config approvals are a web/desktop operator surface; Android has no operator-approval prompt.",
     "plugin.approval.requested": "Plugin approval prompts are not implemented on Android.",
     "plugin.approval.resolved": "Plugin approval prompts are not implemented on Android.",
+    "plugins.controlUi.changed": "Plugin browser-module catalog changes are consumed by the web Control UI; Android does not load those modules.",
     "portal.changed": "Control-UI-only surface; native apps have no portal viewer yet.",
     "presence": "Presence roster is a control-UI (web/desktop) surface; Android does not render it.",
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
@@ -71,6 +79,7 @@
     "terminal.data": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "ui.command": "Web Control UI-only layout commands; Android does not consume them.",
+    "update.run.changed": "Gateway update-run progress is an operator surface; Android has no update-run history view.",
     "voicewake.routing.changed": "Android reads voicewake state on demand via voicewake.get; no push consumer yet."
   }
 }

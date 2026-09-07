@@ -2,6 +2,7 @@
  * Top-level CLI-backed agent runner orchestration.
  */
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -28,6 +29,7 @@ import {
   markAuthProfileSuccess,
 } from "./auth-profiles.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
+import { runCliCleanup } from "./cli-runner/cleanup.js";
 import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
 import {
   resolveCliSessionId,
@@ -230,6 +232,7 @@ async function runCliAgentInternal(
   try {
     context = await prepareCliRunContext(params);
   } catch (error) {
+    params.assertCurrent?.();
     await settleCliPreparationError(error, params);
     throw error;
   }
@@ -242,6 +245,14 @@ async function runCliAgentInternal(
 
 /** Runs an already-prepared CLI agent context through hooks and execution. */
 export async function runPreparedCliAgent(
+  context: PreparedCliRunContext,
+  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
+): Promise<EmbeddedAgentRunResult> {
+  const run = () => runPreparedCliAgentOwned(context, diagnosticLifecycle);
+  return await runWithCliHistoryWriter(context.cliHistoryWriter, run);
+}
+
+async function runPreparedCliAgentOwned(
   context: PreparedCliRunContext,
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
@@ -270,16 +281,12 @@ export async function runPreparedCliAgent(
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
   const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
-  // Prior turn maintenance can rewrite transcript entries after finalization.
-  // Reads for the next same-session inference must observe that rewrite.
-  if (!turnSideEffectsDisabled) {
+  // Durable reads must observe prior deferred rewrites. Caller-owned memory is
+  // independent of durable work sharing its correlation key.
+  if (!turnSideEffectsDisabled && !params.sessionManager) {
     await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
   }
-  const historyMessages = needsHookHistory
-    ? await loadCliSessionHistoryMessages({
-        sessionTarget: params.sessionTarget,
-      })
-    : [];
+  const historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
   const promptForHooks = context.promptForHooks ?? params.prompt;
   const llmInputEvent = {
     runId: params.runId,
@@ -515,6 +522,7 @@ export async function runPreparedCliAgent(
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
+      sessionManager: params.sessionManager,
       config: context.contextEngineConfig,
       contextEngineHostSupport: buildGenericCliContextEngineHostSupport({
         backendId: context.backendResolved.id,
@@ -524,9 +532,7 @@ export async function runPreparedCliAgent(
       warn: (message) => log.warn(message),
     });
     const contextEngineHistoryMessages = context.contextEngine
-      ? await loadCliSessionContextEngineMessages({
-          sessionTarget: params.sessionTarget,
-        })
+      ? await loadCliSessionContextEngineMessages(params)
       : [];
     const finishCliAttempt = async (
       result: Awaited<ReturnType<typeof executeCliAttempt>>,
@@ -548,6 +554,7 @@ export async function runPreparedCliAgent(
           modelId: context.modelId,
           usage: output.usage,
           stopReason: resolveCliAssistantStopReason(output),
+          yielded: output.yielded,
         });
         await finalizeCliContextEngineTurn({
           context,
@@ -716,10 +723,13 @@ export async function runPreparedCliAgent(
   }
   let cleanupError: Error | undefined;
   try {
-    await context.preparedBackend.cleanup?.();
+    await runCliCleanup(params, "cli-backend-release", async () => {
+      await context.preparedBackend.cleanup?.();
+    });
   } catch (error) {
     cleanupError = error as Error;
   }
+  params.assertCurrent?.();
   return settleCliBackendOutcome({
     runResult,
     runError,

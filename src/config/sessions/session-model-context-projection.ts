@@ -43,6 +43,22 @@ export function projectTranscriptNavigationSql(event: Expression<string>): RawBu
   return pickJsonObject(event, TRANSCRIPT_NAVIGATION_KEYS);
 }
 
+/** Reset boundaries select ancestry and replay roles without loading message bodies. */
+export function projectResetBoundaryNavigationSql(event: Expression<string>): RawBuilder<string> {
+  const entry = pickJsonObject(event, [
+    ...TRANSCRIPT_NAVIGATION_KEYS,
+    "timestamp",
+    "firstKeptEntryId",
+  ]);
+  // Non-object rows keep their parser behavior; malformed and SQLite-overdepth JSON
+  // must reach JSON.parse unchanged instead of failing inside the metadata projection.
+  return /* kysely-allow-raw: reset planning uses navigation metadata, never durable transcript payloads. */ sql<string>`CASE WHEN json_valid(${event}) THEN
+    CASE WHEN json_type(${event}) = 'object' THEN
+      json_set(${entry}, '$.message', json_object('role', json_extract(${event}, '$.message.role')))
+    ELSE ${event} END
+    ELSE ${event} END`;
+}
+
 /** Lightweight tree/state records; these never serve as persisted transcript evidence. */
 export function projectModelContextNavigationSql(event: Expression<string>): RawBuilder<string> {
   const entry = pickJsonObject(event, [

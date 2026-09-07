@@ -200,6 +200,7 @@ internal class WearProxyClient private constructor(
             }
           null
         }
+
         path == WearProtocol.EVENT_PATH && message is WearMessage.Event -> {
           if (!acceptEventSource(sourceNodeId)) return@withLock null
           val inbound =
@@ -213,7 +214,10 @@ internal class WearProxyClient private constructor(
           mutableEvents.tryEmit(inbound)
           inbound
         }
-        else -> null
+
+        else -> {
+          null
+        }
       }
     }
 

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import nativeFs from "node:fs";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -15,8 +16,15 @@ it("refreshes skills created beneath an initially missing project skills root", 
   const workspaceDir = path.join(root, "workspace");
   await fs.mkdir(path.join(workspaceDir, "skills", "existing"), { recursive: true });
   const registeredPaths = new Set<string>();
+  const turnContext = new AsyncLocalStorage<string>();
+  const pendingInputContext = new AsyncLocalStorage<string>();
+  const inheritedContexts: Array<{ turn?: string; pendingInput?: string }> = [];
   const originalWatch = nativeFs.watch;
   const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+    inheritedContexts.push({
+      turn: turnContext.getStore(),
+      pendingInput: pendingInputContext.getStore(),
+    });
     const watcher = originalWatch(...args);
     registeredPaths.add(path.resolve(String(args[0])));
     return watcher;
@@ -31,7 +39,13 @@ it("refreshes skills created beneath an initially missing project skills root", 
     }
   });
   try {
-    ensureSkillsWatcher({ workspaceDir });
+    turnContext.run("active turn", () => {
+      pendingInputContext.run("accepted input", () => {
+        ensureSkillsWatcher({ workspaceDir });
+        expect(turnContext.getStore()).toBe("active turn");
+        expect(pendingInputContext.getStore()).toBe("accepted input");
+      });
+    });
     const existingSkill = path.join(workspaceDir, "skills", "existing", "SKILL.md");
     // Chokidar readiness can precede missing-parent registration, and parent
     // registration does not await child watches. Observe both native watches
@@ -53,6 +67,10 @@ it("refreshes skills created beneath an initially missing project skills root", 
       },
       { timeout: 3_000 },
     );
+    expect(inheritedContexts.length).toBeGreaterThan(0);
+    for (const context of inheritedContexts) {
+      expect(context).toEqual({ turn: undefined, pendingInput: undefined });
+    }
   } finally {
     unregister();
     await closeSkillsWatchers();

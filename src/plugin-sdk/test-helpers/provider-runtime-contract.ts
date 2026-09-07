@@ -427,7 +427,6 @@ export function describeGithubCopilotProviderRuntimeContract(
               apiKey: "test-token",
               reasoning: level,
               maxTokens: 1024,
-              maxRetries: 0,
               onPayload: (payload) => {
                 payloads.push(payload);
                 throw new Error("Captured payload before network");

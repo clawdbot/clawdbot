@@ -99,7 +99,7 @@ it.each([false, true])("preserves fd paths with trailing search separator=%s", a
       process.platform === "win32" ? "literal/" : "literal\\",
     ].join("\n"),
   );
-  expect(result.details).toBeUndefined();
+  expect(result.details).toEqual({ content: textContent(result) });
 });
 
 it("keeps multibyte stderr intact when pipe chunks split a character", async () => {
@@ -119,6 +119,44 @@ it("keeps multibyte stderr intact when pipe chunks split a character", async () 
 
   await expect(result).rejects.toThrow("fd 失败：权限被拒绝");
 });
+
+it.each([
+  {
+    chunks: ["x".repeat(65536), "y".repeat(65536), "终"],
+    dropped: 65539,
+    tail: "y".repeat(65533) + "终",
+  },
+  {
+    chunks: ["aaaa😀" + "c".repeat(65527), "dddddd"],
+    dropped: 8,
+    tail: "c".repeat(65527) + "dddddd",
+  },
+  { chunks: [" ".repeat(65540)], dropped: 4, tail: "fd exited with code 2" },
+])(
+  "discloses $dropped discarded stderr bytes before the fd diagnostic",
+  async ({ chunks, dropped, tail }) => {
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("fd");
+    const result = createFindToolDefinition("/workspace").execute(
+      "stderr",
+      { pattern: "*" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    for (const chunk of chunks) {
+      child.stderr.write(chunk);
+    }
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 2, null);
+    await expect(result).rejects.toThrow(
+      `[${dropped} UTF-8 bytes of earlier stderr discarded at the 65536-byte retention cap]\n${tail}`,
+    );
+  },
+);
 
 it.each(["stdout", "stderr"] as const)(
   "rejects and stops fd when %s emits an error",

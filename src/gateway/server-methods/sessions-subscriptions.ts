@@ -12,7 +12,6 @@ import { canReviewOperatorApproval } from "../operator-approval-authorization.js
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import { sessionsListHandler } from "./sessions-read.js";
@@ -134,12 +133,9 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
     const canonicalKey = resolveSessionStoreKey({
       cfg,
       sessionKey: key,
-      ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
+      storeAgentId: requestedAgentId,
     });
-    const subscriptionKey = resolveSessionSubscriptionKey(
-      canonicalKey,
-      requestedAgentId ?? resolveSessionStoreAgentId(cfg, canonicalKey),
-    );
+    const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
     if (connId) {
       let approvalReplay;
       if (p.includeApprovals === true) {
@@ -219,12 +215,9 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
     const canonicalKey = resolveSessionStoreKey({
       cfg,
       sessionKey: key,
-      ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
+      storeAgentId: requestedAgentId,
     });
-    const subscriptionKey = resolveSessionSubscriptionKey(
-      canonicalKey,
-      requestedAgentId ?? resolveSessionStoreAgentId(cfg, canonicalKey),
-    );
+    const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
     if (connId) {
       context.unsubscribeSessionMessageEvents(connId, subscriptionKey);
     }

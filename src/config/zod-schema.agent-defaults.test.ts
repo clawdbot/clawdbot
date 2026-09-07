@@ -27,6 +27,25 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it("preserves separate run directories through config validation and list projection", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: { workspace: "/agent-workspace", cwd: "/default-repo" },
+        entries: { worker: { cwd: "/agent-repo" } },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(JSON.stringify(result.issues));
+    }
+    expect(result.config.agents?.defaults).toMatchObject({
+      workspace: "/agent-workspace",
+      cwd: "/default-repo",
+    });
+    expect(result.config.agents?.entries?.worker?.cwd).toBe("/agent-repo");
+    expect(result.config.agents?.list?.[0]?.cwd).toBe("/agent-repo");
+  });
+
   it.each([true, false])("rejects Code Mode %s without an exact model entry", (codeMode) => {
     for (const key of ["openai/*", "openrouter/provider/*", "*", "model", "provider/", "/model"]) {
       const models = { [key]: { codeMode } };
@@ -602,6 +621,14 @@ describe("agent defaults schema", () => {
       "tools.codeMode",
     );
   });
+
+  it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
+    "preserves per-agent Swarm config %j for inherited enablement",
+    (swarm) => {
+      const tools = swarm === undefined ? {} : { swarm };
+      expect(AgentEntrySchema.parse({ id: "ops", tools }).tools?.swarm).toEqual(swarm);
+    },
+  );
 
   it("accepts per-agent tools.swarm config", () => {
     expectSchemaSuccess(

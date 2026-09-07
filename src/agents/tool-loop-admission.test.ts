@@ -36,6 +36,53 @@ describe("whole-batch tool-loop admission", () => {
     resetAdjustedParamsByToolCallIdForTests();
   });
 
+  it.each([
+    ["read", { path: "/tmp/repeated" }, "generic_repeat"],
+    ["process", { action: "poll", sessionId: "process-1" }, "known_poll_no_progress"],
+  ] as const)(
+    "returns bucketed warnings before %s reaches a critical loop",
+    async (name, args, detector) => {
+      const state = getDiagnosticSessionState(ctx);
+      const warningCounts: number[] = [];
+      const unsubscribe = onDiagnosticEvent((event) => {
+        if (event.type === "tool.loop" && event.action === "warn") {
+          warningCounts.push(event.count);
+        }
+      });
+      const result = { content: [{ type: "text", text: "unchanged" }], details: {} };
+      try {
+        for (let index = 0; index < 20; index += 1) {
+          const candidate = call(`repeat-${index}`, name, args);
+          const admission = await admitToolCallBatch([candidate], ctx);
+          expect(admission.intervention).toBeUndefined();
+          expect(admission.warnings ?? []).toEqual(
+            index === 10
+              ? [{ kind: "tool-loop-warning", toolCallId: candidate.toolCall.id, count: index }]
+              : [],
+          );
+          admission.commitReadyCalls?.([{ toolCallId: candidate.toolCall.id, args }]);
+          recordToolCallOutcome(state, {
+            toolName: name,
+            toolParams: args,
+            toolCallId: candidate.toolCall.id,
+            result,
+            runId: ctx.runId,
+          });
+        }
+        expect(warningCounts).toEqual([10]);
+        expect(state.toolCallHistory).toHaveLength(20);
+        expect(new Set(state.toolCallHistory?.map((entry) => entry.resultHash)).size).toBe(1);
+        await expect(
+          admitToolCallBatch([call("critical", name, args)], ctx),
+        ).resolves.toMatchObject({
+          intervention: { kind: "critical-tool-loop", toolCallId: "critical", detector, count: 20 },
+        });
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
   it("returns a typed critical intervention and records only veto evidence", async () => {
     const state = getDiagnosticSessionState({
       sessionKey: ctx.sessionKey,

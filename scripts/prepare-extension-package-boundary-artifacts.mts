@@ -20,7 +20,7 @@ import {
   LOCAL_SDK_ROOT,
   BoundaryInputSnapshot,
 } from "./lib/extension-boundary-inputs.mts";
-import { isLocalCheckEnabled } from "./lib/local-check-runtime.mts";
+import { ensureRepoNodeModulesLink, isLocalCheckEnabled } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mts";
@@ -224,6 +224,8 @@ async function runTsgoSteps(steps: NodeStep[]) {
           {
             ...step,
             ...command,
+            // Go honors PWD aliases; emitted paths must use this owner's actual cwd.
+            env: { ...command.env, PWD: repoRoot },
             timeoutMs: Math.min(step.timeoutMs, command.timeoutMs ?? step.timeoutMs),
           },
         ]
@@ -253,7 +255,13 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
   const batches = [[sdk], mode === "all" ? plugins : []].map((batch) =>
     batch.map((unit) => {
       fs.mkdirSync(resolve(repoRoot, unit.outDir), { recursive: true });
-      return { ...unit, outputRoot: fs.realpathSync(resolve(repoRoot, unit.outDir)) };
+      if (unit.id !== "plugin-sdk") {
+        // Relocated declarations still resolve third-party types through their package owner.
+        ensureRepoNodeModulesLink(resolve(repoRoot, unit.rootDir, "node_modules"), {
+          cwd: resolve(repoRoot, unit.outDir),
+        });
+      }
+      return { ...unit, outputRoot: fs.realpathSync.native(resolve(repoRoot, unit.outDir)) };
     }),
   );
   for (const batch of batches) {

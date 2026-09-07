@@ -47,7 +47,7 @@ export async function isImplicitLocalGatewayTargetFromCliRuntime(
   });
 }
 
-export async function callGatewayFromCliRuntime(
+export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCliTransportRpcOpts,
   params?: unknown,
@@ -73,7 +73,7 @@ export async function callGatewayFromCliRuntime(
       enabled: showProgress,
     },
     async () =>
-      await callGateway({
+      await callGateway<T>({
         config: opts.config,
         url: opts.url,
         token: opts.token,

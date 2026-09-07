@@ -323,27 +323,25 @@ function collectPluginEvidence(plugins, pluginId) {
   };
 }
 
-function assertLegacyPostUpdatePluginFailure(updateJsonPath) {
-  const payload = readJson(updateJsonPath);
-  if (payload.status !== "error" || payload.reason !== "post-update-plugins") {
-    throw new Error(
-      `expected legacy post-update plugin failure, got ${JSON.stringify({
-        status: payload.status,
-        reason: payload.reason,
-      })}`,
-    );
-  }
-  if (!payload.after?.version) {
-    throw new Error(`expected core update to install a new version: ${JSON.stringify(payload)}`);
-  }
-}
-
 function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
   const config = readJson(configPath);
   const allow = config.plugins?.allow;
-  if (JSON.stringify(allow) !== JSON.stringify([pluginId])) {
-    throw new Error(`expected plugins.allow to preserve ${pluginId}, got ${JSON.stringify(allow)}`);
+  if (!Array.isArray(allow)) {
+    throw new Error(`expected plugins.allow to be an array, got ${JSON.stringify(allow)}`);
   }
+  const pluginMembershipCount = allow.filter((entry) => entry === pluginId).length;
+  if (pluginMembershipCount !== 1) {
+    throw new Error(
+      `expected plugins.allow to contain ${pluginId} exactly once, got ${JSON.stringify(allow)}`,
+    );
+  }
+  const codexEnabled = config.plugins?.entries?.codex?.enabled;
+  if (codexEnabled !== false) {
+    throw new Error(
+      `expected the corrupt plugin fixture's explicit Codex opt-out to survive, got ${JSON.stringify(codexEnabled)}`,
+    );
+  }
+  console.log(JSON.stringify({ allow, codexEnabled: false }));
 }
 
 const [command, arg, arg2] = process.argv.slice(2);
@@ -357,7 +355,6 @@ const commands = {
   "assert-output": () => assertOutput(arg),
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
   "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
-  "assert-legacy-post-update-plugin-failure": () => assertLegacyPostUpdatePluginFailure(arg),
   "assert-corrupt-policy-preserved": () => assertCorruptPluginPolicyPreserved(arg, arg2),
 };
 const run = commands[command];

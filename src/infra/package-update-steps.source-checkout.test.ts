@@ -36,6 +36,66 @@ async function writeSourceCheckout(checkoutRoot: string): Promise<void> {
 }
 
 describe("runGlobalPackageUpdateSteps", () => {
+  it("validates a temporary source checkout then exposes its published root", async () => {
+    await withTestDir({ prefix: "openclaw-source-publication-" }, async (base) => {
+      const globalRoot = path.join(base, "prefix", "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const candidateRoot = path.join(base, "candidate");
+      const publishedRoot = path.join(base, "checkout");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await writeSourceCheckout(candidateRoot);
+      await writeSourceCheckout(publishedRoot);
+      const phases: string[] = [];
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: createNpmTarget(globalRoot),
+        installSpec: candidateRoot,
+        packageName: "openclaw",
+        expectedGitCheckout: { root: candidateRoot, sha: SOURCE_SHA },
+        activateGitRoot: publishedRoot,
+        runCommand: createRootRunner(globalRoot),
+        runStep: async ({ name, argv }) => {
+          const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+          if (!stagePrefix) {
+            throw new Error("missing stage prefix");
+          }
+          const layout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+          await fs.mkdir(layout.globalRoot, { recursive: true });
+          await fs.mkdir(layout.binDir, { recursive: true });
+          await fs.symlink(
+            candidateRoot,
+            path.join(layout.globalRoot, "openclaw"),
+            process.platform === "win32" ? "junction" : undefined,
+          );
+          await fs.symlink(
+            "../lib/node_modules/openclaw/openclaw.mjs",
+            path.join(layout.binDir, "openclaw"),
+          );
+          return { name, command: argv.join(" "), cwd: stagePrefix, durationMs: 0, exitCode: 0 };
+        },
+        validateCandidate: async (root) => {
+          phases.push("validate");
+          expect(await fs.realpath(root)).toBe(candidateRoot);
+          return [];
+        },
+        beforeActivate: async () => {
+          phases.push("publish");
+          await fs.rename(publishedRoot, `${publishedRoot}.previous`);
+          await fs.rename(candidateRoot, publishedRoot);
+        },
+        postVerifyStep: async (root) => {
+          phases.push("doctor");
+          expect(await fs.realpath(root)).toBe(publishedRoot);
+          return { name: "doctor", command: "doctor --fix", cwd: root, durationMs: 0, exitCode: 0 };
+        },
+        timeoutMs: 1000,
+      });
+      expect(result.failedStep).toBeNull();
+      expect(phases).toEqual(["validate", "publish", "doctor"]);
+      expect(await fs.realpath(packageRoot)).toBe(publishedRoot);
+      expect(result.afterVersion).toBe(SOURCE_VERSION);
+    });
+  });
+
   it("refuses a prepared checkout when the manager cannot identify its installed root", async () => {
     const postVerifyStep = vi.fn();
     const result = await runGlobalPackageUpdateSteps({
@@ -56,9 +116,37 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
     expect(result.failedStep).toMatchObject({
       name: "global install verify",
-      stderrTail: "could not identify the installed checkout root",
+      stderrTail: "could not identify the installed package root",
     });
     expect(postVerifyStep).not.toHaveBeenCalled();
+  });
+
+  it("preserves the old global package when source exposure refuses before activation", async () => {
+    await withTestDir({ prefix: "openclaw-git-exposure-recovery-" }, async (base) => {
+      const globalRoot = path.join(base, "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await writeSourceCheckout(path.join(base, "prepared-checkout"));
+      const runStep = vi.fn();
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: {
+          ...createNpmTarget(globalRoot),
+          npmOwner: { version: null, lifecyclePolicy: null },
+        },
+        installSpec: path.join(base, "prepared-checkout"),
+        expectedGitCheckout: { root: path.join(base, "prepared-checkout"), sha: SOURCE_SHA },
+        packageName: "openclaw",
+        packageRoot,
+        runCommand: createRootRunner(globalRoot),
+        runStep,
+        timeoutMs: 1000,
+      });
+      expect(result.recovery).toEqual({
+        serviceRestartSafe: true,
+        version: "1.0.0",
+      });
+      expect(runStep).not.toHaveBeenCalled();
+    });
   });
 
   describe.each(["npm", "pnpm", "bun"] as const)("%s source checkout activation", (manager) => {
@@ -114,7 +202,13 @@ describe("runGlobalPackageUpdateSteps", () => {
             JSON.stringify({ commit: "b".repeat(40), head: "b".repeat(40) }),
           );
         }
-        const postVerifyStep = vi.fn(async () => null);
+        const postVerifyStep = vi.fn(async () => ({
+          name: "candidate doctor",
+          command: "doctor",
+          cwd: packageRoot,
+          durationMs: 0,
+          exitCode: 0,
+        }));
         const result = await runGlobalPackageUpdateSteps({
           installTarget:
             manager === "npm"
@@ -182,7 +276,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           }
         } else {
           expect(result.failedStep).toBeNull();
-          expect(result.verifiedPackageRoot).toBe(packageRoot);
+          expect(result.activePackageRoot).toBe(packageRoot);
           expect(result.afterVersion).toBe(SOURCE_VERSION);
           expect(postVerifyStep).toHaveBeenCalledWith(packageRoot);
           await expect(fs.realpath(packageRoot)).resolves.toBe(checkoutRoot);
@@ -190,13 +284,14 @@ describe("runGlobalPackageUpdateSteps", () => {
             expect(result.steps.map((step) => step.name)).toEqual([
               "global update",
               "global install swap",
+              "candidate doctor",
             ]);
             await expect(fs.readlink(path.join(prefix, "bin", "openclaw"))).resolves.toBe(
               "../lib/node_modules/openclaw/openclaw.mjs",
             );
             expect(
               (await fs.readdir(globalRoot)).filter((entry) =>
-                entry.startsWith(".openclaw-update-stage-"),
+                entry.startsWith(".openclaw.update-stage-"),
               ),
             ).toEqual([]);
           }

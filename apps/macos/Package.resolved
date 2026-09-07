@@ -1,13 +1,13 @@
 {
-  "originHash" : "17b9162713f42b8657499bec84c7caad30103a0379c7b457c25aa3b5fd79699a",
+  "originHash" : "4a5551634f350ce9d428f0ffc7c06e99ccda64320adc8e5889c9c11bb6a96a11",
   "pins" : [
     {
       "identity" : "axorcist",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/AXorcist.git",
       "state" : {
-        "revision" : "bab3f2228bac0ce3a34786b8395b65bb36242221",
-        "version" : "0.1.8"
+        "revision" : "37d7ae82ff1443b4b36344ca6f3bf0ad33f13b12",
+        "version" : "0.1.9"
       }
     },
     {
@@ -51,7 +51,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/Peekaboo.git",
       "state" : {
-        "revision" : "d80cc3cae6e9f2978b909d65ef1a21f15aed4706"
+        "revision" : "44eff916c3330739108cc1d73683338d4250503a"
       }
     },
     {

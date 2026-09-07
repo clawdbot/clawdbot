@@ -6,22 +6,19 @@ import {
 import {
   SHORT_TERM_LOCK_MAX_ENTRIES,
   SHORT_TERM_LOCK_NAMESPACE,
-  SHORT_TERM_RECALL_NAMESPACE,
   memoryCoreWorkspaceStateKey,
   openMemoryCoreStateStore,
-  readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import {
-  SHORT_TERM_LOCK_STALE_MS,
   deleteShortTermLockEntryIfCurrent,
-  isProcessLikelyAlive,
-  parseLockOwnerPid,
+  isShortTermLockStealable,
   resolveLockPath,
   withMemoryWorkspaceLock,
 } from "./memory-workspace-lock.js";
 import { filterLiveShortTermRecallEntries } from "./short-term-promotion-record.js";
 import {
   readPhaseSignalStore,
+  readShortTermStore,
   readStore,
   resolveStorePath,
   writePhaseSignalStore,
@@ -69,18 +66,11 @@ export async function auditShortTermPromotionArtifacts(params: {
   let updatedAt: string | undefined;
 
   const nowIso = new Date().toISOString();
-  const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
-    namespace: SHORT_TERM_RECALL_NAMESPACE,
-    workspaceDir,
-  });
-  const exists = rawEntries.length > 0;
+  const raw = await readShortTermStore(workspaceDir, "recall", nowIso);
+  const rawEntryCount = Object.keys(raw.entries).length;
+  const exists = rawEntryCount > 0;
   if (exists) {
-    const parsed = {
-      version: 1,
-      updatedAt: nowIso,
-      entries: Object.fromEntries(rawEntries.map((entry) => [entry.key, entry.value])),
-    };
-    const store = normalizeShortTermRecallStore(parsed, nowIso);
+    const store = normalizeShortTermRecallStore(raw, nowIso);
     const normalizedEntryCount = Object.keys(store.entries).length;
     updatedAt = store.updatedAt;
     entryCount = normalizedEntryCount;
@@ -98,7 +88,7 @@ export async function auditShortTermPromotionArtifacts(params: {
         .filter((entry) => (entry.conceptTags?.length ?? 0) > 0)
         .map((entry) => entry.conceptTags ?? []),
     );
-    invalidEntryCount = rawEntries.length - entryCount;
+    invalidEntryCount = rawEntryCount - entryCount;
     if (invalidEntryCount > 0) {
       issues.push({
         severity: "warn",
@@ -137,12 +127,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   });
   const lockEntry = await lockStore.lookup(lockKey);
   if (lockEntry) {
-    const ageMs = Date.now() - lockEntry.acquiredAt;
-    const ownerPid = parseLockOwnerPid(lockEntry.owner);
-    if (
-      ageMs > SHORT_TERM_LOCK_STALE_MS &&
-      (ownerPid === null || !isProcessLikelyAlive(ownerPid))
-    ) {
+    if (isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
       issues.push({
         severity: "warn",
         code: "recall-lock-stale",
@@ -185,31 +170,16 @@ export async function repairShortTermPromotionArtifacts(params: {
     maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
   });
   const lockEntry = await lockStore.lookup(lockKey);
-  if (lockEntry && Date.now() - lockEntry.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
-    const ownerPid = parseLockOwnerPid(lockEntry.owner);
-    if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
-      removedStaleLock = await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry);
-    }
+  if (lockEntry && isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
+    removedStaleLock = await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry);
   }
 
   await withMemoryWorkspaceLock(workspaceDir, async () => {
-    const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
-      namespace: SHORT_TERM_RECALL_NAMESPACE,
-      workspaceDir,
-    });
-    if (rawEntries.length > 0) {
-      const normalized = normalizeShortTermRecallStore(
-        {
-          version: 1,
-          updatedAt: nowIso,
-          entries: Object.fromEntries(rawEntries.map((entry) => [entry.key, entry.value])),
-        },
-        nowIso,
-      );
-      removedInvalidEntries = Math.max(
-        0,
-        rawEntries.length - Object.keys(normalized.entries).length,
-      );
+    const raw = await readShortTermStore(workspaceDir, "recall", nowIso);
+    const rawEntryCount = Object.keys(raw.entries).length;
+    if (rawEntryCount > 0) {
+      const normalized = normalizeShortTermRecallStore(raw, nowIso);
+      removedInvalidEntries = Math.max(0, rawEntryCount - Object.keys(normalized.entries).length);
       const nextEntries = Object.fromEntries(
         Object.entries(normalized.entries).map(([key, entry]) => {
           const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });

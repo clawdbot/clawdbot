@@ -306,15 +306,17 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     });
   }
 
-  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
+  captureReadScope(sessionKey: string): () => boolean {
     const generation = snapshotStoreGeneration;
     const revision = this.revisions.get(sessionKey) ?? 0;
+    return () =>
+      generation === snapshotStoreGeneration && revision === (this.revisions.get(sessionKey) ?? 0);
+  }
+
+  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
+    const isCurrent = this.captureReadScope(sessionKey);
     const record = await readSnapshotRecord(sessionKey);
-    if (
-      !record ||
-      generation !== snapshotStoreGeneration ||
-      revision !== (this.revisions.get(sessionKey) ?? 0)
-    ) {
+    if (!record || !isCurrent()) {
       return null;
     }
     setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(record.snapshot));

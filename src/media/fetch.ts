@@ -14,6 +14,7 @@ import {
 } from "../infra/http-body.js";
 import {
   fetchWithSsrFGuard,
+  type GuardedFetchOptions,
   withStrictGuardedFetchMode,
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
@@ -23,6 +24,7 @@ import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { saveMediaStream, type SavedMedia } from "./store.js";
+import { SaveMediaSourceError } from "./store.shared.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
 const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
@@ -78,6 +80,8 @@ type FetchDispatcherAttempt = {
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
+  /** Final synchronous check repeated for every media attempt and redirect. */
+  beforeRequest?: GuardedFetchOptions["beforeRequest"];
   requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes?: number;
@@ -245,9 +249,10 @@ function parseContentDispositionFileName(header?: string | null): string | undef
     if (parameter.name !== "filename*") {
       continue;
     }
-    const decoded = decodeExtendedRemoteFileName(parameter.value);
-    if (decoded) {
-      return basenameFromAnyPath(decoded) || undefined;
+    // An unusable extended name must not hide a valid plain filename.
+    const fileName = basenameFromAnyPath(decodeExtendedRemoteFileName(parameter.value) ?? "");
+    if (fileName) {
+      return fileName;
     }
   }
   return fallbackFileName;
@@ -297,6 +302,7 @@ async function fetchGuardedMediaResponse(
   const {
     url,
     fetchImpl,
+    beforeRequest,
     requestInit,
     maxRedirects,
     requireHttps,
@@ -330,6 +336,7 @@ async function fetchGuardedMediaResponse(
         : withStrictGuardedFetchMode)({
         url,
         fetchImpl,
+        ...(beforeRequest ? { beforeRequest } : {}),
         init: requestInit,
         maxRedirects,
         ...(requireHttps !== undefined ? { requireHttps } : {}),
@@ -455,22 +462,18 @@ function resolveRemoteFileName(params: {
   finalUrl: string;
   filePathHint?: string;
 }): string | undefined {
-  let fileNameFromUrl: string | undefined;
+  const fileName =
+    parseContentDispositionFileName(params.res.headers.get("content-disposition")) ||
+    (params.filePathHint ? basenameFromAnyPath(params.filePathHint) : undefined);
+  if (fileName) {
+    return fileName;
+  }
   try {
     const parsed = new URL(params.finalUrl);
-    const base = basenameFromUrlPathname(parsed.pathname);
-    fileNameFromUrl = base || undefined;
+    return basenameFromUrlPathname(parsed.pathname) || undefined;
   } catch {
-    // ignore parse errors; leave undefined
+    return undefined;
   }
-  const headerFileName = parseContentDispositionFileName(
-    params.res.headers.get("content-disposition"),
-  );
-  return (
-    headerFileName ||
-    (params.filePathHint ? basenameFromAnyPath(params.filePathHint) : undefined) ||
-    fileNameFromUrl
-  );
 }
 
 function isGenericResponseContentType(value?: string | null): boolean {
@@ -537,10 +540,6 @@ async function* responseBodyChunks(
   }
 }
 
-function isMediaLimitError(err: unknown): boolean {
-  return err instanceof Error && /Media exceeds .* limit/.test(err.message);
-}
-
 async function saveOkMediaResponse(params: {
   res: Response;
   finalUrl: string;
@@ -584,7 +583,7 @@ async function saveOkMediaResponse(params: {
     if (err instanceof MediaFetchError) {
       throw err;
     }
-    if (isMediaLimitError(err)) {
+    if (err instanceof SaveMediaSourceError && err.code === "too-large") {
       throw new MediaFetchError(
         "max_bytes",
         `Failed to fetch media from ${params.sourceUrl}: payload exceeds maxBytes ${params.maxBytes}`,
@@ -740,14 +739,14 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       filePathHint: options.filePathHint,
     });
 
-    const filePathForMime =
-      fileName && extnameFromAnyPath(fileName) ? fileName : (options.filePathHint ?? finalUrl);
+    const fileNameExt = fileName ? extnameFromAnyPath(fileName) : undefined;
+    const filePathForMime = fileNameExt ? fileName : (options.filePathHint ?? finalUrl);
     const contentType = await detectMime({
       buffer,
       headerMime: res.headers.get("content-type"),
       filePath: filePathForMime,
     });
-    if (fileName && !extnameFromAnyPath(fileName) && contentType) {
+    if (fileName && !fileNameExt && contentType) {
       const ext = extensionForMime(contentType);
       if (ext) {
         fileName = `${fileName}${ext}`;

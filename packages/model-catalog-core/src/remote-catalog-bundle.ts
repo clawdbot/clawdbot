@@ -153,11 +153,16 @@ function stripRemoteTransportOverrides(value: unknown): unknown {
   if (!value || typeof value !== "object") {
     return value;
   }
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => key !== "baseUrl" && key !== "headers")
-      .map(([key, entry]) => [key, stripRemoteTransportOverrides(entry)]),
-  );
+  const entries = Object.entries(value);
+  let kept = 0;
+  for (const entry of entries) {
+    if (entry[0] !== "baseUrl" && entry[0] !== "headers") {
+      entry[1] = stripRemoteTransportOverrides(entry[1]);
+      entries[kept++] = entry;
+    }
+  }
+  entries.length = kept;
+  return Object.fromEntries(entries);
 }
 
 /** Removes every transport endpoint/header override before remote data reaches persistence. */

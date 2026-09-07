@@ -1,6 +1,6 @@
 /** Tests Code Mode MCP namespace. */
 
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { GetPromptResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
@@ -150,6 +150,7 @@ describe("Code Mode MCP namespace", () => {
     expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
     expect(value.apiHeader).not.toContain("@param title Issue title\n");
     expect(value.apiHeader).toContain("title: string;");
+    expect(value.apiHeader).toContain('@param body? Default: "".');
     expect(value.apiHeader).toContain('labels?: Array<"red" | "blue">;');
     expect(value.serverFileContent).toContain('labels?: Array<"red" | "blue">;');
     expect(githubCreate.execute).toHaveBeenCalledTimes(1);
@@ -263,7 +264,7 @@ describe("Code Mode MCP namespace", () => {
       listResources: async () => privateUtilityResults.resources_list,
       readResource: async () => privateUtilityResults.resources_read,
       listPrompts: async () => privateUtilityResults.prompts_list,
-      getPrompt: async () => privateUtilityResults.prompts_get,
+      getPrompt: async () => GetPromptResultSchema.parse(privateUtilityResults.prompts_get),
       dispose: async () => {},
     };
     const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
@@ -298,7 +299,7 @@ describe("Code Mode MCP namespace", () => {
             "McpPromptsGetResult",
           ].map((name) => ({
             name,
-            declared: api.header.includes("type " + name + " ="),
+            declared: api.header.includes("interface " + name + " {"),
             returned: api.header.includes("Promise<" + name + ">"),
           })),
         };

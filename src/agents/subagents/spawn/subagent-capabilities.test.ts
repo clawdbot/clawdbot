@@ -30,4 +30,14 @@ describe("resolveSubagentCapabilities", () => {
       canControlChildren: false,
     });
   });
+
+  it("makes children at the default recursion boundary leaves", () => {
+    expect(resolveSubagentCapabilities({ depth: 1_000 })).toEqual({
+      depth: 1_000,
+      role: "leaf",
+      controlScope: "none",
+      canSpawn: false,
+      canControlChildren: false,
+    });
+  });
 });

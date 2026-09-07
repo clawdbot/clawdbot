@@ -36,14 +36,12 @@ export type ModelCatalogAuthChecker = (
 type LogicalModelCatalogEntryState = {
   authBacked: boolean;
   compatible: boolean;
-  preferred: boolean;
   routeManaged: boolean;
   routeProjection: ModelCatalogRouteProjection;
 };
 
 /** Maps one shared auth evaluation into logical catalog selection state. */
 export function resolveLogicalModelCatalogEntryState(params: {
-  entry: ModelCatalogEntry;
   evaluation: ModelAuthAvailabilityEvaluation;
   authBacked?: boolean;
   routePolicy: ModelCatalogRoutePolicy;
@@ -58,7 +56,6 @@ export function resolveLogicalModelCatalogEntryState(params: {
   return {
     authBacked: params.authBacked ?? params.evaluation.availability === true,
     compatible: params.evaluation.routeResolution?.kind !== "incompatible",
-    preferred: selectedRoute ? params.routePolicy.matchesRoute(params.entry, selectedRoute) : false,
     routeManaged,
     routeProjection,
   };
@@ -208,21 +205,16 @@ export async function prepareLogicalVisibleModelCatalog(
   return () => {
     // Membership and row availability consume this one observation after every await.
     const states = new Map([...readers].map(([key, read]) => [key, read()]));
-    const evaluateEntry = (entry: ModelCatalogEntry) => {
+    const getEntryState = (entry: ModelCatalogEntry) => {
       const state = states.get(keyOf(entry));
       if (!state) {
         throw new Error("Model catalog publication omitted prepared entry state");
       }
-      const selected =
-        state.routeProjection.kind === "selected" ? state.routeProjection.route : undefined;
-      return {
-        ...state,
-        preferred: selected ? params.routePolicy.matchesRoute(entry, selected) : false,
-      };
+      return state;
     };
     const projectEntries = (entries: readonly ModelCatalogEntry[]) => {
       const projected = entries.map((entry) => {
-        const projection = evaluateEntry(entry).routeProjection;
+        const projection = getEntryState(entry).routeProjection;
         let cached = projections.get(entry);
         if (!cached) {
           cached = {
@@ -259,7 +251,7 @@ export async function prepareLogicalVisibleModelCatalog(
       ? sortModelCatalogEntries(
           dedupeModelCatalogEntries([
             ...configuredCatalog,
-            ...params.catalog.filter((entry) => evaluateEntry(entry).authBacked),
+            ...params.catalog.filter((entry) => getEntryState(entry).authBacked),
           ]),
         )
       : [];
@@ -285,11 +277,15 @@ export async function prepareLogicalVisibleModelCatalog(
       if (!preferredKey && !wildcardRoute) {
         continue;
       }
-      const state = evaluateEntry(entry);
+      const state = getEntryState(entry);
       if (!state.compatible && !configuredKeys.has(key)) {
         continue;
       }
-      if (state.preferred && preferredKey) {
+      if (
+        preferredKey &&
+        state.routeProjection.kind === "selected" &&
+        params.routePolicy.matchesRoute(entry, state.routeProjection.route)
+      ) {
         preferred.push(entry);
       }
       if (wildcardRoute && state.routeManaged && state.authBacked) {
@@ -297,7 +293,7 @@ export async function prepareLogicalVisibleModelCatalog(
       }
     }
     const kept = visible.filter((entry) => {
-      const state = evaluateEntry(entry);
+      const state = getEntryState(entry);
       const configured = configuredKeys.has(keyOf(entry));
       return (
         (state.compatible || configured) &&

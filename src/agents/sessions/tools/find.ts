@@ -13,7 +13,7 @@ import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
+import { appendBoundedTextTail, formatStderrTail, normalizePositiveLimit } from "./limits.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
@@ -122,7 +122,7 @@ function buildFindResult(params: {
   limitNotice: string;
 }): {
   content: Array<{ type: "text"; text: string }>;
-  details: FindToolDetails | undefined;
+  details: FindToolDetails;
 } {
   const resultLimitReached = params.paths.length > params.effectiveLimit;
   const rawOutput = params.paths
@@ -139,9 +139,8 @@ function buildFindResult(params: {
         : relativePath;
     })
     .join("\n");
-  const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-  let resultOutput = truncation.content;
-  const details: FindToolDetails = {};
+  const { content, ...truncation } = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+  const details: FindToolDetails = { content };
   const notices: string[] = [];
   if (resultLimitReached) {
     notices.push(params.limitNotice);
@@ -152,18 +151,18 @@ function buildFindResult(params: {
     details.truncation = truncation;
   }
   if (notices.length > 0) {
-    resultOutput += `\n\n[${notices.join(". ")}]`;
+    details.content += `\n\n[${notices.join(". ")}]`;
   }
   return {
-    content: [{ type: "text", text: resultOutput }],
-    details: Object.keys(details).length > 0 ? details : undefined,
+    content: [{ type: "text", text: details.content }],
+    details,
   };
 }
 
 export function createFindToolDefinition(
   cwd: string,
   options?: FindToolOptions,
-): ToolDefinition<typeof findSchema, FindToolDetails | undefined> {
+): ToolDefinition<typeof findSchema, FindToolDetails> {
   const customOps = options?.operations;
   const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
@@ -239,7 +238,7 @@ export function createFindToolDefinition(
                 settle(() =>
                   resolve({
                     content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: undefined,
+                    details: { content: "No files found matching pattern" },
                   }),
                 );
                 return;
@@ -297,6 +296,7 @@ export function createFindToolDefinition(
             releaseChildProcessOutputAfterExit(child.nodeChildProcess);
             const rl = createInterface({ input: child.stdout });
             let stderr = "";
+            let stderrDroppedBytes = 0;
             const lines: string[] = [];
 
             stopChild = () => {
@@ -321,7 +321,9 @@ export function createFindToolDefinition(
             // cannot split multibyte characters into U+FFFD replacement noise.
             child.stderr?.setEncoding("utf8");
             child.stderr?.on("data", (chunk: string) => {
-              stderr = appendBoundedTextTail(stderr, chunk).tail;
+              const appended = appendBoundedTextTail(stderr, chunk);
+              stderr = appended.tail;
+              stderrDroppedBytes += appended.droppedBytes;
             });
             // Readline re-emits input failures, while the stream listener also catches
             // implementations that do not. settle() keeps the shared failure path one-shot.
@@ -346,7 +348,8 @@ export function createFindToolDefinition(
               }
               const output = lines.join("\n");
               if (code !== 0) {
-                const errorMsg = stderr.trim() || `fd exited with code ${code}`;
+                const fallback = `fd exited with code ${code}`;
+                const errorMsg = formatStderrTail(stderr, stderrDroppedBytes, fallback);
                 settle(() => reject(new Error(errorMsg)));
                 return;
               }
@@ -354,7 +357,7 @@ export function createFindToolDefinition(
                 settle(() =>
                   resolve({
                     content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: undefined,
+                    details: { content: "No files found matching pattern" },
                   }),
                 );
                 return;
@@ -395,6 +398,6 @@ export function createFindToolDefinition(
 export function createFindTool(
   cwd: string,
   options?: FindToolOptions,
-): AgentTool<typeof findSchema> {
+): AgentTool<typeof findSchema, FindToolDetails> {
   return wrapToolDefinition(createFindToolDefinition(cwd, options));
 }

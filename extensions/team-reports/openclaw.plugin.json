@@ -1,0 +1,411 @@
+{
+  "id": "team-reports",
+  "name": "Team Reports",
+  "description": "Daily, weekly, and monthly team activity reports from GitHub and Discord, with model-written summaries, served in the Control UI.",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true,
+    "onCommands": [
+      "team-reports"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "basePath": {
+        "default": "/reports",
+        "type": "string",
+        "pattern": "^\\/(?!api\\/channels(?:\\/|$))(?!\\.{1,2}(?:\\/|$))(?!.*\\/\\.{1,2}(?:\\/|$))[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*\\/*$"
+      },
+      "displayTimezone": {
+        "default": "UTC",
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "github": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "env",
+                      "file",
+                      "exec",
+                      "store"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "orgs": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "teams": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "org": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "slug": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                }
+              },
+              "required": [
+                "org",
+                "slug"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "includeDirectCollaborators": {
+            "default": false,
+            "type": "boolean"
+          },
+          "excludeRepos": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "apiBaseUrl": {
+            "default": "https://api.github.com",
+            "type": "string",
+            "pattern": "^https:\\/\\/[^/?#\\s]+(?:\\/[^?#\\s]*)?$"
+          },
+          "ignoreCommentPatterns": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "token",
+          "orgs"
+        ],
+        "additionalProperties": false
+      },
+      "discord": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "env",
+                      "file",
+                      "exec",
+                      "store"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "guildId": {
+            "type": "string",
+            "pattern": "^\\d+$"
+          },
+          "channels": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "excerpts": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "excerptMaxChars": {
+            "default": 260,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4000
+          }
+        },
+        "required": [
+          "token",
+          "guildId",
+          "channels"
+        ],
+        "additionalProperties": false
+      },
+      "people": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "github": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "display": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "affiliation": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "roleGroup": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "roleLabel": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "access": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "areas": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "discordUserId": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "discordUsername": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived"
+              ]
+            },
+            "archivedAt": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            }
+          },
+          "required": [
+            "github"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "peopleFile": {
+        "type": "string",
+        "pattern": "^(?:\\/|[A-Za-z]:[\\\\/]|\\\\\\\\)[^\\0]*$"
+      },
+      "summaries": {
+        "default": {},
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "reasoning": {
+            "type": "string",
+            "enum": [
+              "off",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "adaptive",
+              "max",
+              "ultra"
+            ]
+          },
+          "agentId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "additionalProperties": false
+      },
+      "schedule": {
+        "default": {},
+        "type": "object",
+        "properties": {
+          "closedDayUtc": {
+            "default": "00:05",
+            "type": "string",
+            "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "intradayEveryHours": {
+            "default": 4,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 24
+          },
+          "jitterMinutes": {
+            "default": 5,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 59
+          },
+          "weekly": {
+            "default": true,
+            "type": "boolean"
+          },
+          "monthly": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "retention": {
+        "default": {},
+        "type": "object",
+        "properties": {
+          "days": {
+            "default": 400,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "github"
+    ],
+    "additionalProperties": false,
+    "not": {
+      "required": [
+        "people",
+        "peopleFile"
+      ]
+    }
+  },
+  "cliCommands": [
+    {
+      "name": "team-reports",
+      "description": "Browse and generate team activity reports",
+      "hasSubcommands": true
+    }
+  ],
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "github.token",
+          "expected": "string",
+          "ownerKind": "capability"
+        },
+        {
+          "path": "discord.token",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  }
+}
