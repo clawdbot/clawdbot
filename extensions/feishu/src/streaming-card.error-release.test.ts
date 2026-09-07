@@ -6,9 +6,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 const loopback = vi.hoisted(() => ({
   baseUrl: "",
+  events: [] as string[],
   releases: [] as Array<{ bodyIsNull: boolean; bodyUsed: boolean }>,
   authStatus: 200,
   createStatus: 200,
+  createInvalidRemaining: 0,
   settingsStatus: 200,
 }));
 
@@ -28,6 +30,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
       return {
         ...guarded,
         release: async () => {
+          loopback.events.push(`release:${url.pathname.includes("/auth/") ? "auth" : "create"}`);
           loopback.releases.push({
             bodyIsNull: guarded.response.body === null,
             bodyUsed: guarded.response.bodyUsed,
@@ -52,6 +55,7 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (url.pathname.includes("/auth/")) {
+      loopback.events.push("request:auth");
       if (loopback.authStatus === 200) {
         writeJson(res, { code: 0, msg: "ok", tenant_access_token: "token", expire: 3600 });
       } else {
@@ -59,6 +63,7 @@ beforeAll(async () => {
       }
       return;
     }
+    loopback.events.push("request:create");
     if (url.pathname.endsWith("/settings")) {
       if (loopback.settingsStatus === 200) {
         writeJson(res, { code: 0, msg: "ok" });
@@ -67,7 +72,10 @@ beforeAll(async () => {
       }
       return;
     }
-    if (loopback.createStatus === 200) {
+    if (loopback.createInvalidRemaining > 0) {
+      loopback.createInvalidRemaining -= 1;
+      writeJson(res, { code: 99991663, msg: "invalid tenant access token" }, 401);
+    } else if (loopback.createStatus === 200) {
       writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_1" } });
     } else {
       writeJson(res, { error: "card create rejected" }, loopback.createStatus);
@@ -87,9 +95,11 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  loopback.events = [];
   loopback.releases = [];
   loopback.authStatus = 200;
   loopback.createStatus = 200;
+  loopback.createInvalidRemaining = 0;
   loopback.settingsStatus = 200;
 });
 
@@ -122,6 +132,35 @@ describe("feishu streaming card error-path body release", () => {
     expect(loopback.releases).toEqual([
       { bodyIsNull: false, bodyUsed: true },
       { bodyIsNull: false, bodyUsed: true },
+    ]);
+  });
+
+  it("releases both invalid-token CardKit attempts around one refresh", async () => {
+    loopback.createInvalidRemaining = 2;
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_error_recovery",
+      appSecret: "secret",
+    });
+
+    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
+      "Create card request failed with HTTP 401",
+    );
+
+    expect(loopback.releases).toEqual([
+      { bodyIsNull: false, bodyUsed: true },
+      { bodyIsNull: false, bodyUsed: true },
+      { bodyIsNull: false, bodyUsed: true },
+      { bodyIsNull: false, bodyUsed: true },
+    ]);
+    expect(loopback.events).toEqual([
+      "request:auth",
+      "release:auth",
+      "request:create",
+      "release:create",
+      "request:auth",
+      "release:auth",
+      "request:create",
+      "release:create",
     ]);
   });
 

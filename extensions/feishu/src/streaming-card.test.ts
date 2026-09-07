@@ -121,14 +121,14 @@ async function createStreamingFetch(
 }
 
 function createMemoryFetch(
-  handler: (url: URL, body: string) => Response | Promise<Response>,
+  handler: (url: URL, body: string, init?: RequestInit) => Response | Promise<Response>,
 ): StreamingFetchDeps {
   return {
     fetchImpl: withFetchPreconnect(
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(input instanceof Request ? input.url : input.toString());
         const body = typeof init?.body === "string" ? init.body : "";
-        return await handler(url, body);
+        return await handler(url, body, init);
       }),
     ) as FeishuStreamingFetch,
     lookupFn: hermeticPublicLookup,
@@ -473,6 +473,176 @@ describe("FeishuStreamingSession", () => {
 
     await expect(session.start("chat_1")).rejects.toThrow("Send card failed: message rejected");
     expect(session.isActive()).toBe(false);
+  });
+
+  it("recovers exact invalid tenant tokens across every CardKit operation", async () => {
+    const tokenCalls: string[] = [];
+    const operationCalls = new Map<string, number>();
+    const deps = createMemoryFetch((url, _body, init) => {
+      if (url.pathname.includes("/auth/")) {
+        const token = `token-${tokenCalls.length + 1}`;
+        tokenCalls.push(token);
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: token,
+          expire: 7200,
+        });
+      }
+      const operation = url.pathname.endsWith("/cardkit/v1/cards")
+        ? "create"
+        : url.pathname.endsWith("/elements/content/content")
+          ? "update"
+          : url.pathname.endsWith("/elements/content")
+            ? "replace"
+            : url.pathname.endsWith("/elements/note/content")
+              ? "note"
+              : "close";
+      const count = (operationCalls.get(operation) ?? 0) + 1;
+      operationCalls.set(operation, count);
+      const expectedToken = `Bearer token-${tokenCalls.length}`;
+      expect(new Headers(init?.headers).get("authorization")).toBe(expectedToken);
+      if (count === 1) {
+        return jsonResponse(
+          {
+            code: operationCalls.size % 2 === 0 ? "99991663" : 99991663,
+            msg: "invalid tenant access token",
+          },
+          401,
+        );
+      }
+      return jsonResponse(
+        operation === "create"
+          ? { code: 0, msg: "ok", data: { card_id: "card_recovered" } }
+          : { code: 0, msg: "ok" },
+      );
+    });
+    const client = {
+      im: {
+        message: {
+          create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
+        },
+      },
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+    const session = new FeishuStreamingSession(
+      client,
+      { appId: "app_all_cardkit_recovery", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+
+    await session.start("chat_1", "chat_id", { note: "working" });
+    await session.update("accepted prefix");
+    await expect(session.closeWithResult("replacement", { note: "done" })).resolves.toMatchObject({
+      visibleReplySent: true,
+      content: "replacement",
+    });
+
+    expect(tokenCalls).toHaveLength(6);
+    expect(operationCalls).toEqual(
+      new Map([
+        ["create", 2],
+        ["update", 2],
+        ["replace", 2],
+        ["note", 2],
+        ["close", 2],
+      ]),
+    );
+  });
+
+  it.each([
+    { code: 99991664, expectedCardCalls: 1, expectedTokenCalls: 1 },
+    { code: 99991663, expectedCardCalls: 2, expectedTokenCalls: 2 },
+  ])(
+    "keeps CardKit recovery exact and bounded for code $code",
+    async ({ code, expectedCardCalls, expectedTokenCalls }) => {
+      let tokenCalls = 0;
+      let cardCalls = 0;
+      const deps = createMemoryFetch((url) => {
+        if (url.pathname.includes("/auth/")) {
+          tokenCalls += 1;
+          return jsonResponse({
+            code: 0,
+            msg: "ok",
+            tenant_access_token: `token-${tokenCalls}`,
+            expire: 7200,
+          });
+        }
+        cardCalls += 1;
+        return jsonResponse({ code, msg: "token rejected" }, 401);
+      });
+      const session = new FeishuStreamingSession(
+        {} as never,
+        { appId: `app_cardkit_bound_${code}`, appSecret: "secret" },
+        undefined,
+        deps,
+      );
+
+      await expect(session.start("chat_1")).rejects.toThrow("HTTP 401");
+      expect(cardCalls).toBe(expectedCardCalls);
+      expect(tokenCalls).toBe(expectedTokenCalls);
+    },
+  );
+
+  it("shares initial acquisition and stale-token refresh across sessions for one client", async () => {
+    let tokenCalls = 0;
+    let cardCalls = 0;
+    let markFreshReplay!: () => void;
+    const freshReplay = new Promise<void>((resolve) => {
+      markFreshReplay = resolve;
+    });
+    let staleCalls = 0;
+    const deps = createMemoryFetch(async (url, _body, init) => {
+      if (url.pathname.includes("/auth/")) {
+        tokenCalls += 1;
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: tokenCalls === 1 ? "stale-token" : "fresh-token",
+          expire: 7200,
+        });
+      }
+      cardCalls += 1;
+      if (new Headers(init?.headers).get("authorization") === "Bearer stale-token") {
+        staleCalls += 1;
+        if (staleCalls === 2) {
+          await freshReplay;
+        }
+        return jsonResponse({ code: 99991663, msg: "invalid tenant access token" }, 401);
+      }
+      markFreshReplay();
+      return jsonResponse({
+        code: 0,
+        msg: "ok",
+        data: { card_id: `card-${cardCalls}` },
+      });
+    });
+    const client = {
+      im: {
+        message: {
+          create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
+        },
+      },
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+    const first = new FeishuStreamingSession(
+      client,
+      { appId: "app_shared_cardkit", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+    const second = new FeishuStreamingSession(
+      client,
+      { appId: "app_shared_cardkit", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+
+    await expect(Promise.all([first.start("chat_1"), second.start("chat_2")])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(tokenCalls).toBe(2);
+    expect(cardCalls).toBe(4);
   });
 
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
