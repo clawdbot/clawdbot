@@ -28,7 +28,13 @@ function shouldIgnoreInstalledPluginDirName(name: string): boolean {
   if (normalized.includes(".backup-")) {
     return true;
   }
-  if (normalized.includes(".disabled")) {
+  if (normalized.includes(".backup-")) {
+    return true;
+  }
+  // Rename-based disable debris is "<id>.disabled" plus optional dot suffixes
+  // (for example ".disabled.20260222"). Match only at the end of the name so a
+  // live installed plugin whose id contains ".disabled" stays in audit roots.
+  if (/\.disabled(\.[^.]+)*$/.test(normalized)) {
     return true;
   }
   return false;

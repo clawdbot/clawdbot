@@ -297,7 +297,10 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
   if (normalized.includes(".backup-")) {
     return true;
   }
-  if (normalized.includes(".disabled")) {
+  // Rename-based disable debris is "<id>.disabled" plus optional dot suffixes
+  // (for example ".disabled.20260222"). Match only at the end of the name so a
+  // valid plugin id that merely contains ".disabled" stays discoverable.
+  if (/\.disabled(\.[^.]+)*$/.test(normalized)) {
     return true;
   }
   return false;

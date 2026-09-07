@@ -419,6 +419,30 @@ describe("security audit install metadata findings", () => {
     );
   });
 
+  it("audits installed plugin ids that merely contain .disabled while still ignoring disable debris", async () => {
+    const stateDir = await makeTmpDir("installed-plugin-disabled-substring");
+    for (const name of [
+      "my.disabled-plugin",
+      "old-plugin.disabled",
+      "old-plugin.disabled.20260502",
+    ]) {
+      await fs.mkdir(path.join(stateDir, "extensions", name), {
+        recursive: true,
+      });
+    }
+
+    const findings = await runInstallMetadataAudit({}, stateDir);
+
+    const noAllowlist = requireInstallFinding(findings, "plugins.extensions_no_allowlist");
+    expect(noAllowlist.detail).toContain("Found 1 extension(s)");
+
+    const toolsReachable = requireInstallFinding(
+      findings,
+      "plugins.tools_reachable_permissive_policy",
+    );
+    expect(toolsReachable.detail).toContain("Enabled extension plugins: my.disabled-plugin.");
+  });
+
   it("does not report bundled provider and utility plugins as phantom allowlist entries", async () => {
     const stateDir = await makeTmpDir("phantom-bundled-providers");
     await fs.mkdir(path.join(stateDir, "extensions", "installed-plugin"), {

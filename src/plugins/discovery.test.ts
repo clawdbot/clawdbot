@@ -767,6 +767,23 @@ describe("discoverOpenClawPlugins", () => {
     });
   });
 
+  it("discovers valid plugin ids that merely contain .disabled", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    mkdirSafe(globalExt);
+
+    for (const name of ["my.disabled-plugin", "teams.disabled-mode"]) {
+      const dir = path.join(globalExt, name);
+      mkdirSafe(dir);
+      fs.writeFileSync(path.join(dir, "index.ts"), "export default function () {}", "utf-8");
+    }
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    expectCandidateIds(candidates, {
+      includes: ["my.disabled-plugin", "teams.disabled-mode"],
+    });
+  });
+
   it("does not warn about source checkout deps when bundled plugins are disabled", () => {
     const stateDir = makeTempDir();
     const packageRoot = makeTempDir();
