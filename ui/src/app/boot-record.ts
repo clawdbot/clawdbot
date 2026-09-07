@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentsListResult } from "../api/types.ts";
 import type { SessionGroupSettings } from "../lib/sessions/custom-groups.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import { scheduleBootRecord } from "./boot-record.runtime.ts";
 
 export const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 export const BOOT_RECORD_MAX_BYTES = 64 * 1024;
@@ -75,14 +76,7 @@ export function readBootRecord(scope: string): BootRecord | null {
 }
 
 export function persistBootRecord(record: BootRecord): void {
-  const generation = bootRecordGeneration;
-  void import("./boot-record.runtime.ts")
-    .then(({ scheduleBootRecord }) => {
-      if (generation === bootRecordGeneration) {
-        scheduleBootRecord(record);
-      }
-    })
-    .catch(() => undefined);
+  scheduleBootRecord(record);
 }
 
 export function clearBootRecords(): void {

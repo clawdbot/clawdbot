@@ -20,7 +20,6 @@ const record = (): BootRecord => ({
 });
 
 async function settleWrite(): Promise<void> {
-  await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(500);
 }
 
@@ -32,6 +31,7 @@ describe("Control UI boot record", () => {
   afterEach(() => {
     clearBootRecords();
     vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -42,6 +42,29 @@ describe("Control UI boot record", () => {
     await settleWrite();
     expect(readBootRecord(scope)).toEqual(saved);
     expect(readBootRecord("https://another.example")).toBeNull();
+  });
+
+  it.each(["pagehide", "hidden"])("flushes the latest pending record on %s", async (event) => {
+    persistBootRecord(record());
+    const saved = { ...record(), sectionOrder: ["ungrouped", "category:Work"] };
+    persistBootRecord(saved);
+    expect(readBootRecord(scope)).toBeNull();
+
+    if (event === "pagehide") {
+      window.dispatchEvent(new Event("pagehide"));
+    } else {
+      const visibility = vi.spyOn(document, "visibilityState", "get");
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(readBootRecord(scope)).toBeNull();
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+
+    expect(readBootRecord(scope)).toEqual(saved);
+    clearBootRecords();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(readBootRecord(scope)).toBeNull();
   });
 
   it.each([
@@ -78,7 +101,7 @@ describe("Control UI boot record", () => {
     expect(readBootRecord(scope)?.agents.agents[0]?.identity).toEqual({ name: "Main" });
   });
 
-  it("clears all scopes and fences pending writes without clearing other settings", async () => {
+  it("clears all scopes and fences pending writes even on pagehide", async () => {
     persistBootRecord(record());
     await settleWrite();
     persistBootRecord({ ...record(), scope: "https://another.example" });
@@ -86,6 +109,7 @@ describe("Control UI boot record", () => {
     localStorage.setItem("unrelated", "keep");
     persistBootRecord(record());
     clearBootRecords();
+    window.dispatchEvent(new Event("pagehide"));
     await settleWrite();
     expect(localStorage.length).toBe(1);
     expect(localStorage.getItem("unrelated")).toBe("keep");
