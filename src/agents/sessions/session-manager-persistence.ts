@@ -69,9 +69,6 @@ export class SessionManagerPersistence extends SessionManagerCore {
       }
       candidatePreservedStart -= 1;
     }
-    if (this.boundedContextIncomplete && candidatePreservedStart === 1) {
-      throw new RangeError("Bounded transcript cleanup cannot cross the hydrated trailing window");
-    }
     const removableEntryIds = new Set<string>();
     let candidateRemoveStart = candidatePreservedStart;
     while (candidateRemoveStart > 1) {

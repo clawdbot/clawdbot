@@ -584,6 +584,50 @@ it("keeps the original hydration boundary after a partial bounded trim", async (
   ).toEqual(["event-0", "event-1", "event-2", "event-3"]);
 });
 
+it("keeps an all-preserved bounded window as a no-op", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-bounded-preserved-noop-");
+  const scope = {
+    agentId: "main",
+    sessionId: "bounded-preserved-noop",
+    sessionKey: "agent:main:bounded-preserved-noop",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  expect(
+    replaceTranscriptEventsSync(scope, [
+      {
+        type: "session",
+        version: 3,
+        id: scope.sessionId,
+        timestamp: new Date(0).toISOString(),
+        cwd: dir,
+      },
+      ...Array.from({ length: 4 }, (_value, index) => ({
+        type: "custom" as const,
+        id: `preserved-${index}`,
+        parentId: index === 0 ? null : `preserved-${index - 1}`,
+        timestamp: new Date(index + 1).toISOString(),
+        customType: "preserved-metadata",
+        data: { index },
+      })),
+    ]),
+  ).toBe(true);
+  const manager = SessionManager.openBounded(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 2,
+  });
+
+  expect(
+    manager.removeTrailingEntries(() => true, {
+      preserveTrailing: (entry) => entry.type === "custom",
+    }),
+  ).toBe(0);
+  expect((await loadTranscriptEvents(scope)).map((entry) => (entry as { id?: string }).id)).toEqual(
+    [scope.sessionId, "preserved-0", "preserved-1", "preserved-2", "preserved-3"],
+  );
+});
+
 it.each([
   { corruptSeq: 1, name: "older raw prefix" },
   { corruptSeq: 2, name: "newly exposed bounded row" },
