@@ -1140,6 +1140,8 @@ export type ControlUiMockRequestHandler = (request: {
 }) => void;
 
 export type ControlUiMockGateway = {
+  /** Observe delivery without replacing handlers or changing mock scheduling. */
+  observeFrame?: (frame: unknown) => void;
   closeLatest: (code?: number, reason?: string) => void;
   deliverLatest: (frame: unknown) => void;
   deferNext: (method: string, match?: Record<string, unknown>) => void;
@@ -2789,6 +2791,16 @@ function installControlUiMockGateway(
     deliver(frame: unknown): void {
       if (this.readyState !== MockWebSocket.OPEN) {
         return;
+      }
+      try {
+        exposed.observeFrame?.(frame);
+      } catch {
+        exposed.observeFrame = undefined;
+        try {
+          console.info("[image-handoff]", '{"kind":"frame-observer-failed"}');
+        } catch {
+          // Diagnostic logging must not suppress frame delivery.
+        }
       }
       this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
     }

@@ -5,6 +5,7 @@ import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import type { ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
@@ -118,6 +119,160 @@ suite.define(() => {
           const displayed = expectDefined(await userImage.elementHandle(), "submitted image");
           const initialPixels = await takeControlUiElementScreenshot(page, userImage, [userImage]);
           const continuity = await displayed.evaluateHandle((image) => {
+            const gateway = (
+              window as Window & {
+                openclawControlUiE2eGateway: ControlUiMockGateway;
+              }
+            ).openclawControlUiE2eGateway;
+            let sequence = 0;
+            let frameRecords = 0;
+            const record = (kind: string, details: Record<string, unknown>) => {
+              console.info(
+                "[image-handoff]",
+                JSON.stringify({
+                  sequence: ++sequence,
+                  at: Date.now(),
+                  kind,
+                  ...details,
+                }),
+              );
+            };
+            const ancestors = [
+              ".chat-image-frame",
+              ".chat-bubble",
+              ".chat-group.user",
+              ".chat-virtual-row",
+              ".chat-thread",
+            ].map((selector) => ({ selector, element: image.closest(selector) }));
+            const originalChain = new Map<Node, { label: string; depth: number }>();
+            for (let node: Node | null = image; node !== null; node = node.parentNode) {
+              originalChain.set(node, {
+                label:
+                  node === image
+                    ? "image"
+                    : node === document
+                      ? "document"
+                      : (ancestors.find(({ element }) => element === node)?.selector ?? "ancestor"),
+                depth: originalChain.size,
+              });
+            }
+            const snapshot = () => {
+              const group = document.querySelector(".chat-group.user");
+              const identity = (element: Element | null | undefined) =>
+                element?.getAttribute("data-virtual-row-key")?.slice(0, 160) ??
+                element?.getAttribute("data-message-id")?.slice(0, 160) ??
+                null;
+              return {
+                imageConnected: image.isConnected,
+                currentImageIsOriginal: group?.querySelector("img.chat-message-image") === image,
+                imageCount: group?.querySelectorAll("img.chat-message-image").length ?? 0,
+                ancestors: ancestors.map(({ selector, element }) => {
+                  const current = group?.closest(selector) ?? group?.querySelector(selector);
+                  return {
+                    selector,
+                    connected: element?.isConnected ?? false,
+                    currentIsOriginal: Boolean(element && current === element),
+                    originalKey: identity(element),
+                    currentKey: identity(current),
+                    entryId: current?.getAttribute("data-entry-id")?.slice(0, 160) ?? null,
+                  };
+                }),
+              };
+            };
+            gateway.observeFrame = (value) => {
+              const frame = value as {
+                type?: string;
+                id?: string;
+                event?: string;
+                payload?: {
+                  status?: string;
+                  sessionId?: string;
+                  messageId?: string;
+                  messageSeq?: number;
+                  messages?: Array<{ __openclaw?: { id?: string; seq?: number } }>;
+                  pendingInputs?: { items?: unknown[] };
+                };
+              };
+              const index = gateway.requests.findIndex(({ id }) => id === frame.id);
+              const request = gateway.requests[index];
+              if (
+                !(
+                  frame.type === "res" &&
+                  ["chat.send", "chat.history"].includes(request?.method ?? "")
+                ) &&
+                !(
+                  frame.type === "event" &&
+                  ["sessions.changed", "session.message"].includes(frame.event ?? "")
+                )
+              ) {
+                return;
+              }
+              if (frameRecords++ >= 31) {
+                if (frameRecords === 32) {
+                  record("frame-cap-reached", { limit: 31 });
+                }
+                return;
+              }
+              const payload = frame.payload;
+              record("before-frame-dispatch", {
+                requestOrdinal: index < 0 ? null : index + 1,
+                method: request?.method,
+                event: frame.event,
+                status: payload?.status?.slice(0, 160),
+                sessionId: payload?.sessionId?.slice(0, 160),
+                messageCount: payload?.messages?.length,
+                pendingCount: payload?.pendingInputs?.items?.length,
+                messageId: (payload?.messageId ?? payload?.messages?.[0]?.__openclaw?.id)?.slice(
+                  0,
+                  160,
+                ),
+                messageSeq: payload?.messageSeq ?? payload?.messages?.[0]?.__openclaw?.seq,
+                ...snapshot(),
+              });
+            };
+            let firstRemoval = false;
+            let mutationOrdinal = 0;
+            const observer = new MutationObserver((records) => {
+              const batchStart = mutationOrdinal + 1;
+              let firstMatch: Record<string, unknown> | undefined;
+              for (const mutation of records) {
+                const recordOrdinal = ++mutationOrdinal;
+                if (firstRemoval || firstMatch) {
+                  continue;
+                }
+                let removedNodeOrdinal = 0;
+                for (const removed of mutation.removedNodes) {
+                  removedNodeOrdinal += 1;
+                  const owner = originalChain.get(removed);
+                  if (!owner) {
+                    continue;
+                  }
+                  const target = originalChain.get(mutation.target);
+                  firstMatch = {
+                    recordOrdinal,
+                    removedNodeOrdinal,
+                    removedOwnerLabel: owner.label,
+                    removedOwnerDepth: owner.depth,
+                    targetLabel: target?.label ?? "outside-original-chain",
+                    targetDepth: target?.depth ?? null,
+                  };
+                  break;
+                }
+              }
+              if (firstMatch) {
+                firstRemoval = true;
+                record("first-owner-removal", { removal: firstMatch, callbackState: snapshot() });
+              }
+              if (!image.isConnected) {
+                observer.disconnect();
+                record("first-observed-disconnect", {
+                  observedAfterRecords: { first: batchStart, last: mutationOrdinal },
+                  callbackState: snapshot(),
+                });
+              }
+            });
+            observer.observe(document, { childList: true, subtree: true });
+            record("submitted", snapshot());
             const frames: boolean[] = [];
             const initialBounds = image.getBoundingClientRect();
             let frame = 0;
@@ -139,6 +294,8 @@ suite.define(() => {
             return {
               stop: () => {
                 cancelAnimationFrame(frame);
+                observer.disconnect();
+                gateway.observeFrame = undefined;
                 return frames;
               },
             };
