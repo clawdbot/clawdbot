@@ -11,6 +11,7 @@ import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
@@ -54,7 +55,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextAlign
@@ -296,26 +296,18 @@ private fun CommandActionRow(
 ) {
   val title = row.title.resolveNativeTextResource()
   val subtitle = row.subtitle.resolveNativeTextResource()
-  Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
-    Row(
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .heightIn(min = 52.dp)
-          .clip(RoundedCornerShape(ClawTheme.radii.row))
-          .clickable(onClickLabel = commandActionAccessibilityDescription(row.action, title), onClick = { onOpen(row.action) })
-          .padding(horizontal = 2.dp, vertical = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-      CommandRowIcon(icon = row.icon)
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      }
-      CommandRowChevron(contentDescription = null)
-    }
-  }
+  ClawListItem(
+    title = title,
+    subtitle = subtitle,
+    modifier =
+      Modifier
+        .heightIn(min = 52.dp)
+        .clip(RoundedCornerShape(ClawTheme.radii.row))
+        .clickable(onClickLabel = commandActionAccessibilityDescription(row.action, title), onClick = { onOpen(row.action) })
+        .padding(horizontal = 2.dp),
+    leading = { CommandRowIcon(icon = row.icon) },
+    trailing = { CommandRowChevron(contentDescription = null) },
+  )
 }
 
 @Composable
