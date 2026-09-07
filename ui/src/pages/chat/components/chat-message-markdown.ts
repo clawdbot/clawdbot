@@ -5,6 +5,7 @@ import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gatew
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBookmarksEnglish } from "../../../i18n/locales/en-bookmarks.ts";
 import {
   normalizeMessage,
   normalizeRoleForGrouping,
@@ -14,6 +15,8 @@ import type { ChatBookmarkAccess } from "../chat-bookmarks.ts";
 import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
 import { extractMessageMediaText } from "./chat-message-media.ts";
 import { resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
+
+registerBookmarksEnglish();
 
 export type MessageReplyTarget = {
   messageId: string;

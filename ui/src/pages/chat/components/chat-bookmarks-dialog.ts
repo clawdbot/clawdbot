@@ -2,8 +2,11 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import "../../../components/modal-dialog.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBookmarksEnglish } from "../../../i18n/locales/en-bookmarks.ts";
 import type { ChatBookmark, ChatBookmarks } from "../chat-bookmarks.ts";
 import "./chat-bookmarks.css";
+
+registerBookmarksEnglish();
 
 export function renderChatBookmarksDialog(
   state: ChatBookmarks,

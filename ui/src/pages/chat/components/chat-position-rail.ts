@@ -7,11 +7,14 @@ import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBookmarksEnglish } from "../../../i18n/locales/en-bookmarks.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import type { ChatBookmark, ChatBookmarkAccess } from "../chat-bookmarks.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
+
+registerBookmarksEnglish();
 
 const MAX_POSITION_MARKERS = 10;
 const PREVIEW_LENGTH = 140;
