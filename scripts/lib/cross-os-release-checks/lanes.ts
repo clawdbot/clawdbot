@@ -28,6 +28,7 @@ import {
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
 } from "./config.ts";
+import { runExternalPackageTransition } from "./external-package-transition.ts";
 import {
   binDirForPrefix,
   ensureLocalNpmShim,
@@ -250,6 +251,15 @@ export async function runUpgradeLane(
     const baseline = {
       version: readInstalledVersion(lane.prefixDir),
     };
+
+    if (baseline.version === "2026.9.2" && params.build.candidateVersion === "2026.9.3") {
+      return await runExternalPackageTransition({
+        ...params,
+        lane,
+        env,
+        baselineVersion: baseline.version,
+      });
+    }
 
     const updateEnv = buildRealUpdateEnv(env);
     const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);
