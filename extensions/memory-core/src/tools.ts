@@ -410,6 +410,8 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             },
           };
         };
+        // Cleanup after the search spends what is left of the same call budget.
+        const callStartedAt = Date.now();
         try {
           return await runMemoryCorpusDeadline({
             operation: "memory_search",
@@ -543,16 +545,16 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           );
         } finally {
           cleanupStarted = true;
+          const remainingTimeoutMs = Math.max(
+            0,
+            settings.query.timeoutMs - (Date.now() - callStartedAt),
+          );
           if (searchSignal?.aborted) {
             // Admitted searches retain their leases until they settle; teardown
             // must not add another cleanup timeout to an already expired reply.
-            void closeMemoryManagers(memoryManagersToClose, undefined, settings.query.timeoutMs);
+            void closeMemoryManagers(memoryManagersToClose, undefined, remainingTimeoutMs);
           } else {
-            await closeMemoryManagers(
-              memoryManagersToClose,
-              callerSignal,
-              settings.query.timeoutMs,
-            );
+            await closeMemoryManagers(memoryManagersToClose, callerSignal, remainingTimeoutMs);
           }
         }
       },

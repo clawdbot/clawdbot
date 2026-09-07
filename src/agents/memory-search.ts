@@ -2,6 +2,7 @@
  * Resolves memory-search source, sync, and ranking configuration.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
@@ -210,11 +211,12 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
         0,
         1,
       ),
-      timeoutMs: Math.round(
-        (overrides?.query?.timeoutSeconds ??
-          defaults?.query?.timeoutSeconds ??
-          DEFAULT_QUERY_TIMEOUT_SECONDS) * 1000,
-      ),
+      timeoutMs:
+        clampTimerTimeoutMs(
+          (overrides?.query?.timeoutSeconds ??
+            defaults?.query?.timeoutSeconds ??
+            DEFAULT_QUERY_TIMEOUT_SECONDS) * 1000,
+        ) ?? DEFAULT_QUERY_TIMEOUT_SECONDS * 1000,
       hybrid: {
         enabled: DEFAULT_HYBRID_ENABLED,
         vectorWeight: DEFAULT_HYBRID_VECTOR_WEIGHT,

@@ -592,6 +592,13 @@ describe("memory search config", () => {
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
   });
 
+  it("keeps the query deadline inside the Node timer range", () => {
+    const cfg = asConfig({
+      memory: { search: { query: { timeoutSeconds: 1e9 } } },
+    });
+    expect(resolveMemorySearchConfig(cfg, "main")?.query.timeoutMs).toBe(2_147_000_000);
+  });
+
   it("merges extra memory paths from defaults and overrides", () => {
     const cfg = asConfig({
       memory: {

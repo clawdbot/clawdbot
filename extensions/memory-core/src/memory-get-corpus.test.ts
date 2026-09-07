@@ -347,4 +347,25 @@ describe("memory_get corpus outcomes", () => {
     controller.abort(new Error("cancelled"));
     await expect(pending).rejects.toThrow("cancelled");
   });
+
+  it("cuts a hanging primary read at the configured deadline", async () => {
+    vi.useFakeTimers();
+    setMemoryReadFileImpl(async () => await new Promise<never>(() => {}));
+    const pending = createMemoryGetToolOrThrow(
+      asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { search: { query: { timeoutSeconds: 1 } } },
+      }),
+    ).execute("call_get_primary_timeout", { path: lookup });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(pending).resolves.toMatchObject({
+      details: {
+        path: lookup,
+        text: "",
+        disabled: true,
+        error: "memory_get timed out after 1s",
+      },
+    });
+  });
 });
