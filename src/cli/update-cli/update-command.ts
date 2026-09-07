@@ -548,10 +548,7 @@ async function updateCommandInternal(
         { env: run.env },
       );
       defaultRuntime.error(
-        [
-          "Downgrade confirmation required.",
-          "Downgrading can break configuration. Re-run in a TTY to confirm.",
-        ].join("\n"),
+        "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
       );
       defaultRuntime.exit(1);
       return;
