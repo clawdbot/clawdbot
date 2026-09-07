@@ -1669,6 +1669,20 @@
                     "pages": [
                       "plugins/codex-computer-use",
                       "plugins/codex-harness",
+                      {
+                        "group": "Codex harness",
+                        "pages": [
+                          "plugins/codex-harness/placement",
+                          "plugins/codex-harness/routing",
+                          "plugins/codex-harness/configuration",
+                          "plugins/codex-harness/app-server",
+                          "plugins/codex-harness/config-fields",
+                          "plugins/codex-harness/commands",
+                          "plugins/codex-harness/runtime-behavior",
+                          "plugins/codex-harness/native-features",
+                          "plugins/codex-harness/troubleshooting"
+                        ]
+                      },
                       "plugins/codex-native-plugins",
                       "plugins/codex-supervision"
                     ]
