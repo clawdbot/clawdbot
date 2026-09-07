@@ -252,7 +252,7 @@ export async function swapStagedPackageInstall(params: {
     }
     return messages;
   };
-  const prepareBaseline = async () => {
+  const readBaseline = async () => {
     if (params.recovery && params.prepareRecovery) {
       throw new Error("Package recovery may be supplied or prepared, never both");
     }
@@ -353,44 +353,51 @@ export async function swapStagedPackageInstall(params: {
           candidate: await baseline.launcher(shim.source),
         });
       }
-      // Retain staging before entering the persistence owner, including a lost acknowledgement.
-      retained = true;
-      const recovery =
-        params.recovery ??
-        (await params.prepareRecovery!({
-          liveRoot: targetSwapRoot,
-          stageRoot: stagedSwapRoot,
-          previous: previousTree ?? null,
-          candidate,
-        }));
-      recoveryTransaction = createPackageRecoveryTransaction(
-        {
-          version: 1,
-          transactionId: recovery.transactionId,
-          packageName: params.packageName,
-          liveRoot: targetSwapRoot,
-          stageRoot: stagedSwapRoot,
-          backupRoot,
-          binDir: targetLayout.binDir,
-          shimBackupRoot: shimBackupDir ?? null,
-          shimBackupIdentity: shimBackupDir
-            ? await baseline.directoryIdentity(shimBackupDir)
-            : null,
-          previous: previousTree ?? null,
-          candidate,
-          retention: null,
-          launchers,
-          interruptedLaunchers: [],
-        },
-        recovery,
-        params.timeoutMs,
-      );
-      // Persist the exact descriptor before service preparation or package mutation.
-      await recoveryTransaction.prepare();
+      const shimBackupIdentity = shimBackupDir
+        ? await baseline.directoryIdentity(shimBackupDir)
+        : null;
+      // Finish the bounded read scope before awaited startup/persistence work.
+      // Recovery independently rechecks this captured material before admission.
+      return async () => {
+        // Retain staging before entering the persistence owner, including a lost acknowledgement.
+        retained = true;
+        const recovery =
+          params.recovery ??
+          (await params.prepareRecovery!({
+            liveRoot: targetSwapRoot,
+            stageRoot: stagedSwapRoot,
+            previous: previousTree ?? null,
+            candidate,
+          }));
+        recoveryTransaction = createPackageRecoveryTransaction(
+          {
+            version: 1,
+            transactionId: recovery.transactionId,
+            packageName: params.packageName,
+            liveRoot: targetSwapRoot,
+            stageRoot: stagedSwapRoot,
+            backupRoot,
+            binDir: targetLayout.binDir,
+            shimBackupRoot: shimBackupDir ?? null,
+            shimBackupIdentity,
+            previous: previousTree ?? null,
+            candidate,
+            retention: null,
+            launchers,
+            interruptedLaunchers: [],
+          },
+          recovery,
+          params.timeoutMs,
+        );
+        // Persist the exact descriptor before service preparation or package mutation.
+        await recoveryTransaction.prepare();
+      };
     }
+    return undefined;
   };
   try {
-    await (native ? prepareBaseline() : baseline.observe("baseline", prepareBaseline));
+    const prepare = await (native ? readBaseline() : baseline.observe("baseline", readBaseline));
+    await prepare?.();
     // Validation and launcher backup finish while the old Gateway is serving.
     // Only this boundary authorizes the orchestrator to suspend the service.
     const assertProjectUnchanged = native

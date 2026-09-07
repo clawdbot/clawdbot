@@ -21,9 +21,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each([undefined, "node"])(
-  "persists the actual staged runtime before the native preparation boundary (%s)",
-  async (nodeRunner) => {
+it.each([
+  { nodeRunner: undefined, delayedStartup: false },
+  { nodeRunner: "node", delayedStartup: false },
+  { nodeRunner: undefined, delayedStartup: true },
+])(
+  "persists the actual staged runtime before native preparation (node=$nodeRunner, delayed=$delayedStartup)",
+  async ({ nodeRunner, delayedStartup }) => {
     const base = await fs.realpath(dirs.make("startup-source-"));
     const privateRoot = path.join(base, "control");
     await fs.mkdir(privateRoot, { mode: 0o700 });
@@ -41,16 +45,22 @@ it.each([undefined, "node"])(
       run.executorFence = await executor.enter(fixture.packageRoot);
       const operation = swapStagedPackageInstall({
         ...fixture.params,
-        prepareRecovery: async (source) =>
-          (
-            await beginUpdateCommandStartup({
-              opts,
-              root: fixture.packageRoot,
-              env,
-              source,
-              nodeRunner,
-            })
-          ).hooks,
+        prepareRecovery: async (source) => {
+          const startup = await beginUpdateCommandStartup({
+            opts,
+            root: fixture.packageRoot,
+            env,
+            source,
+            nodeRunner,
+          });
+          if (delayedStartup) {
+            // All OS reads stay real. Advance elapsed startup beyond the previous
+            // scan's budget without changing the limits of later reader scopes.
+            const now = Date.now.bind(Date);
+            vi.spyOn(Date, "now").mockImplementation(() => now() + 31_000);
+          }
+          return startup.hooks;
+        },
         beforeActivate: async () => {
           const record = loadUpdateRecovery(run.runId, { env });
           expect(record).toMatchObject({
