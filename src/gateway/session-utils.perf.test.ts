@@ -85,6 +85,15 @@ describe("session list resolver cache", () => {
       limit: 1,
       shouldYield: true,
     },
+    {
+      name: "one row after expensive store loading",
+      rowWorkMs: 0,
+      storeWorkMs: 20,
+      preparationWorkMs: 0,
+      keepRows: true,
+      limit: 1,
+      shouldYield: true,
+    },
   ])(
     "shares the event loop for $name",
     async ({ rowWorkMs, storeWorkMs, preparationWorkMs, keepRows, limit, shouldYield }) => {
