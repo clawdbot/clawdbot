@@ -71,9 +71,9 @@ describe("signalSetupAdapter account keys", () => {
     // The promotion resolves its key with the lookup Signal declares (accountEntryLookup in
     // setup-core.ts, applied by resolveExistingAccountKey in src/channels/plugins/setup-helpers.ts),
     // so the exact key wins over the case variant listed first, the entry every reader takes
-    // (src/routing/account-lookup.ts:15-17). Before this change the writer took the first key
-    // normalizing to "default", the shadowed variant, and this add was refused with a rename
-    // pointer.
+    // through the exact-key branch of resolveAccountEntry. Before this change the writer took
+    // the first key normalizing to "default", the shadowed variant, and this add was refused with
+    // a rename pointer.
     expect(
       signalSetupAdapter.validateInput?.({ cfg, accountId: "work", input: externalNativeInput }),
     ).toBeNull();
@@ -96,9 +96,9 @@ describe("signalSetupAdapter account keys", () => {
     });
     const authored = structuredClone(cfg);
 
-    // With no exact key a reader selects "Default" by case fold
-    // (src/routing/account-lookup.ts:18-22), so the promotion into it lands where every reader
-    // looks. Comparing the written key with the id instead would refuse this add and call the
+    // With no exact key a reader selects "Default" through the case-folded fallback in
+    // resolveAccountEntry, so the promotion into it lands where every reader looks. Comparing the
+    // written key with the id instead would refuse this add and call the
     // selected key one the account lookup does not select. The exact key listed first beside its
     // twin is covered by setup-core.test.ts ("adds a named account when promotion lands on the
     // selected key beside its stranded twin").
@@ -138,8 +138,8 @@ describe("signalSetupAdapter account keys", () => {
     const authored = structuredClone(cfg);
 
     // Under the lookup Signal declares (accountEntryLookup in setup-core.ts) the promotion takes
-    // the exact key, else the first key whose lowercase is the id, the resolver's own rule
-    // (src/routing/account-lookup.ts:18-22), so the alias listed first is passed over. Before this
+    // the exact key, else the first key whose trimmed lowercase is the id, matching
+    // resolveAccountEntry, so the alias listed first is passed over. Before this
     // change the writer took the first key normalizing to "default", the alias, and this add was
     // refused with a rename pointer.
     expect(
@@ -164,10 +164,10 @@ describe("signalSetupAdapter account keys", () => {
     // The guided wizard promotes before any Signal hook runs (src/channels/plugins/setup-wizard.ts:63,
     // then validateInput at :167 and applyAccountConfig at :175), so no guard can refuse this add.
     // Before this change the promotion wrote into "Default.", whose own empty account kept the root
-    // number from being copied while the root key was still deleted (setup-helpers.ts:313-319), so
-    // the number was gone for good. The writer now lands on the canonical key Signal's resolver
-    // looks up, through the setup contract the wizard passes (setup-wizard.ts:313), which forwards
-    // the adapter's accountEntryLookup declaration.
+    // number from being copied in the copy-then-delete loop in moveSingleAccountKeysIntoAccount,
+    // while the root key was still deleted, so the number was lost. The writer now lands on the
+    // canonical key Signal's resolver looks up, through the setup contract the wizard passes
+    // (setup-wizard.ts:313), which forwards the adapter's accountEntryLookup declaration.
     const promoted = moveSingleAccountChannelSectionToDefaultAccount({
       cfg,
       channelKey: "signal",
@@ -226,15 +226,16 @@ describe("signalSetupAdapter account keys", () => {
     expect(reloaded.channels?.signal?.account).toBeUndefined();
   });
 
-  it("sends a named add to doctor when promotion would write the configured default alias", () => {
+  it("sends a named add to doctor when promotion would land beside the configured default alias", () => {
     const cfg = rootNumberConfig({
       transport: { kind: "container", url: "http://signal-container:8080" },
       defaultAccount: "Work Phone",
       accounts: { "Work Phone": { name: "Work" }, personal: { name: "Personal" } },
     });
 
-    // The promotion writer targets the configured defaultAccount (setup-helpers.ts:370-379), so
-    // the oracle has to see the original config to preview this write into "Work Phone".
+    // The configured-default branch of resolveSingleAccountPromotionTarget selects "work-phone".
+    // The oracle needs the original config to preview that canonical write beside "Work Phone",
+    // whose settings remain under the unrepaired alias.
     expect(
       signalSetupAdapter.validateInput?.({
         cfg,
@@ -327,8 +328,8 @@ describe("signalSetupAdapter account keys", () => {
       });
       const authored = structuredClone(cfg);
 
-      // With no exact key the promotion and the account lookup both take the first key in map
-      // order (src/channels/plugins/setup-helpers.ts:349-352, src/routing/account-lookup.ts:18-22),
+      // With no exact key the case-insensitive branch of resolveExistingAccountKey and the
+      // case-folded fallback in resolveAccountEntry both take the first matching key in map order,
       // so a last-wins lookup would refuse this valid promotion.
       expect(
         signalSetupAdapter.validateInput?.({ cfg, accountId: "work", input: externalNativeInput }),

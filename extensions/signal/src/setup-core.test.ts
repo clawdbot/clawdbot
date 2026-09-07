@@ -765,8 +765,8 @@ describe("signalSetupAdapter", () => {
       httpUrl: "http://signal-container:9090",
     };
 
-    // Adding a named account moves an existing root display name into accounts.default
-    // (src/channels/plugins/setup-helpers.ts:67-89), which would shadow the authored key.
+    // Adding a named account moves an existing root display name into accounts.default through
+    // migrateBaseNameToDefaultAccount, which would shadow the authored key.
     expect(
       signalSetupAdapter.validateInput?.({
         cfg: defaultAliasConfig({ name: "Primary" }),
@@ -805,14 +805,14 @@ describe("signalSetupAdapter", () => {
     );
   });
 
-  it("sends a named add to doctor when promotion would write the default alias", async () => {
+  it("sends a named add to doctor when promotion would land beside the default alias", async () => {
     const cfg = defaultAliasConfig();
     const doctorPointer =
       'Signal account "default" is stored under channels.signal.accounts."Default."; run openclaw doctor --fix to move it to its normalized key, then rerun setup.';
 
-    // Signal declares the case-insensitive rule, so the promotion writes accounts.default and
-    // leaves "Default." as authored (src/channels/plugins/setup-helpers.ts:344-352). The guard
-    // refuses because that canonical id has its settings under an unrepaired alias.
+    // The case-insensitive branch of resolveExistingAccountKey selects "default" for the promotion
+    // and leaves "Default." as authored. The guard refuses because that canonical id has its settings
+    // under an unrepaired alias.
     expect(
       signalSetupAdapter.validateInput?.({
         cfg,
@@ -852,9 +852,9 @@ describe("signalSetupAdapter", () => {
       },
     };
 
-    // Signal declares the case-insensitive rule, so the promotion writes accounts["work-phone"]
-    // and leaves "Work Phone" untouched (src/channels/plugins/setup-helpers.ts:344-352). The
-    // guard refuses because that canonical id has its settings under an unrepaired alias.
+    // The case-insensitive branch of resolveExistingAccountKey selects "work-phone" for the
+    // promotion and leaves "Work Phone" untouched. The guard refuses because that canonical id
+    // has its settings under an unrepaired alias.
     expect(
       signalSetupAdapter.validateInput?.({
         cfg,
@@ -979,8 +979,9 @@ describe("signalSetupAdapter", () => {
   });
 
   it("renames a canonical named account without touching the default alias beside it", () => {
-    // Guided naming lands accounts.work alone: the name-only adapter never migrates the root name
-    // (src/channels/plugins/setup-helpers.ts:140-147), so the unrepaired default key is not written.
+    // Guided naming lands accounts.work alone. The applyAccountName adapter built by
+    // createPatchedAccountSetupAdapter omits root-name migration when calling prepareScopedSetupConfig,
+    // so the unrepaired default key is not written.
     const cfg = defaultAliasConfig({
       name: "Root",
       accounts: {
@@ -1012,7 +1013,7 @@ describe("signalSetupAdapter", () => {
       },
     };
 
-    // A blank name writes nothing (src/channels/plugins/setup-helpers.ts:42-45), so there is no
+    // The blank-name return in applyAccountNameToChannelSection writes nothing, so there is no
     // account-map target to check and no doctor pointer to raise.
     expect(
       signalSetupAdapter.applyAccountName?.({ cfg, accountId: "work-phone", name: "  " }),

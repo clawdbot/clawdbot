@@ -324,7 +324,7 @@ function resolveExistingAccountKey(
   if (accountEntryLookup !== "case-insensitive") {
     // A promotion aimed at a canonical id lands on that key even when an alias is listed first, and
     // one aimed at an id that only an alias spells lands on that alias rather than seeding a
-    // canonical twin. Unlike resolveNormalizedAccountEntry (account-lookup.ts:27-51) the scan skips
+    // canonical twin. Unlike the fallback scan in resolveNormalizedAccountEntry, this scan skips
     // no blocked or canonical-less key, so accounts["!!!"] takes a promotion aimed at "default".
     if (Object.hasOwn(accounts, targetAccountId)) {
       return targetAccountId;
@@ -335,10 +335,9 @@ function resolveExistingAccountKey(
     );
   }
   const accountId = normalizeAccountId(targetAccountId);
-  // The channel's readers select entries with resolveAccountEntry (account-lookup.ts:8-23), the
-  // exact key, else the first key in map order whose lowercase is the id, so the promotion lands
-  // on that key and otherwise on the canonical id. A key that only normalizes to the id is left
-  // as authored for doctor.
+  // The channel's readers use resolveAccountEntry to select the exact key, else the first key in
+  // map order whose trimmed lowercase is the id, so the promotion lands on that key and otherwise
+  // on the canonical id. A key that only normalizes to the id is left as authored for doctor.
   return Object.hasOwn(accounts, accountId)
     ? accountId
     : (Object.keys(accounts).find((key) => normalizeLowercaseStringOrEmpty(key) === accountId) ??
