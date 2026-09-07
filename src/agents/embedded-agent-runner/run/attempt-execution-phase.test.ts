@@ -297,14 +297,17 @@ beforeEach(() => {
 
 describe("runEmbeddedAttemptExecutionPhase", () => {
   it.each([
-    { stopReason: "stop", cacheRead: 10_000 },
-    { stopReason: "stop", cacheRead: 0 },
-    { stopReason: "toolUse", cacheRead: 10_000 },
-    { stopReason: "error", cacheRead: 10_000 },
-    { stopReason: "aborted", cacheRead: 10_000 },
+    { stopReason: "stop", cacheRead: 10_000, completion: "event" },
+    { stopReason: "stop", cacheRead: 0, completion: "event" },
+    { stopReason: "toolUse", cacheRead: 10_000, completion: "event" },
+    { stopReason: "error", cacheRead: 10_000, completion: "event" },
+    { stopReason: "aborted", cacheRead: 10_000, completion: "event" },
+    { stopReason: "stop", cacheRead: 10_000, completion: "result" },
+    { stopReason: "stop", cacheRead: 0, completion: "result" },
+    { stopReason: "error", cacheRead: 10_000, completion: "result" },
   ] as const)(
-    "observes terminal $stopReason usage once across async-tool fragments (cacheRead=$cacheRead)",
-    async ({ stopReason, cacheRead }) => {
+    "observes terminal $stopReason usage once across async-tool fragments (cacheRead=$cacheRead, completion=$completion)",
+    async ({ stopReason, cacheRead, completion }) => {
       const fixture = await createFixture();
       const recordStage = vi.fn();
       const runtime = fixture.input.prepared.sessionRuntime;
@@ -312,7 +315,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         model: testModel,
         modelId: testModel.id,
         provider: testModel.provider,
-        sessionId: `async-fragment-${stopReason}-${cacheRead}`,
+        sessionId: `async-fragment-${stopReason}-${cacheRead}-${completion}`,
       });
       Object.assign(runtime, {
         anthropicPayloadLogger: undefined,
@@ -349,7 +352,9 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         toolCall,
         partial: { ...message, content: [toolCall], usage: makeZeroUsageSnapshot() },
       });
-      if (stopReason === "error" || stopReason === "aborted") {
+      if (completion === "result") {
+        response.end(message);
+      } else if (stopReason === "error" || stopReason === "aborted") {
         response.push({ type: "error", reason: stopReason, error: message });
       } else {
         response.push({ type: "done", reason: stopReason, message });
@@ -431,6 +436,9 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           },
         ],
       ]);
+      expect(runtime.contextGuards.recordCacheTouch).toHaveBeenCalledTimes(
+        stopReason === "error" || stopReason === "aborted" ? 0 : 1,
+      );
     },
   );
 
