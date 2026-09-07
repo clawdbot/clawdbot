@@ -757,24 +757,32 @@ describe("skill_workshop tool", () => {
 
   it.each(
     (["off", "propose", "auto"] as const).flatMap((mode) =>
-      (["auto", "pending"] as const).map((approvalPolicy) => ({ mode, approvalPolicy })),
+      ([undefined, "auto", "pending"] as const).map((approvalPolicy) => ({ mode, approvalPolicy })),
     ),
   )(
-    "uses foreground approval policy $approvalPolicy in autonomous mode $mode",
+    "preserves autonomous mode $mode with approval policy $approvalPolicy",
     async ({ mode, approvalPolicy }) => {
       const workspaceDir = await tempDirs.make("openclaw-skill-workshop-repair-");
       const runId = `repair-${mode}-${approvalPolicy}`;
       const skillName = "weather-planner";
-      const config = { skills: { workshop: { autonomous: { mode }, approvalPolicy } } };
+      const config = {
+        skills: {
+          workshop: { autonomous: { mode }, ...(approvalPolicy ? { approvalPolicy } : {}) },
+        },
+      };
+      const applies = mode === "auto" && approvalPolicy !== "pending";
       const tool = createSkillWorkshopTool({
         workspaceDir,
         config,
         origin: { agentId: "main", runId },
       });
       expect(tool.description).toContain(
-        approvalPolicy === "auto" ? "scanned and applied immediately" : "stays pending for review",
+        mode === "off"
+          ? "Foreground repair is disabled."
+          : applies
+            ? "scanned and applied immediately"
+            : "stays pending for review",
       );
-      expect(tool.description).not.toContain("Foreground repair is disabled.");
       expect(tool.description).not.toContain("Experience capture");
       const created = await tool.execute("repair-create", {
         action: "create",
@@ -797,16 +805,12 @@ describe("skill_workshop tool", () => {
       };
       const apply = vi.spyOn(workshopService, "applySkillProposal");
       try {
-        if (mode === "off") {
-          const noRunTool = createSkillWorkshopTool({ workspaceDir, config });
-          await noRunTool.execute("read", { action: "read", skill_name: skillName });
-          await expect(noRunTool.execute("patch", patchArgs)).rejects.toThrow(
-            "was not used in this run",
-          );
-        }
-        await expect(tool.execute("repair-no-receipt", patchArgs)).rejects.toThrow(
-          "was not used in this run",
-        );
+        const rejection =
+          mode === "off" ? "disabled by autonomous mode off" : "was not used in this run";
+        const noRunTool = createSkillWorkshopTool({ workspaceDir, config });
+        await noRunTool.execute("read", { action: "read", skill_name: skillName });
+        await expect(noRunTool.execute("patch", patchArgs)).rejects.toThrow(rejection);
+        await expect(tool.execute("repair-no-receipt", patchArgs)).rejects.toThrow(rejection);
         recordRunSkillUsage({
           runId,
           name: "another-skill",
@@ -814,9 +818,7 @@ describe("skill_workshop tool", () => {
           activation: "read",
           skillFile: workshopSkillPath("another-skill", "SKILL.md"),
         });
-        await expect(tool.execute("repair-unused", patchArgs)).rejects.toThrow(
-          "was not used in this run",
-        );
+        await expect(tool.execute("repair-unused", patchArgs)).rejects.toThrow(rejection);
         expect(apply).not.toHaveBeenCalled();
         await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(originalContent);
         recordRunSkillUsage({
@@ -826,16 +828,29 @@ describe("skill_workshop tool", () => {
           activation: "read",
           skillFile,
         });
+        if (mode === "off") {
+          await expect(tool.execute("repair-patch", patchArgs)).rejects.toThrow(rejection);
+          expect(apply).not.toHaveBeenCalled();
+          await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(originalContent);
+          await expect(
+            tool.execute("pending", { action: "list", status: "pending" }),
+          ).resolves.toMatchObject({ details: { proposals: [] } });
+          return;
+        }
         const patch = await tool.execute("repair-patch", patchArgs);
         expect(patch.details).toMatchObject({
-          status: approvalPolicy === "auto" ? "applied" : "pending",
+          status: applies ? "applied" : "pending",
           kind: "update",
         });
-        if (approvalPolicy === "pending") {
+        if (!applies) {
           expect(apply).not.toHaveBeenCalled();
           expect(patch.content[0]).toMatchObject({
             type: "text",
-            text: expect.stringContaining("approval policy pending requires operator review"),
+            text: expect.stringContaining(
+              approvalPolicy === "pending"
+                ? "approval policy pending requires operator review"
+                : "autonomous mode propose requires explicit apply",
+            ),
           });
           await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(originalContent);
           await expect(
