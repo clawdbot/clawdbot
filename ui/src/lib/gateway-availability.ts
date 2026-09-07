@@ -6,7 +6,7 @@ import {
 import { isRetryableGatewayStartupUnavailableError } from "../../../packages/gateway-protocol/src/startup-unavailable.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 
-export function isGatewayUnavailableError(error: unknown): boolean {
+function isGatewayUnavailableError(error: unknown): boolean {
   return (
     (error instanceof GatewayProtocolRequestError &&
       (isGatewaySuspendUnavailableError(error) || isGatewayRestartUnavailableError(error))) ||
@@ -21,5 +21,20 @@ export function isGatewayAvailable(
     snapshot.phase === "connected" &&
     snapshot.restartPending !== true &&
     (snapshot.suspensionPhase === undefined || snapshot.suspensionPhase === "accepting")
+  );
+}
+
+export function isAwaitingGatewayFailure(
+  error: unknown,
+  snapshot:
+    | Pick<ApplicationGatewaySnapshot, "phase" | "restartPending" | "suspensionPhase">
+    | null
+    | undefined,
+): boolean {
+  return (
+    isGatewayUnavailableError(error) ||
+    (!(error instanceof GatewayProtocolRequestError) &&
+      snapshot != null &&
+      !isGatewayAvailable(snapshot))
   );
 }

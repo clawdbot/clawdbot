@@ -1,6 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { isGatewayAvailable, isGatewayUnavailableError } from "../gateway-availability.ts";
+import { isAwaitingGatewayFailure, isGatewayAvailable } from "../gateway-availability.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import {
   appendSessionResults,
@@ -249,8 +249,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           if (!isCurrent()) {
             return;
           }
-          const awaitingGateway =
-            isGatewayUnavailableError(error) || !isGatewayAvailable(host.snapshot());
+          const awaitingGateway = isAwaitingGatewayFailure(error, host.snapshot());
           publishManagedList(entry, {
             ...entry.snapshot,
             loading: false,

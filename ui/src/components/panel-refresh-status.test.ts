@@ -68,22 +68,38 @@ describe("panel refresh failures", () => {
     expect(status).toMatchObject({ error: null, stale: true, awaitingGateway: true });
   });
 
-  it.each([undefined, "accepting" as const])(
-    "shows hard failures and retained-data status without a Retry button (%s)",
-    (suspensionPhase) => {
-      const error = new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Catalog service failed",
-      });
+  it.each([
+    {
+      state: {},
+      code: "UNAVAILABLE",
+      message: "Catalog service failed",
+    },
+    {
+      state: { suspensionPhase: "accepting" as const },
+      code: "UNAVAILABLE",
+      message: "Catalog service failed",
+    },
+    {
+      state: { suspensionPhase: "draining" as const },
+      code: "INVALID_REQUEST",
+      message: 'unknown agent id "main"',
+    },
+    {
+      state: { restartPending: true },
+      code: "INVALID_REQUEST",
+      message: 'unknown agent id "main"',
+    },
+  ])(
+    "shows hard failures and retained-data status without a Retry button ($state)",
+    ({ state, code, message }) => {
+      const error = new GatewayRequestError({ code, message });
       const status = failPanelRefresh(completePanelRefresh(), error, {
         ...connected,
-        suspensionPhase,
+        ...state,
       });
       const container = document.createElement("div");
       render(renderPanelRefreshStatus({ status }), container);
-      expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-        "Catalog service failed",
-      );
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(message);
       expect(container.textContent).toContain("Showing stale data");
       expect(container.querySelector("button")).toBeNull();
       expect(status.awaitingGateway).toBe(false);

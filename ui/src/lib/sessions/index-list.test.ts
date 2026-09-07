@@ -643,13 +643,15 @@ describe("session list requests", () => {
   });
 
   it.each([
-    [true, false],
-    [false, false],
-    [true, true],
-    [false, true],
+    [true, "before"],
+    [false, "before"],
+    [true, "during"],
+    [false, "during"],
+    [true, "after"],
+    [false, "after"],
   ])(
-    "recovers a failed managed list once when same-client admission reopens (lifecycle error: %s, late failure: %s)",
-    async (lifecycle, lateFailure) => {
+    "recovers a failed managed list once when same-client admission reopens (lifecycle error: %s, failure: %s drain)",
+    async (lifecycle, failureTiming) => {
       vi.useFakeTimers();
       let fail = false;
       let label = "original";
@@ -673,7 +675,10 @@ describe("session list requests", () => {
         await sessions.refreshList(query);
         fail = true;
         const refresh = sessions.refreshList({ ...query, force: true });
-        if (!lateFailure) {
+        if (failureTiming === "during") {
+          publish({ suspensionPhase: "draining" });
+        }
+        if (failureTiming !== "after") {
           pending.reject(error);
           await refresh;
           expect(sessions.listSnapshot(query).error).toBe(
@@ -682,13 +687,15 @@ describe("session list requests", () => {
         }
         expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:original");
 
-        publish({ suspensionPhase: "draining" });
+        if (failureTiming !== "during") {
+          publish({ suspensionPhase: "draining" });
+        }
         fail = false;
         label = "recovered";
         publish({ suspensionPhase: "accepting" });
         publish({ suspensionPhase: "accepting" });
         await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
-        if (lateFailure) {
+        if (failureTiming === "after") {
           expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(2);
           pending.reject(error);
           await refresh;

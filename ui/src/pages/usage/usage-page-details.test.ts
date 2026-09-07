@@ -857,39 +857,47 @@ describe("UsagePage detail requests", () => {
     });
   });
 
-  it("clears retained details when read authorization is rejected", async () => {
-    const authorizationError = new GatewayRequestError({
-      code: "INVALID_REQUEST",
-      message: "missing scope: operator.read",
-    });
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ points: [{ timestamp: 1 }] })
-      .mockResolvedValueOnce({
-        logs: [{ timestamp: 1, role: "user", content: "sensitive" }],
-      })
-      .mockRejectedValueOnce(authorizationError)
-      .mockRejectedValueOnce(authorizationError);
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+  it.each(["accepting", "draining"] as const)(
+    "clears retained details and preserves read authorization errors while %s",
+    async (suspensionPhase) => {
+      const pending = deferred<never>();
+      const authorizationError = new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "missing scope: operator.read",
+      });
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ points: [{ timestamp: 1 }] })
+        .mockResolvedValueOnce({
+          logs: [{ timestamp: 1, role: "user", content: "sensitive" }],
+        })
+        .mockReturnValue(pending.promise);
+      const client = { request } as unknown as GatewayBrowserClient;
+      const context = contextWithClient(client);
+      const page = await createPage(client, false, context);
 
-    await page.details.timeSeries.load("agent:main:detail");
-    await page.details.sessionLogs.load("agent:main:detail");
-    await page.details.timeSeries.load("agent:main:detail");
-    await page.details.sessionLogs.load("agent:main:detail");
+      await page.details.timeSeries.load("agent:main:detail");
+      await page.details.sessionLogs.load("agent:main:detail");
+      const timeline = page.details.timeSeries.load("agent:main:detail");
+      const conversation = page.details.sessionLogs.load("agent:main:detail");
+      context.setGatewaySnapshot({ suspensionPhase });
+      pending.reject(authorizationError);
+      await Promise.all([timeline, conversation]);
 
-    expect(page.details.timeSeries.data).toBeNull();
-    expect(page.details.timeSeries.status).toEqual({
-      error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
-      hasLoaded: false,
-      stale: false,
-      awaitingGateway: false,
-    });
-    expect(page.details.sessionLogs.data).toBeNull();
-    expect(page.details.sessionLogs.status).toEqual({
-      error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
-      hasLoaded: false,
-      stale: false,
-      awaitingGateway: false,
-    });
-  });
+      expect(page.details.timeSeries.data).toBeNull();
+      expect(page.details.timeSeries.status).toEqual({
+        error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
+        hasLoaded: false,
+        stale: false,
+        awaitingGateway: false,
+      });
+      expect(page.details.sessionLogs.data).toBeNull();
+      expect(page.details.sessionLogs.status).toEqual({
+        error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
+        hasLoaded: false,
+        stale: false,
+        awaitingGateway: false,
+      });
+    },
+  );
 });
