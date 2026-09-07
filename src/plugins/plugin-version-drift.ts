@@ -33,6 +33,11 @@ export type PluginVersionDriftReport = {
   drifts: PluginVersionDriftEntry[];
 };
 
+// Doctor/status maintenance lookups run in the background, not on an interactive
+// prompt, so they can afford to wait out a transient registry stall instead of
+// withholding a repair target the plugin manager itself would resolve seconds later.
+const PINNED_TARGET_LOOKUP_TIMEOUT_MS = 15_000;
+
 export type PluginVersionRestartReadiness =
   | {
       status: "resolved";
@@ -90,9 +95,16 @@ async function resolveEntryTarget(
   const requestedSpec = `${packageName}@${requestedTarget}`;
   // The registry helper owns request deadlines and converts lookup failures to data.
   // Only its exact requested version can authorize a pinned repair command.
+  // This maintenance path (Doctor / `status --deep`) tolerates a longer registry
+  // deadline than the shared 3500ms interactive default, since a transient stall
+  // here should not withhold a valid repair target.
   const result =
     parseRegistryNpmSpec(requestedSpec)?.selectorKind === "exact-version"
-      ? await fetchNpmPackageTargetStatus({ packageName, target: requestedTarget })
+      ? await fetchNpmPackageTargetStatus({
+          packageName,
+          target: requestedTarget,
+          timeoutMs: PINNED_TARGET_LOOKUP_TIMEOUT_MS,
+        })
       : { version: null, error: "gateway release cohort is not an exact npm version" };
   const targetResolution: PluginVersionDriftTargetResolution =
     result.version === requestedTarget

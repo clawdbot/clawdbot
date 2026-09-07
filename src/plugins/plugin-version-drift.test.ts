@@ -365,7 +365,12 @@ describe("resolvePluginVersionDriftTargets", () => {
     expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
       packageName: "@openclaw/brave-plugin",
       target: "2026.7.1",
+      timeoutMs: expect.any(Number),
     });
+    // The maintenance lookup must tolerate a transient registry stall well beyond
+    // the shared 3500ms interactive default, or a valid repair target gets dropped.
+    const call = vi.mocked(fetchNpmPackageTargetStatus).mock.calls[0]?.[0];
+    expect(call?.timeoutMs).toBeGreaterThan(3500);
     expect(
       resolvePluginVersionDriftUpdateCommand(
         expectDefined(report.drifts[0], "detected plugin drift"),

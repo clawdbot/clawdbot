@@ -1812,6 +1812,7 @@ describe("doctor health contributions", () => {
     expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
       packageName: "@openclaw/codex",
       target: "2026.6.1",
+      timeoutMs: 15_000,
     });
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
       pluginVersionReadiness: {
