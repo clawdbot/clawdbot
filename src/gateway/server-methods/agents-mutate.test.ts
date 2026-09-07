@@ -2912,6 +2912,102 @@ describe("agents.delete", () => {
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
+  // Root.stat types the file id as a double, so a large NTFS id arrives rounded.
+  // These two cover the recovery and the collision it has to keep rejecting.
+  function mockNtfsCleanupStats(present: Map<string, { dev: bigint; ino: bigint }>) {
+    mocks.fsLstat.mockImplementation(async (pathname: unknown) => {
+      const stat = present.get(String(pathname));
+      if (!stat) {
+        throw createEnoentError();
+      }
+      return {
+        dev: stat.dev,
+        ino: stat.ino,
+        isFile: () => false,
+        isSymbolicLink: () => false,
+        nlink: 1,
+      } as unknown as import("node:fs").Stats;
+    });
+    agentsTesting.setDepsForTests({
+      root: makeRootForTest({
+        stat: async (params: Record<string, unknown>) => {
+          const { rootDir, relativePath } = params as { rootDir: string; relativePath: string };
+          const stat = present.get(path.join(rootDir, relativePath));
+          if (!stat) {
+            throw createEnoentError();
+          }
+          return {
+            dev: Number(stat.dev),
+            ino: Number(stat.ino),
+            isFile: false,
+            isSymbolicLink: false,
+            mtimeMs: 0,
+            nlink: 1,
+            size: 0,
+          };
+        },
+      }),
+    });
+  }
+
+  it("deletes agent files whose NTFS ids exceed Number.MAX_SAFE_INTEGER", async () => {
+    const agentDir = "/agents/test-agent";
+    const ntfsIno = 1152921504606847267n;
+    const present = new Map<string, { dev: bigint; ino: bigint }>([
+      [agentDir, { dev: 1n, ino: ntfsIno }],
+      ["/workspace/test-agent", { dev: 1n, ino: ntfsIno + 1n }],
+      ["/transcripts/test-agent", { dev: 1n, ino: ntfsIno + 2n }],
+    ]);
+    mockNtfsCleanupStats(present);
+    agentsTesting.setDepsForTests({
+      exactStat: async (target: string) => {
+        const stat = present.get(target);
+        if (!stat) {
+          throw createEnoentError();
+        }
+        return { dev: stat.dev, ino: stat.ino } as unknown as import("node:fs").BigIntStats;
+      },
+    });
+
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await promise;
+
+    expectRespondOk(respond, { failed: [] });
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(agentDir);
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith("/workspace/test-agent");
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith("/transcripts/test-agent");
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+  });
+
+  it("does not trash an NTFS replacement whose id only matches once rounded", async () => {
+    const agentDir = "/agents/test-agent";
+    const prepared = 1152921504606847267n;
+    // Distinct file, same double: both round to 1152921504606847232.
+    const replacement = 1152921504606847268n;
+    expect(Number(prepared)).toBe(Number(replacement));
+    const present = new Map<string, { dev: bigint; ino: bigint }>([
+      [agentDir, { dev: 1n, ino: prepared }],
+    ]);
+    mockNtfsCleanupStats(present);
+    agentsTesting.setDepsForTests({
+      // Preparation reads the exact id through lstat; only the delete-time
+      // recheck goes through exactStat, so this is the swapped replacement.
+      exactStat: async (target: string) => {
+        const stat = present.get(target);
+        if (!stat) {
+          throw createEnoentError();
+        }
+        return { dev: stat.dev, ino: replacement } as unknown as import("node:fs").BigIntStats;
+      },
+    });
+
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await promise;
+
+    expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(agentDir);
+    void respond;
+  });
+
   it("deletes workspace state after removing the last owner's workspace", async () => {
     const { respond, promise } = makeCall("agents.delete", {
       agentId: "test-agent",

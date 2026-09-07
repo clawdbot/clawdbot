@@ -52,8 +52,17 @@ export type AgentDeletionJournalCleanupPath = {
   parentPath: string;
   kind: "target" | "symlink";
   sourcePaths: string[];
+  /**
+   * Rounded ids, kept numeric so a downgrade mid-deletion still parses this
+   * journal. v2026.8.2 and earlier accept only `number | null` here, and their
+   * own recheck refuses to act on an id past the safe integer range, so they
+   * fail closed instead of trusting a rounded match.
+   */
   dev: number | null;
   ino: number | null;
+  /** Exact decimal ids. NTFS file ids do not survive a double. */
+  devExact?: string | null;
+  inoExact?: string | null;
   coversDescendants: boolean;
   done: boolean;
   note?: string;
@@ -318,6 +327,14 @@ function parseDatabasePaths(value: string): string[] {
   return parsed;
 }
 
+function isJournalPathIdentityField(value: unknown): value is number | null {
+  return value === null || typeof value === "number";
+}
+
+function isJournalExactIdentityField(value: unknown): value is string | null | undefined {
+  return value === null || value === undefined || typeof value === "string";
+}
+
 function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
   const parsed: unknown = JSON.parse(value);
   if (
@@ -331,10 +348,12 @@ function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
         typeof (entry as { parentPath?: unknown }).parentPath === "string" &&
         ((entry as { kind?: unknown }).kind === "target" ||
           (entry as { kind?: unknown }).kind === "symlink") &&
-        ((entry as { dev?: unknown }).dev === null ||
-          typeof (entry as { dev?: unknown }).dev === "number") &&
-        ((entry as { ino?: unknown }).ino === null ||
-          typeof (entry as { ino?: unknown }).ino === "number") &&
+        isJournalPathIdentityField((entry as { dev?: unknown }).dev) &&
+        isJournalPathIdentityField((entry as { ino?: unknown }).ino) &&
+        // SAFETY: guarded as a non-null object above; the field stays unknown until validated.
+        isJournalExactIdentityField((entry as { devExact?: unknown }).devExact) &&
+        // SAFETY: guarded as a non-null object above; the field stays unknown until validated.
+        isJournalExactIdentityField((entry as { inoExact?: unknown }).inoExact) &&
         typeof (entry as { coversDescendants?: unknown }).coversDescendants === "boolean" &&
         typeof (entry as { done?: unknown }).done === "boolean" &&
         ((entry as { note?: unknown }).note === undefined ||

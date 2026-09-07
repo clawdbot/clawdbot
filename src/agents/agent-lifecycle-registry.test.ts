@@ -178,6 +178,62 @@ describe("agent lifecycle registry", () => {
     recovery.rollback();
   });
 
+  it("round-trips NTFS file ids that exceed Number.MAX_SAFE_INTEGER", () => {
+    const options = createOptions();
+    const first = beginAgentDeletion(createEntry("ntfs-inode-agent"), options);
+    // 0x1000000000000123, which no double can represent.
+    const exactIno = "1152921504606847267";
+    const cleanupPaths = [
+      {
+        path: "/real/workspace",
+        canonicalPath: "/real/workspace",
+        parentPath: "/real",
+        kind: "target" as const,
+        sourcePaths: ["/linked/workspace"],
+        dev: 3,
+        ino: Number(exactIno),
+        devExact: "3",
+        inoExact: exactIno,
+        coversDescendants: true,
+        done: false,
+      },
+    ];
+    first.fenceCleanupPaths(cleanupPaths);
+
+    const recovery = beginAgentDeletion(createEntry("ntfs-inode-agent"), options);
+
+    expect(recovery.entry.cleanupPaths).toEqual(cleanupPaths);
+    const persisted = readAgentDeletionJournal("ntfs-inode-agent", options)?.cleanupPaths;
+    expect(persisted).toEqual(cleanupPaths);
+    expect(persisted?.[0]?.inoExact).toBe(exactIno);
+    expect(String(persisted?.[0]?.ino)).not.toBe(exactIno);
+    recovery.rollback();
+  });
+
+  it("keeps a legacy numeric-only journal readable", () => {
+    const options = createOptions();
+    const first = beginAgentDeletion(createEntry("legacy-inode-agent"), options);
+    const cleanupPaths = [
+      {
+        path: "/real/workspace",
+        canonicalPath: "/real/workspace",
+        parentPath: "/real",
+        kind: "target" as const,
+        sourcePaths: ["/linked/workspace"],
+        dev: 1,
+        ino: 42,
+        coversDescendants: true,
+        done: false,
+      },
+    ];
+    first.fenceCleanupPaths(cleanupPaths);
+
+    const recovery = beginAgentDeletion(createEntry("legacy-inode-agent"), options);
+
+    expect(recovery.entry.cleanupPaths).toEqual(cleanupPaths);
+    recovery.rollback();
+  });
+
   it("does not let a stale operation clear a journal claimed by recovery", () => {
     const options = createOptions();
     const first = beginAgentDeletion(createEntry("claimed-agent"), options);
