@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 // End-to-end auth-profile rotation coverage for embedded runner retries.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { redactIdentifier } from "../logging/redact-identifier.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   resolveInlineProviderApiKeyUsageId,
