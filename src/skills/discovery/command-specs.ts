@@ -3,13 +3,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveSkillTelemetrySource } from "../loading/source.js";
 import { filterWorkspaceSkills, loadVisibleSkills } from "../loading/workspace-skill-loader.js";
 import type {
   SkillEligibilityContext,
@@ -18,6 +16,7 @@ import type {
   SkillSnapshot,
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import { resolveSkillCommandUsagePath } from "./command-identity.js";
 import { sanitizeSkillCommandName, SKILL_COMMAND_MAX_LENGTH } from "./command-name.js";
 import { filterUserInvocableSkillEntries, isSkillPromptVisible } from "./skill-index.js";
 
@@ -110,6 +109,7 @@ export function buildWorkspaceSkillCommandSpecs(
 
   const specs: SkillCommandSpec[] = [];
   for (const entry of userInvocable) {
+    const identity = resolveSkillCommandUsagePath(entry);
     const rawName = entry.skill.name;
     const base = sanitizeSkillCommandName(rawName);
     if (base !== rawName) {
@@ -175,11 +175,11 @@ export function buildWorkspaceSkillCommandSpecs(
     specs.push({
       name: unique,
       displayName: entry.skill.displayName ?? rawName,
-      skillFile: canonicalizePath(entry.skill.filePath),
-      skillName: rawName,
+      skillFile: identity.readPath,
+      skillName: identity.skillName,
       description,
       modelVisible: isSkillPromptVisible(entry),
-      skillSource: resolveSkillTelemetrySource(entry.skill),
+      skillSource: identity.skillSource,
       ...(dispatch ? { dispatch } : {}),
     });
   }

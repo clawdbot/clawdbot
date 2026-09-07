@@ -24,6 +24,7 @@ import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
   resolveAgentHarnessSessionContextError,
 } from "../../sessions/agent-harness-session-key.js";
+import type { ExplicitSkillSelection } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
@@ -373,12 +374,14 @@ export async function prepareAgentCommandExecution(
     });
     const runId = opts.runId?.trim() || sessionId;
     let promptMessage = message;
+    let explicitSkillSelections: ExplicitSkillSelection[] | undefined;
     if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
       const {
         expandExplicitSkillReferences,
         hasSkillReferenceCandidate,
         listSkillCommandsForWorkspace,
         resolveEffectiveAgentSkillFilter,
+        skillCommandsToExplicitSelections,
       } = await import("../../skills/discovery/chat-commands.runtime.js");
       const hasExplicitSkillCandidate =
         message.trimStart().startsWith("/") || hasSkillReferenceCandidate(message);
@@ -405,6 +408,8 @@ export async function prepareAgentCommandExecution(
         if (expansion.error) {
           throw new Error(expansion.error);
         }
+        const selections = skillCommandsToExplicitSelections(expansion.skills);
+        explicitSkillSelections = selections.length > 0 ? selections : undefined;
         promptMessage = expansion.body;
       }
     }
@@ -420,6 +425,7 @@ export async function prepareAgentCommandExecution(
       opts: commandOpts,
       body,
       transcriptBody,
+      explicitSkillSelections,
       cfg,
       configuredThinkingCatalog,
       normalizedSpawned,

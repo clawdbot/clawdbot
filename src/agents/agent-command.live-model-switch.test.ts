@@ -431,6 +431,7 @@ vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   listSkillCommandsForWorkspace: (params: unknown) =>
     state.listSkillCommandsForWorkspaceMock(params),
   resolveEffectiveAgentSkillFilter: () => undefined,
+  skillCommandsToExplicitSelections: () => [],
 }));
 
 vi.mock("../config/runtime-snapshot.js", () => ({

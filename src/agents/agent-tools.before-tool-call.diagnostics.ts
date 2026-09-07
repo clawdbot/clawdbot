@@ -35,6 +35,7 @@ import {
   resolveSkillTelemetrySource,
   resolveSkillTelemetrySourceValue,
 } from "../skills/loading/source.js";
+import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
@@ -55,6 +56,7 @@ import {
 } from "./tool-result-error.js";
 import { getToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { canonicalizePath } from "./utils/paths.js";
 
 export const beforeToolCallLog = createSubsystemLogger("agents/tools");
@@ -438,6 +440,17 @@ export function emitSkillUsedDiagnostic(params: {
     },
     params.match.skillFile ? { skillUsage: { skillFile: params.match.skillFile } } : undefined,
   );
+}
+
+export function recordSkillUsageMatch(params: { ctx?: HookContext; match: SkillUsageMatch }): void {
+  recordRunSkillUsage({
+    runId: params.ctx?.runId,
+    operationalRunInstance: getGatewayToolCallerIdentity()?.operationalRunInstance,
+    name: params.match.skillName,
+    source: params.match.skillSource,
+    activation: params.match.activation,
+    ...(params.match.skillFile ? { skillFile: params.match.skillFile } : {}),
+  });
 }
 
 export function emitToolBlockedSecurityEvent(params: {

@@ -145,6 +145,8 @@ export type SkillSnapshot = {
   /** Effective node-exec eligibility used to select connected node-hosted skills. */
   nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
   resolvedSkills?: Skill[];
+  /** Runtime-only identities for every eligible user-invocable skill command. */
+  skillCommandUsagePaths?: SkillUsagePath[];
   /** Present only when a session merges skills from distinct agent and execution roots. */
   skillRoots?: {
     agentWorkspaceDir: string;

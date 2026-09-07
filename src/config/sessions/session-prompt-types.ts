@@ -1,4 +1,5 @@
 import type { Skill } from "../../skills/loading/skill-contract.js";
+import type { SkillUsagePath } from "../../skills/types.js";
 
 export type SessionSkillPromptRef = {
   version: 1;
@@ -25,5 +26,7 @@ export type SessionSkillSnapshot = {
    * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
    */
   resolvedSkills?: Skill[];
+  /** Runtime-only exact identities for eligible user-invocable skill commands. */
+  skillCommandUsagePaths?: SkillUsagePath[];
   version?: number;
 };

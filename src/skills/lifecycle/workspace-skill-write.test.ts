@@ -19,6 +19,45 @@ afterEach(async () => {
 });
 
 describe("workspace skill mutations", () => {
+  it("revalidates run authority immediately before the atomic file write", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workspace-skill-revoked-write-"),
+    );
+    const skillDir = path.join(workspaceDir, "skills", "revoked-write");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const supportFile = path.join(skillDir, "references", "proof.md");
+    const mutation = await prepareWorkspaceSkillMutation({
+      skillsRoot: workspaceDir,
+      skillDir,
+      skillFile,
+      content: "# Revoked Write\n",
+      supportFiles: [{ path: "references/proof.md", content: "must not be written\n" }],
+      mode: "create",
+    });
+    let authorized = true;
+    let checks = 0;
+
+    await expect(
+      applyWorkspaceSkillMutation(mutation, {
+        assertMutationAuthorized: () => {
+          checks += 1;
+          if (checks === 1) {
+            queueMicrotask(() => {
+              authorized = false;
+            });
+          }
+          if (!authorized) {
+            throw new Error("run authority closed before write");
+          }
+        },
+      }),
+    ).rejects.toThrow("run authority closed before write");
+
+    expect(checks).toBe(2);
+    await expect(fs.access(supportFile)).rejects.toThrow();
+    await expect(fs.access(skillFile)).rejects.toThrow();
+  });
+
   it("removes support files when the activating SKILL.md write fails", async () => {
     const workspaceDir = await fs.realpath(
       await tempDirs.make("openclaw-workspace-skill-write-failure-"),
