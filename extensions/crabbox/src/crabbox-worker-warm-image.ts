@@ -31,6 +31,7 @@ import {
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 type CheckpointContext = {
+  assertAuthorized?: () => void;
   binary: string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -95,6 +96,7 @@ export function createCrabboxWarmImageManager(dependencies: {
   const warned = new Set<string>();
   const openStore = () => (store ??= openCrabboxWarmImageStore());
   const assertCurrent = (context: CheckpointContext) => {
+    context.assertAuthorized?.();
     context.assertCurrent?.();
     context.signal?.throwIfAborted();
   };
@@ -126,6 +128,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       ...(context.signal ? { signal: context.signal } : {}),
       ...(input === undefined ? {} : { input }),
     });
+    assertCurrent(context);
     if (result.termination !== "exit" || result.code !== 0) {
       throw crabboxCommandError(action === "scrub" ? action : `checkpoint ${action}`, result);
     }
@@ -719,6 +722,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         timeoutMs: context.timeoutMs(),
         ...(context.signal ? { signal: context.signal } : {}),
       });
+      assertCurrent(context);
       if (result.termination !== "exit" || result.code !== 0) {
         throw crabboxCommandError("warmup", result);
       }

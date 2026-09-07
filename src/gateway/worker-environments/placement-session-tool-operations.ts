@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
@@ -23,6 +24,76 @@ type WorkerTurnToolStateIdentity = {
   sessionId: string;
   claimId: string;
 };
+
+type InterruptedDelegatedChildPlacement = {
+  sessionId: string;
+  sessionKey: string;
+  environmentId: string;
+};
+
+export type WorkerDelegatedSpawnOperation = {
+  sourceSessionId: string;
+  sourceClaimId: string;
+  toolCallId: string;
+  requestDigest: string;
+};
+
+function parseInterruptedDelegatedChildPlacement(
+  value: string,
+): InterruptedDelegatedChildPlacement {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    Object.keys(parsed).length !== 5 ||
+    parsed.version !== 1 ||
+    parsed.kind !== "child-placement" ||
+    typeof parsed.sessionId !== "string" ||
+    !parsed.sessionId ||
+    typeof parsed.sessionKey !== "string" ||
+    !parsed.sessionKey ||
+    typeof parsed.environmentId !== "string" ||
+    !parsed.environmentId
+  ) {
+    throw new Error("Worker child placement recovery identity is invalid");
+  }
+  return {
+    sessionId: parsed.sessionId,
+    sessionKey: parsed.sessionKey,
+    environmentId: parsed.environmentId,
+  };
+}
+
+export function bindWorkerSessionToolOperationPlacement(params: {
+  db: DatabaseSync;
+  instanceId: string;
+  updatedAtMs: number;
+  operation: WorkerDelegatedSpawnOperation;
+  placement: InterruptedDelegatedChildPlacement;
+}): void {
+  const identityJson = JSON.stringify({ version: 1, kind: "child-placement", ...params.placement });
+  const result = executeSqliteQuerySync(
+    params.db,
+    query(params.db)
+      .updateTable("worker_session_tool_operations")
+      .set({ result_json: identityJson, updated_at_ms: params.updatedAtMs })
+      .where("source_session_id", "=", params.operation.sourceSessionId)
+      .where("source_claim_id", "=", params.operation.sourceClaimId)
+      .where("tool_call_id", "=", params.operation.toolCallId)
+      .where("request_digest", "=", params.operation.requestDigest)
+      .where("gateway_instance_id", "=", params.instanceId)
+      .where("status", "=", "running")
+      .where("child_session_key", "=", params.placement.sessionKey)
+      .where((expression) =>
+        expression.or([
+          expression("result_json", "is", null),
+          expression("result_json", "=", identityJson),
+        ]),
+      ),
+  );
+  if (result.numAffectedRows !== 1n) {
+    throw new Error("Worker child placement operation changed before provisioning");
+  }
+}
 
 type WorkerSessionToolOperationWaiter = (error?: Error) => void;
 
@@ -493,16 +564,42 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
       return abandoned;
     },
 
-    recoverWorkerSessionToolOperationsAfterRestart(): number {
+    recoverWorkerSessionToolOperationsAfterRestart(): {
+      count: number;
+      interruptedChildPlacements: InterruptedDelegatedChildPlacement[];
+    } {
       return write((db) => {
+        const operations = executeSqliteQuerySync(
+          db,
+          query(db)
+            .selectFrom("worker_session_tool_operations")
+            .select("result_json")
+            .where("tool_name", "=", "sessions_spawn")
+            // Unknown is the durable crash fence. Keep returning its child until the
+            // owning turn lifecycle deletes the operation, including across restarts.
+            .where("status", "in", ["running", "unknown"]),
+        ).rows;
+        const interruptedByIdentity = new Map<string, InterruptedDelegatedChildPlacement>();
+        const timestamp = now();
+        for (const operation of operations) {
+          if (operation.result_json) {
+            interruptedByIdentity.set(
+              operation.result_json,
+              parseInterruptedDelegatedChildPlacement(operation.result_json),
+            );
+          }
+        }
         const result = executeSqliteQuerySync(
           db,
           query(db)
             .updateTable("worker_session_tool_operations")
-            .set({ status: "unknown", updated_at_ms: now() })
+            .set({ status: "unknown", updated_at_ms: timestamp })
             .where("status", "=", "running"),
         );
-        return Number(result.numAffectedRows);
+        return {
+          count: Number(result.numAffectedRows),
+          interruptedChildPlacements: [...interruptedByIdentity.values()],
+        };
       });
     },
   };

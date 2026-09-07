@@ -1,6 +1,6 @@
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import type { WorkerPlacementDispatchService } from "./placement-dispatch-service.types.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./placement-dispatch-startup.js";
-import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerEnvironmentService } from "./service.js";
 

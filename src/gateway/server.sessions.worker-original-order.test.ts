@@ -309,13 +309,18 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
   await runGit(localWorkspace, "commit", "-m", "initialize managed workspace");
   const runner = new OriginalOrderSshRunner(remoteHome);
   const events = runner.events;
+  const provision: WorkerProvider["provision"] = async () => {
+    events.push("provider:provision");
+    return { leaseId: "lease-original-order", ssh: SSH_ENDPOINT };
+  };
   const provider: WorkerProvider = {
     id: "ordered-fallback",
     resolveAllocation: async () => ({ leaseId: "lease-original-order", sharedHost: false }),
     supportedExecutionModes: ["remote-exec"],
-    provision: async () => {
-      events.push("provider:provision");
-      return { leaseId: "lease-original-order", ssh: SSH_ENDPOINT };
+    provision,
+    provisionDelegated: async (profile, operationId, options) => {
+      options.assertAuthorized();
+      return await provision(profile, operationId, options);
     },
     inspect: async () => ({ status: "active" }),
     destroy: async () => {
@@ -427,13 +432,17 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
   });
 
-  const active = await dispatch.dispatch({
-    sessionId: SESSION_ID,
-    sessionKey: SESSION_KEY,
-    agentId: "main",
-    profileId: PROFILE_ID,
-    executionMode: "remote-exec",
-  });
+  const active = await dispatch.dispatch(
+    {
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      profileId: PROFILE_ID,
+      executionMode: "remote-exec",
+    },
+    undefined,
+    () => {},
+  );
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
   await expect(fs.stat(runner.bootstrapUploadPath)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(fs.readFile(runner.bootstrapReceiptPath, "utf8")).resolves.toBe(

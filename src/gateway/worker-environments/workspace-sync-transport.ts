@@ -16,19 +16,18 @@ export function createWorkerWorkspaceRsyncTransport(options: WorkerWorkspaceRsyn
   const runRsync = async (
     prepared: PreparedWorkerSsh,
     argv: (rsyncSsh: string) => string[],
+    assertCurrent?: () => void,
   ): Promise<SpawnResult> =>
-    await runWorkerSshCandidates(
-      prepared,
-      options.timeoutMs,
-      async (port, remainingTimeoutMs) =>
-        await options.runTask(
-          argv(workerWorkspaceRsyncRemoteCommand(prepared, port)),
-          workerSshCommandOptions({
-            timeoutMs: remainingTimeoutMs,
-            signal: options.ownerSignal,
-          }),
-        ),
-    );
+    await runWorkerSshCandidates(prepared, options.timeoutMs, async (port, remainingTimeoutMs) => {
+      assertCurrent?.();
+      return await options.runTask(
+        argv(workerWorkspaceRsyncRemoteCommand(prepared, port)),
+        workerSshCommandOptions({
+          timeoutMs: remainingTimeoutMs,
+          signal: options.ownerSignal,
+        }),
+      );
+    });
 
   const runBoundedInboundRsync = async (params: {
     prepared: PreparedWorkerSsh;

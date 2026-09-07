@@ -172,7 +172,27 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   // The Gateway state-directory lock proves that executors from the previous
   // process are gone. Resolve their ambiguous effects before placement
   // reconciliation attempts to release the owning worker claims.
-  params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
+  const { interruptedChildPlacements } =
+    params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
+  // Parent cleanup can delete the spawn record. Transfer its teardown obligation to the
+  // exact environment before any await, so another restart cannot resume the orphan child.
+  for (const child of interruptedChildPlacements) {
+    const placement = params.startup.placementStore.get(child.sessionId);
+    if (
+      placement?.sessionKey !== child.sessionKey ||
+      placement.environmentId !== child.environmentId
+    ) {
+      continue;
+    }
+    const environment = params.startup.store.get(child.environmentId);
+    if (environment) {
+      params.startup.store.requestDestroy({
+        environmentId: environment.environmentId,
+        state: environment.state,
+        lastError: "Delegated child placement lost its initiating worker turn during restart",
+      });
+    }
+  }
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {
@@ -435,20 +455,25 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     placementStore: placementGate,
     executeSessionTool: (request) => executeSessionTool(request),
     liveEvents: workerLiveEvents,
-    resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
+    resolveSshIdentity: async ({ provider, leaseId, profile, keyRef, assertAuthorized }) => {
+      assertAuthorized();
       const workerRuntime = await loadWorkerEnvironmentRuntimeModule();
+      assertAuthorized();
       return await workerRuntime.resolveWorkerSshIdentity({
         provider,
         leaseId,
         profile,
         keyRef,
-        resolveGeneric: async (genericKeyRef) => ({
-          kind: "material",
-          contents: await workerRuntime.resolveSecretRefString(genericKeyRef, {
+        assertAuthorized,
+        resolveGeneric: async (genericKeyRef, assertCurrent) => {
+          assertCurrent();
+          const contents = await workerRuntime.resolveSecretRefString(genericKeyRef, {
             config: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
             env: getActiveSecretsRuntimeEnvState(),
-          }),
-        }),
+          });
+          assertCurrent();
+          return { kind: "material", contents };
+        },
       });
     },
     bootstrapWorker: async ({
@@ -457,6 +482,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       installation,
       resolveIdentity,
       signal,
+      authorize,
     }) => {
       const workerRuntime = await loadWorkerEnvironmentRuntimeModule();
       return await workerRuntime.bootstrapWorker(
@@ -466,7 +492,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
           artifact: installation,
           pinnedHostKey: sshEndpoint.hostKey,
         },
-        { signal, resolveIdentity },
+        { signal, resolveIdentity, assertCurrent: authorize },
       );
     },
     logger: workerEnvironmentLog,

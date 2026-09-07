@@ -23,7 +23,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { createWorkerSessionPlacementStore } from "../../worker-environments/placement-store.js";
-import { signalWorkerTurnClaimClosed } from "../../worker-environments/placement-turn-claim-events.js";
+import {
+  getWorkerTurnExecutionIdentityCapability,
+  signalWorkerTurnClaimClosed,
+} from "../../worker-environments/placement-turn-claim-events.js";
 import { prepareWorkerAgentRuntimeIdentity } from "../../worker-environments/worker-turn-payload.js";
 import {
   CREDENTIAL,
@@ -727,6 +730,8 @@ describe("dedicated worker websocket protocol", () => {
         }),
       );
       expect(runtimeIdentity.executionIdentityToken).toBeUndefined();
+      const sessionToolAuthority = getWorkerTurnExecutionIdentityCapability(placements, claim);
+      expect(sessionToolAuthority).toBeDefined();
       const harness = attachHarness({ identity: ATTACHED_IDENTITY });
       await admit(harness);
       suspension = tryBeginGatewaySuspendAdmission(() => {});
@@ -739,6 +744,14 @@ describe("dedicated worker websocket protocol", () => {
       } else if (fence === "restart") {
         restartSignal = beginGatewayRestartSignalAdmission();
         expect(restartSignal).not.toBeNull();
+      }
+
+      if (fence === "run" || fence === "placement") {
+        await expect(sessionToolAuthority?.run(async () => undefined)).rejects.toThrow(
+          fence === "run"
+            ? "admitted run authority is no longer active"
+            : "worker turn authority changed",
+        );
       }
 
       harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);

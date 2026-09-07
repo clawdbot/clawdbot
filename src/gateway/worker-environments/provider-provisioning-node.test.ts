@@ -75,6 +75,9 @@ describe("node worker provider provisioning", () => {
           "runtime-mode",
           undefined,
           executionMode,
+          undefined,
+          undefined,
+          executionMode ? () => {} : undefined,
         );
         expect(environment).toMatchObject({
           state: "ready",
@@ -97,6 +100,93 @@ describe("node worker provider provisioning", () => {
     },
   );
 
+  it("rejects deferred node enrollment after dispatch authority closes", async () => {
+    const enrollmentRequested = createDeferredCore();
+    const continueEnrollment = createDeferredCore();
+    const prepareNodeEnrollment = vi.fn();
+    let authorized = true;
+    const provider = support.createProvider({
+      supportedExecutionModes: ["worker-turn"],
+      provisionBeforeInstallation: true,
+      requiresNodeEnrollment: true,
+      provisionDelegated: async (_profile, _operationId, options) => {
+        enrollmentRequested.resolve();
+        await continueEnrollment.promise;
+        options.assertAuthorized();
+        await options.beginNodeEnrollment?.();
+        return {
+          leaseId: "cloud-lease-revoked-enrollment",
+          node: { deviceId: "cloud-device-revoked-enrollment" },
+        };
+      },
+    });
+    const workerService = support.createService(provider, { prepareNodeEnrollment });
+
+    const provisioning = workerService.create(
+      "development",
+      "request-revoked-enrollment",
+      undefined,
+      "worker-turn",
+      undefined,
+      undefined,
+      () => {
+        if (!authorized) {
+          throw new Error("session dispatch authority closed");
+        }
+      },
+    );
+    const rejected = expect(provisioning).rejects.toThrow("session dispatch authority closed");
+    await enrollmentRequested.promise;
+    authorized = false;
+    continueEnrollment.resolve();
+
+    await rejected;
+    expect(prepareNodeEnrollment).not.toHaveBeenCalled();
+  });
+
+  it("tears down a node lease when dispatch authority closes during allocation", async () => {
+    let authorized = true;
+    const ensureNodeWorkerBundle = vi.fn();
+    const destroy = vi.fn(async () => {});
+    const workerService = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
+        provisionBeforeInstallation: true,
+        provision: async () => {
+          authorized = false;
+          return {
+            leaseId: "cloud-lease-revoked-allocation",
+            node: { deviceId: "cloud-device-revoked-allocation" },
+          };
+        },
+        destroy,
+      }),
+      { ensureNodeWorkerBundle },
+    );
+
+    await expect(
+      workerService.create(
+        "development",
+        "request-revoked-allocation",
+        undefined,
+        "worker-turn",
+        undefined,
+        undefined,
+        () => {
+          if (!authorized) {
+            throw new Error("session dispatch authority closed");
+          }
+        },
+      ),
+    ).rejects.toThrow("Worker node bootstrap failed: session dispatch authority closed");
+
+    expect(ensureNodeWorkerBundle).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledExactlyOnceWith({
+      leaseId: "cloud-lease-revoked-allocation",
+      profile: { region: "test" },
+    });
+  });
+
   it("supplies replay-safe enrollment only to providers that require it", async () => {
     const prepareNodeEnrollment = vi.fn(async (record) => {
       const enrolled = support.testState.store.ensureNodeEnrollment(record.environmentId);
@@ -116,10 +206,11 @@ describe("node worker provider provisioning", () => {
     const closeNodeEnrollment = vi.fn();
     const retireNodeEnrollment = vi.fn(async () => {});
     let begin: (() => Promise<WorkerNodeEnrollment>) | undefined;
-    const provision = vi.fn<WorkerProvider["provision"]>(
+    const provisionDelegated = vi.fn<NonNullable<WorkerProvider["provisionDelegated"]>>(
       async (_profile, _operationId, options) => {
-        begin = options?.beginNodeEnrollment;
-        await expect(options?.beginNodeEnrollment?.()).resolves.toMatchObject({
+        expect(options.assertAuthorized).toEqual(expect.any(Function));
+        begin = options.beginNodeEnrollment;
+        await expect(options.beginNodeEnrollment?.()).resolves.toMatchObject({
           mode: "connect",
           setupId: expect.any(String),
         });
@@ -135,7 +226,7 @@ describe("node worker provider provisioning", () => {
         supportedExecutionModes: ["worker-turn"],
         provisionBeforeInstallation: true,
         requiresNodeEnrollment: true,
-        provision,
+        provisionDelegated,
       }),
       {
         prepareNodeEnrollment,
@@ -145,7 +236,15 @@ describe("node worker provider provisioning", () => {
       },
     );
 
-    const environment = await workerService.create("development", "request-cloud-node");
+    const environment = await workerService.create(
+      "development",
+      "request-cloud-node",
+      undefined,
+      "worker-turn",
+      undefined,
+      undefined,
+      () => {},
+    );
     expect(environment).toMatchObject({
       state: "ready",
       nodeSetupId: expect.any(String),
@@ -153,7 +252,7 @@ describe("node worker provider provisioning", () => {
       sharedHost: false,
     });
     expect(prepareNodeEnrollment).toHaveBeenCalledOnce();
-    expect(provision).toHaveBeenCalledOnce();
+    expect(provisionDelegated).toHaveBeenCalledOnce();
     expect(closeNodeEnrollment).toHaveBeenCalledExactlyOnceWith(
       await prepareNodeEnrollment.mock.results[0]!.value,
     );

@@ -28,6 +28,7 @@ import {
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import * as support from "./worker-environments/service.test-support.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
@@ -319,6 +320,75 @@ describe("dispatch Stop before provider allocation", () => {
     expect(provision).not.toHaveBeenCalled();
     expect(support.testState.store.list()).toEqual([]);
   });
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "carries session admission authority into reclaimed %s provisioning",
+    async (executionMode) => {
+      workspace.preflight.mockResolvedValue(undefined);
+      moveDestinationMocks.resolveExecutionMode.mockReturnValue(executionMode);
+      const providerEffect = vi.fn();
+      const expected = new Error("provider boundary reached");
+      const environments = support.createService(
+        support.createProvider({
+          supportedExecutionModes: [executionMode],
+          provisionDelegated: async (_profile, _operationId, options) => {
+            options.assertAuthorized();
+            providerEffect();
+            throw expected;
+          },
+        }),
+      );
+      const previous = support.seedReady("previous-environment");
+      const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+      const active = seedActivePlacement(placements, {
+        environmentId: previous.environmentId,
+        ownerEpoch: previous.ownerEpoch,
+        executionMode,
+      });
+      if (active.state !== "active") {
+        throw new Error("reclaimed redispatch fixture requires an active placement");
+      }
+      const draining = placements.startDrain({
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation,
+      });
+      const reconciling = placements.startReconcile({
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: draining.generation,
+      });
+      const reclaimed = placements.transition({
+        sessionId: active.sessionId,
+        from: "reconciling",
+        to: "reclaimed",
+        expectedGeneration: reconciling.generation,
+      });
+      if (reclaimed.state !== "reclaimed") {
+        throw new Error("reclaimed redispatch fixture did not reach reclaimed state");
+      }
+      const runtime = createGatewayWorkerPlacementRuntime({
+        placements,
+        environments,
+        gatewayNamespace: "gateway-test",
+        warn: vi.fn(),
+        cancelSessionWork: vi.fn(async () => {}),
+        revokeSessionAuthority: vi.fn(),
+      });
+      const redispatch = createReclaimedPlacementRedispatch({
+        environments,
+        dispatch: runtime.dispatchService.dispatch,
+      });
+
+      await expect(redispatch(reclaimed)).rejects.toMatchObject({
+        message: `Worker provider operation failed: ${expected.message}`,
+      });
+      expect(providerEffect).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["missing", "reclaimed"] as const)(
     "cancels queued redispatch before the %s placement can allocate",
     async (state) => {
@@ -792,7 +862,15 @@ describe("dispatch Stop before provider allocation", () => {
         patch: { environmentId: intent.environmentId },
       });
       await expect(
-        environments.create("development", key, undefined, REQUEST.executionMode),
+        environments.create(
+          "development",
+          key,
+          undefined,
+          REQUEST.executionMode,
+          undefined,
+          undefined,
+          () => {},
+        ),
       ).rejects.toMatchObject({ code: "provider_failure" });
       const cancelSessionWork = vi.fn(
         async (

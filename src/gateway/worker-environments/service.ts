@@ -95,6 +95,7 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
 export type WorkerEnvironmentReconcileCore = (
   signal?: AbortSignal,
   retainProviderSettlement?: (settled: Promise<void>) => void,
+  authorize?: () => void,
 ) => Promise<void>;
 type WorkerEnvironmentReconcileGuard = (
   environmentId: string,
@@ -317,6 +318,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     environmentId: string,
     signal?: AbortSignal,
     retainProviderSettlement?: (settled: Promise<void>) => void,
+    authorize?: () => void,
   ) => {
     if (stopping) {
       return;
@@ -326,7 +328,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (!current || inState(current, "destroyed", "failed", "orphaned")) {
         return;
       }
-      await providerLifecycle.reconcileRecord(current, signal, retainProviderSettlement);
+      await providerLifecycle.reconcileRecord(current, signal, retainProviderSettlement, authorize);
     });
   };
 
@@ -347,8 +349,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       await active;
       return;
     }
-    const operation = guard(environmentId, async (signal, retainProviderSettlement) => {
-      await reconcileEnvironmentCore(environmentId, signal, retainProviderSettlement);
+    const operation = guard(environmentId, async (signal, retainProviderSettlement, authorize) => {
+      await reconcileEnvironmentCore(environmentId, signal, retainProviderSettlement, authorize);
     });
     guardedReconcileInFlight.set(environmentId, operation);
     try {
@@ -505,8 +507,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
   };
 
-  const providerSupportsExecutionMode = (providerId: string, mode: WorkerExecutionMode) =>
-    options.resolveProvider(providerId)?.supportedExecutionModes?.includes(mode) === true;
+  const providerSupportsExecutionMode = (providerId: string, mode: WorkerExecutionMode) => {
+    const provider = options.resolveProvider(providerId);
+    return (
+      provider?.supportedExecutionModes?.includes(mode) === true &&
+      typeof provider.provisionDelegated === "function"
+    );
+  };
   const requireProviderExecutionMode = (providerId: string, mode?: WorkerExecutionMode) => {
     if (!mode) {
       return;
@@ -515,7 +522,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (!provider) {
       throw serviceError("provider_not_found", `Unknown worker provider: ${providerId}`);
     }
-    if (!provider.supportedExecutionModes?.includes(mode)) {
+    if (
+      !provider.supportedExecutionModes?.includes(mode) ||
+      typeof provider.provisionDelegated !== "function"
+    ) {
       throw serviceError(
         "invalid_profile",
         `Worker provider ${providerId} does not support ${mode} placement`,
@@ -558,6 +568,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       executionMode?: WorkerExecutionMode,
       projectPath?: string,
       signal?: AbortSignal,
+      authorize?: () => void,
     ) => {
       if (executionMode) {
         requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
@@ -568,6 +579,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           executionMode,
           projectPath,
           signal,
+          authorize,
         }),
       );
     },
@@ -578,6 +590,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       executionMode?: WorkerExecutionMode,
       projectPath?: string,
       signal?: AbortSignal,
+      authorize?: () => void,
     ) => {
       requireProviderExecutionMode(profile.providerId, executionMode);
       return environmentAccess.project(
@@ -590,6 +603,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           executionMode,
           projectPath,
           signal,
+          authorize,
         }),
       );
     },

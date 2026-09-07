@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
-import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
+import type { WorkerPlacementDispatchService } from "./placement-dispatch-service.types.js";
 import type { WorkerPlacementCancellationTarget } from "./placement-reclaim-contract.js";
 import {
   WorkerPlacementAdmissionTargetError,
@@ -356,10 +356,14 @@ export function coordinateWorkerPlacementDispatch(
           // Recovery joins its captured sweep, never a later Stop which awaits that sweep.
           const result = await service.resumeProvisioning(
             placement,
-            async (signal) => {
-              await reconcileEnvironmentCore(signal, (settled) => {
-                providerSettlement = settled;
-              });
+            async (signal, _retainProviderSettlement, authorize) => {
+              await reconcileEnvironmentCore(
+                signal,
+                (settled) => {
+                  providerSettlement = settled;
+                },
+                authorize,
+              );
             },
             report,
             (runRecovery) =>

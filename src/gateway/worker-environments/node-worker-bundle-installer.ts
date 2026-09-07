@@ -18,8 +18,10 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
     prewarm: boolean;
     signal?: AbortSignal;
+    authorize?: () => void;
   }) => {
     params.signal?.throwIfAborted();
+    params.authorize?.();
     const transport = options.getTransport();
     if (!transport) {
       throw new Error("Device worker node transport is unavailable");
@@ -32,8 +34,12 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       throw new Error("Device worker node is not connected with the installer dialect");
     }
     const { artifact } = params;
-    const isAuthorized = () =>
-      !params.signal?.aborted && options.getTransport() === transport && transport.isCurrent(node);
+    const isAuthorized = () => {
+      params.authorize?.();
+      return (
+        !params.signal?.aborted && options.getTransport() === transport && transport.isCurrent(node)
+      );
+    };
     if (!isAuthorized()) {
       throw new Error("Device worker installation connection is no longer current");
     }

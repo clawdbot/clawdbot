@@ -570,6 +570,11 @@ export function createHarness(
     environments,
     reportWorkspaceResultConflict,
     reportWorkspaceResultRecoveryFailure,
+    requestEnvironmentDestroy: () => {
+      if (currentEnvironment) {
+        currentEnvironment = { ...currentEnvironment, destroyRequestedAtMs: 1_000 };
+      }
+    },
     markEnvironmentDestroyed: () => {
       currentEnvironment = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
     },

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
@@ -226,6 +226,9 @@ describe("worker placement restart recovery", () => {
         "provider-loss-cleanup",
         undefined,
         "remote-exec",
+        undefined,
+        undefined,
+        () => {},
       );
       const attached = await environments.attachSession({
         environmentId: ready.environmentId,
@@ -545,6 +548,32 @@ describe("worker placement restart recovery", () => {
     expect(harness.log).toContain("placement:starting");
     expect(harness.log).toContain("placement:active");
     expect(harness.log).not.toContain("activation");
+  });
+
+  it("rechecks delegated authority at the recovered attachment boundary", async () => {
+    const placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => 1_000,
+    });
+    const harness = createHarness(placements);
+    const provisioning = harness.placements.seedProvisioning();
+    assert(provisioning.state === "provisioning");
+    vi.mocked(harness.environments.attachSession).mockImplementation(async (request) => {
+      harness.requestEnvironmentDestroy();
+      request.authorize?.();
+      throw new Error("unreachable attachment");
+    });
+
+    await harness.service.resumeProvisioning(provisioning, async () => {});
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: expect.stringContaining("destruction was requested"),
+    });
+    expect(harness.environments.attachSession).toHaveBeenCalledOnce();
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledWith(provisioning.environmentId);
+    expect(harness.log).not.toContain("workspace:reconcile");
   });
 
   it("fences provisioning recovery before attachment when its durable execution mode differs", async () => {
@@ -891,6 +920,52 @@ describe("worker placement restart recovery", () => {
     });
     expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
     expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
+  });
+
+  it("fences pending workspace recovery after environment destruction is requested", async () => {
+    const placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => 1_000,
+    });
+    const originalHarness = createHarness(placements);
+    const active = originalHarness.placements.seedActive(2);
+    assert(active.state === "active");
+    const claim = placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "interrupted-recovery-claim",
+      runId: "interrupted-recovery-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placements.markWorkspaceResultPending(claim);
+    placements.handoffWorkspaceResultRecovery(claim);
+
+    const restartedStore = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => 2_000,
+    });
+    const publishAcceptedWorkspace = vi.fn(async () => {});
+    const restartedHarness = createHarness(restartedStore, {
+      publishAcceptedWorkspace,
+    });
+    restartedHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+    restartedHarness.markEnvironmentProtocolFeatures([WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE]);
+    restartedHarness.requestEnvironmentDestroy();
+
+    await restartedHarness.service.reconcile("startup");
+
+    expect(restartedHarness.placements.current()).toMatchObject({
+      state: "failed",
+    });
+    expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(restartedHarness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
+    expect(restartedHarness.log).not.toContain("workspace:reconcile");
+    expect(publishAcceptedWorkspace).not.toHaveBeenCalled();
   });
 
   it.each(["bundle", "provider"] as const)(

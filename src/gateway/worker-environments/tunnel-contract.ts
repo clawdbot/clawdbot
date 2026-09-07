@@ -62,6 +62,8 @@ export class WorkerRunnerCapacityError extends Error {
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;
+  /** In-process initiating-operation authority, rechecked immediately before tunnel startup. */
+  authorize?: () => void;
 };
 
 /** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
@@ -87,6 +89,8 @@ export type WorkerLocalWorkspaceSyncRequest = {
   gitAuthor?: { name?: string; email?: string };
   /** Immutable project identity from the owning environment's provisioning snapshot. */
   projectKey?: string;
+  /** In-process initiating-operation authority, never retained by the connected tunnel. */
+  authorize?: () => void;
 };
 
 type WorkerRepositoryCheckpointPayload = {
@@ -124,6 +128,8 @@ type WorkerRepositoryWorkspaceSource = {
 };
 
 export type WorkerWorkspaceSyncRequest = {
+  /** Live initiating operation; retained workspace custody uses its independent owner. */
+  authorize?: () => void;
   sessionId: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
@@ -167,6 +173,7 @@ export type WorkerWorkspaceReconcileRequest = {
       }
     | {
         kind: "repository";
+        authorize?: () => void;
         referenceManifestRef: string;
         prepareCheckpoint(
           payload: WorkerRepositoryCheckpointPayload,
@@ -219,7 +226,10 @@ export type WorkerWorkspaceTunnelHandle = {
     isAuthorized: () => boolean;
     signal: AbortSignal;
   }): Promise<void>;
-  quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
+  quiesceWorkspace(
+    remoteWorkspaceDir: string,
+    authorize?: () => void,
+  ): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
   reconcileWorkspace(
     request: WorkerWorkspaceReconcileRequest,

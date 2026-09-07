@@ -23,6 +23,7 @@ import { createWorkerTunnelManager } from "./tunnel.js";
 import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
+  preparedWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
@@ -115,75 +116,138 @@ describe("staged worker placement result recovery", () => {
     return { baseManifestRef: base.ref, currentManifestRef: current.ref, stagedResultRef };
   }
 
-  it("applies a staged pending result without a tunnel and reclaims the worker", async () => {
-    const workspacePath = path.join(root, "same-worker-staged-result");
-    const priorConflictRef = "refs/openclaw/worker-results/prior-conflict";
-    const prepareAcceptedWorkspacePublication = vi.fn(async () => {
-      throw new Error("publication snapshot rejected");
+  it.each([
+    { record: true, destroyRequested: false },
+    { record: true, destroyRequested: true },
+    { record: false, destroyRequested: true },
+  ])(
+    "applies a staged pending result without a tunnel (recorded=$record, destroyRequested=$destroyRequested)",
+    async ({ record, destroyRequested }) => {
+      const workspacePath = path.join(root, "same-worker-staged-result");
+      const priorConflictRef = "refs/openclaw/worker-results/prior-conflict";
+      const prepareAcceptedWorkspacePublication = vi.fn(async () => {
+        throw new Error("publication snapshot rejected");
+      });
+      const publishAcceptedWorkspace = vi.fn(async () => undefined);
+      const harness = createHarness(placementStore, {
+        workspacePath,
+        priorWorkspaceResultConflict: { paths: ["old.txt"], stagedResultRef: priorConflictRef },
+        prepareAcceptedWorkspacePublication,
+        publishAcceptedWorkspace,
+      });
+      const { active, claim } = seedWorkerTurn(harness);
+      harness.markEnvironmentOwnerEpoch(2);
+      if (destroyRequested) {
+        harness.requestEnvironmentDestroy();
+      }
+      const staged = await stagePendingResult({
+        store: placementStore,
+        claim,
+        workspacePath,
+        base: "base\n",
+        current: "worker\n",
+        record,
+      });
+      expect(
+        (
+          await runCommandWithTimeout(
+            ["git", "-C", workspacePath, "update-ref", priorConflictRef, staged.stagedResultRef],
+            { timeoutMs: 10_000 },
+          )
+        ).code,
+      ).toBe(0);
+      placementStore.handoffWorkspaceResultRecovery(claim);
+
+      await harness.service.reconcile();
+
+      await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+        "worker\n",
+      );
+      expect(harness.placements.current()).toMatchObject({
+        state: "reclaimed",
+        turnClaim: null,
+        workspaceBaseManifestRef: staged.currentManifestRef,
+      });
+      expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+      expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+      expect(harness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
+      expect(prepareAcceptedWorkspacePublication).toHaveBeenCalledWith(claim);
+      expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
+      expect(
+        (
+          await runCommandWithTimeout(
+            ["git", "-C", workspacePath, "show-ref", "--verify", staged.stagedResultRef],
+            { timeoutMs: 10_000 },
+          )
+        ).code,
+      ).not.toBe(0);
+      expect(harness.reportWorkspaceResultConflict).toHaveBeenCalledWith({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+        cleared: true,
+      });
+      expect(
+        (
+          await runCommandWithTimeout(
+            ["git", "-C", workspacePath, "show-ref", "--verify", priorConflictRef],
+            { timeoutMs: 10_000 },
+          )
+        ).code,
+      ).not.toBe(0);
+    },
+  );
+
+  it("preserves an unpublished candidate after its environment is fenced and the parent descriptor is gone", async () => {
+    const workspacePath = path.join(root, "fenced-prepared-result");
+    const publishAcceptedWorkspace = vi.fn(async () => {});
+    const harness = createHarness(placementStore, { workspacePath, publishAcceptedWorkspace });
+    const { claim } = seedWorkerTurn(harness);
+    vi.mocked(harness.environments.get).mockReturnValue({
+      ...harness.attached,
+      destroyRequestedAtMs: 1_000,
     });
-    const publishAcceptedWorkspace = vi.fn(async () => undefined);
-    const harness = createHarness(placementStore, {
-      workspacePath,
-      priorWorkspaceResultConflict: { paths: ["old.txt"], stagedResultRef: priorConflictRef },
-      prepareAcceptedWorkspacePublication,
-      publishAcceptedWorkspace,
-    });
-    const { active, claim } = seedWorkerTurn(harness);
-    harness.markEnvironmentOwnerEpoch(2);
     const staged = await stagePendingResult({
       store: placementStore,
       claim,
       workspacePath,
       base: "base\n",
       current: "worker\n",
+      record: false,
     });
+    const candidateRef = preparedWorkerWorkspaceResultRef(staged.stagedResultRef);
+    for (const args of [
+      ["update-ref", candidateRef, staged.stagedResultRef],
+      ["update-ref", "-d", staged.stagedResultRef],
+    ]) {
+      expect(
+        (await runCommandWithTimeout(["git", "-C", workspacePath, ...args], { timeoutMs: 10_000 }))
+          .code,
+      ).toBe(0);
+    }
+    placementStore.handoffWorkspaceResultRecovery(claim);
+    await harness.service.reconcile();
+    await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+      "base\n",
+    );
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(publishAcceptedWorkspace).not.toHaveBeenCalled();
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      {
+        claimId: claim.claimId,
+        stagedResultRef: null,
+        workspaceAcceptedAtMs: null,
+      },
+    ]);
     expect(
       (
         await runCommandWithTimeout(
-          ["git", "-C", workspacePath, "update-ref", priorConflictRef, staged.stagedResultRef],
+          ["git", "-C", workspacePath, "show-ref", "--verify", candidateRef],
           { timeoutMs: 10_000 },
         )
       ).code,
     ).toBe(0);
-    placementStore.handoffWorkspaceResultRecovery(claim);
-
-    await harness.service.reconcile();
-
-    await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
-      "worker\n",
-    );
-    expect(harness.placements.current()).toMatchObject({
-      state: "reclaimed",
-      turnClaim: null,
-      workspaceBaseManifestRef: staged.currentManifestRef,
-    });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
-    expect(harness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
-    expect(prepareAcceptedWorkspacePublication).toHaveBeenCalledWith(claim);
-    expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
-    expect(
-      (
-        await runCommandWithTimeout(
-          ["git", "-C", workspacePath, "show-ref", "--verify", staged.stagedResultRef],
-          { timeoutMs: 10_000 },
-        )
-      ).code,
-    ).not.toBe(0);
-    expect(harness.reportWorkspaceResultConflict).toHaveBeenCalledWith({
-      sessionId: REQUEST.sessionId,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-      cleared: true,
-    });
-    expect(
-      (
-        await runCommandWithTimeout(
-          ["git", "-C", workspacePath, "show-ref", "--verify", priorConflictRef],
-          { timeoutMs: 10_000 },
-        )
-      ).code,
-    ).not.toBe(0);
   });
 
   it.each(["retained", "removed-before-restart"] as const)(
@@ -250,6 +314,9 @@ describe("staged worker placement result recovery", () => {
         "session-dispatch:session-1:1",
         undefined,
         "remote-exec",
+        undefined,
+        undefined,
+        () => {},
       );
       const attached = await environments.attachSession({
         environmentId: ready.environmentId,
@@ -538,7 +605,9 @@ describe("staged worker placement result recovery", () => {
         }),
       ).toThrow("Worker workspace result is already pending");
       expect(restartedStore.validateWorkspaceResultClaim(claim)).toBe(true);
-      const restartedHarness = createHarness(restartedStore, { workspacePath });
+      const restartedHarness = createHarness(restartedStore, {
+        workspacePath,
+      });
       restartedHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
       if (placementState === "accepted-reclaim") {
         restartedHarness.markEnvironmentDestroyed();

@@ -169,7 +169,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       "provider=machine0 requires module source; use crabbox run --script",
       "--class is not supported for provider=machine0",
     ].map((stderr) => ({ kind: "cli", name: stderr, result: commandResult({ code: 2, stderr }) })),
-  ])("retains the original allocation after $name across restart", async (scenario) => {
+  ])("reclaims the original allocation after $name across restart", async (scenario) => {
     const profile = {
       ...PROFILE,
       ...(scenario.kind === "config" ? { provider: "hetzner", desktop: true } : {}),
@@ -230,7 +230,15 @@ describe("Crabbox runtime preflight cleanup", () => {
     };
     let service = support.createService(await makeProvider(), { prepareNodeEnrollment });
     await expect(
-      service.create("development", "runtime-replay", undefined, "worker-turn"),
+      service.create(
+        "development",
+        "runtime-replay",
+        undefined,
+        "worker-turn",
+        undefined,
+        undefined,
+        () => {},
+      ),
     ).rejects.toMatchObject({ code: "provider_failure" });
     const original = expectDefined(support.testState.store.list()[0], "unreported allocation");
     expect(original).toMatchObject({ state: "provisioning", leaseId: null });
@@ -246,41 +254,40 @@ describe("Crabbox runtime preflight cleanup", () => {
     service = support.createService(replayProvider, { prepareNodeEnrollment });
     await service.reconcileOnce();
     expect(support.testState.store.get(original.environmentId)).toMatchObject({
-      state: "provisioning",
-      leaseId: null,
+      state: "destroying",
+      leaseId,
       provisionOperationId: original.provisionOperationId,
       profileSnapshot: original.profileSnapshot,
-      lastError: expect.any(String),
+      lastError: "Worker placement provisioning authority is unavailable after restart",
     });
     const beforeCleanup = calls.length;
     support.testState.config.cloudWorkers!.profiles = {};
-    await expect(service.destroy(original.environmentId)).rejects.toMatchObject({
-      code: "provider_failure",
+    await expect(service.destroy(original.environmentId)).resolves.toMatchObject({
+      state: "failed",
+      leaseId: null,
     });
     expect(resolveAllocation).toHaveBeenCalledExactlyOnceWith(
       profile,
       original.provisionOperationId,
     );
     expect(support.testState.store.get(original.environmentId)).toMatchObject({
-      state: "destroying",
-      leaseId,
+      state: "failed",
+      leaseId: null,
       destroyRequestedAtMs: expect.any(Number),
     });
-    expect(live).toBe(true);
+    expect(live).toBe(false);
 
     await support.reopenWorkerEnvironmentStore();
     service = support.createService(await makeProvider(), { prepareNodeEnrollment });
     await service.reconcileOnce();
     expect(support.testState.store.get(original.environmentId)).toMatchObject({
-      state: "destroyed",
-      leaseId,
+      state: "failed",
+      leaseId: null,
     });
     await service.destroy(original.environmentId);
     await service.reconcileOnce();
-    expect(calls.slice(beforeCleanup).map((argv) => argv[1])).toEqual(["stop", "inspect", "stop"]);
-    expect(calls.filter((argv) => argv[1] === "warmup")).toHaveLength(
-      scenario.kind === "cli" ? 2 : 1,
-    );
+    expect(calls.slice(beforeCleanup).map((argv) => argv[1])).toEqual(["stop"]);
+    expect(calls.filter((argv) => argv[1] === "warmup")).toHaveLength(1);
     expect(allocations).toBe(1);
     expect(stops).toBe(2);
     expect(live).toBe(false);

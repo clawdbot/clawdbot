@@ -51,9 +51,14 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
   const commandRunner = async (argv: string[], runOptions: { timeoutMs: number }) =>
     await runCommandWithTimeout(argv, { timeoutMs: runOptions.timeoutMs });
 
-  const prepare = async (record: WorkerEnvironmentRecord, enrollmentSignal?: AbortSignal) => {
+  const prepare = async (
+    record: WorkerEnvironmentRecord,
+    enrollmentSignal?: AbortSignal,
+    authorize: () => void = () => {},
+  ) => {
     const preparationSignal = enrollmentSignal ?? signal;
     preparationSignal.throwIfAborted();
+    authorize();
     const config = options.getConfig();
     const url = await resolvePairingGatewayUrl(config, {
       env: process.env,
@@ -61,6 +66,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       networkInterfaces: os.networkInterfaces,
       runCommandWithTimeout: commandRunner,
     });
+    authorize();
     if (!url.url) {
       throw new Error(url.error ?? "Cloud node bootstrap cannot resolve the Gateway address");
     }
@@ -80,6 +86,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     preparationSignal.throwIfAborted();
     const artifact = await options.prepareArtifact(record, preparationSignal);
     preparationSignal.throwIfAborted();
+    authorize();
     const tlsFingerprint = url.url.startsWith("wss://")
       ? url.source?.startsWith("gateway.bind=")
         ? options.getLocalTlsFingerprint?.()
@@ -90,9 +97,14 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     return { artifact, url: url.url, tlsFingerprint };
   };
 
-  const reserve = (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
+  const reserve = (
+    record: WorkerEnvironmentRecord,
+    operationSignal?: AbortSignal,
+    authorize: () => void = () => {},
+  ) => {
     signal.throwIfAborted();
     operationSignal?.throwIfAborted();
+    authorize();
     const admission = options.store.get(record.environmentId);
     if (
       admission?.state !== "provisioning" ||
@@ -122,6 +134,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     active.set(record.environmentId, binding);
     const current = () => {
       enrollmentSignal.throwIfAborted();
+      authorize();
       const live = options.store.get(record.environmentId);
       if (
         active.get(record.environmentId) !== binding ||
@@ -179,10 +192,11 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     record: WorkerEnvironmentRecord,
     bundle: TransferArtifact,
     operationSignal?: AbortSignal,
+    authorize?: () => void,
   ): Promise<WorkerNodeRuntimePreparation> => {
-    const { binding, enrollmentSignal, current } = reserve(record, operationSignal);
+    const { binding, enrollmentSignal, current } = reserve(record, operationSignal, authorize);
     try {
-      const prepared = await prepare(record, enrollmentSignal);
+      const prepared = await prepare(record, enrollmentSignal, authorize);
       const owner = current();
       const isAuthorized = () => {
         const live = current();
@@ -206,10 +220,15 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
   const begin = async (
     record: WorkerEnvironmentRecord,
     operationSignal?: AbortSignal,
+    authorize?: () => void,
   ): Promise<WorkerNodeEnrollment> => {
-    const { binding, enrollmentSignal, current: requireCurrent } = reserve(record, operationSignal);
+    const {
+      binding,
+      enrollmentSignal,
+      current: requireCurrent,
+    } = reserve(record, operationSignal, authorize);
     try {
-      const prepared = await prepare(record, enrollmentSignal);
+      const prepared = await prepare(record, enrollmentSignal, authorize);
       requireCurrent();
       let current = options.store.ensureNodeEnrollment(record.environmentId);
       if (
@@ -234,6 +253,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         const issued = await ensureDevicePairSetupBootstrapToken({
           setupId: current.nodeSetupId,
           profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          assertCurrent: requireCurrent,
         });
         requireCurrent();
         if (issued.status === "completed") {
@@ -251,7 +271,12 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             bootstrapProfile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
             issuedBootstrap: issued,
             localTlsFingerprint: options.getLocalTlsFingerprint?.(),
-            runCommandWithTimeout: commandRunner,
+            runCommandWithTimeout: async (argv, runOptions) => {
+              requireCurrent();
+              const result = await commandRunner(argv, runOptions);
+              requireCurrent();
+              return result;
+            },
           });
           requireCurrent();
           if (!resolved.ok) {
@@ -270,7 +295,20 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         }
       }
       const owner = current;
+      const assertAuthorized = () => {
+        try {
+          authorize?.();
+        } catch (error) {
+          binding.close();
+          throw error;
+        }
+      };
       const isAuthorized = () => {
+        try {
+          assertAuthorized();
+        } catch {
+          return false;
+        }
         const live = options.store.get(owner.environmentId);
         return (
           active.get(owner.environmentId) === binding &&
@@ -297,6 +335,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;
           while (now() < deadline) {
             enrollmentSignal.throwIfAborted();
+            assertAuthorized();
             const live = options.store.ensureNodeEnrollment(owner.environmentId);
             if (
               live.destroyRequestedAtMs !== null ||
@@ -311,6 +350,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             if (live.nodeDeviceId) {
               const availability = await options.resolveAvailability(live.nodeDeviceId);
               enrollmentSignal.throwIfAborted();
+              assertAuthorized();
               const latest = options.store.get(owner.environmentId);
               if (
                 !latest ||
@@ -362,7 +402,11 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
   };
 
   return {
-    prepare: async (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
+    prepare: async (
+      record: WorkerEnvironmentRecord,
+      operationSignal?: AbortSignal,
+      authorize?: () => void,
+    ) => {
       const preflight = new AbortController();
       try {
         await prepare(
@@ -372,6 +416,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             preflight.signal,
             ...(operationSignal ? [operationSignal] : []),
           ]),
+          authorize,
         );
       } finally {
         // Preflight creates no transfer grant; release its artifact pin even on success.

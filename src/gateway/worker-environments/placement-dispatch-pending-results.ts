@@ -212,16 +212,18 @@ export async function recoverPendingWorkspaceResults(
   };
   const stagedResultOwners = new Set<string>();
   for (const pending of placements.listPendingWorkspaceResults()) {
+    // Preserve every owner from the recovery snapshot before scoped processing can await or
+    // mutate rows. Otherwise later teardown may misclassify an out-of-scope staged ref.
     if (pending.stagedResultRef) {
       stagedResultOwners.add(pending.sessionId);
+    }
+    const placement = placements.get(pending.sessionId);
+    if (environmentId !== undefined && placement?.environmentId !== environmentId) {
+      continue;
     }
     const sameGatewayInstance =
       pending.gatewayInstanceId === placements.workspaceResultInstanceId();
     if (sameGatewayInstance && pending.recoveryRequestedAtMs === null) {
-      continue;
-    }
-    const placement = placements.get(pending.sessionId);
-    if (environmentId !== undefined && placement?.environmentId !== environmentId) {
       continue;
     }
     try {

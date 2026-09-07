@@ -165,6 +165,7 @@ describe("device worker placement dispatch", () => {
       REQUEST.executionMode,
       "/gateway/workspace",
       undefined,
+      undefined,
     );
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
@@ -236,6 +237,7 @@ describe("device worker placement dispatch", () => {
       "remote-exec",
       "/gateway/workspace",
       undefined,
+      undefined,
     );
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
       ?.value;
@@ -271,6 +273,7 @@ describe("device worker placement dispatch", () => {
       undefined,
       "remote-exec",
       "/gateway/workspace",
+      undefined,
       undefined,
     );
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
@@ -427,7 +430,6 @@ describe("device worker placement dispatch", () => {
       node: currentNode,
     }));
     const request = prepareCloudNodeDispatch(harness);
-
     await expect(
       harness.service.dispatch(request, undefined, () => {
         if (harness.placements.current()?.state === "starting") {

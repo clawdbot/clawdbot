@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { WorkerWorkspaceCommand, WorkerWorkspaceQuiescence } from "./tunnel-contract.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 
 describe("worker workspace quiescence", () => {
@@ -170,3 +171,60 @@ describe("worker workspace quiescence", () => {
     },
   );
 });
+
+it.each(["before dispatch", "after acquisition", "during final renewal"] as const)(
+  "fences quiescence acquisition but permits release when invocation closes %s",
+  async (closure) => {
+    const nonce = "f".repeat(32);
+    let authorized = true;
+    let effects = 0;
+    let lease: WorkerWorkspaceQuiescence | undefined;
+    const quiesce = createWorkerWorkspaceQuiescence({
+      ownerSignal: new AbortController().signal,
+      sharedHost: true,
+      runWorkspaceCommand: async (command: WorkerWorkspaceCommand) => {
+        await Promise.resolve();
+        if (closure === "before dispatch") {
+          authorized = false;
+        }
+        command.assertCurrent?.();
+        effects += 1;
+        if (closure === "during final renewal" && command.argv.includes("final")) {
+          authorized = false;
+        }
+        return {
+          stdout: command.argv.includes("final") ? `renewed ${nonce}\n` : `quiesced ${nonce}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      },
+    });
+    const acquiring = quiesce("/workspace", () => {
+      if (!authorized) {
+        throw new Error("Initiating dispatch turn closed");
+      }
+    }).then((acquired) => {
+      lease = acquired;
+      return acquired;
+    });
+    try {
+      if (closure === "before dispatch") {
+        await expect(acquiring).rejects.toThrow("Initiating dispatch turn closed");
+        expect(effects).toBe(0);
+      } else {
+        await acquiring;
+        if (closure === "during final renewal") {
+          await expect(lease!.assertActive()).rejects.toThrow("Initiating dispatch turn closed");
+        }
+        authorized = false;
+        await expect(lease!.resume()).resolves.toBeUndefined();
+        expect(effects).toBe(closure === "during final renewal" ? 3 : 2);
+      }
+    } finally {
+      await lease?.resume();
+    }
+  },
+);

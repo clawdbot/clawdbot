@@ -64,7 +64,9 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       await failure.failActive(placement, error, { forceClaimFence: true });
       return;
     }
-    const environment = environments.get(placement.environmentId);
+    const environment = placement.environmentId
+      ? environments.get(placement.environmentId)
+      : undefined;
     const disappearance = workerDisappearanceError(environment);
     if (disappearance || (environment && isUnavailableEnvironment(environment))) {
       await failure.reclaimActive(
@@ -116,7 +118,8 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const reconcile = async (mode?: "startup"): Promise<void> => {
     if (mode === "startup") {
       // Readiness fences live owners; unowned teardown remains in the service-owned sweep.
-      for (const { environmentId, state } of placements.listForReconcile()) {
+      for (const placement of placements.listForReconcile()) {
+        const { environmentId, state } = placement;
         if (environmentId && state !== "failed" && state !== "reclaimed") {
           await environments.reconcileEnvironment(environmentId);
         }

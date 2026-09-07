@@ -6,6 +6,7 @@ import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSshIdentityResolver } from "./provider-ssh-identity.js";
 import * as support from "./service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
@@ -252,13 +253,17 @@ describe("worker environment service", () => {
     });
 
     await expect(
-      dispatch.dispatch({
-        sessionId: "session-bootstrap-failure",
-        sessionKey: "agent:main:session-bootstrap-failure",
-        agentId: "main",
-        profileId: "development",
-        executionMode: "remote-exec",
-      }),
+      dispatch.dispatch(
+        {
+          sessionId: "session-bootstrap-failure",
+          sessionKey: "agent:main:session-bootstrap-failure",
+          agentId: "main",
+          profileId: "development",
+          executionMode: "remote-exec",
+        },
+        undefined,
+        () => {},
+      ),
     ).rejects.toThrow("Worker bootstrap failed: remote bootstrap rejected");
 
     const persisted = expectDefined(
@@ -378,6 +383,91 @@ describe("worker environment service", () => {
     expect(destroy).toHaveBeenCalledOnce();
     expect(events).toEqual(["identity:start", "abort", "identity:end", "destroy"]);
     expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
+  });
+
+  it("rechecks authority after queued provider work before resolving SSH identity", async () => {
+    const provider = support.createProvider();
+    const workerService = support.createService(provider);
+    const environment = await workerService.create("development", "request-queued-identity");
+    const record = expectDefined(
+      support.testState.store.get(environment.environmentId),
+      "created worker environment",
+    );
+    const leaseId = expectDefined(record.leaseId, "created worker lease");
+    let releaseProvider!: () => void;
+    const providerBlocked = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const providerEntered = vi.fn();
+    const resolveSshIdentity = vi.fn(async () => ({
+      kind: "path" as const,
+      path: "/keys/worker",
+    }));
+    const identityResolverFor = createWorkerSshIdentityResolver({
+      assertCurrent: () => {},
+      callProvider: async (_environmentId, run) => {
+        providerEntered();
+        await providerBlocked;
+        return await run();
+      },
+      requireWorkerProfile: () => ({ region: "test" }),
+      resolveSshIdentity,
+    });
+    let authorized = true;
+    const identity = identityResolverFor(record, provider, leaseId, () => {
+      if (!authorized) {
+        throw new Error("session dispatch authority closed");
+      }
+    })(support.SSH_ENDPOINT.keyRef);
+
+    await vi.waitFor(() => expect(providerEntered).toHaveBeenCalledOnce());
+    authorized = false;
+    releaseProvider();
+
+    await expect(identity).rejects.toThrow("session dispatch authority closed");
+    expect(resolveSshIdentity).not.toHaveBeenCalled();
+  });
+
+  it("passes live authority through provider-owned SSH identity resolution", async () => {
+    const provider = support.createProvider();
+    const workerService = support.createService(provider);
+    const environment = await workerService.create("development", "request-live-identity");
+    const record = expectDefined(
+      support.testState.store.get(environment.environmentId),
+      "created worker environment",
+    );
+    const leaseId = expectDefined(record.leaseId, "created worker lease");
+    let releaseIdentity!: () => void;
+    const identityPending = new Promise<void>((resolve) => {
+      releaseIdentity = resolve;
+    });
+    const identityEntered = vi.fn();
+    let authorized = true;
+    const resolveSshIdentity = vi.fn(async ({ assertAuthorized }) => {
+      assertAuthorized();
+      identityEntered();
+      await identityPending;
+      assertAuthorized();
+      return { kind: "path" as const, path: "/keys/worker" };
+    });
+    const identityResolverFor = createWorkerSshIdentityResolver({
+      assertCurrent: () => {},
+      callProvider: async (_environmentId, run) => await run(),
+      requireWorkerProfile: () => ({ region: "test" }),
+      resolveSshIdentity,
+    });
+    const identity = identityResolverFor(record, provider, leaseId, () => {
+      if (!authorized) {
+        throw new Error("session dispatch authority closed");
+      }
+    })(support.SSH_ENDPOINT.keyRef);
+
+    await vi.waitFor(() => expect(identityEntered).toHaveBeenCalledOnce());
+    authorized = false;
+    releaseIdentity();
+
+    await expect(identity).rejects.toThrow("session dispatch authority closed");
+    expect(resolveSshIdentity).toHaveBeenCalledOnce();
   });
 
   it("aborts a timed-out SSH bootstrap before tearing down its lease", async () => {

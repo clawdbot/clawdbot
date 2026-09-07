@@ -1,7 +1,15 @@
 import type { SecretRef } from "../../config/types.secrets.js";
-import type { WorkerProfile, WorkerProvider, WorkerSshIdentity } from "../../plugins/types.js";
+import type {
+  WorkerProfile,
+  WorkerProvider,
+  WorkerSshIdentity,
+  WorkerSshIdentityRequestV2,
+} from "../../plugins/types.js";
 
-type GenericWorkerSshIdentityResolver = (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
+type GenericWorkerSshIdentityResolver = (
+  keyRef: SecretRef,
+  assertAuthorized: () => void,
+) => Promise<WorkerSshIdentity>;
 
 function requireIdentity(value: unknown): WorkerSshIdentity {
   if (
@@ -35,14 +43,19 @@ export async function resolveWorkerSshIdentity(params: {
   leaseId: string;
   profile: WorkerProfile;
   keyRef: SecretRef;
+  assertAuthorized: () => void;
   resolveGeneric: GenericWorkerSshIdentityResolver;
 }): Promise<WorkerSshIdentity> {
+  params.assertAuthorized();
+  const request: WorkerSshIdentityRequestV2 = {
+    leaseId: params.leaseId,
+    profile: params.profile,
+    keyRef: params.keyRef,
+    assertAuthorized: params.assertAuthorized,
+  };
   const identity = params.provider.resolveSshIdentity
-    ? await params.provider.resolveSshIdentity({
-        leaseId: params.leaseId,
-        profile: params.profile,
-        keyRef: params.keyRef,
-      })
-    : await params.resolveGeneric(params.keyRef);
+    ? await params.provider.resolveSshIdentity(request)
+    : await params.resolveGeneric(params.keyRef, params.assertAuthorized);
+  params.assertAuthorized();
   return requireIdentity(identity);
 }

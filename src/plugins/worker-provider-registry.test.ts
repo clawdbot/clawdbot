@@ -1,9 +1,10 @@
 /** Covers cloud-worker provider manifest ownership, uniqueness, and lookup ordering. */
 import { describe, expect, it } from "vitest";
+import { resolveWorkerSshIdentity } from "../gateway/worker-environments/identity.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import type { WorkerProvider } from "./types.js";
+import type { WorkerProvider, WorkerProviderV2 } from "./types.js";
 import { resolveDurableWorkerProviderAutoEnabledReasons } from "./worker-provider-manifest.js";
 
 function createTestRegistry() {
@@ -128,17 +129,86 @@ describe("worker provider registry", () => {
     );
   });
 
-  it("registers both placement modes in canonical order", () => {
+  it("registers V2 placement modes and authority-bound SSH identity resolution", async () => {
+    const pluginRegistry = createTestRegistry();
+    let authorized = true;
+    let resolutions = 0;
+    const provider: WorkerProviderV2 = {
+      ...createWorkerProvider("static-ssh"),
+      supportedExecutionModes: ["worker-turn", "remote-exec"],
+      provisionDelegated: async () => {
+        throw new Error("not called");
+      },
+      resolveSshIdentity: async ({ assertAuthorized }) => {
+        assertAuthorized();
+        resolutions += 1;
+        return { kind: "path", path: "/keys/provider-owned" };
+      },
+    };
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    const registered = pluginRegistry.registry.workerProviders.get("static-ssh")?.provider;
+    expect(registered).toBe(provider);
+    expect(pluginRegistry.registry.diagnostics).toEqual([]);
+    if (!registered) {
+      throw new Error("V2 provider was not registered");
+    }
+    const resolve = () =>
+      resolveWorkerSshIdentity({
+        provider: registered,
+        leaseId: "provider-lease",
+        profile: {},
+        keyRef: { source: "file", provider: "default", id: "/key" },
+        assertAuthorized: () => {
+          if (!authorized) {
+            throw new Error("provider authority closed");
+          }
+        },
+        resolveGeneric: async () => {
+          throw new Error("unexpected generic resolver");
+        },
+      });
+    await expect(resolve()).resolves.toEqual({ kind: "path", path: "/keys/provider-owned" });
+    authorized = false;
+    await expect(resolve()).rejects.toThrow("provider authority closed");
+    expect(resolutions).toBe(1);
+  });
+
+  it("warns legacy placement providers without dropping direct lifecycle support", () => {
     const pluginRegistry = createTestRegistry();
     const provider = {
       ...createWorkerProvider("static-ssh"),
-      supportedExecutionModes: ["worker-turn", "remote-exec"],
+      supportedExecutionModes: ["remote-exec"],
     } satisfies WorkerProvider;
 
     pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
 
     expect(pluginRegistry.registry.workerProviders.get("static-ssh")?.provider).toBe(provider);
-    expect(pluginRegistry.registry.diagnostics).toEqual([]);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual({
+      level: "warn",
+      pluginId: "owner",
+      source: "/tmp/owner/index.js",
+      message:
+        "worker provider static-ssh advertises delegated placement without provisionDelegated; direct lifecycle remains available, but session placement is disabled. Implement WorkerProviderV2 and revalidate options.assertAuthorized before each external effect",
+    });
+  });
+
+  it("rejects a malformed delegated provisioning capability", () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      provisionDelegated: true,
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message: "worker provider registration provisionDelegated must be a function",
+      }),
+    );
   });
 
   it.each([

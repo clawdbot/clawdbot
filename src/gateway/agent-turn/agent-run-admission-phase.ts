@@ -561,6 +561,7 @@ export async function prepareAgentRunDispatch(params: {
   let assertInputAdmissionCurrent = params.assertAdmissionCurrent;
   let userTurn: PreparedAgentRunUserTurn;
   try {
+    assertInputAdmissionCurrent?.();
     userTurn = await prepareAgentRunUserTurn({
       assertCurrent: () => {
         assertInputAdmissionCurrent?.();

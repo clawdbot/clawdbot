@@ -13,6 +13,7 @@ import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
 } from "./placement-record.js";
+import type { WorkerDelegatedSpawnOperation } from "./placement-session-tool-operations.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerTunnelHandle,
@@ -106,6 +107,8 @@ export type WorkerPlacementDispatchRequest = {
     providerId: string;
     profileSnapshot: WorkerProfile;
   };
+  /** Private durable owner used only while a worker session tool provisions its exact child. */
+  delegatedSpawnOperation?: WorkerDelegatedSpawnOperation;
 };
 
 export type WorkerPlacementDispatchAdmission = <T>(

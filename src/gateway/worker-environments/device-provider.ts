@@ -8,7 +8,7 @@ import {
 import {
   WorkerProviderError,
   type WorkerProfile,
-  type WorkerProvider,
+  type WorkerProviderV2,
 } from "../../plugins/types.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -138,24 +138,42 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       ...(unavailableReason ? { unavailableReason } : {}),
     };
   };
-  const provider: WorkerProvider = {
+  const resolveAllocation: WorkerProviderV2["resolveAllocation"] = async (
+    profile,
+    operationId,
+  ) => ({
+    leaseId: deviceLeaseId(requireDeviceId(profile), operationId),
+    sharedHost: true,
+  });
+  const provision: WorkerProviderV2["provision"] = async (profile, operationId) => {
+    const deviceId = requireDeviceId(profile);
+    const availability = await resolveAvailability(deviceId);
+    if (!availability.available) {
+      throw new WorkerProviderError(deviceUnavailableText(deviceId, availability));
+    }
+    return {
+      ...(await resolveAllocation(profile, operationId)),
+      node: { deviceId },
+    };
+  };
+  const provider: WorkerProviderV2 = {
     id: DEVICE_WORKER_PROVIDER_ID,
     supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
-    resolveAllocation: async (profile, operationId) => ({
-      leaseId: deviceLeaseId(requireDeviceId(profile), operationId),
-      sharedHost: true,
-    }),
-    provision: async (profile, operationId) => {
-      const deviceId = requireDeviceId(profile);
-      const availability = await resolveAvailability(deviceId);
-      if (!availability.available) {
-        throw new WorkerProviderError(deviceUnavailableText(deviceId, availability));
-      }
-      return {
-        ...(await provider.resolveAllocation(profile, operationId)),
-        node: { deviceId },
+    resolveAllocation,
+    provision,
+    provisionDelegated: async (profile, operationId, provisionOptions) => {
+      const assertAuthorized = () => {
+        try {
+          provisionOptions.assertAuthorized();
+        } catch (error) {
+          throw WorkerProviderError.cleanupComplete(error);
+        }
       };
+      assertAuthorized();
+      const lease = await provision(profile, operationId, provisionOptions);
+      assertAuthorized();
+      return lease;
     },
     inspect: async ({ profile }) => {
       const deviceId = requireDeviceId(profile);

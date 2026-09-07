@@ -144,6 +144,7 @@ export type {
   WorkerMachineOption,
   WorkerProfile,
   WorkerProvider,
+  WorkerProviderV2,
   WorkerSshEndpoint,
   WorkerSshIdentity,
   WorkerSshIdentityRequest,

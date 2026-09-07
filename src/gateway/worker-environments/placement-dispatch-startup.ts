@@ -234,6 +234,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       environmentId: provisioned.environmentId,
       ownerEpoch: provisioned.ownerEpoch,
       sessionId: request.sessionId,
+      authorize: params.authorize,
     });
     params.signal?.throwIfAborted();
     params.authorize?.();
@@ -249,6 +250,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       const tunnel = await environments.startTunnel({
         environmentId: provisioned.environmentId,
         ownerEpoch,
+        ...(params.authorize ? { authorize: params.authorize } : {}),
       });
       params.signal?.throwIfAborted();
       params.authorize?.();
@@ -310,6 +312,7 @@ export function createWorkerPlacementDispatchStartup(options: {
               sessionId: request.sessionId,
               generation: placement.generation,
               ...(gitAuthor ? { gitAuthor } : {}),
+              authorize: assertSyncOwner,
             });
       assertSyncOwner();
       params.signal?.throwIfAborted();
@@ -465,15 +468,35 @@ export function createWorkerPlacementDispatchStartup(options: {
             recoveryRunStarted = true;
             try {
               signal?.throwIfAborted();
-              const initialEnvironment = environments.get(environmentId);
-              if (initialEnvironment?.environmentId !== environmentId) {
-                throw new Error("Provisioning worker environment record is missing");
-              }
-              if (initialEnvironment.destroyRequestedAtMs !== null) {
-                throw new Error("Provisioning worker environment destruction was requested");
-              }
-              await reconcileEnvironmentCore(signal);
-              signal?.throwIfAborted();
+              const assertRecoveryCurrent = () => {
+                signal?.throwIfAborted();
+                const current = placements.get(placement.sessionId);
+                if (!current) {
+                  throw new Error("Worker placement authority disappeared during recovery");
+                }
+                const environment = environments.get(environmentId);
+                if (environment?.environmentId !== environmentId) {
+                  throw new Error("Provisioning worker environment record is missing");
+                }
+                if (environment.destroyRequestedAtMs !== null) {
+                  throw new Error("Provisioning worker environment destruction was requested");
+                }
+                if (
+                  current.state !== recoveryOwnedPlacement.state ||
+                  current.generation !== recoveryOwnedPlacement.generation ||
+                  current.environmentId !== environmentId ||
+                  current.sessionKey !== placement.sessionKey ||
+                  current.agentId !== placement.agentId ||
+                  current.executionMode !== placement.executionMode
+                ) {
+                  throw new Error(
+                    "Worker placement authority changed during provisioning recovery",
+                  );
+                }
+              };
+              assertRecoveryCurrent();
+              await reconcileEnvironmentCore(signal, undefined, assertRecoveryCurrent);
+              assertRecoveryCurrent();
               const current = placements.get(placement.sessionId);
               if (
                 current?.state !== "provisioning" ||
@@ -521,6 +544,7 @@ export function createWorkerPlacementDispatchStartup(options: {
                 onTransition: report,
                 signal,
                 recovery: true,
+                authorize: assertRecoveryCurrent,
               });
             } catch (error) {
               // Keep teardown under the same session lifecycle fence that admitted recovery.

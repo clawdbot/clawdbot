@@ -582,6 +582,44 @@ describe("gateway agent handler", () => {
     expect(result.payloads?.[0]?.text).toBe("✅ Session reset.");
   });
 
+  it("does not acknowledge a bare /reset after delegated runtime authority closes", async () => {
+    let authorityActive = true;
+    mockMainSessionEntry({ sessionId: "existing-session-id" });
+    mocks.performGatewaySessionReset.mockClear();
+    mocks.agentCommand.mockClear();
+    mocks.performGatewaySessionReset.mockImplementation(async () => {
+      authorityActive = false;
+      return {
+        ok: true,
+        key: "agent:main:main",
+        entry: { sessionId: "reset-session-id" },
+      };
+    });
+    const client = operatorWriteCliClient(["operator.admin"]);
+    client.internal = {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      } as never,
+    };
+    const context = makeContext();
+    context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
+
+    const respond = await invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-reset-closed-authority",
+      },
+      { reqId: "4-reset-closed-authority", client, context },
+    );
+
+    expect(mocks.performGatewaySessionReset).toHaveBeenCalledOnce();
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expectRespondError(respond, { message: "agent runtime authority is no longer active" });
+  });
+
   it("dedupes bare /reset retries after returning the terminal ack", async () => {
     mockSessionResetSuccess({ reason: "reset" });
     mocks.performGatewaySessionReset.mockClear();

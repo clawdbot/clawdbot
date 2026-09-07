@@ -198,6 +198,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
           const tunnel = await environments.startTunnel({
             environmentId: current.environmentId,
             ownerEpoch: current.activeOwnerEpoch,
+            authorize: reauthorize,
           });
           const reclaimed = await options.workspaceOperations.run(
             current.environmentId,

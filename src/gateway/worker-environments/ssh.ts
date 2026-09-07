@@ -128,11 +128,13 @@ export function resolveWorkerSshSandboxSettings(params: {
 
 /** Materializes one pinned identity/known-hosts context for a complete SSH ownership lifetime. */
 export async function prepareWorkerSsh(params: {
+  assertCurrent?: () => void;
   ssh: WorkerSshEndpoint;
   pinnedHostKey?: string;
   resolveIdentity: WorkerSshIdentityResolver;
   temporaryDirectoryPrefix?: string;
 }): Promise<PreparedWorkerSsh> {
+  params.assertCurrent?.();
   if (params.pinnedHostKey === undefined) {
     throw new Error(
       "Worker SSH setup is missing pinnedHostKey; WorkerProvider.provision() must return ssh.hostKey",
@@ -157,7 +159,9 @@ export async function prepareWorkerSsh(params: {
     ),
   );
   try {
+    params.assertCurrent?.();
     const identity = await params.resolveIdentity(params.ssh.keyRef);
+    params.assertCurrent?.();
     let identityPath: string;
     if (identity.kind === "path") {
       const resolvedPath = identity.path.trim();
@@ -176,12 +180,15 @@ export async function prepareWorkerSsh(params: {
       }
       identityPath = path.join(temporaryDir, "identity");
       await fs.writeFile(identityPath, normalizedContents, { mode: 0o600 });
+      params.assertCurrent?.();
       await fs.chmod(identityPath, 0o600);
+      params.assertCurrent?.();
     }
 
     const knownHostsPath = path.join(temporaryDir, "known_hosts");
     // The isolated file contains only trusted provisioning output; SSH never learns the first key.
     await fs.writeFile(knownHostsPath, knownHosts, { mode: 0o600 });
+    params.assertCurrent?.();
     let disposed = false;
     let selectedPort = endpoint.port;
     return {

@@ -502,6 +502,7 @@ type WorkerBootstrapDependencies = {
   runCommand?: WorkerBootstrapCommandRunner;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 function normalizeHandshake(artifact: WorkerInstallationArtifact): WorkerAdmissionHandshake {
@@ -733,18 +734,22 @@ export async function bootstrapWorker(
   const uploadFilename = workerUploadFilename(receipt.bundleHash, operationToken);
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const prepared = await prepareWorkerSsh({
+    assertCurrent: dependencies.assertCurrent,
     ssh: request.ssh,
     pinnedHostKey: request.pinnedHostKey,
     resolveIdentity: dependencies.resolveIdentity,
     temporaryDirectoryPrefix: "openclaw-worker-bootstrap-",
   });
-  let needsUploadCleanup = true;
+  let needsUploadCleanup = false;
   try {
+    dependencies.assertCurrent?.();
+    needsUploadCleanup = true;
     const preflightResult = await runWorkerSshCandidates(
       prepared,
       timeoutMs,
-      (port, remainingTimeoutMs) =>
-        runSshScript({
+      (port, remainingTimeoutMs) => {
+        dependencies.assertCurrent?.();
+        return runSshScript({
           prepared,
           runCommand,
           script: PREFLIGHT_SCRIPT,
@@ -757,7 +762,8 @@ export async function bootstrapWorker(
           timeoutMs: remainingTimeoutMs,
           port,
           signal: dependencies.signal,
-        }),
+        });
+      },
     );
     const preflight = parsePreflight(preflightResult, receipt, uploadFilename);
     if (preflight.action === "current") {
@@ -770,8 +776,9 @@ export async function bootstrapWorker(
       const transfer = await runWorkerSshCandidates(
         prepared,
         transferTimeoutMs,
-        (port, remainingTimeoutMs) =>
-          runCommand(
+        (port, remainingTimeoutMs) => {
+          dependencies.assertCurrent?.();
+          return runCommand(
             [
               "scp",
               ...workerSshOptions(prepared, { forwarding: "disabled" }),
@@ -782,31 +789,37 @@ export async function bootstrapWorker(
               `${prepared.scpTarget}:${preflight.path}`,
             ],
             workerSshCommandOptions({ timeoutMs: remainingTimeoutMs, signal: dependencies.signal }),
-          ),
+          );
+        },
       );
       if (!isSuccess(transfer)) {
         throw commandFailure("bundle transfer", transfer);
       }
     }
 
-    const install = await runWorkerSshCandidates(prepared, timeoutMs, (port, remainingTimeoutMs) =>
-      runSshScript({
-        prepared,
-        runCommand,
-        script: INSTALL_SCRIPT,
-        scriptArgs: [
-          artifact.install,
-          receipt.bundleHash,
-          artifact.install === "npm" ? artifact.packageSpec : "",
-          artifact.install === "npm" ? artifact.packageIntegrity : "",
-          JSON.stringify(receipt),
-          preflight.path,
-          artifact.install === "bundle" ? artifact.tarballSha256 : "",
-        ],
-        timeoutMs: remainingTimeoutMs,
-        port,
-        signal: dependencies.signal,
-      }),
+    const install = await runWorkerSshCandidates(
+      prepared,
+      timeoutMs,
+      (port, remainingTimeoutMs) => {
+        dependencies.assertCurrent?.();
+        return runSshScript({
+          prepared,
+          runCommand,
+          script: INSTALL_SCRIPT,
+          scriptArgs: [
+            artifact.install,
+            receipt.bundleHash,
+            artifact.install === "npm" ? artifact.packageSpec : "",
+            artifact.install === "npm" ? artifact.packageIntegrity : "",
+            JSON.stringify(receipt),
+            preflight.path,
+            artifact.install === "bundle" ? artifact.tarballSha256 : "",
+          ],
+          timeoutMs: remainingTimeoutMs,
+          port,
+          signal: dependencies.signal,
+        });
+      },
     );
     if (
       install.code === NPM_MISSING_EXIT_CODE ||

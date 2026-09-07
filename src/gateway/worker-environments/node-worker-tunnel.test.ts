@@ -47,6 +47,41 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("node worker tunnel manager", () => {
+  it("does not expose a tunnel after authority closes during workspace binding", async () => {
+    const record = environment();
+    const binding = createDeferred<undefined>();
+    const transfer = workspaceTransfer();
+    const prepareSync = vi.fn();
+    transfer.prepareSync = prepareSync;
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      listEnvironments: () => [record],
+      getTransport: transport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: transfer,
+    });
+    const resolveBinding = vi.fn(async () => await binding.promise);
+    manager.bindWorkspaceBindingResolver(resolveBinding);
+    let authorized = true;
+    const starting = manager.start({
+      ...startRequest(),
+      authorize: () => {
+        if (!authorized) {
+          throw new Error("session dispatch authority closed");
+        }
+      },
+    });
+    await vi.waitFor(() => expect(resolveBinding).toHaveBeenCalledOnce());
+    authorized = false;
+    binding.resolve(undefined);
+
+    await expect(starting).rejects.toThrow("session dispatch authority closed");
+    expect(prepareSync).not.toHaveBeenCalled();
+    expect(manager.status(record.environmentId)).toBe("stopped");
+  });
+
   it.each([
     ["gateway-push", true],
     ["published-origin", false],

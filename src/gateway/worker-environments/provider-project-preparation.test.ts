@@ -127,7 +127,12 @@ describe("worker provider project preparation ownership", () => {
         settled = true;
       });
     try {
-      await entered.promise;
+      await Promise.race([
+        entered.promise,
+        creation.then((error) => {
+          throw error;
+        }),
+      ]);
       controller.abort(new DOMException("Stop project transfer", "AbortError"));
       await setImmediate();
       expect(transportSignal?.aborted).toBe(true);
@@ -144,6 +149,38 @@ describe("worker provider project preparation ownership", () => {
     expect(await creation).toMatchObject({ name: "AbortError" });
     expect(events).toEqual(["transport settled"]);
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+  });
+
+  it("rejects project transfer after delegated placement authority closes", async () => {
+    const git = await repository("closed-project-authority");
+    const runScript = vi.fn(async () => '{"ready":true}');
+    const upload = vi.fn(async () => {});
+    let authorized = true;
+    const service = createService(async (_profile, _operationId, options) => {
+      const project = expectDefined(options?.project, "provider project preparation");
+      authorized = false;
+      await project.prepare({ runScript, upload });
+      return { leaseId: "unexpected-project-lease", ssh: support.SSH_ENDPOINT };
+    });
+
+    await expect(
+      service.create(
+        "development",
+        "closed-project-authority",
+        undefined,
+        "remote-exec",
+        git.root,
+        undefined,
+        () => {
+          if (!authorized) {
+            throw new Error("placement authority closed");
+          }
+        },
+      ),
+    ).rejects.toMatchObject({ code: "provider_failure" });
+
+    expect(runScript).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
   });
 
   it("persists project identity and the Git base before provision and replays them after restart and HEAD advance", async () => {

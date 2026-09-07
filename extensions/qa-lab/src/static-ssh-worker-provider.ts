@@ -1,7 +1,7 @@
 // QA Lab static-SSH worker provider for cloud-worker feature development.
 import type {
   WorkerProfile,
-  WorkerProvider,
+  WorkerProviderV2,
   WorkerSshEndpoint,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
@@ -67,22 +67,34 @@ function parseStaticSshWorkerSettings(profile: WorkerProfile): WorkerSshEndpoint
   };
 }
 
-export function createStaticSshWorkerProvider(): WorkerProvider {
-  const resolveAllocation: WorkerProvider["resolveAllocation"] = async (_profile, opId) => {
+export function createStaticSshWorkerProvider(): WorkerProviderV2 {
+  const resolveAllocation: WorkerProviderV2["resolveAllocation"] = async (_profile, opId) => {
     if (!opId.trim()) {
       throw new Error("static-ssh provision operation id must be non-empty");
     }
     return { leaseId: `${STATIC_SSH_LEASE_PREFIX}${opId}`, sharedHost: true };
   };
+  const provision: WorkerProviderV2["provision"] = async (profile, opId) => ({
+    ...(await resolveAllocation(profile, opId)),
+    ssh: parseStaticSshWorkerSettings(profile),
+  });
   return {
     id: STATIC_SSH_WORKER_PROVIDER_ID,
     supportedExecutionModes: ["remote-exec"],
     resolveAllocation,
-    async provision(profile, opId) {
-      return {
-        ...(await resolveAllocation(profile, opId)),
-        ssh: parseStaticSshWorkerSettings(profile),
+    provision,
+    async provisionDelegated(profile, opId, options) {
+      const assertAuthorized = () => {
+        try {
+          options.assertAuthorized();
+        } catch (error) {
+          throw WorkerProviderError.cleanupComplete(error);
+        }
       };
+      assertAuthorized();
+      const lease = await provision(profile, opId, options);
+      assertAuthorized();
+      return lease;
     },
     async inspect({ leaseId }) {
       const active =

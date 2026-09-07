@@ -19,8 +19,8 @@ export function createWorkerWorkspaceQuiescence(params: {
   ownerSignal: AbortSignal;
   sharedHost: boolean;
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
-}): (remoteWorkspaceDir: string) => Promise<WorkerWorkspaceQuiescence> {
-  return async (remoteWorkspaceDir) => {
+}): (remoteWorkspaceDir: string, authorize?: () => void) => Promise<WorkerWorkspaceQuiescence> {
+  return async (remoteWorkspaceDir, authorize) => {
     const posixAbsolute = path.posix.isAbsolute(remoteWorkspaceDir);
     const windowsAbsolute = path.win32.isAbsolute(remoteWorkspaceDir);
     if (!posixAbsolute && !windowsAbsolute) {
@@ -30,21 +30,29 @@ export function createWorkerWorkspaceQuiescence(params: {
       throw new Error("Windows worker workspace quiescence requires a shared host");
     }
     const hostMode = params.sharedHost ? "shared-host" : "dedicated";
-    const run = async (argv: string[]) => {
-      const result = await params.runWorkspaceCommand({ transportRetry: "never", argv });
+    const run = async (argv: string[], assertCurrent?: () => void) => {
+      assertCurrent?.();
+      const result = await params.runWorkspaceCommand({
+        transportRetry: "never",
+        argv,
+        assertCurrent,
+      });
       if (!workerWorkspaceCommandSucceeded(result)) {
         throw workspaceSyncError(result);
       }
       return result;
     };
-    const result = await run([
-      "node",
-      "-e",
-      REMOTE_WORKSPACE_QUIESCE_JS,
-      remoteWorkspaceDir,
-      String(WORKSPACE_QUIESCENCE_TIMEOUT_MS),
-      hostMode,
-    ]);
+    const result = await run(
+      [
+        "node",
+        "-e",
+        REMOTE_WORKSPACE_QUIESCE_JS,
+        remoteWorkspaceDir,
+        String(WORKSPACE_QUIESCENCE_TIMEOUT_MS),
+        hostMode,
+      ],
+      authorize,
+    );
     const acknowledgement = /^quiesced ([a-f0-9]{32})$/u.exec(result.stdout.trim());
     if (!acknowledgement) {
       throw new Error("Worker workspace quiescence returned an invalid acknowledgement");
@@ -57,16 +65,19 @@ export function createWorkerWorkspaceQuiescence(params: {
     let renewalQueue = Promise.resolve();
     const renew = (validationMode: "heartbeat" | "final") => {
       const operation = renewalQueue.then(async () => {
-        const renewedResult = await run([
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-          remoteWorkspaceDir,
-          nonce,
-          String(WORKSPACE_QUIESCENCE_TIMEOUT_MS),
-          validationMode,
-          hostMode,
-        ]);
+        const renewedResult = await run(
+          [
+            "node",
+            "-e",
+            REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+            remoteWorkspaceDir,
+            nonce,
+            String(WORKSPACE_QUIESCENCE_TIMEOUT_MS),
+            validationMode,
+            hostMode,
+          ],
+          validationMode === "final" ? authorize : undefined,
+        );
         if (renewedResult.stdout.trim() !== `renewed ${nonce}`) {
           throw new Error(
             "Worker workspace quiescence renewal returned an invalid acknowledgement",
@@ -76,6 +87,7 @@ export function createWorkerWorkspaceQuiescence(params: {
       renewalQueue = operation.catch(() => undefined);
       return operation;
     };
+    // Renewal and release maintain an acquired nonce; they must settle even after caller closure.
     const renewalLoop = (async () => {
       while (!renewalSignal.aborted) {
         if (
@@ -102,6 +114,7 @@ export function createWorkerWorkspaceQuiescence(params: {
           });
         }
         await renew("final");
+        authorize?.();
       },
       resume: async () => {
         releasePromise ??= (async () => {

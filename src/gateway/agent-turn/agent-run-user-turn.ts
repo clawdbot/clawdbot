@@ -149,6 +149,7 @@ export async function prepareAgentRunUserTurn(params: {
         logContext: "agent",
       });
       durableMediaIds = persistedMedia.entries.map((entry) => entry.id);
+      params.assertCurrent();
       const media = persistedMedia.entries.map((entry) => entry.fact);
       const slots = persistedMedia.entries.flatMap((entry, factIndex) =>
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
@@ -171,6 +172,7 @@ export async function prepareAgentRunUserTurn(params: {
       recorder = createUserTurnTranscriptRecorder({
         input,
         target: () => {
+          params.assertCurrent();
           const loaded = loadSessionEntry(params.resolvedSessionKey!, {
             agentId: params.activeSessionAgentId,
             clone: false,
@@ -196,7 +198,11 @@ export async function prepareAgentRunUserTurn(params: {
           };
         },
         errorContext: "gateway agent user turn transcript",
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        beforeMessageWrite: (writeContext) => {
+          const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
+          params.assertCurrent();
+          return preparedMessage;
+        },
         onPersistenceError: (error) => {
           params.context.logGateway.warn(
             `gateway agent user transcript persistence failed: ${formatForLog(error)}`,

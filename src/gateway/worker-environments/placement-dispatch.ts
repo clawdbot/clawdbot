@@ -33,6 +33,7 @@ import {
   type WorkerPlacementReclaimOptions,
 } from "./placement-reclaim.js";
 import { reportPlacementTransition } from "./placement-record.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,
@@ -40,7 +41,6 @@ import type {
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
-import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
@@ -182,6 +182,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         to: "provisioning",
         expectedGeneration: placement.generation,
         patch: { environmentId: expectedEnvironmentId },
+        delegatedSpawnOperation: request.delegatedSpawnOperation,
       });
       reportPlacementTransition(onTransition, placement);
       const environment = request.inheritedProfile
@@ -196,6 +197,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             request.executionMode,
             projectPath,
             signal,
+            assertCurrent,
           )
         : await environments.create(
             request.profileId,
@@ -204,6 +206,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             request.executionMode,
             projectPath,
             signal,
+            assertCurrent,
           );
       return await startup.continueProvisionedDispatch({
         request,
@@ -373,7 +376,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   };
 
   const abandonment = createWorkerPlacementMoveAbandonment(options);
-
   const moveService = createWorkerPlacementMoveService({
     placements,
     environments,
@@ -386,7 +388,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     resolveDestination: options.resolveMoveDestination,
     prepareGatewayMove: options.prepareGatewayMove,
   });
-
   return {
     dispatch,
     forceDestroyEnvironment: abandonment.forceDestroyEnvironment,
@@ -397,7 +398,3 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     resumeProvisioning: startup.resumeProvisioning,
   };
 }
-
-export type WorkerPlacementDispatchService = ReturnType<
-  typeof createWorkerPlacementDispatchService
->;

@@ -261,6 +261,7 @@ export async function ensureDevicePairSetupBootstrapToken(params: {
   setupId: string;
   baseDir?: string;
   profile: DeviceBootstrapProfileInput;
+  assertCurrent?: () => void;
 }): Promise<EnsuredDevicePairSetupBootstrap> {
   const setupId = params.setupId.trim();
   if (!setupId) {
@@ -302,6 +303,7 @@ export async function ensureDevicePairSetupBootstrapToken(params: {
       redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
       issuedAtMs,
     };
+    params.assertCurrent?.();
     persistState(state, params.baseDir);
     return { status: "pending", token, expiresAtMs, setupId };
   });

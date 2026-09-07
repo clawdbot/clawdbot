@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
 import {
   MANIFEST_REF,
@@ -45,7 +46,11 @@ describe("worker placement shutdown replay", () => {
     const transitions: string[] = [];
     const request = { ...REQUEST, executionMode: "remote-exec" as const };
     const rejected = expect(
-      dispatch.dispatch(request, (placement) => transitions.push(placement.state)),
+      dispatch.dispatch(
+        request,
+        (placement) => transitions.push(placement.state),
+        () => {},
+      ),
     ).rejects.toThrow("provider interrupted");
     await provisionStarted.promise;
     const provisioning = placements.get(REQUEST.sessionId)!;
@@ -88,11 +93,17 @@ describe("worker placement shutdown replay", () => {
     }));
     const attach = vi.spyOn(restarted, "attachSession");
     const recovery = createRecoveryService(placements, restarted);
-    const owner = placements.get(REQUEST.sessionId)!;
-    if (owner.state !== "provisioning") {
-      throw new Error("restart lost its provisioning owner");
+    const closeGuard = installWorkerPlacementReconcileGuard({
+      placements,
+      environments: restarted,
+      dispatch: recovery,
+      isStopping: () => false,
+    });
+    try {
+      await restarted.reconcileEnvironment(environmentId);
+    } finally {
+      await closeGuard();
     }
-    await recovery.resumeProvisioning(owner, () => restarted.reconcileEnvironment(environmentId));
 
     expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", environmentId });
     expect(support.testState.store.get(environmentId)).toMatchObject({
@@ -212,9 +223,9 @@ describe("worker placement shutdown replay", () => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const dispatch = createRecoveryService(placements, environments, () => shutdown);
 
-      await expect(dispatch.dispatch({ ...REQUEST, executionMode: "remote-exec" })).rejects.toThrow(
-        "provider interrupted",
-      );
+      await expect(
+        dispatch.dispatch({ ...REQUEST, executionMode: "remote-exec" }, undefined, () => {}),
+      ).rejects.toThrow("provider interrupted");
 
       expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
       expect(placements.get(REQUEST.sessionId)?.terminalAtMs).not.toBeNull();

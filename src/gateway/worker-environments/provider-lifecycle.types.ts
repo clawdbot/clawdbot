@@ -39,29 +39,38 @@ export type WorkerProviderLifecycleInputOptions = {
     installation: WorkerInstallationArtifact;
     resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
     signal: AbortSignal;
+    authorize?: () => void;
   }) => Promise<WorkerAdmissionHandshake>;
   resolveSshIdentity?: (params: {
     provider: WorkerProvider;
     leaseId: string;
     profile: WorkerProfile;
     keyRef: SecretRef;
+    assertAuthorized: () => void;
   }) => Promise<WorkerSshIdentity>;
   ensureNodeWorkerBundle?: (params: {
     deviceId: string;
     artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
     prewarm: boolean;
     signal?: AbortSignal;
+    authorize?: () => void;
   }) => Promise<WorkerAdmissionHandshake>;
-  prepareNodeBootstrap?: (record: WorkerEnvironmentRecord, signal?: AbortSignal) => Promise<void>;
+  prepareNodeBootstrap?: (
+    record: WorkerEnvironmentRecord,
+    signal?: AbortSignal,
+    authorize?: () => void,
+  ) => Promise<void>;
   prepareNodeRuntime?: (
     record: WorkerEnvironmentRecord,
     bundle: Extract<WorkerInstallationArtifact, { install: "bundle" }>,
     signal?: AbortSignal,
+    authorize?: () => void,
   ) => Promise<WorkerNodeRuntimePreparation>;
   closeNodeRuntime?: (preparation: WorkerNodeRuntimePreparation) => void;
   prepareNodeEnrollment?: (
     record: WorkerEnvironmentRecord,
     signal?: AbortSignal,
+    authorize?: () => void,
   ) => Promise<WorkerNodeEnrollment>;
   closeNodeEnrollment?: (enrollment: WorkerNodeEnrollment) => void;
   retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;

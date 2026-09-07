@@ -506,7 +506,10 @@ describe("worker session placement gate", () => {
     ).toMatchObject({ kind: "execute" });
 
     const restarted = createWorkerSessionPlacementStore({ database });
-    expect(restarted.recoverWorkerSessionToolOperationsAfterRestart()).toBe(1);
+    expect(restarted.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
+      count: 1,
+      interruptedChildPlacements: [],
+    });
     expect(
       restarted.beginWorkerSessionToolOperation({
         claim: binding,
@@ -516,5 +519,160 @@ describe("worker session placement gate", () => {
       }),
     ).toEqual({ kind: "unknown" });
     expect(() => restarted.releaseTurn(claim)).not.toThrow();
+  });
+
+  it("retains an interrupted child fence across previous-reader recovery", () => {
+    const claim = preclaim("run-worker-child-crash-recovery");
+    const binding = bindingFor(claim);
+    const childSessionKey = "agent:main:subagent:interrupted-child";
+    const childSessionId = "session-interrupted-child";
+    const childEnvironmentId = "environment-interrupted-child";
+    store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "spawn-before-crash",
+        requestDigest: "spawn-before-crash-digest",
+        childSessionKey,
+      }),
+    ).toMatchObject({ kind: "execute" });
+    const childRequested = store.startDispatch({
+      sessionId: childSessionId,
+      sessionKey: childSessionKey,
+      agentId: "main",
+      executionMode: "worker-turn",
+    });
+    store.transition({
+      sessionId: childSessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: childRequested.generation,
+      patch: { environmentId: childEnvironmentId },
+      delegatedSpawnOperation: {
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "spawn-before-crash",
+        requestDigest: "spawn-before-crash-digest",
+      },
+    });
+    const interruptedChildPlacement = {
+      sessionId: childSessionId,
+      sessionKey: childSessionKey,
+      environmentId: childEnvironmentId,
+    };
+    const recoveryResultJson = JSON.stringify({
+      version: 1,
+      kind: "child-placement",
+      ...interruptedChildPlacement,
+    });
+    expect(
+      database.db
+        .prepare(
+          "SELECT status, result_json FROM worker_session_tool_operations WHERE tool_call_id = ?",
+        )
+        .get("spawn-before-crash"),
+    ).toEqual({ status: "running", result_json: recoveryResultJson });
+
+    const versionBefore = database.db.prepare("PRAGMA user_version").get();
+    // Current main's same-schema reader only marks running operations unknown.
+    database.db
+      .prepare(
+        "UPDATE worker_session_tool_operations SET status = 'unknown', updated_at_ms = ? WHERE status = 'running'",
+      )
+      .run(2_000);
+    expect(
+      database.db
+        .prepare(
+          "SELECT status, result_json FROM worker_session_tool_operations WHERE tool_call_id = ?",
+        )
+        .get("spawn-before-crash"),
+    ).toEqual({ status: "unknown", result_json: recoveryResultJson });
+    const candidateRestart = createWorkerSessionPlacementStore({ database });
+    expect(candidateRestart.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
+      count: 0,
+      interruptedChildPlacements: [interruptedChildPlacement],
+    });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual(versionBefore);
+  });
+
+  it("replaces a child recovery descriptor with the final tool result", () => {
+    const claim = preclaim("run-worker-child-completion");
+    const binding = bindingFor(claim);
+    const operation = {
+      sourceSessionId: claim.sessionId,
+      sourceClaimId: claim.claimId,
+      toolCallId: "completed-child-spawn",
+      requestDigest: "completed-child-spawn-digest",
+    };
+    const childSessionKey = "agent:main:subagent:completed-child";
+    store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: operation.toolCallId,
+        requestDigest: operation.requestDigest,
+        childSessionKey,
+      }),
+    ).toMatchObject({ kind: "execute" });
+    const requested = store.startDispatch({
+      sessionId: "session-completed-child",
+      sessionKey: childSessionKey,
+      agentId: "main",
+      executionMode: "worker-turn",
+    });
+    store.transition({
+      sessionId: requested.sessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: requested.generation,
+      patch: { environmentId: "environment-completed-child" },
+      delegatedSpawnOperation: operation,
+    });
+
+    expect(
+      store.completeWorkerSessionToolOperation({
+        ...operation,
+        resultJson: '{"status":"ok"}',
+      }),
+    ).toBe(true);
+    expect(
+      database.db
+        .prepare(
+          "SELECT status, result_json FROM worker_session_tool_operations WHERE tool_call_id = ?",
+        )
+        .get(operation.toolCallId),
+    ).toEqual({ status: "succeeded", result_json: '{"status":"ok"}' });
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: operation.toolCallId,
+        requestDigest: operation.requestDigest,
+        childSessionKey,
+      }),
+    ).toEqual({ kind: "completed", resultJson: '{"status":"ok"}' });
+  });
+
+  it("does not create a child placement fence before provisioning starts", () => {
+    const claim = preclaim("run-worker-child-before-provisioning");
+    const binding = bindingFor(claim);
+    store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "spawn-before-provisioning",
+        requestDigest: "spawn-before-provisioning-digest",
+        childSessionKey: "agent:main:subagent:not-provisioning",
+      }),
+    ).toMatchObject({ kind: "execute" });
+
+    const restarted = createWorkerSessionPlacementStore({ database });
+    expect(restarted.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
+      count: 1,
+      interruptedChildPlacements: [],
+    });
   });
 });

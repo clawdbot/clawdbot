@@ -129,8 +129,10 @@ export type {
   WorkerMachineOption,
   WorkerProfile,
   WorkerProvider,
+  WorkerProviderV2,
   WorkerSshEndpoint,
   WorkerSshIdentity,
+  WorkerSshIdentityRequestV2,
 } from "./capability-provider.types.js";
 export type {
   MigrationApplyResult,
