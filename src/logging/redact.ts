@@ -1125,7 +1125,8 @@ function shouldRedactStructuredAuthorizationCode(
     pathEndsWith(normalizedPath, ["nodeerror", "code"]) ||
     pathEndsWith(normalizedPath, ["status", "code"]) ||
     pathEndsWith(normalizedPath, ["details", "code"]) ||
-    pathEndsWith(normalizedPath, ["warnings", "code"])
+    pathEndsWith(normalizedPath, ["warnings", "code"]) ||
+    pathEndsWith(normalizedPath, ["cause", "code"])
   ) {
     return false;
   }
