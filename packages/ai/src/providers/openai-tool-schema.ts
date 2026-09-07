@@ -4,8 +4,12 @@
  * Caches normalized object inputs by provider compatibility so repeated inventory builds preserve identity.
  */
 import {
+  MAX_TOOL_SCHEMA_NESTING_DEPTH,
   normalizeToolParameterSchema,
+  SCHEMA_LITERAL_KEYS,
+  SCHEMA_MAP_KEYS,
   shouldOmitEmptyArrayItems,
+  ToolSchemaDepthLimitError,
   type ToolSchemaModelCompat,
 } from "./agent-tools-parameter-schema.js";
 import type { OpenAIToolProjection } from "./openai-tool-projection.js";
@@ -107,10 +111,20 @@ export function normalizeStrictOpenAIJsonSchema(
 }
 
 function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
+  // Shares the tool-schema depth convention: descending into a child schema node costs one
+  // level, containers cost zero, literal payloads never recurse. Without the cap a hostile MCP
+  // schema nested past the stack limit overflows as a RangeError mid-request.
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
+      // Scalar entries (required lists, type unions) are payloads, not child schema nodes.
+      const next =
+        !entry || typeof entry !== "object"
+          ? entry
+          : normalizeStrictOpenAIJsonSchemaRecursive(entry, depth + 1);
       changed ||= next !== entry;
       return next;
     });
@@ -124,10 +138,61 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
   let changed = false;
   const normalized = Object.fromEntries<unknown>(
     Object.entries(record).map(([key, value]) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(
-        value,
-        key === "properties" ? depth : depth + 1,
-      );
+      // Schema-map entries are user-named subschemas — a property can be called "default" — so
+      // traverse each entry value before the literal-keyword exemption below can apply.
+      if (SCHEMA_MAP_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+        let mapChanged = false;
+        const nextMap = Object.fromEntries(
+          // SAFETY: value is narrowed to a non-null, non-array object above.
+          Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => {
+            const nextEntry =
+              !entryValue || typeof entryValue !== "object"
+                ? entryValue
+                : normalizeStrictOpenAIJsonSchemaRecursive(entryValue, depth + 1);
+            mapChanged ||= nextEntry !== entryValue;
+            return [entryKey, nextEntry];
+          }),
+        );
+        changed ||= mapChanged;
+        return [key, mapChanged ? nextMap : value];
+      }
+      // Draft-07 dependencies mix subschemas with property-name arrays: normalize only the
+      // subschema values, keep name lists byte-identical. Entry names are user-chosen, so this
+      // branch must also win over the literal exemption (dependencies.default is a subschema).
+      if (key === "dependencies" && value && typeof value === "object" && !Array.isArray(value)) {
+        let depsChanged = false;
+        const nextDeps = Object.fromEntries(
+          // SAFETY: value is narrowed to a non-null, non-array object above.
+          Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => {
+            if (Array.isArray(entryValue)) {
+              return [entryKey, entryValue];
+            }
+            const nextEntry =
+              !entryValue || typeof entryValue !== "object"
+                ? entryValue
+                : normalizeStrictOpenAIJsonSchemaRecursive(entryValue, depth + 1);
+            depsChanged ||= nextEntry !== entryValue;
+            return [entryKey, nextEntry];
+          }),
+        );
+        changed ||= depsChanged;
+        return [key, depsChanged ? nextDeps : value];
+      }
+      // Literal payloads (const/default/enum/examples) are values, not schemas: preserve them
+      // without recursion so their depth can neither trip the cap nor abort request construction.
+      if (SCHEMA_LITERAL_KEYS.has(key)) {
+        return [key, value];
+      }
+      const next =
+        // Scalars are payloads, not child schema nodes: they cost no depth. Arrays are
+        // transparent containers whose object elements pay the one level — the same convention
+        // the inliner uses, so 130 nested single-element allOf chains measure 130 in every walker.
+        !value || typeof value !== "object"
+          ? value
+          : normalizeStrictOpenAIJsonSchemaRecursive(
+              value,
+              Array.isArray(value) ? depth : depth + 1,
+            );
       changed ||= next !== value;
       return [key, next];
     }),
@@ -168,7 +233,7 @@ export function normalizeOpenAIStrictToolParameters<T>(
 
 /** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
+  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema), 0);
 }
 
 type OpenAIStrictToolSchemaDiagnostic = {
@@ -199,9 +264,17 @@ export function findOpenAIStrictToolProjectionDiagnostics(
   ];
 }
 
-function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
+function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown, depth: number): boolean {
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
   if (Array.isArray(schema)) {
-    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatibleRecursive(entry));
+    return schema.every(
+      (entry) =>
+        !entry ||
+        typeof entry !== "object" ||
+        isStrictOpenAIJsonSchemaCompatibleRecursive(entry, depth + 1),
+    );
   }
   if (!schema || typeof schema !== "object") {
     return true;
@@ -237,12 +310,41 @@ function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
   }
 
   return Object.entries(record).every(([key, entry]) => {
-    if (key === "properties" && entry && typeof entry === "object" && !Array.isArray(entry)) {
-      return Object.values(entry as Record<string, unknown>).every((value) =>
-        isStrictOpenAIJsonSchemaCompatibleRecursive(value),
+    // Literal payloads are values, not schemas — nothing to check inside them.
+    if (SCHEMA_LITERAL_KEYS.has(key)) {
+      return true;
+    }
+    // Schema-map entry names are user-chosen, never keywords; check each subschema value.
+    if (SCHEMA_MAP_KEYS.has(key) && entry && typeof entry === "object" && !Array.isArray(entry)) {
+      // SAFETY: entry is narrowed to a non-null, non-array object above.
+      return Object.values(entry as Record<string, unknown>).every(
+        (value) =>
+          !value ||
+          typeof value !== "object" ||
+          isStrictOpenAIJsonSchemaCompatibleRecursive(value, depth + 1),
       );
     }
-    return isStrictOpenAIJsonSchemaCompatibleRecursive(entry);
+    // Draft-07 dependencies: subschema values must be compatible; property-name arrays pass.
+    if (key === "dependencies" && entry && typeof entry === "object" && !Array.isArray(entry)) {
+      // SAFETY: entry is narrowed to a non-null, non-array object above.
+      return Object.values(entry as Record<string, unknown>).every(
+        (value) =>
+          Array.isArray(value) ||
+          !value ||
+          typeof value !== "object" ||
+          isStrictOpenAIJsonSchemaCompatibleRecursive(value, depth + 1),
+      );
+    }
+    return (
+      // Scalars are payloads, not child schema nodes — nothing to check and no depth to pay.
+      !entry ||
+      typeof entry !== "object" ||
+      isStrictOpenAIJsonSchemaCompatibleRecursive(
+        entry,
+        // Same transparent-container convention as the normalizer: array elements pay the level.
+        Array.isArray(entry) ? depth : depth + 1,
+      )
+    );
   });
 }
 
