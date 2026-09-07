@@ -1,13 +1,6 @@
-// Firecrawl tests cover firecrawl client behavior — URL safety,
-// scrape payload parsing, and search-item extraction.
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 let firecrawlClient: typeof import("./firecrawl-client.js").testing;
-
-function requireSearchResult<T>(results: readonly T[], index: number): T {
-  return expectDefined(results[index], `firecrawl search result ${index}`);
-}
 
 beforeAll(async () => {
   firecrawlClient = (
@@ -19,9 +12,6 @@ afterAll(() => {
   vi.resetModules();
 });
 
-// ---------------------------------------------------------------------------
-// assertFirecrawlScrapeTargetAllowed
-// ---------------------------------------------------------------------------
 describe("assertFirecrawlScrapeTargetAllowed", () => {
   it("allows valid public HTTPS URLs", () => {
     expect(() =>
@@ -109,84 +99,58 @@ describe("assertFirecrawlScrapeTargetAllowed", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// resolveSearchItems
-// ---------------------------------------------------------------------------
 describe("resolveSearchItems", () => {
-  it("extracts items from a top-level data array (Firecrawl Search API)", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: [
+  it.each([
+    [
+      "extracts items from a top-level data array (Firecrawl Search API)",
+      {
+        data: [
+          { url: "https://example.com", title: "Example" },
+          { url: "https://openclaw.ai", title: "OpenClaw" },
+        ],
+      },
+      [
         { url: "https://example.com", title: "Example" },
         { url: "https://openclaw.ai", title: "OpenClaw" },
       ],
-    });
-
-    expect(result).toHaveLength(2);
-    expect(requireSearchResult(result, 0)).toMatchObject({
-      url: "https://example.com",
-      title: "Example",
-    });
-    expect(requireSearchResult(result, 1)).toMatchObject({
-      url: "https://openclaw.ai",
-      title: "OpenClaw",
-    });
-  });
-
-  it("extracts items from a results array", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      results: [{ url: "https://example.org", title: "Org" }],
-    });
-
-    expect(result).toHaveLength(1);
-    expect(requireSearchResult(result, 0).url).toBe("https://example.org");
-    expect(requireSearchResult(result, 0).title).toBe("Org");
-  });
-
-  it("extracts items from data.results (nested)", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: {
-        results: [
-          { url: "https://example.com/a", title: "A" },
-          { url: "https://example.com/b", title: "B" },
-        ],
+    ],
+    [
+      "extracts items from a results array",
+      { results: [{ url: "https://example.org", title: "Org" }] },
+      [{ url: "https://example.org", title: "Org" }],
+    ],
+    [
+      "extracts items from data.results (nested)",
+      {
+        data: {
+          results: [
+            { url: "https://example.com/a", title: "A" },
+            { url: "https://example.com/b", title: "B" },
+          ],
+        },
       },
-    });
-
-    expect(result).toHaveLength(2);
-  });
-
-  it("extracts items from data.data (doubly nested)", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: {
-        data: [{ url: "https://example.com/nested", title: "Nested" }],
-      },
-    });
-
-    expect(result).toHaveLength(1);
-    expect(requireSearchResult(result, 0).url).toBe("https://example.com/nested");
-  });
-
-  it("extracts items from data.web array (Firecrawl web search format)", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: {
-        web: [{ url: "https://example.com/web", title: "Web Result" }],
-      },
-    });
-
-    expect(result).toHaveLength(1);
-    expect(requireSearchResult(result, 0).url).toBe("https://example.com/web");
-    expect(requireSearchResult(result, 0).title).toBe("Web Result");
-  });
-
-  it("extracts items from web.results (top-level)", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      web: {
-        results: [{ url: "https://example.com/top-web", title: "Top Web" }],
-      },
-    });
-
-    expect(result).toHaveLength(1);
-    expect(requireSearchResult(result, 0).url).toBe("https://example.com/top-web");
+      [
+        { url: "https://example.com/a", title: "A" },
+        { url: "https://example.com/b", title: "B" },
+      ],
+    ],
+    [
+      "extracts items from data.data (doubly nested)",
+      { data: { data: [{ url: "https://example.com/nested", title: "Nested" }] } },
+      [{ url: "https://example.com/nested", title: "Nested" }],
+    ],
+    [
+      "extracts items from data.web array (Firecrawl web search format)",
+      { data: { web: [{ url: "https://example.com/web", title: "Web Result" }] } },
+      [{ url: "https://example.com/web", title: "Web Result" }],
+    ],
+    [
+      "extracts items from web.results (top-level)",
+      { web: { results: [{ url: "https://example.com/top-web", title: "Top Web" }] } },
+      [{ url: "https://example.com/top-web", title: "Top Web" }],
+    ],
+  ])("%s", (_name, payload, expected) => {
+    expect(firecrawlClient.resolveSearchItems(payload)).toMatchObject(expected);
   });
 
   it("returns an empty array when no search items are present", () => {
@@ -209,7 +173,7 @@ describe("resolveSearchItems", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(requireSearchResult(result, 0).title).toBe("OK");
+    expect(result[0]?.title).toBe("OK");
   });
 
   it("resolves URL from alternate fields: sourceURL, sourceUrl, metadata.sourceURL", () => {
@@ -240,9 +204,9 @@ describe("resolveSearchItems", () => {
       ],
     });
 
-    expect(requireSearchResult(result, 0).description).toBe("explicit desc");
-    expect(requireSearchResult(result, 1).description).toBe("snippet text");
-    expect(requireSearchResult(result, 2).description).toBe("summary text");
+    expect(result[0]?.description).toBe("explicit desc");
+    expect(result[1]?.description).toBe("snippet text");
+    expect(result[2]?.description).toBe("summary text");
   });
 
   it("reads content from multiple possible fields", () => {
@@ -254,9 +218,9 @@ describe("resolveSearchItems", () => {
       ],
     });
 
-    expect(requireSearchResult(result, 0).content).toBe("# md");
-    expect(requireSearchResult(result, 1).content).toBe("plain content");
-    expect(requireSearchResult(result, 2).content).toBe("raw text");
+    expect(result[0]?.content).toBe("# md");
+    expect(result[1]?.content).toBe("plain content");
+    expect(result[2]?.content).toBe("raw text");
   });
 
   it("reads published date from multiple possible fields", () => {
@@ -269,10 +233,10 @@ describe("resolveSearchItems", () => {
       ],
     });
 
-    expect(requireSearchResult(result, 0).published).toBe("2025-01-01");
-    expect(requireSearchResult(result, 1).published).toBe("2025-02-02");
-    expect(requireSearchResult(result, 2).published).toBe("2025-03-03");
-    expect(requireSearchResult(result, 3).published).toBe("2025-04-04");
+    expect(result[0]?.published).toBe("2025-01-01");
+    expect(result[1]?.published).toBe("2025-02-02");
+    expect(result[2]?.published).toBe("2025-03-03");
+    expect(result[3]?.published).toBe("2025-04-04");
   });
 
   it("resolves siteName by stripping www. prefix from URL hostname", () => {
@@ -283,8 +247,8 @@ describe("resolveSearchItems", () => {
       ],
     });
 
-    expect(requireSearchResult(result, 0).siteName).toBe("example.com");
-    expect(requireSearchResult(result, 1).siteName).toBe("example.org");
+    expect(result[0]?.siteName).toBe("example.com");
+    expect(result[1]?.siteName).toBe("example.org");
   });
 
   it("sets description and content to undefined when absent", () => {
@@ -292,9 +256,9 @@ describe("resolveSearchItems", () => {
       data: [{ url: "https://example.com", title: "Minimal" }],
     });
 
-    expect(requireSearchResult(result, 0).description).toBeUndefined();
-    expect(requireSearchResult(result, 0).content).toBeUndefined();
-    expect(requireSearchResult(result, 0).published).toBeUndefined();
+    expect(result).toMatchObject([
+      { description: undefined, content: undefined, published: undefined },
+    ]);
   });
 
   it("falls back from empty url to sourceURL within the same entry", () => {
@@ -306,8 +270,8 @@ describe("resolveSearchItems", () => {
     });
 
     expect(result).toHaveLength(2);
-    expect(requireSearchResult(result, 0).url).toBe("https://fallback.com");
-    expect(requireSearchResult(result, 1).url).toBe("https://only-source.com");
+    expect(result[0]?.url).toBe("https://fallback.com");
+    expect(result[1]?.url).toBe("https://only-source.com");
   });
 
   it("includes entries with empty title (title defaults to empty string)", () => {
@@ -319,8 +283,8 @@ describe("resolveSearchItems", () => {
     });
 
     expect(result).toHaveLength(2);
-    expect(requireSearchResult(result, 0).title).toBe("");
-    expect(requireSearchResult(result, 1).title).toBe("Has Title");
+    expect(result[0]?.title).toBe("");
+    expect(result[1]?.title).toBe("Has Title");
   });
 
   it("picks the first candidate array when multiple are present", () => {
@@ -332,7 +296,7 @@ describe("resolveSearchItems", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(requireSearchResult(result, 0).url).toBe("https://from-data.com");
+    expect(result[0]?.url).toBe("https://from-data.com");
   });
 
   it("treats non-object metadata as absent (number, string)", () => {
@@ -345,8 +309,8 @@ describe("resolveSearchItems", () => {
 
     expect(result).toHaveLength(2);
     // Both should still be resolved; metadata fallback should not crash.
-    expect(requireSearchResult(result, 0).url).toBe("https://example.com/meta-num");
-    expect(requireSearchResult(result, 1).url).toBe("https://example.com/meta-str");
+    expect(result[0]?.url).toBe("https://example.com/meta-num");
+    expect(result[1]?.url).toBe("https://example.com/meta-str");
   });
 
   it("drops non-HTTP or malformed provider URLs before they can bypass content framing", () => {
@@ -394,55 +358,29 @@ describe("resolveSearchItems", () => {
     expect(result).toHaveLength(100);
   });
 
-  it("prefers record.title over metadata.title when both are present", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: [
-        {
-          url: "https://example.com",
-          title: "record title",
-          metadata: { title: "metadata title" },
-        },
-      ],
-    });
-
-    expect(result).toHaveLength(1);
-    expect(requireSearchResult(result, 0).title).toBe("record title");
-  });
-
-  it("falls back to metadata.title when record.title is absent", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: [
-        {
-          url: "https://example.com",
-          metadata: { title: "metadata title" },
-        },
-      ],
-    });
-
-    expect(result).toHaveLength(1);
-    expect(requireSearchResult(result, 0).title).toBe("metadata title");
-  });
-
-  it("falls back to metadata.title when record.title is empty string", () => {
-    // typeof "" === "string" && "" → falsy → falls through to metadata.title
-    const result = firecrawlClient.resolveSearchItems({
-      data: [
-        {
-          url: "https://example.com",
-          title: "",
-          metadata: { title: "metadata title" },
-        },
-      ],
-    });
-
-    expect(result).toHaveLength(1);
-    expect(requireSearchResult(result, 0).title).toBe("metadata title");
+  it.each([
+    [
+      "prefers record.title over metadata.title when both are present",
+      "record title",
+      "record title",
+    ],
+    ["falls back to metadata.title when record.title is absent", undefined, "metadata title"],
+    ["falls back to metadata.title when record.title is empty string", "", "metadata title"],
+  ])("%s", (_name, title, expected) => {
+    expect(
+      firecrawlClient.resolveSearchItems({
+        data: [
+          {
+            url: "https://example.com",
+            ...(title === undefined ? {} : { title }),
+            metadata: { title: "metadata title" },
+          },
+        ],
+      }),
+    ).toMatchObject([{ title: expected }]);
   });
 });
 
-// ---------------------------------------------------------------------------
-// parseFirecrawlScrapePayload
-// ---------------------------------------------------------------------------
 describe("parseFirecrawlScrapePayload", () => {
   const baseOpts = {
     url: "https://example.com/page",
@@ -648,101 +586,33 @@ describe("parseFirecrawlScrapePayload", () => {
     expect(String(result.title).length + String(result.warning).length).toBeLessThan(5_000);
   });
 
-  it("omits title when metadata title is absent", () => {
+  it.each([
+    ["omits title when metadata title is absent", "no title", "title"],
+    ["omits status when no statusCode is available", "no status", "status"],
+    ["omits warning when response has no warning field", "content without warning", "warning"],
+  ])("%s", (_name, markdown, field) => {
     const result = firecrawlClient.parseFirecrawlScrapePayload({
       ...baseOpts,
-      payload: {
-        data: { markdown: "no title" },
-      },
+      payload: { data: { markdown } },
     });
-
-    expect(result.title).toBeUndefined();
-    expect(Object.hasOwn(result, "title")).toBe(false);
+    expect(result[field]).toBeUndefined();
+    expect(Object.hasOwn(result, field)).toBe(false);
   });
 
-  it("omits status when no statusCode is available", () => {
+  it.each([
+    ["truncates content when it exceeds maxChars", "a".repeat(200), 50, true],
+    ["does not truncate content within maxChars limit", "short content here", 50_000, false],
+    ["handles truncation at exact boundary (not truncated)", "x".repeat(100), 100, false],
+    ["truncates content one character over maxChars", "x".repeat(101), 100, true],
+    ["handles maxChars of 0 (truncates everything)", "some content", 0, true],
+  ])("%s", (_name, markdown, maxChars, truncated) => {
     const result = firecrawlClient.parseFirecrawlScrapePayload({
       ...baseOpts,
-      payload: {
-        data: { markdown: "no status" },
-      },
+      maxChars,
+      payload: { data: { markdown } },
     });
-
-    expect(result.status).toBeUndefined();
-    expect(Object.hasOwn(result, "status")).toBe(false);
-  });
-
-  it("truncates content when it exceeds maxChars", () => {
-    const longContent = "a".repeat(200);
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      url: "https://example.com",
-      extractMode: "markdown",
-      maxChars: 50,
-      payload: {
-        data: { markdown: longContent },
-      },
-    });
-
-    expect(result.truncated).toBe(true);
-    expect(result.rawLength as number).toBe(200);
-  });
-
-  it("does not truncate content within maxChars limit", () => {
-    const shortContent = "short content here";
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      ...baseOpts,
-      payload: {
-        data: { markdown: shortContent },
-      },
-    });
-
-    expect(result.truncated).toBe(false);
-    expect(result.rawLength as number).toBe(shortContent.length);
-  });
-
-  it("handles truncation at exact boundary (not truncated)", () => {
-    const content = "x".repeat(100);
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      url: "https://example.com",
-      extractMode: "markdown",
-      maxChars: 100,
-      payload: {
-        data: { markdown: content },
-      },
-    });
-
-    // When raw length equals maxChars, truncateText returns the full text.
-    expect(result.truncated).toBe(false);
-    expect(result.rawLength as number).toBe(100);
-  });
-
-  it("truncates content one character over maxChars", () => {
-    const content = "x".repeat(101);
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      url: "https://example.com",
-      extractMode: "markdown",
-      maxChars: 100,
-      payload: {
-        data: { markdown: content },
-      },
-    });
-
-    expect(result.truncated).toBe(true);
-    expect(result.rawLength as number).toBe(101);
-  });
-
-  it("handles maxChars of 0 (truncates everything)", () => {
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      url: "https://example.com",
-      extractMode: "markdown",
-      maxChars: 0,
-      payload: {
-        data: { markdown: "some content" },
-      },
-    });
-
-    expect(result.truncated).toBe(true);
-    expect(result.rawLength as number).toBe("some content".length);
+    expect(result.truncated).toBe(truncated);
+    expect(result.rawLength).toBe(markdown.length);
   });
 
   it("preserves warning string from the response payload", () => {
@@ -757,27 +627,14 @@ describe("parseFirecrawlScrapePayload", () => {
     expect(result.warning).toContain("Proxy fallback was used");
   });
 
-  it("omits warning when response has no warning field", () => {
+  it.each([
+    ["handles non-string warning gracefully", 42],
+    ["silently drops empty-string warning", ""],
+  ])("%s", (_name, warning) => {
     const result = firecrawlClient.parseFirecrawlScrapePayload({
       ...baseOpts,
-      payload: {
-        data: { markdown: "content without warning" },
-      },
+      payload: { data: { markdown: "content" }, warning },
     });
-
-    expect(result.warning).toBeUndefined();
-    expect(Object.hasOwn(result, "warning")).toBe(false);
-  });
-
-  it("handles non-string warning gracefully", () => {
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      ...baseOpts,
-      payload: {
-        data: { markdown: "content" },
-        warning: 42,
-      },
-    });
-
     expect(result.warning).toBeUndefined();
   });
 
@@ -796,7 +653,6 @@ describe("parseFirecrawlScrapePayload", () => {
   });
 
   it("treats whitespace-only markdown as valid content", () => {
-    // typeof "   " === "string" && "   " → truthy → treated as content.
     const result = firecrawlClient.parseFirecrawlScrapePayload({
       ...baseOpts,
       payload: {
@@ -804,25 +660,11 @@ describe("parseFirecrawlScrapePayload", () => {
       },
     });
 
-    expect(result.rawLength as number).toBe(3);
+    expect(result.rawLength).toBe(3);
     expect(result.truncated).toBe(false);
   });
 
-  it("silently drops empty-string warning", () => {
-    // typeof "" === "string" && "" → "" is falsy → warning = undefined.
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      ...baseOpts,
-      payload: {
-        data: { markdown: "content" },
-        warning: "",
-      },
-    });
-
-    expect(result.warning).toBeUndefined();
-  });
-
   it("drops empty-string metadata.title (treated as absent)", () => {
-    // typeof "" === "string" && "" → falsy → title = undefined.
     const result = firecrawlClient.parseFirecrawlScrapePayload({
       ...baseOpts,
       payload: {
