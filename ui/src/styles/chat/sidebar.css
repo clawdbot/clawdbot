@@ -260,7 +260,7 @@ openclaw-chat-sidebar-region,
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   background: transparent;
   box-shadow: none;
   color: var(--rail-header-action-color);
@@ -517,7 +517,7 @@ openclaw-chat-sidebar-region,
   height: 24px;
   place-items: center;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
 }
@@ -1864,7 +1864,9 @@ openclaw-session-discussion {
 }
 
 /* Grid, not flex: Chromium's flex layout on <button> pins the label's line box
-   to the button's vertical center, painting the count text into the row above. */
+   to the button's vertical center, painting the count text into the row above.
+   Keeps a tight 3px corner rather than the platform pill: it sits on the
+   monospace diff grid, where a pill breaks code-row alignment. */
 .session-diff__gap-controls button {
   display: inline-grid;
   place-items: center;

@@ -75,7 +75,7 @@ openclaw-chat-question-panel {
   height: 26px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: inherit;
   cursor: var(--cursor-action);

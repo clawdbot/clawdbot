@@ -41,6 +41,8 @@ html.openclaw-native-macos
   margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
 }
 
+/* Full-width banner action inside the update card, so it keeps the card radius;
+   a pill stretched across the sidebar reads as a giant lozenge. */
 .sidebar-update-card__action {
   min-width: 0;
   flex: 1 1 auto;

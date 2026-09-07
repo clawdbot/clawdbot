@@ -740,7 +740,7 @@
   color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   opacity: 0.65;
   transition:
     color var(--duration-fast) ease,
@@ -789,7 +789,7 @@
   color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   transition:
     color var(--duration-fast) ease,
     background-color var(--duration-fast) ease,

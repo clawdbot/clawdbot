@@ -721,7 +721,7 @@
   min-height: 58px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   background: var(--card);
   color: var(--text);
   text-align: left;

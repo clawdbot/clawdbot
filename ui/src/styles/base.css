@@ -281,6 +281,13 @@
   --radius-full: 9999px;
   --radius: 10px;
 
+  /* Every clickable control shaped like a button is a pill, platform-wide. Square
+     icon buttons inherit this as a true circle. Button families that predate this
+     knob must reference it rather than restate a radius, so the platform button
+     shape stays a one-line change. Segmented groups, menu items, and image
+     buttons intentionally opt out - see their local rules. */
+  --btn-radius: var(--radius-full);
+
   /* One profile for every scroll surface: 12px hit target, 6px visible thumb
      (transparent border + content-box clip). Derived from --muted so every
      theme family and both modes follow with no override. scrollbar-color is a

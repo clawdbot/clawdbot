@@ -365,7 +365,7 @@
   padding: 4px;
   min-width: 24px;
   min-height: 24px;
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   color: var(--muted);
   transition:
     opacity 120ms ease-out,

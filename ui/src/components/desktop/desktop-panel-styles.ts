@@ -58,8 +58,8 @@ const desktopPanelStyles = css`
   }
   .desktop-button {
     border: 1px solid var(--border, #262b34);
-    border-radius: 6px;
-    padding: 5px 10px;
+    border-radius: var(--btn-radius);
+    padding: 5px 12px;
     background: transparent;
     color: var(--text, #d7dae0);
     font: inherit;

@@ -82,9 +82,9 @@ export const terminalPanelUploadStyles = css`
   }
   .tp-upload-card__action {
     margin: -3px 0;
-    padding: 3px 5px;
+    padding: 3px 8px;
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--btn-radius);
     background: transparent;
     color: var(--muted, #8a919e);
     font: inherit;

@@ -71,6 +71,9 @@ wa-radio-group.settings-segmented::part(form-control-label) {
 }
 
 /* The parent selector also wins over the shared .btn hover/active chrome. */
+/* Segmented thumbs keep the nested rounded-rect formula (track radius minus
+   track padding). Pill segments inside a rounded-rect track read as loose
+   chips and lose the shared-track grouping, so they opt out of --btn-radius. */
 .settings-segmented > .settings-segmented__btn {
   display: inline-flex;
   align-items: center;
@@ -283,7 +286,7 @@ select.settings-select:focus-visible {
   height: 24px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);

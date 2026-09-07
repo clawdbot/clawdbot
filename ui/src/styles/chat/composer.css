@@ -638,7 +638,7 @@
   gap: 6px;
   min-width: 36px;
   height: 36px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   border: none;
   background: transparent;
   color: var(--muted);
