@@ -211,6 +211,7 @@ type WorkflowJob = {
   "runs-on"?: string;
   strategy?: {
     "fail-fast"?: boolean;
+    "max-parallel"?: number;
     matrix?: {
       include?: WorkflowMatrixEntry[];
       lane?: string;
@@ -1396,7 +1397,6 @@ function runReleaseSurvivorProfileStep(params: {
   override?: string;
   supportsScenario?: boolean;
   metadataError?: boolean;
-  npmArray?: boolean;
 }) {
   const step = workflowStep(
     workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package"),
@@ -1420,9 +1420,7 @@ if (tool === "gh") {
   if (process.env.FIXTURE_METADATA_ERROR === "true") process.exit(1);
   process.stdout.write(process.env.FIXTURE_DIRECTORY);
 } else {
-  process.stdout.write(process.argv[4] === "versions"
-    ? '["2026.6.34","2026.6.35","2026.9.2","2026.9.3"]'
-    : process.env.FIXTURE_DIST_TAGS);
+  process.exit(75);
 }
 `,
       { mode: 0o755 },
@@ -1444,11 +1442,6 @@ if (tool === "gh") {
       RUN_RELEASE_SOAK: String(params.soak ?? false),
       FIXTURE_CALLS: calls,
       FIXTURE_METADATA_ERROR: String(params.metadataError ?? false),
-      FIXTURE_DIST_TAGS: JSON.stringify(
-        params.npmArray
-          ? [{ latest: "2026.9.3", "extended-stable": "2026.6.35" }]
-          : { latest: "2026.9.3", "extended-stable": "2026.6.35" },
-      ),
       FIXTURE_DIRECTORY: JSON.stringify(
         params.supportsScenario === false ? ["run.sh"] : ["run.sh", "legacy-operator-state.mjs"],
       ),
@@ -6113,6 +6106,29 @@ describe("package artifact reuse", () => {
       RELEASE_TEST_PROFILE: "${{ inputs.release_test_profile }}",
     });
     expect(workflow).toContain("plan_docker_lane_groups:");
+    const reusable = readWorkflow(LIVE_E2E_WORKFLOW);
+    expect(reusable.on?.workflow_dispatch?.inputs).not.toHaveProperty(
+      "published_upgrade_survivor_baseline_scope",
+    );
+    expect(reusable.on?.workflow_call?.inputs).toHaveProperty(
+      "published_upgrade_survivor_baseline_scope",
+    );
+    const groupPlanner = workflowStep(
+      workflowJob(LIVE_E2E_WORKFLOW, "plan_docker_lane_groups"),
+      "Build targeted Docker lane groups",
+    );
+    expect(groupPlanner.env).toMatchObject({
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "${{ inputs.published_upgrade_survivor_baseline }}",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE:
+        "${{ inputs.published_upgrade_survivor_baseline_scope || 'all-scenarios' }}",
+    });
+    expect(workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes").strategy?.["max-parallel"]).toBe(
+      32,
+    );
+    expect(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance").with).toMatchObject({
+      published_upgrade_survivor_baseline_scope:
+        "${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline_scope }}",
+    });
     expect(workflow).toContain("targeted_docker_lane_group_size:");
     expect(workflow).toContain("scripts/plan-targeted-docker-lane-groups.mjs");
     expect(workflow).toContain(
@@ -8430,18 +8446,33 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it.each([false, true])(
-    "expands modern published candidate-compatible upgrade survivor baselines without a prepublish registry (npm array=%s)",
-    (npmArray) => {
+    "keeps published candidate-compatible upgrade survivor fixtures on the predecessor (soak=%s)",
+    (soak) => {
       const { result, output, calls } = runReleaseSurvivorProfileStep({
         published: true,
-        npmArray,
+        soak,
       });
       expect(result.status, result.stderr).toBe(0);
-      expect(output).toEqual({
-        baselines: "openclaw@2026.9.3 openclaw@2026.9.2 openclaw@2026.6.35 openclaw@2026.6.34",
-        scenarios: "base",
-      });
-      expect(calls.map((call) => call.tool)).toEqual(["npm", "gh", "npm"]);
+      expect(output.baselines).toBe("");
+      expect(output.scenarios?.split(" ")).toEqual(
+        soak
+          ? [
+              "base",
+              "acpx-openclaw-tools-bridge",
+              "feishu-channel",
+              "bootstrap-persona",
+              "channel-post-core-restore",
+              "plugin-deps-cleanup",
+              "configured-plugin-installs",
+              "stale-source-plugin-shadow",
+              "tilde-log-path",
+              "meeting-transcripts-sqlite",
+              "versioned-runtime-deps",
+              "cron-scheduled-authority",
+            ]
+          : ["base"],
+      );
+      expect(calls).toEqual([]);
     },
   );
 

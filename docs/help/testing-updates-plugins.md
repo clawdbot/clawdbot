@@ -304,12 +304,16 @@ for this comparison. The child prepares or reuses the prerelease plugin registry
 The default scenario set includes `base` and `legacy-operator-state`; release
 soak runs `reported-issues`.
 
-Older source targets, extended-stable qualification, older published packages,
-and separate npm overrides retain a candidate-relative predecessor. A modern
-published candidate can expand baselines when it contains the harness and is
-not older than npm's current `latest`, but it retains the previous scenario set:
-published qualification does not prepare the registry required by the new
-operator-state scenario. Historical soak keeps every preexisting reported-issue
+The standalone `supported-lines` selector expands only `legacy-operator-state`.
+Every preexisting synthetic scenario remains on the separately resolved
+candidate-relative predecessor, including weekly `plugin-deps-cleanup` proof.
+Comma and whitespace delimiters and repeated selectors are accepted. Explicit version lists and mixed
+selector/version lists preserve the full Cartesian matrix for manual proof.
+
+Older source targets, extended-stable qualification, published packages, and
+separate npm overrides retain the candidate-relative predecessor and previous
+scenario set. Published qualification does not prepare the registry required
+by the new operator-state scenario. Historical soak keeps every preexisting reported-issue
 fixture; it does not automatically enable frozen-target scenario omissions.
 See [release qualification](/ci/release-validation#suite-profiles) for the exact
 boundary. The candidate remains the selected package-under-test tarball. The per-PR

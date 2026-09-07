@@ -461,6 +461,7 @@ jobs:
       prepublish_plugin_registry_json: ${{ steps.registry_identity.outputs.json }}
       published_upgrade_survivor_baseline: ${{ steps.upgrade_survivor_baselines.outputs.baseline }}
       published_upgrade_survivor_baselines: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
+      published_upgrade_survivor_baseline_scope: ${{ steps.upgrade_survivor_baselines.outputs.baseline_scope }}
       published_upgrade_survivor_scenarios: ${{ inputs.published_upgrade_survivor_scenarios }}
       telegram_enabled: ${{ steps.profile.outputs.telegram_enabled }}
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
@@ -1104,6 +1105,7 @@ jobs:
       docker_lanes: ${{ needs.resolve_package.outputs.docker_lanes }}
       published_upgrade_survivor_baseline: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline }}
       published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}
+      published_upgrade_survivor_baseline_scope: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline_scope }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_package.outputs.published_upgrade_survivor_scenarios }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions || false }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}

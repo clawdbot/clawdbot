@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       baselines:
-        description: supported-lines resolves latest, previous stable, optional extended-stable, and the supported floor; exact lists override it
+        description: supported-lines expands native operator state and keeps synthetic fixtures on the candidate predecessor; explicit lists retain the full matrix
         default: supported-lines
         required: false
         type: string

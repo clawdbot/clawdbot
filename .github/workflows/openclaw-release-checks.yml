@@ -1241,10 +1241,7 @@ jobs:
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
           import { execFileSync } from "node:child_process";
-          import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-          import { tmpdir } from "node:os";
-          import path from "node:path";
-          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";
+          import { appendFileSync, readFileSync } from "node:fs";
           import { compareReleaseVersions, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
           import { parseUpgradeSurvivorScenarios } from "./scripts/lib/upgrade-survivor-policy.mjs";
 
@@ -1255,22 +1252,11 @@ jobs:
           const ref = (process.env.CANDIDATE_REF || "").replace(/^refs\/heads\//u, "");
           assert(["true", "false"].includes(process.env.CANDIDATE_PUBLISHED),
             "Candidate publication state is required.");
-          let currentLine = !process.env.PACKAGE_ACCEPTANCE_PACKAGE_SPEC &&
+          const currentLine = process.env.CANDIDATE_PUBLISHED === "false" &&
+            !process.env.PACKAGE_ACCEPTANCE_PACKAGE_SPEC &&
             !context.startsWith("extended-stable/") &&
             !ref.startsWith("extended-stable/") &&
             compareReleaseVersions(candidate.baseVersion, workflow.baseVersion) >= 0;
-          let publishedTags;
-          if (currentLine && process.env.CANDIDATE_PUBLISHED === "true") {
-            const tagEntries = resolveNpmJsonEntries(JSON.parse(execFileSync("npm", ["view", "openclaw", "dist-tags",
-              "--json", "--silent", "--prefer-online"], { encoding: "utf8", timeout: 60_000 })));
-            const tags = tagEntries.length === 1 ? tagEntries[0] : undefined;
-            assert(tags && typeof tags === "object" && !Array.isArray(tags) && typeof tags.latest === "string",
-              "npm dist-tags must contain one latest release.");
-            publishedTags = tags;
-            const latest = parseReleaseVersion(tags.latest);
-            assert(latest, "npm latest must resolve to a valid release version.");
-            currentLine = compareReleaseVersions(candidate.version, latest.version) >= 0;
-          }
           let supportsOperatorScenario = false;
           if (currentLine) {
             const sha = process.env.CANDIDATE_SOURCE_SHA;
@@ -1283,29 +1269,7 @@ jobs:
               "Candidate survivor directory metadata was invalid.");
             supportsOperatorScenario = names.includes("legacy-operator-state.mjs");
           }
-          let baselines = supportsOperatorScenario ? "supported-lines" : "";
-          if (supportsOperatorScenario && process.env.CANDIDATE_PUBLISHED === "true") {
-            // Pin the checked tag snapshot so a later registry move cannot turn
-            // published requalification into a downgrade from a newer baseline.
-            const { resolveBaselines } = await import("./scripts/resolve-upgrade-survivor-baselines.mts");
-            const temporary = mkdtempSync(path.join(tmpdir(), "openclaw-release-survivor-"));
-            try {
-              const tagsFile = path.join(temporary, "tags.json");
-              const versionsFile = path.join(temporary, "versions.json");
-              writeFileSync(tagsFile, JSON.stringify(publishedTags));
-              writeFileSync(versionsFile, execFileSync("npm", ["view", "openclaw", "versions",
-                "--json", "--silent", "--prefer-online"], { encoding: "utf8", timeout: 60_000 }));
-              const specs = resolveBaselines(new Map([
-                ["requested", "supported-lines"], ["npm-dist-tags-json", tagsFile],
-                ["npm-versions-json", versionsFile],
-              ]));
-              assert(specs.every((spec) => compareReleaseVersions(spec.slice("openclaw@".length), candidate.version) <= 0),
-                "Published qualification cannot start from a newer baseline.");
-              baselines = specs.join(" ");
-            } finally {
-              rmSync(temporary, { recursive: true, force: true });
-            }
-          }
+          const baselines = supportsOperatorScenario ? "supported-lines" : "";
           // The child prepares/reuses a registry only for unpublished artifacts.
           // Published qualification cannot satisfy this fixture's artifact checks.
           const legacyOperator = supportsOperatorScenario && process.env.CANDIDATE_PUBLISHED === "false";

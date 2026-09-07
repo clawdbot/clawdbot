@@ -267,6 +267,13 @@ if (isMain) {
 
   const githubOutput = args.get("github-output");
   if (githubOutput) {
-    writeFileSync(githubOutput, `baselines=${baselines}\n`, { flag: "a" });
+    const requestedTokens = splitSpecs(args.get("requested"));
+    const baselineScope =
+      requestedTokens.length > 0 && requestedTokens.every((token) => token === "supported-lines")
+        ? "legacy-operator-state"
+        : "all-scenarios";
+    writeFileSync(githubOutput, `baselines=${baselines}\nbaseline_scope=${baselineScope}\n`, {
+      flag: "a",
+    });
   }
 }

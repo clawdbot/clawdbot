@@ -26,6 +26,25 @@ concurrent repositories, retries, and burst overlap.
 
 The protected cache warmer has two platform rows: the existing Linux workload and one hosted macOS pnpm-store publisher. Its per-ref concurrency and pending-run coalescing are unchanged. Each admitted warmer run adds one hosted macOS job and no Blacksmith registrations; pull-request CI adds no writers or jobs. Native producer and consumer measurements must include cache transfer, extraction, installation, and archive size before claiming a setup-time saving.
 
+The published-upgrade PR/main tripwire reuses the reserved `docker-seed-e2e` job,
+so the retained peak envelope stays `4 × 144 + 21 × 200 = 4,776` registrations.
+Removing push path exclusions admits docs-only main tips into the same two
+non-canceling parity slots; the bound still includes both active runs and both
+coalesced successors. It does not assume that every pushed commit starts a run.
+The weekly Update Migration dispatch uses one targeted Docker group per
+supported baseline for native operator state and keeps synthetic cleanup on
+the candidate-relative predecessor. If that predecessor is outside the
+supported set, it adds one existing matrix row: at most five targeted jobs,
+plus image preparation, the group planner, and the hybrid ref validator, for
+at most eight Blacksmith registrations per weekly run. Its separate non-canceling concurrency group
+coalesces pending scheduled runs and cannot cancel manual validation. Release
+checks reuse the same bounded grouping and unchanged 32-job cap: at four
+distinct baselines, normal Package Acceptance selects 16 targeted jobs (17
+when the predecessor needs its own row) and release soak selects 20. The
+three-scenario group limit and 32-job concurrency cap are unchanged. The additional weekly burst and expanded release jobs
+share the existing headroom for releases, adjacent repositories, and carryover;
+the live shared bucket must still be checked before further fanout changes.
+
 The three Mac Node parts add two hosted jobs per run on `github` and `hybrid`, with no added Blacksmith registrations there. Normal Blacksmith routing adds two registrations per qualifying attempt-1 push or trusted PR; manual runs, retries, and untrusted PRs remain hosted. The matrix concurrency cap is three. GitHub's documented Enterprise macOS concurrency allowance is 50, shared with other hosted Mac workflows; it does not guarantee immediate runner admission. No runner class or repository capacity setting changes with this split.
 
 `Release npm Cache Warm` (`release-npm-cache-warm.yml`) runs a hosted Linux job on scheduled and manual triggers to prepare an npm download seed from the latest published OpenClaw package with lifecycle scripts disabled. Its concurrency group is separate from push-triggered Vitest warming, so newer pushes cannot cancel a pending seed. Scheduled runs publish from `main`, so new release branches can restore that seed through GitHub's default-branch cache scope. Each seed starts empty and contains only the current baseline dependency graph. Cross-OS release checks first restore their candidate-specific cache, then a matching runtime/suite cache, then this shared seed. Only npm's content-addressed `_cacache` directory is archived; install prefixes, OpenClaw state, npm logs, and executable `npx` caches remain fresh. The producer and consumers use the same relative archive path and enable cross-OS archives. npm retains normal freshness and integrity checks and downloads missing platform-specific packages. This adds one hosted Linux job per scheduled or manual warmer run, no jobs on pushes, and no Blacksmith registrations.
