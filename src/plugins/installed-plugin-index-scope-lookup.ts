@@ -3,7 +3,8 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { normalizePluginId } from "./config-state.js";
 import { CONFIG_PATH_ACTIVATION_COMPAT_CODE } from "./installed-plugin-index-config-path-scope.js";
-import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 
 const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "externalAuthProviders",
@@ -21,8 +22,6 @@ const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "workerProviders",
   "usageProviders",
 ] as const;
-
-type OwnerMap = ReadonlyMap<string, readonly string[]>;
 
 type ModelSupportOwner = {
   pluginId: string;
@@ -51,73 +50,34 @@ export type InstalledPluginIndexScopeLookup = {
   normalizePluginId: (pluginId: string) => string;
 };
 
-function appendOwner(
-  owners: Map<string, string[]>,
-  rawKey: string | undefined,
-  pluginId: string,
-): void {
-  const key = normalizeOptionalLowercaseString(rawKey);
-  if (!key) {
-    return;
-  }
-  const existing = owners.get(key);
-  if (existing) {
-    existing.push(pluginId);
-    return;
-  }
-  owners.set(key, [pluginId]);
+/** A private ownership index shares normalization and duplicate handling across scope kinds. */
+function createOwnerLookup() {
+  const owners = new Map<string, Set<string>>();
+  const resolve = (id: string) => owners.get(normalizeOptionalLowercaseString(id) ?? "");
+  return {
+    index(pluginId: string, ids: readonly (string | undefined)[]) {
+      for (const id of ids) {
+        const key = normalizeOptionalLowercaseString(id);
+        if (key) {
+          const pluginIds = owners.get(key) ?? new Set<string>();
+          pluginIds.add(pluginId);
+          owners.set(key, pluginIds);
+        }
+      }
+    },
+    add(target: Set<string>, ids: readonly string[]) {
+      for (const id of ids) {
+        for (const pluginId of resolve(id) ?? []) {
+          target.add(pluginId);
+        }
+      }
+    },
+    has: (ids: readonly string[]) => ids.every((id) => resolve(id) !== undefined),
+  };
 }
 
-function freezeOwnerMap(owners: Map<string, string[]>): OwnerMap {
-  return new Map(
-    [...owners.entries()].map(([key, pluginIds]) => [key, Object.freeze([...new Set(pluginIds)])]),
-  );
-}
-
-function addOwners(target: Set<string>, owners: OwnerMap, ids: readonly string[]): void {
-  for (const id of ids) {
-    const normalized = normalizeOptionalLowercaseString(id);
-    if (!normalized) {
-      continue;
-    }
-    for (const pluginId of owners.get(normalized) ?? []) {
-      target.add(pluginId);
-    }
-  }
-}
-
-function hasOwners(owners: OwnerMap, ids: readonly string[]): boolean {
-  return ids.every((id) => {
-    const normalized = normalizeOptionalLowercaseString(id);
-    return Boolean(normalized && owners.has(normalized));
-  });
-}
-
-function listContributionValues(
-  plugin: InstalledPluginIndexRecord,
-  key: keyof NonNullable<InstalledPluginIndexRecord["contributions"]>,
-): readonly string[] {
-  const value = plugin.contributions?.[key];
+function listValues(value: unknown): readonly string[] {
   return Array.isArray(value) ? value : [];
-}
-
-function listContractContributionValues(
-  plugin: InstalledPluginIndexRecord,
-  key: string,
-): readonly string[] {
-  const value = plugin.contributions?.contracts?.[key];
-  return Array.isArray(value) ? value : [];
-}
-
-function compileModelSupportPatterns(patterns: readonly string[]): readonly RegExp[] {
-  const compiled: RegExp[] = [];
-  for (const pattern of patterns) {
-    const regex = compileSafeRegex(pattern, "u");
-    if (regex) {
-      compiled.push(regex);
-    }
-  }
-  return compiled;
 }
 
 function modelSupportOwnerMatches(owner: ModelSupportOwner, modelId: string): boolean {
@@ -131,100 +91,66 @@ function modelSupportOwnerMatches(owner: ModelSupportOwner, modelId: string): bo
   return owner.patterns.some((pattern) => pattern.test(trimmed));
 }
 
-function buildLookupMaps(index: InstalledPluginIndex): {
-  agentHarnessOwners: OwnerMap;
-  channelContributionOwners: OwnerMap;
-  directChannelOwners: OwnerMap;
-  directProviderOwners: OwnerMap;
-  installedPluginIds: ReadonlySet<string>;
-  modelSupportOwners: readonly ModelSupportOwner[];
-  pluginIdsByLowercase: ReadonlyMap<string, string>;
-  providerContributionOwners: OwnerMap;
-} {
-  const agentHarnessOwners = new Map<string, string[]>();
-  const channelContributionOwners = new Map<string, string[]>();
-  const directChannelOwners = new Map<string, string[]>();
-  const directProviderOwners = new Map<string, string[]>();
+export function createInstalledPluginIndexScopeLookup(
+  index: InstalledPluginIndex,
+): InstalledPluginIndexScopeLookup {
+  const facts = getInstalledPluginIndexFacts(index);
+  if (facts?.scopeLookup) {
+    return { ...facts.scopeLookup };
+  }
+  const agentHarnessOwners = createOwnerLookup();
+  const channelContributionOwners = createOwnerLookup();
+  const directChannelOwners = createOwnerLookup();
+  const directProviderOwners = createOwnerLookup();
+  const providerContributionOwners = createOwnerLookup();
   const pluginIdsByLowercase = new Map<string, string>();
-  const providerContributionOwners = new Map<string, string[]>();
   const modelSupportOwners: ModelSupportOwner[] = [];
-
   for (const plugin of index.plugins) {
     const normalizedPluginId = normalizeOptionalLowercaseString(plugin.pluginId);
     if (normalizedPluginId) {
       pluginIdsByLowercase.set(normalizedPluginId, plugin.pluginId);
-      appendOwner(directChannelOwners, plugin.pluginId, plugin.pluginId);
-      appendOwner(directProviderOwners, plugin.pluginId, plugin.pluginId);
-      appendOwner(channelContributionOwners, plugin.pluginId, plugin.pluginId);
-      appendOwner(providerContributionOwners, plugin.pluginId, plugin.pluginId);
+      directProviderOwners.index(plugin.pluginId, [plugin.pluginId]);
     }
-    for (const runtimeId of plugin.startup.agentHarnesses) {
-      appendOwner(agentHarnessOwners, runtimeId, plugin.pluginId);
-    }
-
-    appendOwner(directChannelOwners, plugin.packageChannel?.id, plugin.pluginId);
-    appendOwner(channelContributionOwners, plugin.packageChannel?.id, plugin.pluginId);
-    for (const channelId of listContributionValues(plugin, "channels")) {
-      appendOwner(channelContributionOwners, channelId, plugin.pluginId);
-    }
-    for (const channelId of listContributionValues(plugin, "channelConfigs")) {
-      appendOwner(channelContributionOwners, channelId, plugin.pluginId);
-    }
-
-    for (const providerId of listContributionValues(plugin, "providers")) {
-      appendOwner(providerContributionOwners, providerId, plugin.pluginId);
-    }
-    for (const providerId of listContributionValues(plugin, "modelCatalogProviders")) {
-      appendOwner(providerContributionOwners, providerId, plugin.pluginId);
-    }
-    for (const providerId of listContributionValues(plugin, "autoEnableProviderIds")) {
-      appendOwner(providerContributionOwners, providerId, plugin.pluginId);
-    }
-    for (const contract of PROVIDER_CONTRIBUTION_CONTRACTS) {
-      for (const providerId of listContractContributionValues(plugin, contract)) {
-        appendOwner(providerContributionOwners, providerId, plugin.pluginId);
-      }
-    }
-
+    directChannelOwners.index(plugin.pluginId, [plugin.pluginId, plugin.packageChannel?.id]);
+    agentHarnessOwners.index(plugin.pluginId, plugin.startup.agentHarnesses);
+    channelContributionOwners.index(plugin.pluginId, [
+      plugin.pluginId,
+      plugin.packageChannel?.id,
+      ...listValues(plugin.contributions?.channels),
+      ...listValues(plugin.contributions?.channelConfigs),
+    ]);
+    providerContributionOwners.index(plugin.pluginId, [
+      plugin.pluginId,
+      ...listValues(plugin.contributions?.providers),
+      ...listValues(plugin.contributions?.modelCatalogProviders),
+      ...listValues(plugin.contributions?.autoEnableProviderIds),
+      ...PROVIDER_CONTRIBUTION_CONTRACTS.flatMap((contract) =>
+        listValues(plugin.contributions?.contracts?.[contract]),
+      ),
+    ]);
     modelSupportOwners.push({
       pluginId: plugin.pluginId,
-      prefixes: listContributionValues(plugin, "modelSupportPrefixes"),
-      patterns: compileModelSupportPatterns(listContributionValues(plugin, "modelSupportPatterns")),
+      prefixes: listValues(plugin.contributions?.modelSupportPrefixes),
+      patterns: listValues(plugin.contributions?.modelSupportPatterns).flatMap((pattern) => {
+        const regex = compileSafeRegex(pattern, "u");
+        return regex ? [regex] : [];
+      }),
     });
   }
-
-  return {
-    agentHarnessOwners: freezeOwnerMap(agentHarnessOwners),
-    channelContributionOwners: freezeOwnerMap(channelContributionOwners),
-    directChannelOwners: freezeOwnerMap(directChannelOwners),
-    directProviderOwners: freezeOwnerMap(directProviderOwners),
-    installedPluginIds: new Set(pluginIdsByLowercase.keys()),
-    modelSupportOwners,
-    pluginIdsByLowercase,
-    providerContributionOwners: freezeOwnerMap(providerContributionOwners),
-  };
-}
-
-export function createInstalledPluginIndexScopeLookup(
-  index: InstalledPluginIndex,
-): InstalledPluginIndexScopeLookup {
-  const maps = buildLookupMaps(index);
   const normalizeInstalledPluginId = (pluginId: string): string => {
     const normalized = normalizePluginId(pluginId);
     const lowercase = normalizeOptionalLowercaseString(normalized);
-    return lowercase ? (maps.pluginIdsByLowercase.get(lowercase) ?? normalized) : normalized;
+    return lowercase ? (pluginIdsByLowercase.get(lowercase) ?? normalized) : normalized;
   };
-  return {
-    addAgentHarnessOwners: (target, ids) => addOwners(target, maps.agentHarnessOwners, ids),
-    addChannelContributionOwners: (target, ids) =>
-      addOwners(target, maps.channelContributionOwners, ids),
-    addDirectChannelOwners: (target, ids) => addOwners(target, maps.directChannelOwners, ids),
-    addDirectProviderOwners: (target, ids) => addOwners(target, maps.directProviderOwners, ids),
-    addProviderContributionOwners: (target, ids) =>
-      addOwners(target, maps.providerContributionOwners, ids),
+  const lookup: InstalledPluginIndexScopeLookup = {
+    addAgentHarnessOwners: agentHarnessOwners.add,
+    addChannelContributionOwners: channelContributionOwners.add,
+    addDirectChannelOwners: directChannelOwners.add,
+    addDirectProviderOwners: directProviderOwners.add,
+    addProviderContributionOwners: providerContributionOwners.add,
     addShorthandModelOwners: (target, modelIds) => {
       for (const modelId of modelIds) {
-        for (const owner of maps.modelSupportOwners) {
+        for (const owner of modelSupportOwners) {
           if (modelSupportOwnerMatches(owner, modelId)) {
             target.add(owner.pluginId);
           }
@@ -240,30 +166,34 @@ export function createInstalledPluginIndexScopeLookup(
       return providerIds.every((providerId) => {
         const normalized = normalizeOptionalLowercaseString(providerId);
         return Boolean(
-          normalized &&
-          (maps.directProviderOwners.has(normalized) || normalizedScope.has(normalized)),
+          normalized && (directProviderOwners.has([normalized]) || normalizedScope.has(normalized)),
         );
       });
     },
-    hasChannelContributionOwners: (ids) => hasOwners(maps.channelContributionOwners, ids),
-    hasAgentHarnessOwners: (ids) => hasOwners(maps.agentHarnessOwners, ids),
+    hasChannelContributionOwners: channelContributionOwners.has,
+    hasAgentHarnessOwners: agentHarnessOwners.has,
     hasCompleteConfigPathActivationMetadata: () =>
       index.plugins.every(
         (plugin) =>
           !plugin.compat.includes(CONFIG_PATH_ACTIVATION_COMPAT_CODE) ||
           plugin.startup.configPaths !== undefined,
       ),
-    hasDirectChannelOwners: (ids) => hasOwners(maps.directChannelOwners, ids),
+    hasDirectChannelOwners: directChannelOwners.has,
     hasInstalledPluginIds: (ids) =>
       [...ids].every((pluginId) => {
         const normalized = normalizeOptionalLowercaseString(pluginId);
-        return Boolean(normalized && maps.installedPluginIds.has(normalized));
+        return Boolean(normalized && pluginIdsByLowercase.has(normalized));
       }),
-    hasProviderContributionOwners: (ids) => hasOwners(maps.providerContributionOwners, ids),
+    hasProviderContributionOwners: providerContributionOwners.has,
     hasShorthandModelOwners: (modelIds) =>
       modelIds.every((modelId) =>
-        maps.modelSupportOwners.some((owner) => modelSupportOwnerMatches(owner, modelId)),
+        modelSupportOwners.some((owner) => modelSupportOwnerMatches(owner, modelId)),
       ),
     normalizePluginId: normalizeInstalledPluginId,
   };
+  if (facts) {
+    // Callers own their method object; immutable maps remain private to these closures.
+    facts.scopeLookup = { ...lookup };
+  }
+  return lookup;
 }
