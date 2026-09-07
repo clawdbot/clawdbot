@@ -26,7 +26,7 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
               const child=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});
               child.once('message',()=>process.send(child.pid,()=>{${exitParent ? "child.disconnect();process.exit(0)" : "setInterval(()=>{},1000)"}}));`,
             ],
-            { stdio: ["ignore", "pipe", "pipe", "ipc"], reject: false },
+            { stdio: ["ignore", "pipe", "pipe"], ipc: true, reject: false },
           );
           let descendantPid: number | undefined;
           try {
