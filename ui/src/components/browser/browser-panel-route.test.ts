@@ -120,19 +120,21 @@ function controllerFor(panel: Panel): BrowserPanelController {
 describe("browser panel route handoff", () => {
   it("follows session results once on presentation, keeps card choices, and clears session/gateway ownership", async () => {
     const gateway = browserGateway();
+    const focusCount = () =>
+      gateway.request.mock.calls.filter(
+        ([, value]) => (value as BrowserRequestEnvelope).path === "/tabs/focus",
+      ).length;
     const panel = await mountPanel(gateway.client, false);
     expect(gateway.request).not.toHaveBeenCalled();
     panel.presented = true;
     await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
     expect(panel.shadowRoot?.querySelector(".bp-profile")?.textContent).toBe("managed");
+    expect(focusCount()).toBe(0);
 
     chooseCard(panel, nodeTab);
     await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
-    const focusCount = () =>
-      gateway.request.mock.calls.filter(
-        ([, value]) => (value as BrowserRequestEnvelope).path === "/tabs/focus",
-      ).length;
     const afterClick = focusCount();
+    expect(afterClick).toBe(1);
     panel.preferredTab = { tab: { ...hostTab }, revision: "first" };
     panel.requestUpdate();
     await panel.updateComplete;
@@ -141,6 +143,7 @@ describe("browser panel route handoff", () => {
 
     panel.preferredTab = { tab: hostTab, revision: "second" };
     await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    expect(focusCount()).toBe(afterClick);
     await controllerFor(panel).selectTab("t2");
     panel.preferredTab = { tab: { ...hostTab }, revision: "second" };
     await panel.updateComplete;
