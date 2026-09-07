@@ -728,6 +728,38 @@
     "target": "配置 — 智能体"
   },
   {
+    "source": "Configuration — agent workspace and bootstrap",
+    "target": "配置 — 智能体工作区和引导上下文"
+  },
+  {
+    "source": "Configuration — agent models",
+    "target": "配置 — 智能体模型"
+  },
+  {
+    "source": "Configuration — agent runtime and CLI backends",
+    "target": "配置 — 智能体运行时和 CLI 后端"
+  },
+  {
+    "source": "Configuration — agent heartbeat, compaction, and streaming",
+    "target": "配置 — 智能体心跳、压缩和流式输出"
+  },
+  {
+    "source": "Configuration — agent sandboxing",
+    "target": "配置 — 智能体沙箱"
+  },
+  {
+    "source": "Configuration — per-agent entries and multi-agent routing",
+    "target": "配置 — 单智能体条目和多智能体路由"
+  },
+  {
+    "source": "Configuration — agent sessions",
+    "target": "配置 — 智能体会话"
+  },
+  {
+    "source": "Configuration — messages and talk",
+    "target": "配置 — 消息和语音对话"
+  },
+  {
     "source": "Configuration — audit, logging, diagnostics, and telemetry",
     "target": "配置 — 审计、日志、诊断和遥测"
   },
