@@ -1,11 +1,126 @@
 // Qa Lab tests cover Slack live adapter message reconciliation.
-
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
-import { testing } from "./adapter.runtime.js";
+
+const mocks = vi.hoisted(() => ({
+  acquireCaptureStore: vi.fn(),
+  acquireCredentialLease: vi.fn(),
+  captureRelease: vi.fn(),
+  createCaptureReader: vi.fn(),
+  credentialRelease: vi.fn(),
+  getSlackIdentity: vi.fn(),
+  heartbeatStop: vi.fn(),
+  heartbeatThrowIfFailed: vi.fn(),
+  prepareFlow: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+  acquireDebugProxyCaptureStore: mocks.acquireCaptureStore,
+  createDebugProxyCaptureReader: mocks.createCaptureReader,
+}));
+
+vi.mock("../shared/credential-lease.runtime.js", () => ({
+  acquireQaCredentialLease: mocks.acquireCredentialLease,
+  startQaCredentialLeaseHeartbeat: () => ({
+    stop: mocks.heartbeatStop,
+    throwIfFailed: mocks.heartbeatThrowIfFailed,
+    whenFailed: new Promise<Error>(() => {}),
+  }),
+}));
+
+vi.mock("./scenario-environment.js", () => ({
+  createSlackQaScenarioEnvironment: () => ({ prepareFlow: mocks.prepareFlow }),
+}));
+
+vi.mock("./slack-live.config.js", () => ({
+  buildSlackQaConfig: () => ({}),
+  parseSlackQaCredentialPayload: vi.fn(),
+  resolveSlackQaRuntimeEnv: vi.fn(),
+}));
+
+vi.mock("./slack-live.message-observations.js", () => ({
+  waitForSlackChannelStable: vi.fn(),
+}));
+
+vi.mock("./slack-live.observations.js", () => ({
+  getSlackIdentity: mocks.getSlackIdentity,
+  listSlackMessages: vi.fn(),
+  listSlackThreadMessages: vi.fn(),
+  sendSlackChannelMessage: vi.fn(),
+}));
+
+vi.mock("./slack-plugin.runtime.js", () => ({
+  loadSlackQaRuntime: () => ({
+    createSlackWebClient: vi.fn(() => ({})),
+    createSlackWriteClient: vi.fn(() => ({})),
+    resolveSlackWebClientOptions: vi.fn(() => ({ fetch: vi.fn() })),
+  }),
+}));
+
+import { createSlackQaTransportAdapter, testing } from "./adapter.runtime.js";
 import type { SlackQaFetchFunction as FetchFunction } from "./slack-live.contracts.js";
 
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.acquireCaptureStore.mockReturnValue({
+    store: {
+      getSessionEvents: vi.fn(() => []),
+      readBlob: vi.fn(() => null),
+    },
+    release: mocks.captureRelease,
+  });
+  mocks.createCaptureReader.mockReturnValue({
+    getSessionEvents: vi.fn(() => []),
+    readBlob: vi.fn(() => null),
+  });
+  mocks.acquireCredentialLease.mockResolvedValue({
+    payload: {
+      channelId: "C123",
+      driverBotToken: "driver-token",
+      sutAppToken: "sut-app-token",
+      sutBotToken: "sut-token",
+    },
+    release: mocks.credentialRelease,
+  });
+  mocks.getSlackIdentity
+    .mockResolvedValueOnce({ userId: "U-driver" })
+    .mockResolvedValueOnce({ userId: "U-sut" });
+  mocks.prepareFlow.mockResolvedValue({});
+});
+
 describe("Slack live adapter reconciliation", () => {
+  it("reuses a read-only capture reader for the exact candidate runtime environment", async () => {
+    const adapter = await createSlackQaTransportAdapter({
+      messages: {
+        addInboundMessage: vi.fn(),
+        addOutboundMessage: vi.fn(),
+        editMessage: vi.fn(),
+      },
+    } as never);
+    const runtimeEnv = { OPENCLAW_STATE_DIR: "/candidate/state" };
+    const input = {
+      config: {},
+      gateway: { runtimeEnv },
+      outputDir: "/output",
+      scenarioId: "slack-progress",
+      scenarioTitle: "Slack progress",
+      timeoutMs: 30_000,
+      waitForConfigRestartSettle: vi.fn(),
+    } as never;
+
+    await adapter.prepareFlow?.(input);
+    await adapter.prepareFlow?.(input);
+    await adapter.cleanup?.();
+    await adapter.cleanupAfterGatewayStop?.();
+
+    expect(mocks.createCaptureReader).toHaveBeenCalledOnce();
+    expect(mocks.createCaptureReader).toHaveBeenCalledWith({ env: runtimeEnv });
+    expect(mocks.acquireCaptureStore).not.toHaveBeenCalled();
+    expect(mocks.captureRelease).not.toHaveBeenCalled();
+    expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
+    expect(mocks.credentialRelease).toHaveBeenCalledOnce();
+  });
+
   it("aborts an in-flight observer fetch when the adapter stops", async () => {
     let observedSignal: AbortSignal | undefined;
     const fetchImpl: FetchFunction = async (_url, init) => {

@@ -12,7 +12,7 @@ const tool = {
   parameters: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
 };
 
-function responseEvents(first: boolean) {
+function responseEvents(first: boolean, responseId = first ? "resp_number" : "resp_done") {
   const item = first
     ? {
         type: "function_call",
@@ -49,7 +49,7 @@ function responseEvents(first: boolean) {
     {
       type: "response.completed",
       response: {
-        id: first ? "resp_number" : "resp_done",
+        id: responseId,
         status: "completed",
         output: [item],
         usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
@@ -153,6 +153,76 @@ it.each([
           expect.objectContaining({ type: "function_call", arguments: '{"n":"9007199254740992"}' }),
         );
       }
+    } finally {
+      await server.close();
+    }
+  },
+);
+
+it.each(["sse", "websocket-cached"] as const)(
+  "recovers real %s continuation after payload serialization fails",
+  async (transport) => {
+    const server = await createResponsesLoopbackServer((turn) =>
+      responseEvents(false, `resp_${turn}`),
+    );
+    const run = async (messages: Context["messages"], failSerialization = false) => {
+      const stream = await createOpenAIResponsesTransportStreamFn()(
+        responsesLoopbackModel,
+        { messages },
+        {
+          apiKey: "synthetic-continuation-key",
+          sessionId: `serialization-${transport}`,
+          transport,
+          onPayload: (payload) => ({
+            ...(payload as Record<string, unknown>),
+            store: true,
+            ...(failSerialization
+              ? {
+                  metadata: {
+                    value: {
+                      toJSON() {
+                        throw new Error("synthetic continuation serialization failure");
+                      },
+                    },
+                  },
+                }
+              : {}),
+          }),
+        },
+      );
+      return stream.result();
+    };
+    try {
+      const user = { role: "user" as const, content: "First.", timestamp: 1 };
+      const first = await run([user]);
+      expect(first.stopReason).toBe("stop");
+      const messages: Context["messages"] = [
+        user,
+        first,
+        { role: "user", content: "Second.", timestamp: 2 },
+      ];
+      const failed = await run(messages, true);
+      expect(failed.stopReason).toBe("error");
+      expect(failed.errorMessage).toBe("synthetic continuation serialization failure");
+      expect(server.requests).toHaveLength(1);
+
+      const second = await run(messages);
+      expect(second.stopReason).toBe("stop");
+      expect(server.requests[1]).not.toHaveProperty("previous_response_id");
+      expect(server.requests[1]?.input).toHaveLength(3);
+      const third = await run([
+        ...messages,
+        second,
+        { role: "user", content: "Third.", timestamp: 3 },
+      ]);
+      expect(third.stopReason).toBe("stop");
+      expect(server.requests).toHaveLength(3);
+      expect(server.requests[2]).toMatchObject({
+        previous_response_id: "resp_2",
+        input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "Third." }] },
+        ],
+      });
     } finally {
       await server.close();
     }

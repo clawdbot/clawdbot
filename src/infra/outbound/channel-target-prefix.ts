@@ -13,6 +13,8 @@ const TARGET_KIND_PREFIXES = new Set([
   "thread",
   "user",
 ]);
+const DEFAULT_TARGET_KINDS = [...TARGET_KIND_PREFIXES];
+const TARGET_KIND_PATTERN = new RegExp(`^(${DEFAULT_TARGET_KINDS.join("|")}):`, "i");
 
 /** Removes a selected channel/provider prefix from an outbound target string. */
 export function stripTargetProviderPrefix(raw: string, ...providers: string[]): string {
@@ -30,8 +32,11 @@ export function stripTargetProviderPrefix(raw: string, ...providers: string[]): 
 /** Removes generic target-kind prefixes such as room:, thread:, or user:. */
 export function stripOutboundTargetKindPrefix(
   raw: string,
-  kinds: readonly string[] = ["channel", "conversation", "dm", "group", "room", "thread", "user"],
+  kinds: readonly string[] = DEFAULT_TARGET_KINDS,
 ): string {
+  if (kinds === DEFAULT_TARGET_KINDS) {
+    return raw.replace(TARGET_KIND_PATTERN, "").trim();
+  }
   const kindPattern = kinds
     .map((kind) => normalizeOptionalLowercaseString(kind))
     .filter((kind): kind is string => Boolean(kind))

@@ -13,11 +13,11 @@ import {
   MAX_STRING_LENGTH,
   readDesktopOverlay,
 } from "./session-catalog-desktop.js";
+import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import {
   CLAUDE_CATALOG_IO_CONCURRENCY,
   CLAUDE_PARTIAL_SCAN_TTL_MS,
   CLAUDE_SESSION_SCAN_HARD_TTL_MS,
-  currentHomeDir,
   type ClaudeProjectsTreeSnapshot,
   type ClaudeSessionScanContext,
   projectsDir,
@@ -350,6 +350,7 @@ async function discoverCliRecords(
         if (
           !isCliEntrypoint(raw.entrypoint) ||
           raw.type !== "user" ||
+          raw.isMeta === true ||
           !isRecord(raw.message) ||
           raw.message.role !== "user"
         ) {
@@ -528,7 +529,7 @@ async function readCliScan(
 }
 
 export async function listClaudeSessions(
-  homeDir = currentHomeDir(),
+  homeDir = resolveClaudeCatalogHomeDir(),
   options: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean } = {},
 ): Promise<CatalogRecord[]> {
   const [cli, desktop] = await Promise.all([

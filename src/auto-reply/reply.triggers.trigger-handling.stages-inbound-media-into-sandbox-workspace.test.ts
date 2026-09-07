@@ -79,6 +79,35 @@ async function writeInboundMedia(
 }
 
 describe("stageSandboxMedia", () => {
+  it("leaves no staged input directory when an owned source is missing", async () => {
+    await withSandboxMediaTempHome("openclaw-staging-missing-", async (home) => {
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+      const cfg = createSandboxMediaStageConfig(home);
+      const workspaceDir = join(home, "openclaw");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const projectFile = join(workspaceDir, "keep.txt");
+      await fs.writeFile(projectFile, "existing project file");
+      const missingPath = await writeInboundMedia(home, "missing.png", "small input");
+      await fs.unlink(missingPath);
+      const { ctx, sessionCtx } = createSandboxMediaContexts(missingPath);
+      const originalMedia = structuredClone(ctx.media);
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      expect(result.staged).toEqual(new Map());
+      expect(ctx.media).toEqual(originalMedia);
+      expect(sessionCtx.media).toEqual(originalMedia);
+      expect(await fs.readdir(workspaceDir)).toEqual(["keep.txt"]);
+      await expect(fs.readFile(projectFile, "utf8")).resolves.toBe("existing project file");
+    });
+  });
+
   it("stages global-session media with the prepared agent owner", async () => {
     await withSandboxMediaTempHome("openclaw-staging-global-", async (home) => {
       const { ensureSandboxWorkspaceForSession } = await vi.importActual<
@@ -588,18 +617,7 @@ describe("stageSandboxMedia", () => {
       });
 
       const inboundDir = join(sandboxDir, "media", "inbound");
-      const directories = await fs.readdir(inboundDir).catch((e: unknown) => {
-        if (
-          typeof e === "object" &&
-          e !== null &&
-          "code" in e &&
-          (e as { code?: string }).code === "ENOENT"
-        ) {
-          return [];
-        }
-        throw e;
-      });
-      expect(directories).toEqual([]);
+      await expect(fs.stat(inboundDir)).rejects.toMatchObject({ code: "ENOENT" });
       expect(result.staged).toEqual(new Map());
       expect(ctx.media?.[0]?.path).toBe(mediaPath);
       expect(sessionCtx.media?.[0]?.path).toBe(mediaPath);

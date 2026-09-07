@@ -1,4 +1,3 @@
-// File Transfer plugin module implements file fetch tool behavior.
 import crypto from "node:crypto";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
@@ -65,6 +64,7 @@ export function createFileFetchTool(): AnyAgentTool {
         mimeType,
         FILE_TRANSFER_SUBDIR,
         FILE_FETCH_HARD_MAX_BYTES,
+        canonicalPath,
       );
       const localPath = saved.path;
       const shortHash = sha256.slice(0, 12);
@@ -79,31 +79,19 @@ export function createFileFetchTool(): AnyAgentTool {
           mimeType === "application/xml" ||
           mimeType === "application/yaml");
 
-      const content: Array<
-        { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
-      > = [];
-      if (isInlineImage) {
-        content.push({ type: "image", data: base64, mimeType });
-      } else if (isInlineText) {
+      // Direct model adapters read content, not details. Keep the saved handles
+      // alongside every payload so follow-up operations need no extra lookup.
+      let summaryText = `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}\nmediaId: ${saved.id}`;
+      if (isInlineText) {
         const decodedText = buffer.toString("utf-8");
         const text = decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText;
-        const wrappedText = wrapExternalContent(
-          `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}\n\n--- contents ---\n${text}`,
-          { source: "unknown" },
-        );
-        content.push({
-          type: "text",
-          text: wrappedText,
-        });
-      } else {
-        const wrappedText = wrapExternalContent(
-          `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}`,
-          { source: "unknown" },
-        );
-        content.push({
-          type: "text",
-          text: wrappedText,
-        });
+        summaryText += `\n\n--- contents ---\n${text}`;
+      }
+      const content: Array<
+        { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+      > = [{ type: "text", text: wrapExternalContent(summaryText, { source: "unknown" }) }];
+      if (isInlineImage) {
+        content.push({ type: "image", data: base64, mimeType });
       }
 
       await appendFileTransferAudit({

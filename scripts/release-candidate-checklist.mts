@@ -13,9 +13,10 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml } from "yaml";
@@ -28,8 +29,9 @@ import {
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
-  validateFullReleaseNpmPreflight,
+  downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
   validateReleasePreflightTagIdentity,
 } from "./npm-preflight-tooling-identity.mjs";
@@ -156,7 +158,7 @@ Options:
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
   --plugin-sdk-api-acknowledgement <digest>
                                       8-character digest from the Plugin SDK API diff report.
-  --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
+  --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
   --skip-dispatch                     Require Full Release Validation run; separate npm run only for historical recovery.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
@@ -326,15 +328,10 @@ export function parseArgs(argv: string[]) {
   if (options.pluginPublishScope === "all-publishable" && options.plugins.trim()) {
     throw new Error("--plugins is only valid with --plugin-publish-scope selected");
   }
+  // Apps can attach after npm and GitHub publication; only an explicitly selected
+  // Windows promotion needs a source tag and its immutable installer digests.
   if (options.windowsNodeTag && !WINDOWS_NODE_TAG_PATTERN.test(options.windowsNodeTag)) {
     throw new Error("--windows-node-tag must be an explicit version tag, not latest");
-  }
-  if (
-    !options.tag.includes("-alpha.") &&
-    !options.tag.includes("-beta.") &&
-    !options.windowsNodeTag
-  ) {
-    throw new Error("stable release candidates require --windows-node-tag");
   }
   if (!["mock-openai", "live-frontier"].includes(options.telegramProviderMode)) {
     throw new Error("--telegram-provider-mode must be mock-openai or live-frontier");
@@ -689,9 +686,23 @@ function runFromTrustedTooling(
       cwd: targetRoot,
     });
     worktreeAdded = true;
+    // The tooling worktree installs its own frozen graph: borrowing the target's
+    // node_modules would resolve workspace package links back into the target
+    // checkout and let candidate code run inside the trusted helper.
+    run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
+      cwd: toolingRoot,
+    });
+    const tsxLoader = pathToFileURL(
+      createRequire(join(toolingRoot, "package.json")).resolve("tsx"),
+    ).href;
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", join(toolingRoot, "scripts/release-candidate-checklist.mts"), ...argv],
+      [
+        "--import",
+        tsxLoader,
+        join(toolingRoot, "scripts/release-candidate-checklist.mts"),
+        ...argv,
+      ],
       {
         cwd: targetRoot,
         env: { ...process.env, [TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha },
@@ -1470,11 +1481,13 @@ function pluginPlanArgs(options: ReturnType<typeof parseArgs>) {
 }
 
 function collectPluginPlan(script: string, options: ReturnType<typeof parseArgs>): unknown {
-  return JSON.parse(
+  const plan: unknown = JSON.parse(
     run("node", ["--import", "tsx", join(TOOLING_ROOT, script), ...pluginPlanArgs(options)], {
       capture: true,
     }),
   );
+  console.log(formatPluginPlanSummary(script, plan).join("\n"));
+  return plan;
 }
 
 async function collectPluginPlanWithRetry(script: string, options: ReturnType<typeof parseArgs>) {
@@ -1498,8 +1511,15 @@ async function collectPluginPlanWithRetry(script: string, options: ReturnType<ty
   throw lastError;
 }
 
-function pluginPlanPackageCount(plan: unknown) {
-  return isRecord(plan) && Array.isArray(plan.packages) ? plan.packages.length : 0;
+function formatPluginPlanSummary(label: string, plan: unknown): string[] {
+  const count = isRecord(plan) && Array.isArray(plan.all) ? plan.all.length : 0;
+  const warnings = isRecord(plan) && Array.isArray(plan.warnings) ? plan.warnings : [];
+  return [
+    `- ${label}: ${count} packages`,
+    ...warnings
+      .filter((warning): warning is string => typeof warning === "string")
+      .map((warning) => `- Warning: ${warning}`),
+  ];
 }
 
 function shellQuote(value: unknown) {
@@ -1517,12 +1537,15 @@ export function buildPublishCommand(
   npmPreflightSource?: Awaited<ReturnType<typeof validateNpmPreflightRunSource>>,
 ) {
   const workflowRef =
-    options.publishWorkflowRef ||
-    npmPreflightSource?.workflowRef ||
-    (options.tag.includes("-alpha.") ? options.workflowRef : "main");
-  if (options.tag.includes("-alpha.") && !TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(workflowRef)) {
+    options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef;
+  const publishRefPattern = options.tag.includes("-alpha.")
+    ? TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN
+    : /^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u;
+  if (!publishRefPattern.test(workflowRef)) {
     throw new Error(
-      "alpha release publish requires a matching tideclaw/alpha/YYYY-MM-DD-HHMMZ workflow ref",
+      options.tag.includes("-alpha.")
+        ? "alpha release publish requires a matching tideclaw/alpha/YYYY-MM-DD-HHMMZ workflow ref"
+        : "regular release publish requires protected tooling; supply --publish-workflow-ref release-publish/<sha12>-<epoch> after creating and pushing the tag at the trusted tooling SHA",
     );
   }
   const fields: Array<[string, string | number | undefined]> = [
@@ -1734,11 +1757,6 @@ async function runParallelsIfNeeded(
   if (options.skipParallels) {
     return { status: "skipped", reason: options.parallelsSkipReason };
   }
-  // This function runs inside trusted tooling, not the frozen target checkout.
-  // Prepare its isolated dependencies here before importing the Parallels harness.
-  run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
-    cwd: TOOLING_ROOT,
-  });
   const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
     capture: true,
   }).trim();
@@ -1776,7 +1794,7 @@ export function buildTelegramArtifactInputs({
   ) {
     throw new Error(`npm preflight artifact ${artifact.name} is missing immutable identity`);
   }
-  if (String(artifact.workflowRunId) !== runId) {
+  if (!/^[1-9][0-9]*$/u.test(runId) || String(artifact.workflowRunId) !== runId) {
     throw new Error(
       `npm preflight artifact ${artifact.name} belongs to run ${artifact.workflowRunId}, not ${runId}`,
     );
@@ -1826,7 +1844,7 @@ async function runTelegramIfNeeded(
     artifact,
     manifest,
     runAttempt,
-    runId: options.npmPreflightRunId,
+    runId: String(artifact.workflowRunId),
     sourceSha,
   });
   const runId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
@@ -1846,6 +1864,30 @@ async function runTelegramIfNeeded(
     url: runLocal.url,
     artifactName: artifact.name,
     providerMode: options.telegramProviderMode,
+  };
+}
+
+function checkCandidateAndroidVersion(targetSha: string, tag: string) {
+  const release = parseReleaseVersion(tag.replace(/^v/u, ""));
+  if (release?.channel !== "stable") {
+    return undefined;
+  }
+  const manifest: unknown = JSON.parse(
+    run("git", ["show", `${targetSha}:apps/android/version.json`], { capture: true }),
+  );
+  const androidVersion = requireString(
+    isRecord(manifest) ? manifest.version : undefined,
+    "Android version",
+  );
+  const targetVersion = release.baseVersion;
+  const matches = androidVersion === targetVersion;
+  return {
+    status: matches ? "passed" : "warning",
+    androidVersion,
+    targetVersion,
+    message: matches
+      ? `PASS: Android version ${androidVersion} matches release train ${targetVersion}.`
+      : `WARNING: Android version ${androidVersion} does not match release train ${targetVersion}; run node --import tsx scripts/mobile-release-version.ts --prepare --version ${targetVersion} --write before tagging, or accept that Android will not ship for this release.`,
   };
 }
 
@@ -1912,6 +1954,10 @@ async function main() {
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
   writeReleaseCandidateState(statePath, candidateState);
+  const androidVersionCheck = checkCandidateAndroidVersion(targetSha, options.tag);
+  if (androidVersionCheck) {
+    console.log(androidVersionCheck.message);
+  }
   const releaseChangelog = run("git", ["show", `${targetSha}:CHANGELOG.md`], { capture: true });
   const releaseNotesVersion = releaseNotesVersionForTag(options.tag);
   const releaseNotesCheck = validateCandidateReleaseNotes({
@@ -1936,6 +1982,17 @@ async function main() {
       )
     : "";
   const localGeneratedCheck = runLocalGeneratedCheckIfNeeded(options);
+
+  // Discover invalid plugin inputs and registry failures before starting expensive validation.
+  // Publishers rebuild these read-only plans; this snapshot never authorizes publication.
+  const pluginNpmPlan = await collectPluginPlanWithRetry(
+    "scripts/plugin-npm-release-plan.ts",
+    options,
+  );
+  const pluginClawHubPlan = await collectPluginPlanWithRetry(
+    "scripts/plugin-clawhub-release-plan.ts",
+    options,
+  );
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
@@ -1978,7 +2035,7 @@ async function main() {
     allowShaPinnedWorkflowRef: true,
   });
   const npmUsesFullRun = options.npmPreflightRunId === options.fullReleaseRunId;
-  const { run: npmRun, source: npmPreflightSource } = npmUsesFullRun
+  const { run: selectedNpmRun, source: npmPreflightSource } = npmUsesFullRun
     ? {
         run: fullRun,
         source: { status: "passed", headSha: fullRun.headSha, workflowRef: options.workflowRef },
@@ -2007,60 +2064,6 @@ async function main() {
     join(fullDir, "full-release-validation-manifest.json"),
     "full validation manifest",
   );
-  const qualifiedPreflight = npmUsesFullRun
-    ? validateFullReleaseNpmPreflight({
-        manifest: fullManifest,
-        runId: options.fullReleaseRunId,
-        runAttempt: fullRun.runAttempt,
-        sourceSha: targetSha,
-        toolingSha: fullRun.headSha,
-      })
-    : undefined;
-  const npmArtifact = await downloadResolvedArtifact(
-    options.repo,
-    options.npmPreflightRunId,
-    qualifiedPreflight?.artifact.name ?? `openclaw-npm-preflight-${options.tag}`,
-    "openclaw-npm-preflight-",
-    npmDir,
-  );
-  if (
-    qualifiedPreflight &&
-    (String(npmArtifact.id) !== qualifiedPreflight.artifact.id ||
-      npmArtifact.digest !== `sha256:${qualifiedPreflight.artifact.digest}`)
-  ) {
-    throw new Error("npm preflight artifact differs from the immutable full validation descriptor");
-  }
-  const npmArtifactName = npmArtifact.name;
-  if (!Number.isInteger(npmRun.runAttempt) || npmRun.runAttempt < 1) {
-    throw new Error(`OpenClaw npm preflight run ${options.npmPreflightRunId} has invalid attempt.`);
-  }
-  downloadArtifact(
-    options.repo,
-    options.npmPreflightRunId,
-    `plugin-sdk-api-release-diff-${options.npmPreflightRunId}-${npmRun.runAttempt}`,
-    pluginSdkApiDir,
-  );
-  const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
-  const npmPreflightProducer = verifyNpmPreflightProducer({
-    manifest: npmManifest,
-    repository: options.repo,
-    workflowFullRef: `refs/${npmRun.headBranch?.startsWith("release-publish/") ? "tags" : "heads"}/${npmRun.headBranch}`,
-    workflowSha: npmRun.headSha,
-    runId: options.npmPreflightRunId,
-    runAttempt: npmRun.runAttempt,
-    workflowPath: String(npmRun.workflowPath).split("@", 1)[0],
-    fullReleaseManifest: fullManifest,
-    manifestSha256: sha256(join(npmDir, "preflight-manifest.json")),
-  });
-  const immutablePluginSdkApiEvidence = readJson(
-    join(pluginSdkApiDir, "plugin-sdk-api-release-evidence.json"),
-    "immutable Plugin SDK API evidence",
-  );
-  if (!isDeepStrictEqual(npmManifest.pluginSdkApi, immutablePluginSdkApiEvidence)) {
-    throw new Error(
-      "npm preflight manifest Plugin SDK API evidence does not match its immutable artifact",
-    );
-  }
   run("git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], {
     capture: true,
   });
@@ -2078,6 +2081,76 @@ async function main() {
   });
   if (fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha) {
     throw new Error(`run SHA mismatch: tag=${targetSha} full=${fullRun.headSha}`);
+  }
+  if (npmUsesFullRun) {
+    rmSync(npmDir, { recursive: true, force: true });
+  }
+  const qualifiedPreflight = npmUsesFullRun
+    ? await downloadFullReleaseNpmPreflight({
+        manifest: fullManifest,
+        repository: options.repo,
+        runId: options.fullReleaseRunId,
+        runAttempt: fullRun.runAttempt,
+        sourceSha: targetSha,
+        toolingSha: fullRun.headSha,
+        outputDir: npmDir,
+        token: run("gh", ["auth", "token"], { capture: true }).trim(),
+      })
+    : undefined;
+  const npmProducerRunId = qualifiedPreflight?.producer.runId ?? options.npmPreflightRunId;
+  const npmRun = qualifiedPreflight
+    ? {
+        ...selectedNpmRun,
+        databaseId: Number(npmProducerRunId),
+        runAttempt: Number(qualifiedPreflight.producer.runAttempt),
+        workflowName: qualifiedPreflight.run.name,
+        workflowPath: qualifiedPreflight.run.path,
+        headBranch: qualifiedPreflight.run.head_branch,
+        headSha: qualifiedPreflight.run.head_sha,
+        url: qualifiedPreflight.run.html_url,
+      }
+    : selectedNpmRun;
+  const npmArtifact = qualifiedPreflight
+    ? { ...qualifiedPreflight.artifact, workflowRunId: Number(npmProducerRunId) }
+    : await downloadResolvedArtifact(
+        options.repo,
+        npmProducerRunId,
+        `openclaw-npm-preflight-${options.tag}`,
+        "openclaw-npm-preflight-",
+        npmDir,
+      );
+  const npmArtifactName = npmArtifact.name;
+  if (!Number.isInteger(npmRun.runAttempt) || npmRun.runAttempt < 1) {
+    throw new Error(`OpenClaw npm preflight run ${npmProducerRunId} has invalid attempt.`);
+  }
+  downloadArtifact(
+    options.repo,
+    npmProducerRunId,
+    `plugin-sdk-api-release-diff-${npmProducerRunId}-${npmRun.runAttempt}`,
+    pluginSdkApiDir,
+  );
+  const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
+  const npmPreflightProducer = verifyNpmPreflightProducer({
+    manifest: npmManifest,
+    repository: options.repo,
+    workflowFullRef: `refs/${npmRun.headBranch?.startsWith("release-publish/") ? "tags" : "heads"}/${npmRun.headBranch}`,
+    workflowSha: npmRun.headSha,
+    runId: npmProducerRunId,
+    runAttempt: npmRun.runAttempt,
+    workflowPath: String(npmRun.workflowPath).split("@", 1)[0],
+    fullReleaseManifest: fullManifest,
+    fullReleaseRunId: options.fullReleaseRunId,
+    fullReleaseRunAttempt: fullRun.runAttempt,
+    manifestSha256: sha256(join(npmDir, "preflight-manifest.json")),
+  });
+  const immutablePluginSdkApiEvidence = readJson(
+    join(pluginSdkApiDir, "plugin-sdk-api-release-evidence.json"),
+    "immutable Plugin SDK API evidence",
+  );
+  if (!isDeepStrictEqual(npmManifest.pluginSdkApi, immutablePluginSdkApiEvidence)) {
+    throw new Error(
+      "npm preflight manifest Plugin SDK API evidence does not match its immutable artifact",
+    );
   }
   validatePreflightManifest(npmManifest, {
     tag: options.tag,
@@ -2157,14 +2230,6 @@ async function main() {
     targetSha,
     fullValidationEvidence.coveragePolicy,
   );
-  const pluginNpmPlan = await collectPluginPlanWithRetry(
-    "scripts/plugin-npm-release-plan.ts",
-    options,
-  );
-  const pluginClawHubPlan = await collectPluginPlanWithRetry(
-    "scripts/plugin-clawhub-release-plan.ts",
-    options,
-  );
   const publishCommand = buildPublishCommand(
     {
       ...options,
@@ -2182,7 +2247,8 @@ async function main() {
     npmDistTag: options.npmDistTag,
     fullReleaseValidationRunId: options.fullReleaseRunId,
     fullReleaseValidationRunAttempt: fullRun.runAttempt,
-    npmPreflightRunId: options.npmPreflightRunId,
+    npmPreflightRunId: npmProducerRunId,
+    npmPreflightAuthorizationRunId: options.npmPreflightRunId,
     windowsNodeTag: options.windowsNodeTag || undefined,
     windowsNodeSourceRelease,
     fullReleaseValidationUrl: fullRun.url,
@@ -2198,6 +2264,7 @@ async function main() {
     },
     releaseNotesCheck,
     releaseNotesProvenance,
+    androidVersionCheck,
     localGeneratedCheck,
     tarball: {
       name: basename(tarballPath),
@@ -2221,8 +2288,9 @@ async function main() {
       `# ${options.tag} release candidate evidence`,
       "",
       `- target SHA: ${targetSha}`,
+      ...(androidVersionCheck ? [`- **${androidVersionCheck.message}**`] : []),
       `- full release validation: ${options.fullReleaseRunId} ${fullRun.url}`,
-      `- npm preflight: ${options.npmPreflightRunId} ${npmRun.url}`,
+      `- npm preflight: ${npmProducerRunId} ${npmRun.url}`,
       ...(windowsNodeSourceRelease
         ? [
             `- Windows Node source release: ${windowsNodeSourceRelease.tag} ${formatJsonValue(windowsNodeSourceRelease.url)}`,
@@ -2250,8 +2318,8 @@ async function main() {
       `- tarball: ${basename(tarballPath)}`,
       `- tarball sha256: ${actualTarballSha}`,
       `- npm dist-tag: ${options.npmDistTag}`,
-      `- plugin npm plan: ${pluginPlanPackageCount(pluginNpmPlan)} packages`,
-      `- ClawHub plan: ${pluginPlanPackageCount(pluginClawHubPlan)} packages`,
+      ...formatPluginPlanSummary("plugin npm plan", pluginNpmPlan),
+      ...formatPluginPlanSummary("ClawHub plan", pluginClawHubPlan),
       `- Parallels: ${parallels.status}${parallels.reason ? ` (${parallels.reason})` : ""}`,
       `- NPM Telegram E2E: ${npmTelegram.status}${
         npmTelegram.runId ? ` ${npmTelegram.runId} ${npmTelegram.url}` : ""
@@ -2269,6 +2337,9 @@ async function main() {
 
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);
+  if (androidVersionCheck) {
+    console.log(androidVersionCheck.message);
+  }
   console.log("publish command:");
   console.log(publishCommand);
 }

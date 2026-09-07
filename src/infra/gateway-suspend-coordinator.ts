@@ -1,6 +1,8 @@
 // Coordinates atomic host suspension preparation and terminal-policy-aware drain leases.
 import { randomUUID } from "node:crypto";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type {
+  GatewaySuspendHandoffResult,
   GatewaySuspendPrepareParams,
   GatewaySuspendPrepareResult as GatewaySuspendPrepareWireResult,
   GatewaySuspendResumeResult as GatewaySuspendResumeWireResult,
@@ -57,15 +59,21 @@ type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
   drain: boolean;
   suspensionId: string;
   expiresAtMs: number;
+  inspect?: Partial<GatewayActiveWorkInspectors>;
+  handoff?: GatewaySuspendHandoffOwner;
   phase:
     | {
         status: "draining";
         snapshot: GatewayActiveWorkSnapshot;
-        inspect?: Partial<GatewayActiveWorkInspectors>;
         commitAdmission: () => boolean;
       }
     | { status: "ready"; snapshot: GatewayActiveWorkSnapshot };
   nowMs: () => number;
+};
+
+/** Private identity of one live process-owning host iteration, never a wire token. */
+export type GatewaySuspendHandoffOwner = {
+  isCurrent: () => boolean;
 };
 
 type GatewaySchedulerRecovery = GatewaySuspendCoordinatorEntryBase & {
@@ -239,7 +247,7 @@ function refreshHeldSuspension(held: HeldGatewaySuspension): HeldGatewaySuspensi
     return held.phase;
   }
   // Polls and renewals must retain the update's terminal policy until the lease is ready.
-  const snapshot = createGatewayActiveWorkSnapshot(held.phase.inspect, {
+  const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
     ignoreTerminalSessions: held.terminalPolicy === "terminate",
   });
   if (!snapshot.idle) {
@@ -302,8 +310,11 @@ export function prepareGatewaySuspend(params: {
     ) {
       return { status: "conflict", expiresAtMs: existing.expiresAtMs };
     }
-    existing.nowMs = params.nowMs ?? Date.now;
-    renewHeldSuspension(existing, nowMs);
+    // Repeated preparation may renew a lease, never an already-armed interruption.
+    if (!existing.handoff) {
+      existing.nowMs = params.nowMs ?? Date.now;
+      renewHeldSuspension(existing, nowMs);
+    }
     return heldPrepareResult(existing);
   }
 
@@ -372,12 +383,12 @@ export function prepareGatewaySuspend(params: {
       drain,
       suspensionId,
       expiresAtMs,
+      inspect: params.inspect,
       phase: snapshot.idle
         ? { status: "ready", snapshot }
         : {
             status: "draining",
             snapshot,
-            inspect: params.inspect,
             commitAdmission: admission.commit,
           },
       reopenAdmission: admission.release,
@@ -405,6 +416,65 @@ export function prepareGatewaySuspend(params: {
       admission.rollback();
     }
     throw err;
+  }
+}
+
+function handoffRefusal(held: HeldGatewaySuspension, owner: GatewaySuspendHandoffOwner) {
+  if (
+    COORDINATOR_STATE.current !== held ||
+    held.nowMs() >= held.expiresAtMs ||
+    !owner.isCurrent()
+  ) {
+    return "gateway suspension or host iteration changed";
+  }
+  // READY retains this server-owned inspector too: final-chat writes can arrive
+  // after preparation and must never be replaced by the process-only inventory.
+  if (!held.inspect?.getTerminalPersistence) {
+    return "gateway terminal persistence inspection is unavailable";
+  }
+  if (held.inspect.getTerminalPersistence() > 0) {
+    return "gateway terminal persistence is still pending";
+  }
+  return undefined;
+}
+
+/** The authenticated handler verifies the process target before this synchronous commit. */
+export function armGatewaySuspendHandoff(params: {
+  suspensionId: string;
+  owner: GatewaySuspendHandoffOwner;
+}): Result<GatewaySuspendHandoffResult, string> {
+  const held = COORDINATOR_STATE.current;
+  if (held?.kind !== "held" || held.suspensionId !== params.suspensionId) {
+    return resultError("gateway suspension id does not match");
+  }
+  const refusal = handoffRefusal(held, params.owner);
+  if (refusal) {
+    return resultError(refusal);
+  }
+  if (held.handoff && held.handoff !== params.owner) {
+    return resultError("gateway suspension already belongs to another host iteration");
+  }
+  held.handoff = params.owner;
+  return ok({ status: "armed", suspensionId: held.suspensionId, expiresAtMs: held.expiresAtMs });
+}
+
+/** Consume synchronously before restart drain invalidates suspension or retires the host. */
+export function consumeGatewaySuspendHandoff(
+  owner: GatewaySuspendHandoffOwner | undefined,
+): Result<boolean, string> {
+  const held = COORDINATOR_STATE.current;
+  if (held?.kind !== "held" || !owner || held.handoff !== owner) {
+    return ok(false);
+  }
+  held.handoff = undefined;
+  const refusal = handoffRefusal(held, owner);
+  return refusal ? resultError(refusal) : ok(true);
+}
+
+export function disarmGatewaySuspendHandoff(owner: GatewaySuspendHandoffOwner): void {
+  const held = COORDINATOR_STATE.current;
+  if (held?.kind === "held" && held.handoff === owner) {
+    held.handoff = undefined;
   }
 }
 

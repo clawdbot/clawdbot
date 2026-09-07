@@ -54,11 +54,13 @@ export function renderSessionGroupOptions(params: {
         title=${params.actionTitle(actionKind)}
       >
         <span class="session-menu__text">${label}</span>
-        ${radio && checked
-          ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-              >${icons.check}</span
-            >`
-          : nothing}
+        ${
+          radio && checked
+            ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                >${icons.check}</span
+              >`
+            : nothing
+        }
         ${digit ? menuShortcutHint(digit) : nothing}
       </wa-dropdown-item>
     `;
@@ -67,18 +69,20 @@ export function renderSessionGroupOptions(params: {
     ${params.groups.map((group) =>
       entry(group, params.category === group, `move-to-group:${encodeURIComponent(group)}`),
     )}
-    ${params.category
-      ? entry(
-          t(
-            params.categoryClearReturnsToGroups
-              ? "sessionsView.moveBackToGroups"
-              : "sessionsView.removeFromGroup",
-          ),
-          false,
-          "move-to-group:",
-          false,
-        )
-      : nothing}
+    ${
+      params.category
+        ? entry(
+            t(
+              params.categoryClearReturnsToGroups
+                ? "sessionsView.moveBackToGroups"
+                : "sessionsView.removeFromGroup",
+            ),
+            false,
+            "move-to-group:",
+            false,
+          )
+        : nothing
+    }
     ${entry(t("sessionsView.newGroup"), false, "new-group", false)}
   `;
 }

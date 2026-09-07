@@ -93,7 +93,7 @@ describe("sessions.usage result cache", () => {
     vi.clearAllMocks();
     testApi.sessionsUsageCache.clear();
     mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
-      agentIdBySessionKey: new Map(),
+      targetsBySessionKey: new Map(),
       durableTargets: [],
       storePath: "(multiple)",
       store: {},
@@ -141,7 +141,18 @@ describe("sessions.usage result cache", () => {
       tools: { listChars: 0, schemaChars: 0, entries: [] },
     };
     mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
-      agentIdBySessionKey: new Map([["agent:main:main", "main"]]),
+      targetsBySessionKey: new Map([
+        [
+          "agent:main:main",
+          {
+            agentId: "main",
+            storeTarget: {
+              agentId: "main",
+              storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
+            },
+          },
+        ],
+      ]),
       durableTargets: [],
       storePath: "(multiple)",
       store: {
@@ -230,9 +241,27 @@ describe("sessions.usage result cache", () => {
         },
       };
       mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
-        agentIdBySessionKey: new Map([
-          ["agent:main:first", "main"],
-          ["agent:main:second", "main"],
+        targetsBySessionKey: new Map([
+          [
+            "agent:main:first",
+            {
+              agentId: "main",
+              storeTarget: {
+                agentId: "main",
+                storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
+              },
+            },
+          ],
+          [
+            "agent:main:second",
+            {
+              agentId: "main",
+              storeTarget: {
+                agentId: "main",
+                storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
+              },
+            },
+          ],
         ]),
         durableTargets: [],
         storePath: "(multiple)",

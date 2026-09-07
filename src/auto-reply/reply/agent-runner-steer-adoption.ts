@@ -3,13 +3,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import {
   scheduleFollowupDrainAfterReplyOperationClear,
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import {
   admitFollowupRunLifecycle,
-  completeFollowupRunLifecycle,
   parkSteerCandidate,
   resolveFollowupAbortSignal,
   scheduleFollowupDrain,
@@ -22,7 +23,6 @@ import {
   type ReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
-import { runAfterReplyOperationClear } from "./reply-run-registry.state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -69,7 +69,9 @@ function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
   );
 }
 
-export async function runActiveReplySteer(params: ActiveReplySteerParams): Promise<"handled"> {
+export async function runActiveReplySteer(
+  params: ActiveReplySteerParams,
+): Promise<"handled" | ReplyPayload> {
   const {
     followupRun,
     queueKey,
@@ -169,9 +171,12 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
       attempt: injectionAttempt,
       target: injectionTarget,
       inboundAudio: followupRun.currentInboundAudio === true,
-      onAccepted: () => {
+      onOutcome: (outcome) => {
         if (replyOperationRunState) {
-          replyOperationRunState.admission = { status: "accepted", mode: "steer" };
+          replyOperationRunState.admission =
+            outcome === "indeterminate"
+              ? { status: "skipped", reason: "question-response-indeterminate" }
+              : { status: "accepted", mode: "steer" };
         }
       },
       onAdopted: () => admitFollowupRunLifecycle(followupRun),
@@ -180,30 +185,14 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
     if (finalization.status === "rejected") {
       return await fallback(finalization.outcome.reason);
     }
-    // Transfer staging ownership to the active operation so the producer
-    // no longer sees the directory and cannot delete media owned by the steer.
-    params.opts?.onHostStagingDelegated?.();
-    // Save staging properties for deferred cleanup after owner settlement
-    const hostStagingDir = followupRun.hostWorkspaceStagingDir;
-    const turnAdoptionLifecycle = followupRun.turnAdoptionLifecycle;
-    // Clear the staging properties on the followupRun so lifecycle doesn't double-clean
-    delete followupRun.hostWorkspaceStagingDir;
-    delete followupRun.turnAdoptionLifecycle;
-    parked.consume();
-    // Set up deferred cleanup after owner settlement
-    if (activeReplyOperation?.ownerSettlement) {
-      void activeReplyOperation.ownerSettlement.then(() => {
-        completeFollowupRunLifecycle({
-          hostWorkspaceStagingDir: hostStagingDir,
-          turnAdoptionLifecycle,
-        });
-      });
-    } else if (activeReplyOperation) {
-      runAfterReplyOperationClear(activeReplyOperation, () => {
-        completeFollowupRunLifecycle({
-          hostWorkspaceStagingDir: hostStagingDir,
-          turnAdoptionLifecycle,
-        });
+    // Accepted or indeterminate input cannot be abandoned for replay, even
+    // when the source's later adoption callback rejects.
+    parked.consume("consumed");
+    if (finalization.status === "indeterminate") {
+      typing.cleanup();
+      return markReplyPayloadForSourceSuppressionDelivery({
+        text: finalization.outcome.errorMessage,
+        isError: true,
       });
     }
     const transcriptCommitUnconfirmed =

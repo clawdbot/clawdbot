@@ -380,6 +380,13 @@ describe("resolveCommandAuthorization", () => {
       expectedOwner: true,
     },
     {
+      name: "leaves retired channel-qualified owner migration to Doctor",
+      owner: "discord:user:123456789012345678",
+      provider: "discord",
+      expectedProvider: "discord",
+      expectedOwner: false,
+    },
+    {
       name: "does not apply channel-prefixed owner wildcards to mismatched providers",
       owner: "telegram:*",
       provider: "discord",
@@ -403,6 +410,16 @@ describe("resolveCommandAuthorization", () => {
 
     expect(auth.providerId).toBe(expectedProvider);
     expect(auth.senderIsOwner).toBe(expectedOwner);
+  });
+
+  it("preserves third-party native owner identities outside the bundled Doctor migration", () => {
+    registerAllowFromPlugins(createAllowFromPlugin("custom-chat", () => []));
+    const auth = resolveCommandAuthorization({
+      ctx: { Provider: "custom-chat", SenderId: "user:123" },
+      cfg: { commands: { ownerAllowFrom: ["custom-chat:user:123"] } },
+      commandAuthorized: true,
+    });
+    expect(auth.senderIsOwner).toBe(true);
   });
 
   it("preserves external channel command auth in mixed webchat contexts", () => {

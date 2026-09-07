@@ -50,6 +50,40 @@ class ConnectionManagerTest {
     )
 
   @Test
+  fun resolveTlsParamsForEndpoint_loopbackPreservesPinAndHintPolicy() {
+    val cases =
+      listOf(
+        Triple<String?, Boolean, String?>(" pinned ", false, null) to "pinned",
+        Triple<String?, Boolean, String?>(null, true, null) to null,
+        Triple<String?, Boolean, String?>(" \t ", true, null) to null,
+        Triple<String?, Boolean, String?>(null, false, "untrusted") to null,
+      )
+    for ((input, expectedFingerprint) in cases) {
+      val (storedFingerprint, tlsEnabled, advertisedFingerprint) = input
+      val endpoint =
+        GatewayEndpoint(
+          stableId = "_openclaw-gw._tcp.|local.|Loopback",
+          name = "Loopback",
+          host = "127.0.0.1",
+          port = 18789,
+          tlsEnabled = tlsEnabled,
+          tlsFingerprintSha256 = advertisedFingerprint,
+        )
+
+      assertEquals(
+        GatewayTlsParams(
+          required = true,
+          expectedFingerprint = expectedFingerprint,
+          allowTOFU = false,
+          stableId = endpoint.stableId,
+        ),
+        ConnectionManager.resolveTlsParamsForEndpoint(endpoint, storedFingerprint, manualTlsEnabled = false),
+      )
+    }
+    assertNull(resolveDiscoveredTls(host = "127.0.0.1", storedFingerprint = " \t "))
+  }
+
+  @Test
   fun resolveTlsParamsForEndpoint_manualRespectsManualTlsToggle() {
     assertNull(resolveManualTls(host = "127.0.0.1", port = 443))
     assertTls(resolveManualTls(host = "127.0.0.1", port = 443, manualTlsEnabled = true))

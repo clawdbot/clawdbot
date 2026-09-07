@@ -1,3 +1,4 @@
+import type { GatewaySuspension } from "../../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
@@ -17,6 +18,7 @@ export type ApplicationGatewaySnapshot = {
   phase: ApplicationGatewayPhase;
   offlineStable: boolean;
   restartPending?: boolean;
+  suspensionPhase?: GatewaySuspension["phase"];
   hello: GatewayHelloOk | null;
   canvasPluginSurfaceUrl: string | null;
   assistantAgentId: string | null;
@@ -45,6 +47,8 @@ export type ApplicationGateway = {
   readonly connection: ApplicationGatewayConnection;
   readonly connectionRevision: number;
   readonly eventLog: readonly EventLogEntry[];
+  /** Advances when the connection or authentication context retires diagnostic history. */
+  readonly eventLogRevision: number;
   connect: (connection?: ApplicationGatewayConnectOptions) => void;
   setSessionKey: (sessionKey: string) => void;
   start: () => void;

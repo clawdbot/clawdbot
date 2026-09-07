@@ -23,6 +23,7 @@ import {
   BEAM_MAX_SESSIONS,
   BEAM_RETENTION_MS,
   type BeamTranscriptItem,
+  type BeamSourceModel,
   type BeamUpload,
 } from "./types.js";
 
@@ -194,10 +195,28 @@ export function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
 type BeamMirrorCandidate = {
   catalogId: string;
   hostId: string;
+  modelProvider?: string;
   threadId: string;
   title: string;
   recencyAt: number;
 };
+
+function sourceModelForMirror(
+  providerValue: string | undefined,
+  items: readonly SessionCatalogTranscriptItem[],
+): BeamSourceModel | undefined {
+  const provider = providerValue?.trim().toLowerCase();
+  const rawModel = items.find((item) => item.type === "agentMessage" && item.model?.trim())?.model;
+  if (!provider || !/^[a-z0-9._-]+$/i.test(provider) || !rawModel) {
+    return undefined;
+  }
+  const prefixed = rawModel.trim();
+  const model = truncateUtf16Safe(
+    prefixed.startsWith(`${provider}/`) ? prefixed.slice(provider.length + 1) : prefixed,
+    256,
+  ).trim();
+  return model && /^\S+$/u.test(model) ? { provider, model } : undefined;
+}
 
 function mirrorCandidateKey(candidate: BeamMirrorCandidate): string {
   return `${candidate.catalogId}\0${candidate.hostId}\0${candidate.threadId}`;
@@ -357,6 +376,7 @@ export function createBeamMirrorRunner(params: {
     );
     signal.throwIfAborted();
     const reduced = buildBeamMirrorItems(transcript.items);
+    const sourceModel = sourceModelForMirror(candidate.modelProvider, transcript.items);
     const items = reduced.items.length
       ? reduced.items
       : [{ type: "other" as const, text: "no shareable messages yet" }];
@@ -367,6 +387,7 @@ export function createBeamMirrorRunner(params: {
       title: truncateUtf16Safe(redactToolPayloadText(candidate.title), 160),
       updatedAt: new Date(candidate.recencyAt || now()).toISOString(),
       completed,
+      ...(sourceModel ? { sourceModel } : {}),
       ...(reduced.truncated || transcript.nextCursor ? { truncated: true } : {}),
       items,
     });
@@ -455,6 +476,7 @@ export function createBeamMirrorRunner(params: {
               const candidate = {
                 catalogId: catalog.id,
                 hostId: host.hostId,
+                modelProvider: session.modelProvider,
                 threadId: session.threadId,
                 title: session.name?.trim() || `${catalog.id} session`,
                 recencyAt: session.recencyAt ?? session.updatedAt ?? 0,

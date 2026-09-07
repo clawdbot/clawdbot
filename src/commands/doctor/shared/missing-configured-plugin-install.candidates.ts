@@ -7,7 +7,6 @@ import { compareOpenClawReleaseVersions } from "../../../infra/npm-registry-spec
 import {
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
-  type UpdateChannel,
 } from "../../../infra/update-channels.js";
 import {
   resolveDefaultPluginExtensionsDir,
@@ -29,10 +28,11 @@ import {
   resolveOfficialExternalPluginLabel,
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { safeRealpathSync } from "../../../plugins/path-safety.js";
+import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveUserPath } from "../../../utils.js";
-import { VERSION } from "../../../version.js";
+import { resolveCompatibilityHostVersion } from "../../../version.js";
 import {
   CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
   VERSION_BOUND_RUNTIME_PLUGIN_IDS,
@@ -42,7 +42,6 @@ import {
   collectConfiguredPluginIds,
   collectEffectiveConfiguredChannelOwnerPluginIds,
 } from "./missing-configured-plugin-install.ids.js";
-import { isInstalledRecordMissingOnDisk } from "./missing-configured-plugin-install.records.js";
 
 export type DownloadableInstallCandidate = {
   pluginId: string;
@@ -68,6 +67,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
   configuredChannelIds: ReadonlySet<string>;
   blockedPluginIds?: ReadonlySet<string>;
   baselineRecords?: Record<string, PluginInstallRecord>;
+  coreVersion?: string;
 }) {
   const realpathCache = new Map<string, string>();
   const resolvePathIdentity = (value: string): string => {
@@ -103,9 +103,10 @@ export async function resolveConfiguredPluginInstallContext(params: {
     });
   const records =
     params.baselineRecords ?? (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
+  const currentVersion = params.coreVersion ?? resolveCompatibilityHostVersion(params.env);
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
-    currentVersion: VERSION,
+    currentVersion,
   });
   const installedPluginIdsWithRepairablePackageDiagnostics =
     collectInstalledPluginIdsWithRepairablePackageDiagnostics({
@@ -118,7 +119,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
       snapshot,
       installRecords: records,
       configuredPluginIds: params.configuredPluginIds,
-      updateChannel,
+      currentVersion,
     });
   const installedPluginIdsWithRepairablePackages = new Set([
     ...installedPluginIdsWithRepairablePackageDiagnostics,
@@ -166,7 +167,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     }
     const configRootIdentity = resolvePathIdentity(configPluginRoot);
     if (
-      isInstalledRecordMissingOnDisk(record, params.env) &&
+      isPayloadMissing(params.env, record.installPath) &&
       recordedPaths.every((value) => resolvePathIdentity(value) !== configRootIdentity)
     ) {
       stalePathInstallPluginIds.add(pluginId);
@@ -199,17 +200,6 @@ const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "extension entry unreadable",
   "requires compiled runtime output",
 ] as const;
-const OPENCLAW_BETA_COMPANION_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)-beta\.[1-9]\d*$/;
-const OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE =
-  /^(\d{4}\.[1-9]\d?\.[1-9]\d?)(?:-beta\.[1-9]\d*)?$/;
-
-function resolveCandidateClawHubSpec(install: PluginPackageInstall): string | undefined {
-  const explicit = install.clawhubSpec?.trim();
-  if (explicit) {
-    return explicit;
-  }
-  return undefined;
-}
 
 function setDownloadableInstallCandidate(params: {
   candidates: Map<string, DownloadableInstallCandidate>;
@@ -219,7 +209,7 @@ function setDownloadableInstallCandidate(params: {
   trustedSourceLinkedOfficialInstall?: boolean;
 }): void {
   const npmSpec = params.install.npmSpec?.trim();
-  const clawhubSpec = resolveCandidateClawHubSpec(params.install);
+  const clawhubSpec = params.install.clawhubSpec?.trim();
   if (!npmSpec && !clawhubSpec) {
     return;
   }
@@ -535,41 +525,22 @@ function resolveInstalledRuntimePackageVersion(params: {
 function installedRuntimePackageVersionIsStale(params: {
   installedVersion: string | undefined;
   currentVersion: string;
-  updateChannel: UpdateChannel;
 }): boolean {
   if (!params.installedVersion) {
-    return false;
-  }
-  if (
-    params.updateChannel === "beta" &&
-    betaCompanionMatchesCurrentStableVersion({
-      installedVersion: params.installedVersion,
-      currentVersion: params.currentVersion,
-    })
-  ) {
     return false;
   }
   const comparison = compareOpenClawReleaseVersions(params.installedVersion, params.currentVersion);
   return comparison === null ? params.installedVersion !== params.currentVersion : comparison < 0;
 }
 
-function betaCompanionMatchesCurrentStableVersion(params: {
-  installedVersion: string;
-  currentVersion: string;
-}): boolean {
-  const installedBase = OPENCLAW_BETA_COMPANION_VERSION_RE.exec(params.installedVersion)?.[1];
-  const currentBase = OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE.exec(params.currentVersion)?.[1];
-  return Boolean(installedBase && currentBase && installedBase === currentBase);
-}
-
 function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
   configuredPluginIds: ReadonlySet<string>;
-  updateChannel: UpdateChannel;
+  currentVersion: string;
 }): Set<string> {
   const pluginIds = new Set<string>();
-  const currentVersion = normalizeOptionalLowercaseString(VERSION);
+  const currentVersion = normalizeOptionalLowercaseString(params.currentVersion);
   if (!currentVersion) {
     return pluginIds;
   }
@@ -593,7 +564,6 @@ function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
       installedRuntimePackageVersionIsStale({
         installedVersion,
         currentVersion,
-        updateChannel: params.updateChannel,
       })
     ) {
       pluginIds.add(candidate.pluginId);

@@ -23,7 +23,7 @@ import {
 } from "./plugin-thread-config.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
-  captureExclusiveSharedCodexAppServerClient,
+  captureCodexAppServerClientLifetime,
   retainSharedCodexAppServerClientByInstanceId,
 } from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
@@ -141,7 +141,7 @@ export async function releaseCodexBoundLiveThread(
     const client = previous?.client ?? options.client;
     const assertPrevious =
       previous && options.assertCurrent
-        ? captureExclusiveSharedCodexAppServerClient(client, "connection")
+        ? captureCodexAppServerClientLifetime(client, "connection")
         : undefined;
     if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
@@ -228,6 +228,7 @@ export async function tryReuseCodexLiveThread(
       // healthy. Both subscription and host authority must survive policy awaits.
       retainedThread.assertCurrent();
       params.params.hostCapabilities.assertActive();
+      params.assertCurrent?.();
     } catch (cause) {
       throw new AgentHarnessPreflightError(
         "Codex warm thread ownership changed before this turn could run. No turn was sent; reconnect before continuing, or start a new conversation if the original thread was closed.",

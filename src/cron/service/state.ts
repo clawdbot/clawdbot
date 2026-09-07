@@ -114,6 +114,7 @@ export type CronServiceDeps = {
     state: unknown;
     streamBatch?: string;
     abortSignal?: AbortSignal;
+    executionIdentity?: CronExecutionIdentityAdmission;
   }) => Promise<CronTriggerEvaluationResult>;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
@@ -189,13 +190,10 @@ export type CronServiceDeps = {
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
-  runSkillCollectionReview?: (params: {
-    agentId: string;
-    abortSignal?: AbortSignal;
-  }) => Promise<
-    | { status: "ok" | "skipped"; summary: string }
-    | { status: "error"; summary: string; error: string }
-  >;
+  /** Resolves the outer watchdog for an awaited heartbeat handoff. */
+  resolveHeartbeatTimeoutMs?: (
+    opts: HeartbeatWakeRequest & { agentId: string },
+  ) => number | undefined;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
    * { status:"skipped", reason:"requests-in-flight" } before falling back to
@@ -250,6 +248,7 @@ export type CronServiceDeps = {
     job: CronStoredJob;
     streamBatch?: string;
     abortSignal?: AbortSignal;
+    executionIdentity?: CronExecutionIdentityAdmission;
   }) => Promise<
     {
       delivered?: boolean;

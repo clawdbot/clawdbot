@@ -9,6 +9,7 @@ import {
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
 export async function launchAcpChildThroughGateway(params: {
+  assertDispatchCurrent?: () => void;
   attachments?: unknown[];
   childIdem: string;
   deliveryPlan: AcpSpawnBootstrapDeliveryPlan;
@@ -25,6 +26,7 @@ export async function launchAcpChildThroughGateway(params: {
     withSubagentGatewayExecutionIdentity(
       {
         method: "agent",
+        assertDispatchCurrent: params.assertDispatchCurrent,
         params: {
           message: params.task,
           sessionKey: params.sessionKey,

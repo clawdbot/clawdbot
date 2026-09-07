@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { boundedJsonUtf8Bytes } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -24,6 +25,9 @@ import type { A2aTaskStore } from "./task-store.js";
 import type { A2aChannelConfig } from "./types.js";
 
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+const MAX_RESPONSE_BODY_BYTES = 1024 * 1024;
+// This cap stays enforced when an operator disables the per-peer rate limit.
+const MAX_BATCH_REQUESTS = 30;
 const DEFAULT_REPLY_TIMEOUT_MS = 120_000;
 const DEFAULT_RATE_LIMIT_PER_MINUTE = 30;
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -51,14 +55,41 @@ type A2aHttpHandlerParams = {
 };
 
 function writeJsonResponse(response: ServerResponse, statusCode: number, value: unknown): void {
+  writeJsonBody(response, statusCode, JSON.stringify(value));
+}
+
+function writeJsonBody(response: ServerResponse, statusCode: number, body: string): void {
   response.statusCode = statusCode;
   response.setHeader("content-type", "application/json; charset=utf-8");
   response.setHeader("cache-control", "no-store");
-  response.end(JSON.stringify(value));
+  response.end(body);
 }
 
 function createRpcError(id: A2aRpcIdentifier, code: number, message: string): A2aRpcResponse {
   return { jsonrpc: "2.0", id, error: { code, message } };
+}
+
+function writeRpcResponse(
+  response: ServerResponse,
+  value: A2aRpcResponse | A2aRpcResponse[],
+): void {
+  const measured = boundedJsonUtf8Bytes(value, MAX_RESPONSE_BODY_BYTES);
+  if (measured.complete) {
+    writeJsonBody(response, 200, JSON.stringify(value));
+    return;
+  }
+  const errorMessage = "A2A response exceeds the 1 MiB limit";
+  const bounded = Array.isArray(value)
+    ? value.map((entry) => createRpcError(entry.id, -32000, errorMessage))
+    : createRpcError(value.id, -32000, errorMessage);
+  // Request IDs can consume nearly the entire inbound budget. Drop correlation
+  // only when an already-oversized response's replacement still cannot fit.
+  const fallback = boundedJsonUtf8Bytes(bounded, MAX_RESPONSE_BODY_BYTES).complete
+    ? bounded
+    : Array.isArray(bounded)
+      ? bounded.map(() => createRpcError(null, -32000, errorMessage))
+      : createRpcError(null, -32000, errorMessage);
+  writeJsonResponse(response, 200, fallback);
 }
 
 function resolvePeerName(request: IncomingMessage, config: A2aChannelConfig): string | undefined {
@@ -154,20 +185,20 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
     peerName: string,
   ): Promise<A2aRpcResponse | undefined> {
     const parsed = A2aRpcRequestSchema.safeParse(input);
-    if (!parsed.success) {
-      const candidateId = isRecord(input) ? input.id : undefined;
-      const id =
-        typeof candidateId === "string" || typeof candidateId === "number" ? candidateId : null;
-      return createRpcError(id, -32600, "Invalid JSON-RPC request");
-    }
-
-    const request = parsed.data;
-    const notification = !Object.hasOwn(request, "id");
-    const id: A2aRpcIdentifier = request.id ?? null;
+    const candidateId = isRecord(input) ? input.id : undefined;
+    const id =
+      typeof candidateId === "string" || typeof candidateId === "number" ? candidateId : null;
+    const notification = parsed.success && !Object.hasOwn(parsed.data, "id");
 
     if (isRateLimited(peerName)) {
       return notification ? undefined : createRpcError(id, -32000, "Peer is rate limited");
     }
+
+    if (!parsed.success) {
+      return createRpcError(id, -32600, "Invalid JSON-RPC request");
+    }
+
+    const request = parsed.data;
 
     let result: unknown;
     try {
@@ -317,11 +348,22 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
         writeJsonResponse(response, 200, createRpcError(null, -32600, "Invalid JSON-RPC request"));
         return true;
       }
+      if (payload.length > MAX_BATCH_REQUESTS) {
+        const error = isRateLimited(peerName)
+          ? createRpcError(null, -32000, "Peer is rate limited")
+          : createRpcError(
+              null,
+              -32000,
+              `A2A batch exceeds the ${MAX_BATCH_REQUESTS} request limit`,
+            );
+        writeRpcResponse(response, error);
+        return true;
+      }
       const responses = (
         await Promise.all(payload.map((entry) => processRpcRequest(entry, peerName)))
       ).filter((entry): entry is A2aRpcResponse => entry !== undefined);
       if (responses.length > 0) {
-        writeJsonResponse(response, 200, responses);
+        writeRpcResponse(response, responses);
       } else {
         response.statusCode = 200;
         response.end();
@@ -331,7 +373,7 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
 
     const result = await processRpcRequest(payload, peerName);
     if (result) {
-      writeJsonResponse(response, 200, result);
+      writeRpcResponse(response, result);
     } else {
       response.statusCode = 200;
       response.end();

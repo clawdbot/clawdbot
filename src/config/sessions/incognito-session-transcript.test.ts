@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -74,9 +74,10 @@ describe("session creation scope", () => {
 
       const created = await createSessionEntryWithTranscript(
         scope,
-        ({ existingEntry, sessionEntries }) => {
+        ({ existingEntry, targetEntry, isLabelInUse }) => {
           expect(existingEntry).toBeUndefined();
-          expect(sessionEntries).toEqual({});
+          expect(targetEntry).toBeUndefined();
+          expect(isLabelInUse("unused")).toBe(false);
           return { ok: true, entry };
         },
         { cwd: state.workspaceDir },
@@ -110,10 +111,10 @@ describe("session creation scope", () => {
 
       const updated = { ...entry, label: "recreated", updatedAt: 2 };
       await expect(
-        createSessionEntryWithTranscript(scope, ({ existingEntry, sessionEntries }) => {
+        createSessionEntryWithTranscript(scope, ({ existingEntry, targetEntry, isLabelInUse }) => {
           expect(existingEntry).toMatchObject(entry);
-          expect(Object.keys(sessionEntries)).toEqual([key]);
-          expect(sessionEntries[key]).toMatchObject(entry);
+          expect(targetEntry).toMatchObject(entry);
+          expect(isLabelInUse("recreated")).toBe(false);
           return { ok: true, entry: updated };
         }),
       ).resolves.toMatchObject({ ok: true, sessionFile: key });
@@ -273,7 +274,7 @@ describe("incognito transcript access", () => {
     }
   });
 
-  it("prunes incognito transcripts in process without publishing a disk archive", async () => {
+  it("archives incognito transcripts only in memory until the database closes", async () => {
     const stateDir = fs.realpathSync(
       fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "incognito-maintenance-")),
     );
@@ -335,11 +336,31 @@ describe("incognito transcript access", () => {
         },
       });
 
-      expect(
-        listSessionEntriesCore({ agentId: "main", env, storePath }).map(
-          (summary) => summary.sessionKey,
-        ),
-      ).toEqual([activeScope.sessionKey]);
+      await vi.waitFor(() => {
+        expect(loadSessionEntry(staleScope)).toMatchObject({
+          sessionId: "incognito-stale-session",
+          archivedAt: expect.any(Number),
+        });
+        expect(
+          listSessionEntriesCore({ agentId: "main", env, storePath })
+            .filter(({ entry }) => entry.archivedAt === undefined)
+            .map((summary) => summary.sessionKey),
+        ).toEqual([activeScope.sessionKey]);
+      });
+      expect(listSessionEntriesCore({ agentId: "main", env, storePath })).toHaveLength(2);
+      await expect(
+        loadTranscriptEvents({ ...staleScope, sessionId: "incognito-stale-session" }),
+      ).resolves.toEqual([
+        {
+          id: "incognito-stale-event",
+          timestamp: new Date(now).toISOString(),
+          type: "metadata",
+        },
+      ]);
+      expect(fs.readdirSync(stateDir, { recursive: true })).toEqual([]);
+
+      closeOpenClawAgentDatabasesForTest();
+      expect(listSessionEntriesCore({ agentId: "main", env, storePath })).toEqual([]);
       await expect(
         loadTranscriptEvents({
           ...staleScope,
@@ -348,6 +369,7 @@ describe("incognito transcript access", () => {
       ).resolves.toEqual([]);
       expect(fs.existsSync(storePath)).toBe(false);
       expect(fs.existsSync(archiveDirectory)).toBe(false);
+      expect(fs.readdirSync(stateDir, { recursive: true })).toEqual([]);
     } finally {
       closeOpenClawAgentDatabasesForTest();
       fs.rmSync(stateDir, { force: true, recursive: true });

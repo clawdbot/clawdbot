@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import { createCliTimeoutError } from "../cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../failover-error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
@@ -189,11 +190,14 @@ describe("createAgentCommandLifecycle", () => {
             livenessState: "blocked",
             yielded: true,
             replayInvalid: true,
-            ...(phase === "error" ? { fallbackExhaustedFailure: true } : {}),
+            ...(phase !== "finishing" ? { executionSettled: true } : {}),
           }),
         }),
       );
       const event = emitAgentEvent.mock.calls[0]?.[0];
+      if (phase === "finishing") {
+        expect(event.data).not.toHaveProperty("executionSettled");
+      }
       expect(event.data.terminalDelivery).toEqual({ status: "sent", resultCount: 2 });
       expect(JSON.stringify(event)).not.toContain(secret);
       expect(event.data).not.toHaveProperty("unsafeMetadata");
@@ -269,7 +273,16 @@ describe("createAgentCommandLifecycle", () => {
       });
       const error = attachErrorDiagnostic(
         kind === "timeout"
-          ? new FailoverError("watchdog stopped the child", { reason: "timeout" })
+          ? createCliTimeoutError(
+              {},
+              {
+                mode: "overall",
+                timeoutSeconds: 30,
+                observedActivity: false,
+                activeToolCount: 0,
+                backgroundTaskCount: 0,
+              },
+            )
           : new Error("child exited with code 1"),
         "stderr: an earlier request timed out and was aborted",
       );
@@ -343,6 +356,7 @@ describe("createAgentCommandLifecycle", () => {
         renderFailoverCodeUserCopy("selected_auth_profile_unavailable"),
       );
       expect(event.data.error).toContain("stderr: credential staging failed.");
+      expect(event.data.executionSettled).toBe(true);
       expect(JSON.stringify(event)).not.toContain(profileId);
       expect(JSON.stringify(event)).not.toContain(rawCause);
       expect(JSON.stringify(event)).not.toContain(secret);

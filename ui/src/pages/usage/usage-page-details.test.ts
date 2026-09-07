@@ -1,15 +1,18 @@
 /* @vitest-environment jsdom */
 
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
+import * as downloads from "../../lib/download.ts";
 import * as toast from "../../lib/toast.ts";
-import * as usageQuery from "./query.ts";
+import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
+  contextWithClient,
   createPage,
   deferred,
   focusDocument,
@@ -32,6 +35,124 @@ function contextWeight(name: string): NonNullable<UsageSessionEntry["contextWeig
 }
 
 describe("UsagePage detail requests", () => {
+  it("releases hydrated export reports after download while the page stays mounted", async () => {
+    class ExportReport {
+      name = "exported-context";
+      blockChars = 10;
+    }
+    let report: WeakRef<ExportReport> | undefined;
+    const snapshot = cacheSnapshot("sessions", "fresh");
+    const session = {
+      key: "agent:main:export-lifetime",
+      label: "Export lifetime",
+      agentId: "main",
+      hasContextWeight: true,
+      usage: snapshot.result.totals,
+    };
+    const request = async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.usage") {
+        const weight = params?.includeContextWeight
+          ? {
+              ...contextWeight("exported-context"),
+              skills: { promptChars: 10, entries: [new ExportReport()] },
+            }
+          : undefined;
+        if (weight) {
+          report = new WeakRef(weight.skills.entries[0]!);
+        }
+        return {
+          ...snapshot.result,
+          sessions: [{ ...session, ...(weight ? { contextWeight: weight } : {}) }],
+        };
+      }
+      return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+    };
+    const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
+    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+    await preloadUsage(page);
+    page
+      .querySelector(".usage-export-menu")!
+      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
+    await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+    expect(download.mock.calls[0]![1]).toContain("exported-context");
+    const collectionControl = new WeakRef({ unowned: true });
+    await collectGarbageForTest(() => {
+      queryObjects(ExportReport);
+    });
+    expect(collectionControl.deref()).toBeUndefined();
+    expect(report).toBeDefined();
+    expect(report!.deref()).toBeUndefined();
+    expect(page.isConnected).toBe(true);
+  });
+
+  it("keeps cancelled details displayed and releases them on explicit clear", async () => {
+    class DetailPayload {
+      timestamp = 1;
+      totalTokens = 10;
+      role = "user";
+      content = "Selected session";
+    }
+    const payloads: WeakRef<DetailPayload>[] = [];
+    const request = async (method: string) => {
+      const payload = new DetailPayload();
+      payloads.push(new WeakRef(payload));
+      return method === "sessions.usage.logs" ? { logs: [payload] } : { points: [payload] };
+    };
+    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+    await page.details.timeSeries.load("agent:main:detail-lifetime");
+    await page.details.sessionLogs.load("agent:main:detail-lifetime");
+    page.details.cancel();
+    const collectionControl = new WeakRef({ unowned: true });
+    await collectGarbageForTest(() => {
+      queryObjects(DetailPayload);
+    });
+    expect(collectionControl.deref()).toBeUndefined();
+    expect(payloads).toHaveLength(2);
+    expect(payloads.every((payload) => payload.deref() !== undefined)).toBe(true);
+    expect(page.details.timeSeries.data).not.toBeNull();
+    expect(page.details.sessionLogs.data).not.toBeNull();
+
+    page.details.clear();
+    await collectGarbageForTest(() => {
+      queryObjects(DetailPayload);
+    });
+    expect(payloads.every((payload) => payload.deref() === undefined)).toBe(true);
+    expect(page.details.timeSeries.data).toBeNull();
+    expect(page.details.sessionLogs.data).toBeNull();
+    expect(page.isConnected).toBe(true);
+  });
+
+  it("releases a loaded overview when its Gateway identity is replaced", async () => {
+    class OverviewPayload {
+      key = "agent:main:overview-lifetime";
+      usage = null;
+    }
+    let payload: WeakRef<OverviewPayload> | undefined;
+    const snapshot = cacheSnapshot("sessions", "fresh");
+    const request = async (method: string) => {
+      if (method === "sessions.usage") {
+        const report = new OverviewPayload();
+        payload = new WeakRef(report);
+        return { ...snapshot.result, sessions: [report] };
+      }
+      return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+    };
+    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+    await page.loadUsage();
+    expect(payload).toBeDefined();
+    page.context = contextWithClient({
+      request: async () => ({}),
+    } as unknown as GatewayBrowserClient);
+    page.requestUpdate();
+    await page.updateComplete;
+    const collectionControl = new WeakRef({ unowned: true });
+    await collectGarbageForTest(() => {
+      queryObjects(OverviewPayload);
+    });
+    expect(collectionControl.deref()).toBeUndefined();
+    expect(payload!.deref()).toBeUndefined();
+    expect(page.isConnected).toBe(true);
+  });
   it("loads context only for the selected session and fences superseded replies through retry", async () => {
     const snapshot = cacheSnapshot("sessions", "fresh");
     const keys = ["agent:main:first", "agent:main:second", "global"];
@@ -203,6 +324,7 @@ describe("UsagePage detail requests", () => {
       ...snapshot.result,
       sessions: ["First", "Second"].map((label, index) => ({
         key: "global",
+        sessionId: "shared-instance",
         label,
         agentId: index === 0 ? "main" : "opus",
         hasContextWeight: true,
@@ -222,7 +344,7 @@ describe("UsagePage detail requests", () => {
         return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
       },
     );
-    const download = vi.spyOn(usageQuery, "downloadTextFile").mockImplementation(() => {});
+    const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const notice = vi.spyOn(toast, "showToast").mockReturnValue(true);
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
@@ -247,14 +369,17 @@ describe("UsagePage detail requests", () => {
       sessions: result.sessions.map((session) => ({
         ...session,
         usage: { ...session.usage, totalTokens: 9999 },
-        contextWeight: contextWeight(session.label),
+        contextWeight: { ...contextWeight(session.label), sessionId: session.sessionId },
       })),
     };
     pending.resolve(full);
     await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
     const payload = JSON.parse(download.mock.calls[0]![1]) as { sessions: UsageSessionEntry[] };
     expect(payload.sessions).toEqual([
-      { ...result.sessions[0], contextWeight: contextWeight("First") },
+      {
+        ...result.sessions[0],
+        contextWeight: { ...contextWeight("First"), sessionId: "shared-instance" },
+      },
     ]);
     expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).toBeNull();
 
@@ -280,6 +405,60 @@ describe("UsagePage detail requests", () => {
       }),
     );
     expect(download).toHaveBeenCalledOnce();
+
+    for (const [scenario, sessionId, otherSessionId, expectedDownloads] of [
+      ["matching instance", "shared-instance", "shared-instance", 1],
+      ["replacement instance", "replacement-instance", "shared-instance", 0],
+      ["unrelated agent replacement", "shared-instance", "other-instance", 1],
+    ] as const) {
+      download.mockClear();
+      notice.mockClear();
+      pending = deferred<SessionsUsageResult>();
+      exportJson();
+      await page.updateComplete;
+      expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).not.toBeNull();
+      pending.resolve({
+        ...full,
+        sessions: [
+          {
+            ...full.sessions[0]!,
+            sessionId,
+            contextWeight: { ...contextWeight("Current first"), sessionId },
+          },
+          {
+            ...full.sessions[1]!,
+            sessionId: otherSessionId,
+            contextWeight: { ...contextWeight("Other agent"), sessionId: otherSessionId },
+          },
+        ],
+      });
+      await vi.waitFor(() =>
+        expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).toBeNull(),
+      );
+      expect(download, scenario).toHaveBeenCalledTimes(expectedDownloads);
+      if (expectedDownloads === 0) {
+        expect(notice).toHaveBeenCalledWith({
+          message: expect.stringContaining("Refresh usage and try again"),
+        });
+      } else {
+        expect(notice).not.toHaveBeenCalled();
+        const exportedPayload = JSON.parse(download.mock.calls[0]![1]) as {
+          sessions: UsageSessionEntry[];
+        };
+        expect(exportedPayload.sessions).toMatchObject([
+          {
+            key: "global",
+            agentId: "main",
+            sessionId: "shared-instance",
+            usage: { totalTokens: 100 },
+            contextWeight: {
+              sessionId: "shared-instance",
+              skills: { entries: [{ name: "Current first" }] },
+            },
+          },
+        ]);
+      }
+    }
   });
 
   it("marks provider usage stalled once the retry budget is spent", async () => {
@@ -383,27 +562,35 @@ describe("UsagePage detail requests", () => {
     expect(page.providerUsageStalled).toBe(false);
   });
 
-  it("commits only the latest time-series selection", async () => {
-    const first = deferred<SessionUsageTimeSeries>();
-    const second = deferred<SessionUsageTimeSeries>();
-    const request = vi.fn((_method: string, params: { key: string }) =>
-      params.key === "agent:main:a" ? first.promise : second.promise,
-    );
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+  it.each(["resolve", "reject"])(
+    "commits only the latest time-series selection (%s)",
+    async (completion) => {
+      const first = deferred<SessionUsageTimeSeries>();
+      const second = deferred<SessionUsageTimeSeries>();
+      const request = vi.fn((_method: string, params: { key: string }) =>
+        params.key === "agent:main:a" ? first.promise : second.promise,
+      );
+      const page = await createPage({ request } as unknown as GatewayBrowserClient);
 
-    page.usageSelectedSessions = ["agent:main:a"];
-    const firstLoad = page.details.timeSeries.load("agent:main:a");
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    page.usageSelectedSessions = ["agent:main:b"];
-    const secondLoad = page.details.timeSeries.load("agent:main:b");
-    const latest = { points: [{ timestamp: 2 }] } as SessionUsageTimeSeries;
-    second.resolve(latest);
-    await secondLoad;
-    first.resolve({ points: [{ timestamp: 1 }] } as SessionUsageTimeSeries);
-    await firstLoad;
+      page.usageSelectedSessions = ["agent:main:a"];
+      const firstLoad = page.details.timeSeries.load("agent:main:a");
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      page.usageSelectedSessions = ["agent:main:b"];
+      const secondLoad = page.details.timeSeries.load("agent:main:b");
+      const latest = { points: [{ timestamp: 2 }] } as SessionUsageTimeSeries;
+      second.resolve(latest);
+      await secondLoad;
+      if (completion === "resolve") {
+        first.resolve({ points: [{ timestamp: 1 }] } as SessionUsageTimeSeries);
+      } else {
+        first.reject(new Error("superseded timeline failed"));
+      }
+      await firstLoad;
 
-    expect(page.details.timeSeries.data).toBe(latest);
-  });
+      expect(page.details.timeSeries.data).toBe(latest);
+      expect(page.details.timeSeries.status.error).toBeNull();
+    },
+  );
 
   it("retains stale time-series data until a retry succeeds", async () => {
     const retry = deferred<SessionUsageTimeSeries>();

@@ -52,6 +52,70 @@ describe("golden failover classification corpus", () => {
 });
 
 describe("cross-layer drift (documents current behavior, see refactor-02)", () => {
+  it.each([503, 521, 529])("classifies body-only HTTP %s failures", (status) => {
+    const signal = {
+      message: "Provider rejected request",
+      details: [`${status} status code (no body)`],
+    };
+    expect(classifyFailoverSignal(signal)).toEqual({
+      kind: "reason",
+      reason: status === 529 ? "overloaded" : "timeout",
+    });
+  });
+
+  it("does not infer permanent model removal from availability prose alone", () => {
+    const message = "The model is not available. Please try again later.";
+    expect(classifyFailoverSignal({ message })).toBeNull();
+    expect(classifyReplyRequest({ message })?.code).not.toBe("provider_model_unavailable");
+  });
+
+  it.each([
+    ...[500, 502, 503, 504, 520, 521, 522, 523, 524].map((status) => ({
+      signal: { status, message: "The model is not available. Please try again later." },
+      reason: "timeout",
+    })),
+    {
+      signal: {
+        message:
+          '{"type":"error","error":{"type":"overloaded_error","message":"The model is not available due to high demand."}}',
+      },
+      reason: "overloaded",
+    },
+    {
+      signal: { errorType: "server_error", message: "The model is not available." },
+      reason: "server_error",
+    },
+    {
+      signal: {
+        message: "The model is not available.",
+        details: ['{"error":{"type":"overloaded_error","message":"Overloaded"}}'],
+      },
+      reason: "overloaded",
+    },
+    {
+      signal: {
+        status: 529,
+        message: '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      },
+      reason: "overloaded",
+    },
+    {
+      signal: {
+        status: 500,
+        message:
+          '{"error":{"type":"server_error","message":"An error occurred while processing your request."}}',
+      },
+      reason: "server_error",
+    },
+    {
+      signal: { message: "Selected model is at capacity. Please try a different model." },
+      reason: "overloaded",
+    },
+  ])("keeps outage evidence transient: $signal", ({ signal, reason }) => {
+    expect(classifyFailoverSignal(signal)).toEqual({ kind: "reason", reason });
+    expect(classifyReplyRequest(signal)?.code).not.toBe("provider_model_unavailable");
+  });
+
   it.each([
     ["Ollama setup pull", "Failed to download gemma4:e2b: pull stream ended before success"],
     ["OpenRouter music", "OpenRouter music generation stream ended before completion"],

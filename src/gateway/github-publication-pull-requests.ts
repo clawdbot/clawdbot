@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
+import { requirePublicationCommand } from "./github-publication-git-transport.js";
 
 type GitHubPublicationPullRequest = {
   userId: number;
@@ -11,7 +14,7 @@ type GitHubPublicationPullRequest = {
   baseRef: string;
 };
 
-export function githubPublicationPullRequestLookupArgs(params: {
+function githubPublicationPullRequestLookupArgs(params: {
   repository: string;
   owner: string;
   branch: string;
@@ -51,7 +54,7 @@ export function githubPublicationCreatePullRequestArgs(repository: string): stri
 }
 
 /** Parses the complete authenticated PR lookup; one malformed candidate invalidates the response. */
-export function parseGitHubPublicationPullRequests(raw: string): GitHubPublicationPullRequest[] {
+function parseGitHubPublicationPullRequests(raw: string): GitHubPublicationPullRequest[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -88,7 +91,7 @@ export function parseGitHubPublicationPullRequests(raw: string): GitHubPublicati
   });
 }
 
-export function resolveGitHubPublicationPullRequest(
+function resolveGitHubPublicationPullRequest(
   candidates: readonly GitHubPublicationPullRequest[],
   params: {
     accountId: number;
@@ -112,4 +115,63 @@ export function resolveGitHubPublicationPullRequest(
       (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
     )
   );
+}
+
+export async function findGitHubPublicationPullRequest(params: {
+  repository: string;
+  pushOwner: string;
+  branch: string;
+  baseBranch: string;
+  headCommit: string;
+  marker: string;
+  refreshIdentity: () => Promise<PreparedGitHubPublicationIdentity>;
+  recordObserved: (url: string) => void;
+  assertCurrent: () => void;
+}): Promise<string | undefined> {
+  const identity = await params.refreshIdentity();
+  const raw = await requirePublicationCommand(
+    githubPublicationPullRequestLookupArgs({
+      repository: params.repository,
+      owner: params.pushOwner,
+      branch: params.branch,
+      baseBranch: params.baseBranch,
+    }),
+    { env: identity.env },
+  );
+  const candidates = parseGitHubPublicationPullRequests(raw);
+  const found = resolveGitHubPublicationPullRequest(candidates, {
+    accountId: identity.account.accountId,
+    headCommit: params.headCommit,
+    branch: params.branch,
+    baseBranch: params.baseBranch,
+    marker: params.marker,
+  });
+  if (found) {
+    params.recordObserved(found.url);
+    params.assertCurrent();
+    if (found.state === "closed") {
+      throw new GitHubPublicationKnownFailure(
+        "GitHub pull request was closed before publication completed.",
+        {
+          code: "github_rejected",
+          nextAction:
+            "Reopen the closed pull request or retry to create a new publication request.",
+        },
+      );
+    }
+  }
+  const occupied = candidates.find(
+    (candidate) =>
+      candidate.state === "open" &&
+      candidate.headRef === params.branch &&
+      candidate.baseRef === params.baseBranch,
+  );
+  if (occupied && occupied.userId !== identity.account.accountId) {
+    throw new GitHubPublicationKnownFailure("GitHub pull request is owned by another account.", {
+      code: "github_rejected",
+      nextAction: "Check pull-request permission for the effective account, then retry.",
+    });
+  }
+  params.assertCurrent();
+  return found?.url;
 }

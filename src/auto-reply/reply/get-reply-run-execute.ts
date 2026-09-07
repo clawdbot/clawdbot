@@ -21,7 +21,6 @@ import { readChannelContextAdmissionEvidence } from "../../channels/message-acce
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
-import { isRegisteredStagingDirectory } from "../../media/staged-inputs.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -60,6 +59,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const {
     context,
     resolvedThinkLevel,
+    thinkLevelOverride,
     thinkingCatalog,
     skillsSnapshot,
     prefixedCommandBody,
@@ -366,10 +366,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
-    hostWorkspaceStagingDir:
-      opts?.hostWorkspaceStagingDir && isRegisteredStagingDirectory(opts.hostWorkspaceStagingDir)
-        ? opts.hostWorkspaceStagingDir
-        : undefined,
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
       : {}),
@@ -438,6 +434,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       senderIsOwner: command.senderIsOwner,
       traceAuthorized:
         command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+      traceLevelOverride: params.directives.traceLevel,
+      verboseLevelOverride: params.directives.verboseLevel,
       approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
@@ -464,6 +462,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       authProfileIdSource,
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
+      thinkLevelOverride,
       ...(() => {
         if (useFastReplyRuntime) {
           return { fastMode: false, fastModeAutoOnSeconds: undefined, fastModeOverride: true };

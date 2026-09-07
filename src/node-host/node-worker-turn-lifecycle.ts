@@ -41,6 +41,7 @@ export function nodeWorkerDescriptorSecrets(descriptor: WorkerLaunchDescriptor):
   return [
     descriptor.admission.credential,
     ...(access ? [access.clientId, access.clientSecret] : []),
+    ...(descriptor.assignment.github ? [descriptor.assignment.github.token] : []),
   ];
 }
 

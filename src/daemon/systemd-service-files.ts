@@ -18,7 +18,11 @@ import type {
   GatewayServiceReadOptions,
 } from "./service-types.js";
 import { execBusctlUser } from "./systemd-exec.js";
-import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
+import {
+  parseSystemdEnvAssignments,
+  parseSystemdExecStart,
+  splitSystemdLogicalLines,
+} from "./systemd-unit.js";
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
@@ -95,14 +99,14 @@ async function readSystemdManagerCommand(
   const unavailable = () => new Error("Effective systemd service command could not be inspected.");
   const timeoutMs =
     opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : SYSTEMD_MANAGER_QUERY_TIMEOUT_MS;
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = performance.now() + timeoutMs;
   let remainingCalls = 3;
   // All manager D-Bus calls share one deadline so wedged reads reach local fallback promptly.
   const query = async (args: string[], signatures: string[]): Promise<unknown[] | null> => {
     const result = await execBusctlUser(
       env,
       ["--json=short", ...args],
-      Math.max(1, Math.floor((deadlineAt - Date.now()) / remainingCalls--)),
+      Math.max(1, Math.floor((deadlineAt - performance.now()) / remainingCalls--)),
     );
     if (result.code !== 0) {
       if (
@@ -248,7 +252,7 @@ async function readSystemdDropInOverrides(
     const content = await fs.readFile(pathname, "utf8");
     let inService = false;
     // Loaded drop-ins own directives even when their current values equal the managed base.
-    for (const rawLine of content.replace(/\\\r?\n\s*/g, " ").split(/\r?\n/)) {
+    for (const rawLine of splitSystemdLogicalLines(content)) {
       const line = rawLine.trim();
       if (!line || line.startsWith("#") || line.startsWith(";")) {
         continue;
@@ -369,32 +373,36 @@ export async function readSystemdServiceExecStart(
     let inlineEnvironment: Record<string, string> = {};
     const environmentFileSpecs: string[] = [];
     const unsetEnvironment: string[] = [];
-    for (const rawLine of (content ?? "").split("\n")) {
+    for (const rawLine of splitSystemdLogicalLines(content ?? "")) {
       const line = rawLine.trim();
       if (!line || line.startsWith("#")) {
         continue;
       }
-      if (line.startsWith("ExecStart=")) {
-        execStart = line.slice("ExecStart=".length).trim();
-      } else if (line.startsWith("WorkingDirectory=")) {
-        const parsed = parseSystemdExecStart(line.slice("WorkingDirectory=".length))[0] ?? "";
+      const separator = line.indexOf("=");
+      if (separator < 0) {
+        continue;
+      }
+      const directive = line.slice(0, separator).trim();
+      const value = line.slice(separator + 1).trim();
+      if (directive === "ExecStart") {
+        execStart = value;
+      } else if (directive === "WorkingDirectory") {
+        const parsed = parseSystemdExecStart(value)[0] ?? "";
         workingDirectory = expandSystemdSpecifier(parsed.replace(/^-/, ""), env);
-      } else if (line.startsWith("Environment=")) {
-        const raw = line.slice("Environment=".length).trim();
-        if (!raw) {
+      } else if (directive === "Environment") {
+        if (!value) {
           inlineEnvironment = {};
         }
-        for (const parsed of parseSystemdEnvAssignments(raw)) {
+        for (const parsed of parseSystemdEnvAssignments(value)) {
           inlineEnvironment[parsed.key] = expandSystemdSpecifier(parsed.value, env);
         }
-      } else if (line.startsWith("EnvironmentFile=") || line.startsWith("UnsetEnvironment=")) {
-        const file = line.startsWith("EnvironmentFile=");
+      } else if (directive === "EnvironmentFile" || directive === "UnsetEnvironment") {
+        const file = directive === "EnvironmentFile";
         const entries = file ? environmentFileSpecs : unsetEnvironment;
-        const raw = line.slice(line.indexOf("=") + 1).trim();
-        if (!raw) {
+        if (!value) {
           entries.length = 0;
         } else {
-          entries.push(...(file ? [raw] : splitSystemdEnvironmentWords(raw)));
+          entries.push(...(file ? [value] : splitSystemdEnvironmentWords(value)));
         }
       }
     }

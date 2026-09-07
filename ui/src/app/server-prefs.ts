@@ -64,7 +64,7 @@ export function resolveServerUiPrefState<K extends SyncedPrefKey>(
   configObject: unknown,
   key: K,
   scope = "",
-  settings = loadSettings(),
+  settings = loadSettings(scope || undefined),
   options: { canSync?: boolean | null; profileId?: string | null } = {},
 ): ServerUiPrefState<SyncedPrefValue<K>> {
   const effectiveScope = resolveProfilePreferenceScope(scope, options.profileId);
@@ -392,7 +392,7 @@ export function applyServerUiPrefs(
   if (Object.hasOwn(changed, "theme")) {
     hooks.onThemeChanged?.(changed.theme ?? null);
   }
-  const patch = serverPrefsLocalPatch(changed, loadSettings());
+  const patch = serverPrefsLocalPatch(changed, loadSettings(gatewayScope || undefined));
   if (!patch) {
     return false;
   }

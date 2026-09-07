@@ -3,6 +3,7 @@ import { property } from "lit/decorators.js";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 export type PanelLoadingSkeletonVariant =
+  | "board"
   | "browser"
   | "chat"
   | "desktop"
@@ -211,6 +212,63 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
       border-radius: 8px;
     }
 
+    /* Mirrors board.css: a 38px tab strip over a 12-column grid with 56px rows,
+       so the placeholder occupies the same footprint as the widgets it precedes. */
+    .board-tabs {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      min-height: 38px;
+      margin-bottom: 12px;
+      padding: 0 13px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tab {
+      width: 64px;
+      height: 10px;
+      border-radius: 5px;
+    }
+
+    .board-grid {
+      container-type: inline-size;
+      display: grid;
+      gap: 12px;
+      grid-auto-rows: 56px;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+    }
+
+    .widget {
+      display: grid;
+      grid-template-rows: 38px minmax(0, 1fr);
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+
+    @container (max-width: 560px) {
+      .widget {
+        grid-column: 1 / -1 !important;
+      }
+    }
+
+    .widget-bar {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .widget-body {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      padding: 12px;
+    }
+
     @keyframes shimmer {
       from {
         transform: translateX(-100%);
@@ -247,8 +305,32 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     );
   }
 
+  private widget(columns: number, rows: number, lines: Array<"short" | "medium" | "long">) {
+    return html`
+      <div class="widget" style=${`grid-column: span ${columns}; grid-row: span ${rows}`}>
+        <div class="widget-bar">
+          <div class="skeleton icon"></div>
+          ${this.line("short")}
+        </div>
+        <div class="widget-body">${lines.map((width) => this.line(width))}</div>
+      </div>
+    `;
+  }
+
   private renderContent() {
     switch (this.variant) {
+      case "board":
+        return html`
+          <div class="board-tabs">
+            <div class="skeleton tab"></div>
+            <div class="skeleton tab"></div>
+          </div>
+          <div class="board-grid">
+            ${this.widget(6, 4, ["long", "medium", "short"])}
+            ${this.widget(6, 4, ["medium", "long"])} ${this.widget(4, 3, ["medium", "short"])}
+            ${this.widget(8, 3, ["long", "medium", "long"])}
+          </div>
+        `;
       case "browser":
         return html`
           <div class="toolbar">

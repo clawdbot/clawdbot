@@ -1,5 +1,5 @@
 // Run diagnostic event tests cover emitted diagnostics from isolated cron runs.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -11,14 +11,12 @@ vi.mock("../../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
 }));
 
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   makeCronSessionEntry,
-  resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
-  restoreFastTestEnv,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -55,17 +53,11 @@ type EventRecord = {
 };
 
 describe("runCronIsolatedAgentTurn diagnostic events", () => {
-  let previousFastTestEnv: string | undefined;
+  setupRunCronIsolatedAgentTurnSuite();
 
   beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
-    resetRunCronIsolatedAgentTurnHarness();
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
-  });
-
-  afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
   });
 
   it("emits a paired queued/processing/idle/processed lifecycle for an isolated cron run", async () => {

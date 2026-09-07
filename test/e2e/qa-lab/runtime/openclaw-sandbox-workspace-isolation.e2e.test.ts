@@ -116,8 +116,10 @@ test("Docker enforces none, read-only, and read-write workspace isolation", asyn
             'test ! -e /agent && test ! -e /workspace/host-sentinel.txt && test ! -e "$1"',
             [hostSentinel],
           );
-          const mutation = await run(sandbox, "printf blocked > /workspace/blocked.txt", [], true);
-          expect(mutation.code).not.toBe(0);
+          await expectOk(
+            sandbox,
+            'printf private > /workspace/host-sentinel.txt && test "$(cat /workspace/host-sentinel.txt)" = private',
+          );
           await expect(fs.readFile(hostSentinel, "utf8")).resolves.toBe("original-none");
         } else if (access === "ro") {
           await expectOk(

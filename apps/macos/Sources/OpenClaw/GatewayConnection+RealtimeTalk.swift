@@ -4,6 +4,29 @@ import OpenClawKit
 import OpenClawProtocol
 
 extension GatewayConnection {
+    // MARK: - VoiceWake
+
+    func voiceWakeSetTriggers(_ triggers: [String]) async {
+        do {
+            try await self.requestVoid(
+                method: .voicewakeSet,
+                params: ["triggers": AnyCodable(triggers)],
+                timeoutMs: 10000)
+        } catch {
+            // Best-effort only.
+        }
+    }
+
+    func talkMode(enabled: Bool, phase: String? = nil) async {
+        var params: [String: AnyCodable] = ["enabled": AnyCodable(enabled)]
+        if let phase {
+            params["phase"] = AnyCodable(phase)
+        }
+        // Phase broadcasts report UI state; a failed notification must not start
+        // the Gateway or restart its tunnel. Talk startup owns that recovery.
+        _ = try? await self.request(method: Method.talkMode.rawValue, params: params, retryTransportFailures: false)
+    }
+
     struct RealtimeTalkBootstrap: @unchecked Sendable {
         let transport: RealtimeTalkRelayTransport
         let configSnapshot: ConfigSnapshot
@@ -53,7 +76,8 @@ extension GatewayConnection {
                     ifCurrentServerLease: lease)
                 return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
                     let task = Task {
-                        for await push in pushes {
+                        for await delivery in pushes {
+                            guard delivery.isCurrent, let push = delivery.push else { continue }
                             guard case let .event(event) = push else { continue }
                             switch continuation.yield(event) {
                             case .enqueued:
@@ -87,7 +111,7 @@ extension GatewayConnection {
 
     func subscribe(
         bufferingNewest: Int,
-        ifCurrentServerLease lease: ServerLease) -> AsyncStream<GatewayPush>
+        ifCurrentServerLease lease: ServerLease) -> AsyncStream<PushDelivery>
     {
         let id = UUID()
         let connection = self
@@ -96,8 +120,8 @@ extension GatewayConnection {
                 continuation.finish()
                 return
             }
-            if let snapshot = self.lastSnapshot {
-                switch continuation.yield(.snapshot(snapshot)) {
+            if let snapshot = self.lastSnapshot, let delivery = self.makePushDelivery(.snapshot(snapshot)) {
+                switch continuation.yield(delivery) {
                 case .enqueued:
                     break
                 case .dropped, .terminated:
@@ -127,7 +151,7 @@ extension GatewayConnection {
     }
 
     func finishRealtimeTalkSubscribers(socketGeneration: UInt64? = nil) {
-        let subscribers: [AsyncStream<GatewayPush>.Continuation]
+        let subscribers: [AsyncStream<PushDelivery>.Continuation]
         if let socketGeneration {
             if let removed = self.realtimeTalkSubscribers.removeValue(forKey: socketGeneration) {
                 subscribers = Array(removed.values)

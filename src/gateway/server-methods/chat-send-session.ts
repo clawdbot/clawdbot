@@ -17,6 +17,7 @@ import { assertPreparedSkillLibrarySelection } from "../../skills/library/select
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   loadSessionEntry,
   resolveDeletedAgentIdFromSessionKey,
@@ -26,7 +27,6 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import {
   hasGatewayAdminScope,
   resolveChatSendActiveScopeKey,
-  resolveRequestedChatAgentId,
   validateChatSelectedAgent,
 } from "./chat-origin-routing.js";
 import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
@@ -87,12 +87,12 @@ function loadChatSendSessionContext(params: {
   const agentIdOverride = normalizeOptionalChatText(p.agentId);
   const clientRunId = p.idempotencyKey;
   const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
-  const runtimeConfig = context.getRuntimeConfig?.();
-  const requestedAgent = resolveRequestedChatAgentId({
-    cfg: runtimeConfig,
-    requestedSessionKey: rawSessionKey,
-    agentId: agentIdOverride,
-  });
+  const runtimeConfig = context.getRuntimeConfig();
+  const requestedAgent = resolveRequestedSessionAgentId(
+    runtimeConfig,
+    rawSessionKey,
+    agentIdOverride,
+  );
   if (!requestedAgent.ok) {
     return { ok: false as const, error: requestedAgent.error };
   }
@@ -101,13 +101,10 @@ function loadChatSendSessionContext(params: {
   // alias for that agent's main thread. Resolve it before every store lookup so
   // reconnect replay cannot create a parallel literal `global` transcript.
   const sessionLoadKey =
-    runtimeConfig &&
-    runtimeConfig.session?.scope !== "global" &&
-    rawSessionKey.trim().toLowerCase() === "global" &&
-    requestedAgentId
+    runtimeConfig.session?.scope !== "global" && rawSessionKey.trim().toLowerCase() === "global"
       ? resolveAgentMainSessionKey({ cfg: runtimeConfig, agentId: requestedAgentId })
       : rawSessionKey;
-  const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
+  const sessionLoadOptions = { agentId: requestedAgentId };
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = measureDiagnosticsTimelineSpanSync(
     "gateway.chat_send.load_session",
@@ -239,6 +236,7 @@ export function prepareChatSendSession(params: {
       request.systemProvenanceReceipt === undefined &&
       !request.suppressCommandInterpretation,
     message: rawMessage,
+    mentions: p.mentions,
     senderIsOwner: hasGatewayAdminScope(client),
   });
 

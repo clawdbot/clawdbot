@@ -48,6 +48,7 @@ function projectGatewayConnectFailure(params: {
 /** Probe Gateway connectivity or read-capability status with optional RPC verification. */
 export async function probeGatewayStatus(opts: {
   url: string;
+  urlOverride?: string;
   localPortOverride?: number;
   token?: string;
   password?: string;
@@ -82,7 +83,7 @@ export async function probeGatewayStatus(opts: {
           const { resolveProbeAuthSummary } = await probeGatewayModuleLoader.load();
           const { callGateway } = await import("../../gateway/call.js");
           await callGateway({
-            url: opts.url,
+            ...(opts.urlOverride ? { url: opts.urlOverride } : { serviceTargetUrl: opts.url }),
             localPortOverride: opts.localPortOverride,
             token: opts.token,
             password: opts.password,
@@ -92,6 +93,7 @@ export async function probeGatewayStatus(opts: {
             method: "status",
             timeoutMs: opts.timeoutMs,
             sharedStateMode: "read-only",
+            skipImplicitAuth: true,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
             onHelloOk: (hello) => {
               gatewayReached = true;

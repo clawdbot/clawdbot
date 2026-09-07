@@ -1,3 +1,4 @@
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { ClawAppliedExtension, ClawPackage } from "./types.js";
 
 export const CLAW_PACKAGE_REF_SCHEMA_VERSION = "openclaw.clawPackageRef.v1" as const;
@@ -128,9 +129,9 @@ export function rowToPackageRef(row: PackageRefRow): PersistedClawPackageRef {
     status: row.package_status,
     relationship: row.relationship,
     origin: row.origin,
-    independentOwner: Number(row.independent_owner) === 1,
+    independentOwner: sqliteNumber(row.independent_owner) === 1,
     ...(extension ? { extension } : {}),
-    installedAtMs: Number(row.installed_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    installedAtMs: sqliteNumber(row.installed_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
 }

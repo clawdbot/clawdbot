@@ -6,6 +6,7 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -29,6 +30,11 @@ export type RunCronAgentTurnParams = {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
+  /** Host-only root for system-owned turns; never persisted in cron state. */
+  executionRoot?: string;
+  /** Explicit instruction set for a host-owned turn, including an empty review context. */
+  skillsSnapshot?: SkillSnapshot;
 };
 
 export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
@@ -41,6 +47,26 @@ export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): stri
 export type WithRunSession = (
   result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
 ) => RunCronAgentTurnResult;
+
+const CRON_EXECUTION_ROOT_RUNTIME_ERROR =
+  "collection review requires a runtime that enforces the Workshop root through OpenClaw tools";
+
+export class CronExecutionRootRuntimeError extends Error {
+  constructor() {
+    super(CRON_EXECUTION_ROOT_RUNTIME_ERROR);
+    this.name = "CronExecutionRootRuntimeError";
+  }
+}
+
+export function assertCronExecutionRootRuntime(
+  executionRoot: string | undefined,
+  runtime: string,
+  rootedCliExecution: boolean,
+): void {
+  if (executionRoot && runtime !== "openclaw" && !rootedCliExecution) {
+    throw new CronExecutionRootRuntimeError();
+  }
+}
 
 const sessionAccessorRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),

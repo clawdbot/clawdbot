@@ -1,4 +1,5 @@
 // Openai tests cover tts plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   finalizeDebugProxyCapture,
   getDebugProxyCaptureStore,
@@ -40,22 +41,6 @@ const officialEndpointValidationCases = [
     isAccepted: () => isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/"),
   },
 ];
-
-function firstFetchCall(fetchMock: ReturnType<typeof vi.fn>): unknown[] {
-  const call = fetchMock.mock.calls[0];
-  if (!call) {
-    throw new Error("expected fetch call");
-  }
-  return call;
-}
-
-function firstFetchInit(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
-  const init = firstFetchCall(fetchMock)[1];
-  if (!init || typeof init !== "object") {
-    throw new Error("expected fetch init");
-  }
-  return init as RequestInit;
-}
 
 describe("openai tts", () => {
   const originalFetch = globalThis.fetch;
@@ -134,11 +119,10 @@ describe("openai tts", () => {
   describe("openaiTTS diagnostics", () => {
     it("adds OpenClaw attribution headers to native OpenAI speech requests", async () => {
       vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-      const fetchMock = vi.fn(
-        async (_url: string | URL, _init?: RequestInit) =>
-          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+      const fetchMock = vi.fn<typeof fetch>(
+        async (_url, _init) => new Response(Buffer.from("audio-bytes"), { status: 200 }),
       );
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      globalThis.fetch = fetchMock;
 
       await openaiTTS({
         text: "hello",
@@ -150,8 +134,8 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const url = firstFetchCall(fetchMock)[0];
-      const init = firstFetchInit(fetchMock);
+      const [url, initValue] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
+      const init = expectDefined(initValue, "fetch init");
       const headers = init?.headers as Record<string, string> | undefined;
       expect(url).toBe("https://api.openai.com/v1/audio/speech");
       expect(headers?.originator).toBe("openclaw");
@@ -160,11 +144,10 @@ describe("openai tts", () => {
     });
 
     it("sends instructions to custom OpenAI-compatible endpoints", async () => {
-      const fetchMock = vi.fn(
-        async (_url: string | URL, _init?: RequestInit) =>
-          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+      const fetchMock = vi.fn<typeof fetch>(
+        async (_url, _init) => new Response(Buffer.from("audio-bytes"), { status: 200 }),
       );
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      globalThis.fetch = fetchMock;
 
       await openaiTTS({
         text: "hello",
@@ -177,7 +160,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const init = firstFetchInit(fetchMock);
+      const [, init] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
       if (typeof init?.body !== "string") {
         throw new Error("expected JSON request body");
       }
@@ -188,11 +171,10 @@ describe("openai tts", () => {
     });
 
     it("merges sanitized extraBody fields into TTS requests", async () => {
-      const fetchMock = vi.fn(
-        async (_url: string | URL, _init?: RequestInit) =>
-          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+      const fetchMock = vi.fn<typeof fetch>(
+        async (_url, _init) => new Response(Buffer.from("audio-bytes"), { status: 200 }),
       );
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      globalThis.fetch = fetchMock;
       const extraBody = JSON.parse(
         '{"lang":"e","speed":1.2,"__proto__":{"polluted":true},"constructor":"bad","prototype":"bad"}',
       ) as Record<string, unknown>;
@@ -209,7 +191,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const init = firstFetchInit(fetchMock);
+      const [, init] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
       if (typeof init?.body !== "string") {
         throw new Error("expected JSON request body");
       }
@@ -227,11 +209,10 @@ describe("openai tts", () => {
     });
 
     it("omits instructions for unsupported models on the official OpenAI endpoint", async () => {
-      const fetchMock = vi.fn(
-        async (_url: string | URL, _init?: RequestInit) =>
-          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+      const fetchMock = vi.fn<typeof fetch>(
+        async (_url, _init) => new Response(Buffer.from("audio-bytes"), { status: 200 }),
       );
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      globalThis.fetch = fetchMock;
 
       await openaiTTS({
         text: "hello",
@@ -244,7 +225,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const init = firstFetchInit(fetchMock);
+      const [, init] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
       if (typeof init?.body !== "string") {
         throw new Error("expected JSON request body");
       }
@@ -253,7 +234,7 @@ describe("openai tts", () => {
     });
 
     it("includes parsed provider detail and request id for JSON API errors", async () => {
-      const fetchMock = vi.fn(
+      const fetchMock = vi.fn<typeof fetch>(
         async () =>
           new Response(
             JSON.stringify({
@@ -272,7 +253,7 @@ describe("openai tts", () => {
             },
           ),
       );
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      globalThis.fetch = fetchMock;
 
       await expect(
         openaiTTS({
@@ -290,10 +271,10 @@ describe("openai tts", () => {
     });
 
     it("falls back to raw body text when the error body is non-JSON", async () => {
-      const fetchMock = vi.fn(
+      const fetchMock = vi.fn<typeof fetch>(
         async () => new Response("temporary upstream outage", { status: 503 }),
       );
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      globalThis.fetch = fetchMock;
 
       await expect(
         openaiTTS({
@@ -317,10 +298,10 @@ describe("openai tts", () => {
       "rejects a successful $name response as synthesized audio",
       async ({ contentType, body }) => {
         globalThis.fetch = vi
-          .fn()
+          .fn<typeof fetch>()
           .mockResolvedValue(
             new Response(body, { status: 200, headers: { "content-type": contentType } }),
-          ) as unknown as typeof fetch;
+          );
 
         await expect(
           openaiTTS({
@@ -342,12 +323,12 @@ describe("openai tts", () => {
       { name: "missing content type", contentType: undefined },
     ])("preserves nonempty $name speech responses", async ({ contentType }) => {
       const audio = Buffer.from("audio-bytes");
-      globalThis.fetch = vi.fn().mockResolvedValue(
+      globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(
         new Response(audio, {
           status: 200,
           ...(contentType ? { headers: { "content-type": contentType } } : {}),
         }),
-      ) as unknown as typeof fetch;
+      );
 
       await expect(
         openaiTTS({
@@ -369,8 +350,8 @@ describe("openai tts", () => {
         chunkSize: 1024,
         byte: 121,
       });
-      const fetchMock = vi.fn(async () => streamed.response);
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const fetchMock = vi.fn<typeof fetch>(async () => streamed.response);
+      globalThis.fetch = fetchMock;
 
       await expect(
         openaiTTS({
@@ -395,8 +376,8 @@ describe("openai tts", () => {
         chunkSize: 1024,
         byte: 120,
       });
-      const fetchMock = vi.fn(async () => streamed.response);
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const fetchMock = vi.fn<typeof fetch>(async () => streamed.response);
+      globalThis.fetch = fetchMock;
 
       await expect(
         openaiTTS({
@@ -419,10 +400,8 @@ describe("openai tts", () => {
       process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-session";
 
       globalThis.fetch = vi
-        .fn()
-        .mockResolvedValue(
-          new Response(Buffer.from("audio-bytes"), { status: 200 }),
-        ) as unknown as typeof globalThis.fetch;
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(Buffer.from("audio-bytes"), { status: 200 }));
 
       const store = getDebugProxyCaptureStore();
       store.upsertSession({
@@ -460,10 +439,8 @@ describe("openai tts", () => {
       process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-patched-session";
 
       globalThis.fetch = vi
-        .fn()
-        .mockResolvedValue(
-          new Response(Buffer.from("audio-bytes"), { status: 200 }),
-        ) as unknown as typeof globalThis.fetch;
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(Buffer.from("audio-bytes"), { status: 200 }));
 
       initializeDebugProxyCapture("test");
 

@@ -14,11 +14,13 @@ function sessionRow(
   return {
     key,
     label: key,
+    renameValue: "",
     active: false,
     visuallyActive: false,
     hasActiveRun: false,
     modelSelectionLocked: false,
     pinned: false,
+    pinnable: true,
     cloudWorkerStopAction: null,
     hasAutomation: false,
     unread: false,

@@ -583,6 +583,18 @@
   height: 15px;
 }
 
+.settings-accent-swatch__reset {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--theme-chip-bg);
+}
+
+.settings-accent-swatch__reset svg {
+  width: 16px;
+  height: 16px;
+}
+
 @media (forced-colors: active) {
   .settings-accent-swatch__picker {
     color: CanvasText;

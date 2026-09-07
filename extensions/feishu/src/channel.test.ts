@@ -1202,6 +1202,77 @@ describe("feishuPlugin actions", () => {
     expect(details.chatId).toBe("oc_group_1");
   });
 
+  it("falls back to text delivery when presentation text exceeds the card table limit", async () => {
+    feishuOutboundSendPayloadMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_fallback",
+      chatId: "oc_group_1",
+    });
+    const sixTables = Array.from(
+      { length: 6 },
+      (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
+    ).join("\n\n");
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: sixTables,
+        presentation: {
+          title: "Status",
+          blocks: [{ type: "text", text: "Build completed" }],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(feishuOutboundSendPayloadMock).toHaveBeenCalledTimes(1);
+    const payloadArgs = requireRecord(
+      mockCallArg(feishuOutboundSendPayloadMock, 0, 0, "feishuOutbound.sendPayload"),
+      "sendPayload args",
+    );
+    expect(payloadArgs.to).toBe("chat:oc_group_1");
+    expect(payloadArgs.text).toBe(sixTables);
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.messageId).toBe("om_fallback");
+  });
+
+  it("falls back when a presentation text block embeds 6 tables", async () => {
+    feishuOutboundSendPayloadMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_fallback",
+      chatId: "oc_group_1",
+    });
+    const sixTables = Array.from(
+      { length: 6 },
+      (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
+    ).join("\n\n");
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        presentation: {
+          title: "Report",
+          blocks: [{ type: "text", text: sixTables }],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(feishuOutboundSendPayloadMock).toHaveBeenCalledTimes(1);
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.messageId).toBe("om_fallback");
+  });
+
   it("hides prefixed native-card JSON in oversized presentation fallbacks", async () => {
     feishuOutboundSendPayloadMock.mockResolvedValueOnce({
       channel: "feishu",

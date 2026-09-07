@@ -31,6 +31,38 @@ describe("AppSidebar update card wiring", () => {
   });
 });
 
+describe("AppSidebar invitation admission", () => {
+  it.each([
+    { field: "draggingSessionKey", value: "agent:main:task", finish: "finishSessionDrag" },
+    { field: "draggingSidebarSection", value: "ungrouped", finish: "finishSidebarSectionDrag" },
+    { field: "draggingSidebarEntry", value: "route:home", finish: "finishSidebarEntryDrag" },
+  ] as const)(
+    "waits for $field to finish even without hover or focus",
+    async ({ field, value, finish }) => {
+      const { sidebar, context } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("main", ["agent:main:main", "agent:main:task"]),
+      );
+      expect(sidebar.matches(":hover, :focus-within")).toBe(false);
+      sidebar.sessionOrganizer[field] = value;
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: true }));
+      try {
+        await context.config.refresh();
+        await sidebar.updateComplete;
+        expect(context.config.current.communityInvite).toBe(true);
+        expect(sidebar.querySelector(".community-invite-card")).toBeNull();
+        sidebar.sessionOrganizer[finish]();
+        await sidebar.updateComplete;
+        expect(sidebar.querySelector(".community-invite-card")).not.toBeNull();
+      } finally {
+        fetch.mockRestore();
+      }
+    },
+  );
+});
+
 describe("AppSidebar new session navigation", () => {
   it("opens new-session links for the expanded agent without intercepting browser gestures", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -128,7 +160,7 @@ describe("AppSidebar new session navigation", () => {
         capabilities: {
           continueSession: true,
           archive: false,
-          createSession: { model: "anthropic/claude-opus-4-8" },
+          startTerminal: true,
         },
         hosts: [],
       },
@@ -289,9 +321,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.offline = true;
     await sidebar.updateComplete;
     const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
-    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
-      "Account",
-    );
+    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe("Owner");
     expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
     const connectionStatus = sidebar.querySelector(".sidebar-footer-bar__status");
     expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
@@ -511,5 +541,14 @@ describe("AppSidebar agent chip", () => {
     expect(promoted).not.toBeNull();
     expect(promoted?.classList.contains("sidebar-recent-session--child")).toBe(false);
     expect(promoted?.textContent).toContain("Spawned thread");
+    expect(promoted?.querySelector("[data-sidebar-session-pin]")).toBeNull();
+    promoted?.querySelector<HTMLButtonElement>("[data-session-menu]")?.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-session-menu",
+    );
+    expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
   });
 });

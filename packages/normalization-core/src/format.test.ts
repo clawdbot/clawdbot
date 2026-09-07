@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bucketRelativeTimeMs, formatByteSize } from "./format.js";
+import { bucketRelativeTimeMs, formatByteSize, formatCompactTokenCount } from "./format.js";
 
 describe("bucketRelativeTimeMs", () => {
   it.each([
@@ -38,5 +38,33 @@ describe("formatByteSize", () => {
         floorUnits: ["kilo", "mega"],
       }),
     ).toBe("99 MB");
+  });
+});
+
+describe("formatCompactTokenCount", () => {
+  it.each([
+    [999_500, { thousandsPrecision: 0 }, "1.0m"],
+    [999_500, { thousandsPrecision: 1 }, "999.5k"],
+    [999_950, { thousandsPrecision: 1 }, "1.0m"],
+    [999_500, { thousandsPrecision: 0, trimTrailingZero: true }, "1m"],
+  ] as const)("preserves precision-dependent rollover for %s", (tokens, options, expected) => {
+    expect(formatCompactTokenCount(tokens, options)).toBe(expected);
+  });
+
+  it.each([
+    [999_999_999, "1000M"],
+    [1_000_000_000, "1B"],
+  ] as const)("selects the billion unit from the unrounded count %s", (tokens, expected) => {
+    expect(
+      formatCompactTokenCount(tokens, {
+        maxUnit: "billion",
+        millionsSuffix: "M",
+        trimTrailingZero: true,
+      }),
+    ).toBe(expected);
+  });
+
+  it("retains million-only displays for billion-scale counts", () => {
+    expect(formatCompactTokenCount(1_000_000_000)).toBe("1000.0m");
   });
 });

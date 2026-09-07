@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared owner for dispatch and completion around the immutable ClawHub receipt.
+# Shared owner for trusted release child dispatch, approval, and completion.
 set -euo pipefail
 
 openclaw_npm_expected_workflow_ref="${GITHUB_REF}"
@@ -11,6 +11,25 @@ is_stable_release() {
 
 is_android_release() {
   [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
+}
+
+resolve_child_workflow_ref() {
+  local workflow_full_ref="$1"
+
+  if [[ "${workflow_full_ref}" =~ ^refs/tags/(release-publish/[a-f0-9]{12}-[1-9][0-9]*)$ ]]; then
+    # Request validation already proves this is the exact live
+    # lightweight tag; dispatch revalidates it immediately before use.
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  if [[ "${workflow_full_ref}" =~ ^refs/heads/(tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  echo "Publish children require the parent to run from a protected release-publish tag or a validated Tideclaw alpha branch." >&2
+  return 1
 }
 
 verify_child_run_sha() {
@@ -39,6 +58,26 @@ verify_child_run_sha() {
     gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id" >/dev/null 2>&1 || true
     return 1
   fi
+}
+
+require_clawhub_dispatch_available() {
+  local workflow_ref="$1"
+  local run_state runs run_id run_url endpoint
+  # Query each non-completed status separately so recent completed runs cannot
+  # hide an older environment-gated child on the same workflow ref; `requested`
+  # and `action_required` precede `queued`/`waiting` and are just as active.
+  for run_state in requested action_required waiting pending queued in_progress; do
+    runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow plugin-clawhub-release.yml \
+      --branch "$workflow_ref" --status "$run_state" --limit 1 --json databaseId,url)" || return 1
+    run_id="$(jq -r '.[0].databaseId // empty' <<< "$runs")" || return 1
+    if [[ -n "$run_id" ]]; then
+      run_url="$(jq -r '.[0].url' <<< "$runs")"
+      endpoint="repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments"
+      echo "ClawHub dispatch blocked by ${run_state} run on ${workflow_ref}: ${run_url}" >&2
+      echo "Either wait for that run, or reject its pending deployment: GET ${endpoint} for environment IDs, then gh api -X POST ${endpoint} -F 'environment_ids[]=<id>' -f state=rejected -f comment='Reject stale release gate'." >&2
+      return 1
+    fi
+  done
 }
 
 dispatch_workflow_at_ref() {
@@ -84,6 +123,15 @@ dispatch_workflow_at_ref() {
     --arg ref "$workflow_ref" \
     --argjson inputs "$inputs_json" \
     '{ref: $ref, inputs: $inputs}')"
+  # Ref and asset queries can outlive native qualification. Check the attested
+  # approval's exact native attempt after those reads and immediately before POST.
+  if [[ "$workflow" == "android-release.yml" ]]; then
+    node "${BASH_SOURCE[0]%/*}/../android-native-ci.mjs" \
+      "${RUNNER_TEMP}/android-release-approval/approval.json" || return 1
+  fi
+  if [[ "$workflow" == "plugin-clawhub-release.yml" && "$(jq -r '.dry_run // "false"' <<< "$inputs_json")" != "true" ]]; then
+    require_clawhub_dispatch_available "$workflow_ref" || return 1
+  fi
   # API 2026-03-10 removed return_run_details and always returns the
   # workflow_run_id, API run_url, and browser html_url in a 200 response.
   dispatch_response="$(printf '%s' "$dispatch_body" | gh api \
@@ -112,6 +160,8 @@ verify_bootstrap_workflow_sha() {
   approved_ref="$(jq -er '.bootstrap.ref | select(type == "string" and length > 0)' "${CLAWHUB_PLAN_PATH}")"
   approved_sha="$(jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}")"
   if [[ "${approved_ref}" == "main" ]]; then
+    # Tideclaw bootstrap uses separately approved main tooling because the
+    # token-gated bootstrap workflow does not accept alpha branch tooling.
     current_main_sha="$(
       gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
         --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
@@ -204,7 +254,7 @@ print_failed_run_summary() {
   local failed_json
 
   failed_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs \
-    --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {databaseId, name, conclusion, url}' || true)"
+    --jq '.jobs[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped") | {databaseId, name, conclusion, url}' || true)"
   if [[ -z "${failed_json}" ]]; then
     return 0
   fi
@@ -537,7 +587,7 @@ resolve_openclaw_npm_publish_state() {
   manifest_dir="${RUNNER_TEMP}/openclaw-npm-resume-preflight"
   rm -rf "${manifest_dir}"
   mkdir -p "${manifest_dir}"
-  gh run download "${PREFLIGHT_RUN_ID}" \
+  gh run download "${PREFLIGHT_ARTIFACT_RUN_ID}" \
     --repo "${GITHUB_REPOSITORY}" \
     --name "${artifact_name}" \
     --dir "${manifest_dir}"
@@ -545,7 +595,7 @@ resolve_openclaw_npm_publish_state() {
   manifest_sha="$(jq -er '.releaseSha' "${manifest_path}")"
   manifest_tarball_sha="$(jq -er '.tarballSha256' "${manifest_path}")"
   if [[ "${manifest_sha}" != "${TARGET_SHA}" ]]; then
-    echo "openclaw@${release_version} is already on npm but preflight ${PREFLIGHT_RUN_ID} was built from ${manifest_sha}, not ${TARGET_SHA}; refusing to resume." >&2
+    echo "openclaw@${release_version} is already on npm but preflight ${PREFLIGHT_ARTIFACT_RUN_ID} was built from ${manifest_sha}, not ${TARGET_SHA}; refusing to resume." >&2
     exit 1
   fi
   published_tarball_url="$(npm view "openclaw@${release_version}" dist.tarball)"
@@ -744,11 +794,11 @@ create_or_update_github_release() {
         return 0
       fi
     fi
+    # Latest promotion is invalid while this existing release remains a draft.
     gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
       --title "${title}" \
       --notes-file "${prepared_release_notes_file}" \
-      "${prerelease_arg}" \
-      "${latest_arg}"
+      "${prerelease_arg}"
   else
     gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
       --verify-tag \
@@ -812,106 +862,21 @@ verify_android_release_asset_contract() {
   echo "- Android APK asset contract: verified" >> "${GITHUB_STEP_SUMMARY}"
 }
 
-verify_windows_release_asset_contract() {
-  local actual_companion_assets actual_digest asset_name expected_companion_assets expected_digest expected_hash expected_installer_names manifest_dir manifest_json manifest_path release_json
-  # Add future promoted installer names, such as MSIX x64/ARM64, here.
-  local -a installer_assets=(
-    "OpenClawCompanion-Setup-x64.exe"
-    "OpenClawCompanion-Setup-arm64.exe"
-  )
-  local -a required_assets=(
-    "${installer_assets[@]}"
-    "OpenClawCompanion-SHA256SUMS.txt"
-  )
-
-  release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json assets,url)" || return 1
-  expected_companion_assets="$(printf '%s\n' "${required_assets[@]}" | jq -R . | jq -sc 'sort')"
-  actual_companion_assets="$(printf '%s' "${release_json}" | jq -c '
-    [.assets[]? | select(.name | startswith("OpenClawCompanion-")) | .name] | sort
-  ')"
-  if [[ "${actual_companion_assets}" != "${expected_companion_assets}" ]]; then
-    echo "Stable release OpenClawCompanion asset names do not exactly match the current contract." >&2
-    return 1
-  fi
-  for asset_name in "${required_assets[@]}"; do
-    if ! printf '%s' "${release_json}" | jq -e --arg name "${asset_name}" 'any(.assets[]?; .name == $name)' >/dev/null; then
-      echo "Stable release is missing required Windows asset ${asset_name}." >&2
-      return 1
-    fi
-  done
-
-  manifest_dir="${RUNNER_TEMP}/openclaw-windows-release-contract"
-  manifest_path="${manifest_dir}/OpenClawCompanion-SHA256SUMS.txt"
-  rm -rf "${manifest_dir}"
-  mkdir -p "${manifest_dir}"
-  gh release download "${RELEASE_TAG}" \
-    --repo "$GITHUB_REPOSITORY" \
-    --pattern "OpenClawCompanion-SHA256SUMS.txt" \
-    --dir "${manifest_dir}" || return 1
-  if ! manifest_json="$(jq -Rsc '
-    split("\n") as $lines |
-    (if $lines[-1] == "" then $lines[0:-1] else $lines end) |
-    map(sub("\r$"; "")) |
-    if all(.[]; test("^(?<hash>[a-f0-9]{64})  (?<name>[^/\\\\]+)$"))
-    then map(capture("^(?<hash>[a-f0-9]{64})  (?<name>[^/\\\\]+)$"))
-    else error("malformed Windows checksum manifest entry")
-    end
-  ' "${manifest_path}")"; then
-    echo "Stable release Windows checksum manifest contains malformed entries." >&2
-    return 1
-  fi
-  expected_installer_names="$(printf '%s\n' "${installer_assets[@]}" | jq -R . | jq -sc 'sort')"
-  if ! printf '%s' "${manifest_json}" | jq -e --argjson expected "${expected_installer_names}" '
-    length == ($expected | length) and
-    ([.[].name] | sort) == $expected and
-    ([.[].name] | unique | length) == length
-  ' >/dev/null; then
-    echo "Stable release Windows checksum manifest does not exactly match the installer asset contract." >&2
-    return 1
-  fi
-  for asset_name in "${installer_assets[@]}"; do
-    expected_digest="$(printf '%s' "${WINDOWS_NODE_INSTALLER_DIGESTS}" | jq -r --arg name "${asset_name}" '.[$name] // empty')"
-    actual_digest="$(printf '%s' "${release_json}" | jq -r --arg name "${asset_name}" '.assets[]? | select(.name == $name) | .digest // empty')"
-    if [[ -z "${expected_digest}" || "${actual_digest}" != "${expected_digest}" ]]; then
-      echo "Stable release Windows asset ${asset_name} does not match its pinned digest." >&2
-      return 1
-    fi
-    expected_hash="${expected_digest#sha256:}"
-    if ! printf '%s' "${manifest_json}" | jq -e --arg name "${asset_name}" --arg hash "${expected_hash}" '
-      any(.[]; .name == $name and .hash == $hash)
-    ' >/dev/null; then
-      echo "Stable release Windows checksum manifest does not match pinned digest for ${asset_name}." >&2
-      return 1
-    fi
-  done
-  echo "- Windows Hub asset contract: verified" >> "$GITHUB_STEP_SUMMARY"
-}
-
 promote_windows_release_assets() {
-  if ! is_stable_release; then
+  if ! is_stable_release || [[ -z "${WINDOWS_NODE_TAG}" && -z "${WINDOWS_NODE_INSTALLER_DIGESTS}" ]]; then
     return 0
   fi
-  if [[ -z "${WINDOWS_NODE_INSTALLER_DIGESTS// }" ]]; then
-    echo "Stable release is missing prevalidated Windows installer digests." >&2
+  if [[ -z "${WINDOWS_NODE_TAG}" || -z "${WINDOWS_NODE_INSTALLER_DIGESTS}" ]]; then
+    echo "Windows promotion requires both an exact source tag and approved installer digests." >&2
     return 1
   fi
-  # Retry-safe: the asset contract is the done-condition, so a prior
-  # publish run's verified promotion is reused instead of re-running
-  # the Windows child workflow.
-  if verify_windows_release_asset_contract >/dev/null 2>&1; then
-    echo "- Windows Hub promotion: assets already promoted and verified; skipping dispatch" >> "$GITHUB_STEP_SUMMARY"
-    return 0
-  fi
-
   windows_node_run_id="$(dispatch_workflow windows-node-release.yml \
     -f tag="${RELEASE_TAG}" \
     -f windows_node_tag="${WINDOWS_NODE_TAG}" \
-    -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")"
-  # Promotion runs in a background subshell; hand the run id to the
-  # parent shell for the release proof links.
-  printf '%s' "${windows_node_run_id}" > "${RUNNER_TEMP}/windows-node-run-id.txt"
-  echo "- Windows Node release run ID: \`${windows_node_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
-  wait_for_run windows-node-release.yml "${windows_node_run_id}" "${PARENT_WORKFLOW_SHA}"
+    -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")" || return 1
+  # Native promotion owns its terminal evidence; do not join it back into
+  # the npm/Docker publisher after the GitHub release has been finalized.
+  echo "- Windows Hub: detached; completion and failure evidence at https://github.com/${GITHUB_REPOSITORY}/actions/runs/${windows_node_run_id}" >> "$GITHUB_STEP_SUMMARY"
 }
 
 promote_android_release_asset() {
@@ -950,7 +915,7 @@ upload_dependency_evidence_release_asset() {
 
   rm -rf "${download_dir}" "${asset_path}"
   mkdir -p "${download_dir}"
-  gh run download "${PREFLIGHT_RUN_ID}" \
+  gh run download "${PREFLIGHT_ARTIFACT_RUN_ID}" \
     --repo "${GITHUB_REPOSITORY}" \
     --name "${artifact_name}" \
     --dir "${download_dir}"
@@ -1186,7 +1151,7 @@ verify_published_release() {
 }
 
 append_release_proof_to_github_release() {
-  local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line windows_line
+  local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line
 
   release_version="${RELEASE_TAG#v}"
   proof_file="${RUNNER_TEMP}/release-verification.md"
@@ -1196,8 +1161,8 @@ append_release_proof_to_github_release() {
   tarball="$(jq -er '.openclawNpmTarball | select(type == "string" and length > 0)' "${evidence_path}")"
   integrity="$(jq -er '.openclawNpmIntegrity | select(type == "string" and length > 0)' "${evidence_path}")"
 
-  if [[ "$(jq -r '.telegramWaiver // ""' "${evidence_path}")" == "2026.8.1-owner-approved" ]]; then
-    telegram_line="- Telegram integration checks: waived by the release owner for 2026.8.1 (source QA, Package Acceptance, published-package E2E); not run."
+  if [[ "$(jq -r '.telegramWaiver // ""' "${evidence_path}")" == "${release_version}-owner-approved" ]]; then
+    telegram_line="- Telegram integration checks: waived by the release owner for ${release_version} (source QA, Package Acceptance, published-package E2E); not run."
   elif [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
     telegram_line="- npm Telegram beta E2E: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${NPM_TELEGRAM_RUN_ID}"
   else
@@ -1207,10 +1172,6 @@ append_release_proof_to_github_release() {
   write_clawhub_runtime_state "${clawhub_runtime_state_path}"
   clawhub_line="$(jq -r '.proofLines.normal' "${clawhub_runtime_state_path}")"
   clawhub_bootstrap_line="$(jq -r '.proofLines.bootstrap' "${clawhub_runtime_state_path}")"
-  windows_line=""
-  if [[ -n "${windows_node_run_id// }" ]]; then
-    windows_line="- Windows Hub promotion: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${windows_node_run_id} from openclaw/openclaw-windows-node@${WINDOWS_NODE_TAG}"
-  fi
   android_line="${android_release_note}"
   proof_label="full release validation"
   proof_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}"
@@ -1227,7 +1188,7 @@ append_release_proof_to_github_release() {
     RELEASE_TARBALL="${tarball}" \
     RELEASE_INTEGRITY="${integrity}" \
     RELEASE_PUBLISH_RUN_ID="${GITHUB_RUN_ID}" \
-    PREFLIGHT_RUN_ID="${PREFLIGHT_RUN_ID}" \
+    PREFLIGHT_ARTIFACT_RUN_ID="${PREFLIGHT_ARTIFACT_RUN_ID}" \
     RELEASE_VALIDATION_LABEL="${proof_label}" \
     RELEASE_VALIDATION_RUN_ID="${proof_run_id}" \
     PLUGIN_NPM_RUN_ID="${plugin_npm_run_id}" \
@@ -1236,7 +1197,6 @@ append_release_proof_to_github_release() {
     CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
     ANDROID_LINE="${android_line}" \
-    WINDOWS_LINE="${windows_line}" \
     node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs";
 
@@ -1254,7 +1214,7 @@ const section = [
   `- release SHA: \`${process.env.RELEASE_SHA}\``,
   `- full release CI report: https://github.com/openclaw/releases/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
   `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
-  `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_RUN_ID}`,
+  `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_ARTIFACT_RUN_ID}`,
   `- ${process.env.RELEASE_VALIDATION_LABEL}: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_VALIDATION_RUN_ID}`,
   `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`,
   process.env.CLAWHUB_LINE,
@@ -1268,7 +1228,6 @@ const section = [
     : []),
   process.env.TELEGRAM_LINE,
   ...(process.env.ANDROID_LINE ? [process.env.ANDROID_LINE] : []),
-  ...(process.env.WINDOWS_LINE ? [process.env.WINDOWS_LINE] : []),
 ].join("\n");
 
 writeFileSync(proofFile, section);

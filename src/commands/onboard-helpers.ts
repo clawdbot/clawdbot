@@ -22,6 +22,7 @@ import {
   resolveLocalControlUiProbeLinks,
 } from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
 import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
 import {
   detectBrowserOpenSupport,
@@ -136,7 +137,7 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   const trimmed = value.trim();
   // Reject the literal string "undefined" — a common bug when JS undefined
   // gets coerced to a string via template literals or String(undefined).
-  if (trimmed === "undefined" || trimmed === "null") {
+  if (isInvalidGatewayToken(trimmed)) {
     return "";
   }
   return trimmed;
@@ -215,15 +216,18 @@ export async function ensureWorkspaceAndSessions(
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
     agentId: string;
+    beforePersistentApply?: () => void;
   },
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !options?.skipBootstrap,
     skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
+    beforePersistentApply: options.beforePersistentApply,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
+  options.beforePersistentApply?.();
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };

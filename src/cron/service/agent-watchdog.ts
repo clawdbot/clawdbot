@@ -49,6 +49,7 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
 /** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
 type CronAgentWatchdog = {
   start: () => void;
+  replaceTimeout: (timeoutMs: number | undefined) => void;
   noteLaneWait: () => void;
   noteLaneAdmitted: () => void;
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
@@ -149,6 +150,17 @@ export function createCronAgentWatchdog(params: {
         return;
       }
       startTimeout();
+    },
+    replaceTimeout: (timeoutMs) => {
+      // A heartbeat handoff starts a distinct configured deadline. Keeping the
+      // original timer would still abort long heartbeat turns at the cron default.
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      timeoutId =
+        timeoutMs !== undefined && state !== "timed_out" && state !== "disposed"
+          ? setTimeout(() => setTimedOut(timeoutErrorMessage(activeExecution)), timeoutMs)
+          : undefined;
     },
     noteLaneWait: () => {
       if (state === "waiting_for_runner") {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import { writeWorkspaceSkills } from "../skills/test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
@@ -111,6 +112,57 @@ describe("skills-cli (e2e)", () => {
     const output = formatSkillInfo(report, "peekaboo", {});
     expect(output).toContain("peekaboo");
     expect(output).toContain("Details:");
+  });
+
+  it.each([
+    ["plain", "left\tright"],
+    ["ESC CSI", "left\x1b[31\tmright\x1b[0m"],
+    ["C1 CSI", "left\x9b31\tmright\x9b0m"],
+  ])(
+    "keeps %s tab-separated skill descriptions in their table cell",
+    async (_label, description) => {
+      const workspaceDir = fs.mkdtempSync(path.join(tempWorkspaceDir, "tab-spacing-"));
+      await writeWorkspaceSkills(workspaceDir, [
+        {
+          name: "tab-spacing",
+          description: JSON.stringify(description).replaceAll("\x9b", "\\u009b"),
+        },
+      ]);
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, "managed"),
+        config: { plugins: { enabled: false } },
+      });
+      expect(report.skills.find((skill) => skill.name === "tab-spacing")?.description).toBe(
+        description,
+      );
+
+      const row = stripAnsi(formatSkillsList(report, {}))
+        .split("\n")
+        .find((line) => line.includes("tab-spacing"));
+      expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left right");
+    },
+  );
+
+  it("preserves description and path whitespace in skills JSON output", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(tempWorkspaceDir, "json-whitespace-"));
+    const managedSkillsDir = path.join(workspaceDir, "managed\tlocal");
+    const description = "First paragraph.\nSecond\tcolumn.\r\nThird paragraph.";
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "json-whitespace", description: JSON.stringify(description) },
+    ]);
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir,
+      config: { plugins: { enabled: false } },
+    });
+    expect(report.skills[0]?.description).toBe(description);
+
+    const list = JSON.parse(formatSkillsList(report, { json: true }));
+    const info = JSON.parse(formatSkillInfo(report, "json-whitespace", { json: true }));
+    const check = JSON.parse(formatSkillsCheck(report, { json: true }));
+    expect(list.skills[0].description).toBe(description);
+    expect(info.description).toBe(description);
+    expect(list.managedSkillsDir).toBe(managedSkillsDir);
+    expect(check.managedSkillsDir).toBe(managedSkillsDir);
   });
 
   it("reports missing prerequisites for discovered agent-excluded skills", async () => {

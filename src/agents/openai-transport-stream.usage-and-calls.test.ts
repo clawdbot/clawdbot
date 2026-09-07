@@ -4,6 +4,7 @@ import {
   makeResponsesModel,
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("openai transport stream", () => {
   it("serializes raw string tool-call arguments without double-encoding them", () => {
@@ -20,14 +21,7 @@ describe("openai transport stream", () => {
             api: "openai-responses",
             provider: "openai",
             model: "gpt-5.4",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "stop",
             timestamp: 1,
             content: [

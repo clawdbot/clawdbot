@@ -30,11 +30,16 @@ import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   pullRequestLinksIn,
+  refreshPullRequestsForFinalReply,
   refreshPullRequestsForStreamedLinks,
+  retirePullRequestRefreshes,
 } from "./chat-pull-request-refresh.ts";
-import { clearPendingQueueItemsForRun } from "./chat-queue.ts";
+import { clearPendingQueueItemsForRun, readDeliveredQueuedChatSendForRun } from "./chat-queue.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
+import {
+  requiresChatInputConsumption,
+  retireDeliveredQueuedUserTurn,
+} from "./chat-send-support.ts";
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -365,6 +370,11 @@ function handleSessionsChangedEvent(
     state.retireSessionCompanion?.(event.key, event.agentId);
   }
   const resetsSelectedSession = matchesChat && resetsSession;
+  const changesBranchTopology =
+    matchesChat && typeof source?.reason === "string" && BRANCH_TOPOLOGY_REASONS.has(source.reason);
+  if (resetsSelectedSession || changesBranchTopology) {
+    retirePullRequestRefreshes(state);
+  }
   if (
     matchesChat &&
     state.client &&
@@ -382,11 +392,7 @@ function handleSessionsChangedEvent(
     // only proof that its old live and pending transcript no longer exists.
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
   }
-  if (
-    matchesChat &&
-    typeof source?.reason === "string" &&
-    BRANCH_TOPOLOGY_REASONS.has(source.reason)
-  ) {
+  if (changesBranchTopology) {
     retireChatBranchRequests(state);
     state.chatBranches = [];
     state.chatBranchesSessionKey = null;
@@ -432,23 +438,16 @@ function handleSessionsChangedEvent(
       supersedeInFlight: true,
     }).finally(() => state.requestUpdate?.());
   }
-  if (
-    result.applied &&
-    event &&
-    runIdBeforeApply &&
-    matchesChat &&
+  // The session capability owns roster invalidation, including unapplied events.
+  // A pane refresh here bypasses its debounce and multiplies reads across split panes.
+  if (result.applied && event && runIdBeforeApply && matchesChat) {
     finishSessionMessageRunReconcile(
       state,
       event.key,
       event.clientRunId ?? event.runId ?? runIdBeforeApply,
       result.row,
       presentation,
-    )
-  ) {
-    return;
-  }
-  if (!result.applied && event?.isChatTurn !== true) {
-    void refreshCurrentChatSessionList(state);
+    );
   }
 }
 
@@ -574,7 +573,7 @@ export function handlePageGatewayEvent(
         state.observerDigest = null;
       }
       if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
-        refreshPullRequestsForStreamedLinks(state, payload, payload.deltaText);
+        refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
       }
       const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
       const shouldRefreshPullRequests =
@@ -586,8 +585,8 @@ export function handlePageGatewayEvent(
       if (shouldCelebrateFirstReply && result === "final") {
         fireFirstReplyConfetti();
       }
-      if (shouldRefreshPullRequests) {
-        void state.refreshSessionPullRequests?.({ refresh: true });
+      if (shouldRefreshPullRequests && payload) {
+        refreshPullRequestsForFinalReply(state, payload.runId, payload.message);
       }
       const shouldRecoverMissingTerminal = Boolean(
         recoveryRunId &&
@@ -640,8 +639,13 @@ export function handlePageGatewayEvent(
         : terminalPayload.agentId,
     );
     const connectionEpoch = state.connectionEpoch;
+    const queued = readDeliveredQueuedChatSendForRun(state, terminalPayload.runId, scope)?.item;
     const ownerIsCurrent = captureOutboxPayloadOwner(state);
-    const retirement = retireDeliveredQueuedUserTurn(state, terminalPayload.runId, scope);
+    // Keep the complete user display pinned before applying the terminal, but
+    // ordinary input retains its durable retry bytes until consumption is proven.
+    const retirement = retireDeliveredQueuedUserTurn(state, terminalPayload.runId, scope, {
+      retainUntilConsumed: Boolean(queued && requiresChatInputConsumption(queued)),
+    });
     const finish = (outcome: Awaited<typeof retirement>) => {
       if (outcome !== "stale" && state.connectionEpoch === connectionEpoch && ownerIsCurrent()) {
         apply();

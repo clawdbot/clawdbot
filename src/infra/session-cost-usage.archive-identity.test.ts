@@ -8,6 +8,7 @@ import {
   readSessionArchiveContentSync,
 } from "../config/sessions/archive-compression.js";
 import {
+  deleteSessionEntryLifecycle,
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -282,6 +283,34 @@ describe("usage archive identity", () => {
       ]);
     });
   }
+
+  it("resolves registered archive identity from a configured custom store", async () => {
+    const storePath = path.join(state.root, "custom", "shared.sqlite");
+    const sessionId = `usage-${"x".repeat(300)}`;
+    const sessionKey = "agent:main:usage-custom-archive";
+    await state.writeConfig({ ...config, session: { store: storePath } });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId, updatedAt: archiveTime },
+    );
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      { messages: [{ message: assistant(17) }], touchSessionEntry: false },
+    );
+    const deleted = await deleteSessionEntryLifecycle({
+      agentId: "main",
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+
+    await expect(listUsageCountedTranscriptStats("main")).resolves.toEqual([
+      expect.objectContaining({
+        sessionId,
+        sourcePath: deleted.archivedTranscripts[0]?.archivedPath,
+      }),
+    ]);
+  });
 
   it("replaces compressed read bytes without changing the durable session identity", async () => {
     const manager = transcript();

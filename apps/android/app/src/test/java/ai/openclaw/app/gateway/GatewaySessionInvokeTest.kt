@@ -1,6 +1,8 @@
 package ai.openclaw.app.gateway
 
 import ai.openclaw.app.chat.ChatWidgetUrlResolver
+import ai.openclaw.app.node.NodeHostStatsReporter
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +42,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLog
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -1484,6 +1487,106 @@ class GatewaySessionInvokeTest {
         assertEquals("persisted", response["reason"]?.jsonPrimitive?.content)
       } finally {
         shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun sendNodeEventForEndpoint_sendsHostStatsAndAcceptsUnhandledAck() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val nodeEventParams = CompletableDeferred<JsonObject>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          when (method) {
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
+            "node.event" -> {
+              nodeEventParams.complete(frame["params"]!!.jsonObject)
+              webSocket.send(
+                """{"type":"res","id":"$id","ok":true,"payload":{"ok":true,"event":"node.host.stats","handled":false}}""",
+              )
+            }
+          }
+        }
+      val harness =
+        createNodeHarness(connected, lastDisconnect) { GatewaySession.InvokeResult.ok("{}") }
+      val payloadJson =
+        NodeHostStatsReporter.makePayloadJson(
+          NodeHostStatsReporter.Sample(8, 8_000_000_000, 3_000_000_000, 128_000_000_000, 64_000_000_000),
+        )
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        assertFalse(
+          harness.session.sendNodeEventForEndpoint("another-gateway", NodeHostStatsReporter.EVENT_NAME, payloadJson),
+        )
+        assertTrue(
+          harness.session.sendNodeEventForEndpoint(
+            gatewayIdForPort(server.port),
+            NodeHostStatsReporter.EVENT_NAME,
+            payloadJson,
+          ),
+        )
+        val params = withTimeout(TEST_TIMEOUT_MS) { nodeEventParams.await() }
+        assertEquals("node.host.stats", params["event"]?.jsonPrimitive?.content)
+        assertEquals(payloadJson, params["payloadJSON"]?.jsonPrimitive?.content)
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun sendNodeEventForEndpoint_canDelegateFailureLoggingToCaller() =
+    runBlocking {
+      for (suppressLog in listOf(false, true)) {
+        val connected = CompletableDeferred<Unit>()
+        val nodeEventSeen = CompletableDeferred<Unit>()
+        val sent = CompletableDeferred<Boolean>()
+        val lastDisconnect = AtomicReference("")
+        val server =
+          startGatewayServer(testJson()) { webSocket, id, method, _ ->
+            when (method) {
+              "connect" -> webSocket.send(connectResponseFrame(id))
+              "node.event" -> nodeEventSeen.complete(Unit)
+            }
+          }
+        val harness =
+          createNodeHarness(connected, lastDisconnect) { GatewaySession.InvokeResult.ok("{}") }
+
+        fun failureLogs(): Int =
+          ShadowLog.getLogsForTag("OpenClawGateway").count {
+            it.type == Log.WARN && it.msg.startsWith("node.event failed:")
+          }
+        var sendJob: Job? = null
+
+        try {
+          connectNodeSession(harness.session, server.port)
+          awaitConnectedOrThrow(connected, lastDisconnect, server)
+          val logsBefore = failureLogs()
+          val gatewayId = gatewayIdForPort(server.port)
+          sendJob =
+            launch {
+              sent.complete(
+                if (suppressLog) {
+                  harness.session.sendNodeEventForEndpoint(gatewayId, NodeHostStatsReporter.EVENT_NAME, "{}", logFailure = false)
+                } else {
+                  harness.session.sendNodeEventForEndpoint(gatewayId, NodeHostStatsReporter.EVENT_NAME, "{}")
+                },
+              )
+            }
+          withTimeout(TEST_TIMEOUT_MS) { nodeEventSeen.await() }
+          harness.session.disconnect()
+          assertFalse(withTimeout(TEST_TIMEOUT_MS) { sent.await() })
+          assertEquals(if (suppressLog) 0 else 1, failureLogs() - logsBefore)
+        } finally {
+          sendJob?.cancelAndJoin()
+          shutdownHarness(harness, server)
+        }
       }
     }
 

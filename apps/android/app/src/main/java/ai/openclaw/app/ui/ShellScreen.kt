@@ -10,6 +10,7 @@ import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.GatewaySkillWorkshopSummary
+import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
@@ -27,6 +28,7 @@ import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -64,29 +66,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
-import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -97,6 +90,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -113,6 +107,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.window.layout.DisplayFeature
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -140,6 +135,7 @@ private const val overviewRecentSessionVisibleLimit = 3
 fun ShellScreen(
   viewModel: MainViewModel,
   modifier: Modifier = Modifier,
+  features: List<DisplayFeature> = emptyList(),
 ) {
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
   val appearanceThemeFamily by viewModel.appearanceThemeFamily.collectAsState()
@@ -151,251 +147,277 @@ fun ShellScreen(
     val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
-    val sidebarDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    var sidebarRowDragging by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
-    val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
-    val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
-    val gatewayAgents by viewModel.gatewayAgents.collectAsState()
-    val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
-    val chatSessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
-    val chatSessions by viewModel.chatSessions.collectAsState()
-    val chatSessionKey by viewModel.chatSessionKey.collectAsState()
-    val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
-
-    LaunchedEffect(requestedHomeDestination) {
-      val destination = requestedHomeDestination ?: return@LaunchedEffect
-      // HomeDestination is a one-shot command from launch intents and settings
-      // actions; consume it after translating to local shell state.
-      nav.selectTab(
-        when (destination) {
-          HomeDestination.Connect -> Tab.Overview
-          HomeDestination.Chat -> Tab.Chat
-          HomeDestination.Voice -> Tab.Chat
-          HomeDestination.Settings -> Tab.Settings
-        },
-      )
-      // Screenshot scenes can target a settings detail route alongside the tab.
-      viewModel.requestedSettingsRoute.value?.let { route ->
-        nav.openSettingsRoute(route)
-        viewModel.clearRequestedSettingsRoute()
+    FoldAwareContent(
+      features = features,
+      modifier = modifier.background(ClawTheme.colors.canvas),
+      bookPanesEnabled = !commandOpen && pendingTrust == null,
+      tabletopEnabled = nav.activeTab == Tab.Chat && !commandOpen && pendingTrust == null,
+    ) { foldBounds ->
+      val bookPanes = foldBounds.book
+      val permanentSidebar = bookPanes != null
+      // Mode changes discard modal operations and their drag state, not the two content slots.
+      val sidebarDrawerState = key(permanentSidebar) { rememberDrawerState(initialValue = DrawerValue.Closed) }
+      var sidebarRowDragging by remember(sidebarDrawerState) { mutableStateOf(false) }
+      val drawerScope = key(sidebarDrawerState) { rememberCoroutineScope() }
+      val openSidebar: () -> Unit = {
+        if (!permanentSidebar) drawerScope.launch { sidebarDrawerState.open() }
       }
-      sidebarDrawerState.close()
-      viewModel.clearRequestedHomeDestination()
-    }
-
-    LaunchedEffect(nav.activeTab, runtimeInitialized) {
-      val conversationScreenActive = nav.activeTab == Tab.Chat
-      if (conversationScreenActive || conversationScreenWasActive || runtimeInitialized) {
-        viewModel.setVoiceScreenActive(conversationScreenActive)
+      val closeSidebar: () -> Unit = {
+        if (!permanentSidebar) drawerScope.launch { sidebarDrawerState.close() }
       }
-      conversationScreenWasActive = conversationScreenActive
-    }
+      val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
+      val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
+      val gatewayAgents by viewModel.gatewayAgents.collectAsState()
+      val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
+      val chatSessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
+      val chatSessions by viewModel.chatSessions.collectAsState()
+      val chatSessionKey by viewModel.chatSessionKey.collectAsState()
+      val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
 
-    BackHandler(
-      enabled =
-        sidebarDrawerState.currentValue == DrawerValue.Closed &&
-          sidebarDrawerState.targetValue == DrawerValue.Closed &&
-          nav.activeTab != Tab.Overview,
-    ) {
-      nav.back()
-    }
-
-    BackHandler(enabled = commandOpen) {
-      commandOpen = false
-    }
-
-    LaunchedEffect(commandOpen, pendingTrust) {
-      if (commandOpen || pendingTrust != null) sidebarDrawerState.close()
-    }
-
-    val activeSidebarDestination =
-      when {
-        nav.activeTab == Tab.Settings && nav.settingsRoute != SettingsRoute.Skills -> SidebarDestination.Settings
-        nav.activeTab == Tab.Overview -> SidebarDestination.Work
-        nav.activeTab == Tab.Chat -> SidebarDestination.Home
-        nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Skills -> SidebarDestination.Skills
-        nav.activeTab == Tab.Sessions -> SidebarDestination.Threads
-        else -> null
+      LaunchedEffect(requestedHomeDestination) {
+        val destination = requestedHomeDestination ?: return@LaunchedEffect
+        // HomeDestination is a one-shot command from launch intents and settings
+        // actions; consume it after translating to local shell state.
+        nav.selectTab(
+          when (destination) {
+            HomeDestination.Connect -> Tab.Overview
+            HomeDestination.Chat -> Tab.Chat
+            HomeDestination.Voice -> Tab.Chat
+            HomeDestination.Settings -> Tab.Settings
+          },
+        )
+        // Screenshot scenes can target a settings detail route alongside the tab.
+        viewModel.requestedSettingsRoute.value?.let { route ->
+          nav.openSettingsRoute(route)
+          viewModel.clearRequestedSettingsRoute()
+        }
+        closeSidebar()
+        viewModel.clearRequestedHomeDestination()
       }
-    val openSidebar: () -> Unit = {
-      coroutineScope.launch { sidebarDrawerState.open() }
-    }
-    val closeSidebar: () -> Unit = {
-      coroutineScope.launch { sidebarDrawerState.close() }
-    }
-    val selectSidebarDestination: (SidebarDestination) -> Unit = { destination ->
-      when (destination) {
-        SidebarDestination.Settings -> nav.openSettingsRoute(SettingsRoute.Home)
-        SidebarDestination.Work -> nav.selectTab(Tab.Overview)
-        SidebarDestination.Home -> nav.selectTab(Tab.Chat)
-        SidebarDestination.Skills -> nav.openSettingsRoute(SettingsRoute.Skills)
-        SidebarDestination.Threads -> nav.selectTab(Tab.Sessions)
-      }
-      closeSidebar()
-    }
 
-    Box(modifier = modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
-      SidebarNavigationShell(
-        drawerState = sidebarDrawerState,
-        gesturesEnabled = !sidebarRowDragging,
-        drawerContent = {
-          OpenClawSidebar(
-            viewModel = viewModel,
-            agents = gatewayAgents,
-            selectedAgentId = chatSessionOwnerAgentId ?: gatewayDefaultAgentId,
-            sessions = chatSessions,
-            activeSessionKey = chatSessionKey,
-            activeDestination = activeSidebarDestination,
-            connection = gatewayConnectionDisplay,
-            drawerActive = sidebarDrawerState.isOpen,
-            showCloseButton = true,
-            onClose = closeSidebar,
-            onDragActiveChange = { sidebarRowDragging = it },
-            onNewSession = {
-              viewModel.startNewChat(worktree = false)
-              nav.selectTab(Tab.Chat)
-              closeSidebar()
-            },
-            onSelectAgent = { agentId ->
-              viewModel.selectChatAgent(agentId)
-              nav.selectTab(Tab.Chat)
-              closeSidebar()
-            },
-            onSelectSession = { session ->
-              viewModel.switchChatSession(session.key, session.ownerAgentId)
-              nav.selectTab(Tab.Chat)
-              closeSidebar()
-            },
-            onSelectCatalogSession = { session ->
-              viewModel.continueSessionCatalogEntry(session) { continued ->
-                if (continued) {
-                  nav.selectTab(Tab.Chat)
-                  closeSidebar()
-                }
-              }
-            },
-            onCreateCatalogSession = { catalogId ->
-              nav.selectTab(Tab.Chat)
-              closeSidebar()
-              viewModel.createSessionCatalogEntry(catalogId)
-            },
-            onSelectDestination = selectSidebarDestination,
-          )
-        },
+      LaunchedEffect(nav.activeTab, runtimeInitialized) {
+        val conversationScreenActive = nav.activeTab == Tab.Chat
+        if (conversationScreenActive || conversationScreenWasActive || runtimeInitialized) {
+          viewModel.setVoiceScreenActive(conversationScreenActive)
+        }
+        conversationScreenWasActive = conversationScreenActive
+      }
+
+      BackHandler(
+        enabled =
+          (
+            permanentSidebar ||
+              (
+                sidebarDrawerState.currentValue == DrawerValue.Closed &&
+                  sidebarDrawerState.targetValue == DrawerValue.Closed
+              )
+          ) &&
+            nav.activeTab != Tab.Overview,
       ) {
-        when (nav.activeTab) {
-          Tab.Overview -> {
-            OverviewScreen(
-              viewModel = viewModel,
-              showSidebarButton = true,
-              onOpenSidebar = openSidebar,
-              onSelectTab = nav::selectTab,
-              onOpenSettingsRoute = nav::openSettingsRoute,
-              onOpenCommand = { commandOpen = true },
-            )
-          }
+        nav.back()
+      }
 
-          Tab.Chat -> {
-            UnifiedChatShellScreen(
-              viewModel = viewModel,
-              showSidebarButton = true,
-              onOpenSidebar = openSidebar,
-              onOpenDashboard = nav::openSessionDashboard,
-              onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
-              onOpenProvidersModels = { nav.openDetailTab(Tab.ProvidersModels) },
-            )
-          }
+      BackHandler(enabled = commandOpen) {
+        commandOpen = false
+      }
 
-          Tab.ProvidersModels -> {
-            ProvidersModelsScreen(
-              viewModel = viewModel,
-              onBack = nav::back,
-            )
-          }
+      LaunchedEffect(commandOpen, pendingTrust, sidebarDrawerState) {
+        if (commandOpen || pendingTrust != null) closeSidebar()
+      }
 
-          Tab.Sessions -> {
-            SessionsScreen(
-              viewModel = viewModel,
-              showSidebarButton = true,
-              onOpenSidebar = openSidebar,
-              onOpenChat = { nav.selectTab(Tab.Chat) },
-            )
-          }
+      val activeSidebarDestination =
+        when {
+          nav.activeTab == Tab.Settings && nav.settingsRoute != SettingsRoute.Skills -> SidebarDestination.Settings
+          nav.activeTab == Tab.Overview -> SidebarDestination.Work
+          nav.activeTab == Tab.Chat -> SidebarDestination.Home
+          nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Skills -> SidebarDestination.Skills
+          nav.activeTab == Tab.Sessions -> SidebarDestination.Threads
+          else -> null
+        }
+      val selectSidebarDestination: (SidebarDestination) -> Unit = { destination ->
+        when (destination) {
+          SidebarDestination.Settings -> nav.openSettingsRoute(SettingsRoute.Home)
+          SidebarDestination.Work -> nav.selectTab(Tab.Overview)
+          SidebarDestination.Home -> nav.selectTab(Tab.Chat)
+          SidebarDestination.Skills -> nav.openSettingsRoute(SettingsRoute.Skills)
+          SidebarDestination.Threads -> nav.selectTab(Tab.Sessions)
+        }
+        closeSidebar()
+      }
 
-          Tab.Files -> {
-            WorkspaceFilesScreen(
+      Box(modifier = Modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
+        SidebarNavigationShell(
+          drawerState = sidebarDrawerState,
+          bookPanes = bookPanes,
+          sidebarBand = foldBounds.sidebarBand,
+          gesturesEnabled = !sidebarRowDragging,
+          drawerContent = {
+            OpenClawSidebar(
               viewModel = viewModel,
-              onBack = nav::back,
+              rowHostBand = foldBounds.sidebarBand,
+              agents = gatewayAgents,
+              selectedAgentId = chatSessionOwnerAgentId ?: gatewayDefaultAgentId,
+              sessions = chatSessions,
+              activeSessionKey = chatSessionKey,
+              activeDestination = activeSidebarDestination,
+              connection = gatewayConnectionDisplay,
+              visible =
+                !commandOpen && pendingTrust == null &&
+                  (permanentSidebar || sidebarDrawerState.isOpen || sidebarDrawerState.targetValue == DrawerValue.Open),
+              showCloseButton = !permanentSidebar,
+              onClose = closeSidebar,
+              onDragActiveChange = { sidebarRowDragging = it },
+              onNewSession = {
+                viewModel.startNewChat(worktree = false)
+                nav.selectTab(Tab.Chat)
+                closeSidebar()
+              },
+              onSelectAgent = { agentId ->
+                viewModel.selectChatAgent(agentId)
+                nav.selectTab(Tab.Chat)
+                closeSidebar()
+              },
+              onSelectSession = { session ->
+                viewModel.switchChatSession(session.key, session.ownerAgentId)
+                nav.selectTab(Tab.Chat)
+                closeSidebar()
+              },
+              onSelectCatalogSession = { session ->
+                viewModel.continueSessionCatalogEntry(session) { continued ->
+                  if (continued) {
+                    nav.selectTab(Tab.Chat)
+                    closeSidebar()
+                  }
+                }
+              },
+              onCreateCatalogSession = { catalogId ->
+                nav.selectTab(Tab.Chat)
+                closeSidebar()
+                viewModel.createSessionCatalogEntry(catalogId)
+              },
+              onSelectDestination = selectSidebarDestination,
             )
-          }
+          },
+        ) {
+          when (nav.activeTab) {
+            Tab.Overview -> {
+              OverviewScreen(
+                viewModel = viewModel,
+                showSidebarButton = !permanentSidebar,
+                onOpenSidebar = openSidebar,
+                onSelectTab = nav::selectTab,
+                onOpenSettingsRoute = nav::openSettingsRoute,
+                onOpenCommand = { commandOpen = true },
+              )
+            }
 
-          Tab.Dashboard -> {
-            SessionDashboardScreen(
-              viewModel = viewModel,
-              sessionKey = nav.dashboardSessionKey,
-              onBack = nav::back,
-            )
-          }
+            Tab.Chat -> {
+              UnifiedChatShellScreen(
+                viewModel = viewModel,
+                tabletopPanes = foldBounds.tabletop,
+                features = features,
+                showSidebarButton = !permanentSidebar,
+                onOpenSidebar = openSidebar,
+                onOpenDashboard = nav::openSessionDashboard,
+                onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
+                onOpenProvidersModels = { nav.openDetailTab(Tab.ProvidersModels) },
+              )
+            }
 
-          Tab.Settings -> {
-            SettingsShellScreen(
-              viewModel = viewModel,
-              route = nav.settingsRoute,
-              showSidebarButton = true,
-              onOpenSidebar = openSidebar,
-              onRouteChange = nav::openSettingsRouteFromHome,
-              onBack = nav::back,
-              onOpenCommand = { commandOpen = true },
-            )
+            Tab.ProvidersModels -> {
+              ProvidersModelsScreen(
+                viewModel = viewModel,
+                onBack = nav::back,
+              )
+            }
+
+            Tab.Sessions -> {
+              SessionsScreen(
+                viewModel = viewModel,
+                showSidebarButton = !permanentSidebar,
+                onOpenSidebar = openSidebar,
+                onOpenChat = { nav.selectTab(Tab.Chat) },
+              )
+            }
+
+            Tab.Files -> {
+              WorkspaceFilesScreen(
+                viewModel = viewModel,
+                onBack = nav::back,
+              )
+            }
+
+            Tab.Dashboard -> {
+              SessionDashboardScreen(
+                viewModel = viewModel,
+                sessionKey = nav.dashboardSessionKey,
+                onBack = nav::back,
+              )
+            }
+
+            Tab.Settings -> {
+              SettingsShellScreen(
+                viewModel = viewModel,
+                route = nav.settingsRoute,
+                showSidebarButton = !permanentSidebar,
+                onOpenSidebar = openSidebar,
+                onRouteChange = nav::openSettingsRouteFromHome,
+                onBack = nav::back,
+                onOpenCommand = { commandOpen = true },
+              )
+            }
           }
         }
-      }
 
-      if (commandOpen) {
-        CommandPalette(
-          viewModel = viewModel,
-          onDismiss = { commandOpen = false },
-          onOpenChat = {
-            nav.selectTab(Tab.Chat)
-            commandOpen = false
-          },
-          onOpenVoice = {
-            nav.selectTab(Tab.Chat)
-            commandOpen = false
-          },
-          onOpenSessions = {
-            nav.openDetailTab(Tab.Sessions)
-            commandOpen = false
-          },
-          onOpenProviders = {
-            nav.openDetailTab(Tab.ProvidersModels)
-            commandOpen = false
-          },
-          onOpenSettings = {
-            nav.openSettingsRoute(SettingsRoute.Home)
-            commandOpen = false
-          },
-          onOpenSession = { sessionKey, ownerAgentId ->
-            viewModel.switchChatSession(sessionKey, ownerAgentId)
-            nav.selectTab(Tab.Chat)
-            commandOpen = false
-          },
-        )
-      }
+        if (commandOpen) {
+          CommandPalette(
+            viewModel = viewModel,
+            onDismiss = { commandOpen = false },
+            onOpen = { action ->
+              when (action) {
+                CommandAction.Chat, CommandAction.Voice -> {
+                  nav.selectTab(Tab.Chat)
+                }
 
-      pendingTrust?.let { prompt ->
-        // Gateway certificate trust is modal across the shell so navigation
-        // cannot hide a changed TLS identity prompt.
-        GatewayTrustDialog(
-          prompt = prompt,
-          confirmLabel = stringResource(R.string.trust_and_continue),
-          cancelLabel = stringResource(R.string.cancel),
-          onAccept = viewModel::acceptGatewayTrustPrompt,
-          onUseSystemTrust = viewModel::useSystemGatewayTrustPrompt,
-          onDecline = viewModel::declineGatewayTrustPrompt,
-        )
+                CommandAction.Sessions -> {
+                  nav.openDetailTab(Tab.Sessions)
+                }
+
+                is CommandAction.Settings -> {
+                  when {
+                    // Keep the provider command on its standalone screen; entering
+                    // Settings detail would also start the Home summary refreshes.
+                    action.route == SettingsRoute.ProvidersModels -> nav.openDetailTab(Tab.ProvidersModels)
+
+                    action.route != SettingsRoute.Home && nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Home -> nav.openSettingsRouteFromHome(action.route)
+
+                    else -> nav.openSettingsRoute(action.route)
+                  }
+                }
+              }
+              commandOpen = false
+            },
+            onOpenSession = { sessionKey, ownerAgentId ->
+              viewModel.switchChatSession(sessionKey, ownerAgentId)
+              nav.selectTab(Tab.Chat)
+              commandOpen = false
+            },
+          )
+        }
+
+        pendingTrust?.let { prompt ->
+          // Gateway certificate trust is modal across the shell so navigation
+          // cannot hide a changed TLS identity prompt.
+          GatewayTrustDialog(
+            prompt = prompt,
+            confirmLabel = stringResource(R.string.trust_and_continue),
+            cancelLabel = stringResource(R.string.cancel),
+            onAccept = viewModel::acceptGatewayTrustPrompt,
+            onUseSystemTrust = viewModel::useSystemGatewayTrustPrompt,
+            onDecline = viewModel::declineGatewayTrustPrompt,
+          )
+        }
       }
     }
   }
@@ -416,17 +438,18 @@ private fun OverviewScreen(
   val isConnected = gatewayConnectionDisplay.isConnected
   val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
-  val execApprovals by viewModel.execApprovals.collectAsState()
+  val approvalInbox by viewModel.execApprovalInbox.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
-  val channelsSummary by viewModel.channelsSummary.collectAsState()
+  val channelsState by viewModel.channelsState.collectAsState()
+  val channelsSummary = channelsState.summary
   val agents by viewModel.gatewayAgents.collectAsState()
   val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
   val providerRows = providerRows(providers = providers, models = models)
   val readyProviderCount = providerRows.count { it.ready }
   val unknownProviderCount = providerRows.count { it.availability == ProviderAvailability.Unknown }
-  val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
+  val pendingApprovalsCount = approvalInbox.approvals.size + pendingToolCalls.size
   val attentionRows =
     homeAttentionRows(
       isConnected = isConnected,
@@ -1182,11 +1205,9 @@ private val sessionSourceLabels =
     "workspace" to "Workspace",
   )
 
-internal fun sessionSourceLabel(sessionKey: String): String = sessionSourceLabel(sessionKey, GatewayChannelsSummary(channels = emptyList()))
-
 internal fun sessionSourceLabel(
   sessionKey: String,
-  channelsSummary: GatewayChannelsSummary,
+  channelsSummary: GatewayChannelsSummary? = null,
 ): String {
   val normalized = sessionKey.trim()
   val scopedKey =
@@ -1198,8 +1219,9 @@ internal fun sessionSourceLabel(
   if (!scopedKey.contains(':') && !scopedKey.contains('#')) return nativeString("OpenClaw")
   val source = scopedKey.substringBefore(':').substringBefore('#').lowercase()
   val channelLabel =
-    channelsSummary.channels
-      .firstOrNull { channel ->
+    channelsSummary
+      ?.channels
+      ?.firstOrNull { channel ->
         channel.id.equals(source, ignoreCase = true)
       }?.label
       ?.takeIf { it.isNotBlank() }
@@ -1218,7 +1240,7 @@ internal data class HomeAttentionRow(
 internal fun homeAttentionRows(
   isConnected: Boolean,
   pendingApprovals: Int,
-  channelsSummary: GatewayChannelsSummary,
+  channelsSummary: GatewayChannelsSummary?,
   nodesDevicesSummary: GatewayNodesDevicesSummary,
   readyProviderCount: Int,
   unknownProviderCount: Int = 0,
@@ -1240,7 +1262,7 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (channelsSummary.channels.any { it.error != null }) {
+    if (channelsSummary?.channels?.any { it.error != null } == true) {
       HomeAttentionRow(nativeString("Channels"), channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels)
     } else {
       null
@@ -1352,7 +1374,7 @@ internal data class RecentSessionListItem(
 
 internal fun overviewRecentSessionRows(
   sessions: List<ChatSessionEntry>,
-  channelsSummary: GatewayChannelsSummary,
+  channelsSummary: GatewayChannelsSummary?,
 ): List<RecentSessionListItem> =
   sessions
     .take(overviewRecentSessionVisibleLimit)
@@ -1472,21 +1494,25 @@ private fun SettingsShellScreen(
   val notificationForwardingEnabled by viewModel.notificationForwardingEnabled.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val agents by viewModel.gatewayAgents.collectAsState()
-  val execApprovals by viewModel.execApprovals.collectAsState()
+  val approvalInbox by viewModel.execApprovalInbox.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
-  val usageSummary by viewModel.usageSummary.collectAsState()
-  val skillsSummary by viewModel.skillsSummary.collectAsState()
+  val usageState by viewModel.usageState.collectAsState()
+  val usageSummary = usageState.summary
+  val skillsState by viewModel.skillsState.collectAsState()
+  val skillsSummary = skillsState.summary
   val skillWorkshopSummary by viewModel.skillWorkshopSummary.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
-  val channelsSummary by viewModel.channelsSummary.collectAsState()
-  val dreamingSummary by viewModel.dreamingSummary.collectAsState()
+  val channelsState by viewModel.channelsState.collectAsState()
+  val channelsSummary = channelsState.summary
+  val dreamingState by viewModel.dreamingState.collectAsState()
+  val dreamingSummary = dreamingState.summary
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
   val providerRows = providerRows(providers = providers, models = models)
   val readyProviderCount = providerRows.count { it.ready }
   val unknownProviderCount = providerRows.count { it.availability == ProviderAvailability.Unknown }
-  val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
+  val pendingApprovalsCount = approvalInbox.approvals.size + pendingToolCalls.size
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -1546,37 +1572,32 @@ private fun SettingsShellScreen(
       }
 
       val settingsRows =
-        listOfNotNull(
+        listOf(
           SettingsRow(
-            nativeText("Gateway"),
+            SettingsRoute.Gateway,
             verbatimText(gatewaySummary(gatewayConnectionDisplay)),
-            Icons.Default.Cloud,
             status = gatewayConnectionDisplay.isConnected,
-            route = SettingsRoute.Gateway,
           ),
-          SettingsRow(nativeText("Nodes & Devices"), verbatimText(nodesDevicesSummaryText(nodesDevicesSummary)), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
-          SettingsRow(nativeText("Channels"), verbatimText(channelsSummaryText(channelsSummary)), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
-          SettingsRow(nativeText("Agents"), if (agents.isEmpty()) nativeText("Load from gateway") else nativeText("\${agents.size} available", agents.size), Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
+          SettingsRow(SettingsRoute.NodesDevices, verbatimText(nodesDevicesSummaryText(nodesDevicesSummary)), status = nodesDevicesStatus(nodesDevicesSummary)),
+          SettingsRow(SettingsRoute.Channels, channelsState.summaryText(::channelsSummaryText), status = if (channelsState.errorText != null) false else channelsSummary?.let(::channelsStatus)),
+          SettingsRow(SettingsRoute.Agents, if (agents.isEmpty()) nativeText("Load from gateway") else nativeText("\${agents.size} available", agents.size), status = agents.isNotEmpty()),
           SettingsRow(
-            nativeText("OpenClaw"),
+            SettingsRoute.SystemAgent,
             nativeText("Setup, status, and repair"),
-            Icons.Default.Bolt,
             status =
               when (systemAgentChatState.access) {
                 SystemAgentChatAccess.Ready -> true
                 SystemAgentChatAccess.CheckingGateway -> null
                 else -> false
               },
-            route = SettingsRoute.SystemAgent,
           ),
           SettingsRow(
-            nativeText("Providers & Models"),
+            SettingsRoute.ProvidersModels,
             when {
               readyProviderCount > 0 -> nativeText("\$readyProviderCount ready", readyProviderCount)
               unknownProviderCount > 0 -> nativeText("Availability unknown")
               else -> nativeText("Review readiness")
             },
-            Icons.Outlined.Inventory2,
             status =
               when {
                 !isConnected -> false
@@ -1584,41 +1605,32 @@ private fun SettingsShellScreen(
                 unknownProviderCount > 0 -> null
                 else -> false
               },
-            route = SettingsRoute.ProvidersModels,
           ),
-          SettingsRow(nativeText("Approvals"), verbatimText(approvalsSummary(pendingApprovalsCount)), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),
-          SettingsRow(nativeText("Automations"), verbatimText(cronJobsSummary(cronStatus.jobs)), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
-          SettingsRow(nativeText("Usage"), verbatimText(usageSummaryText(usageSummary.providers.size)), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
-          SettingsRow(nativeText("Skills"), verbatimText(skillsSummaryText(skillsSummary.skills)), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
+          SettingsRow(SettingsRoute.Approvals, verbatimText(approvalsSummary(pendingApprovalsCount)), status = approvalsStatus(pendingApprovalsCount)),
+          SettingsRow(SettingsRoute.CronJobs, verbatimText(cronJobsSummary(cronStatus.jobs)), status = if (cronStatus.jobs > 0) cronStatus.enabled else null),
+          SettingsRow(SettingsRoute.Usage, usageState.summaryText { usageSummaryText(it.providers.size) }, status = if (usageState.errorText != null) false else true.takeIf { usageSummary?.providers?.isNotEmpty() == true }),
+          SettingsRow(SettingsRoute.Skills, skillsState.summaryText { skillsSummaryText(it.skills) }, status = if (skillsState.errorText != null) false else skillsSummary?.skills?.let(::skillsStatus)),
           SettingsRow(
-            nativeText("Skill Workshop"),
+            SettingsRoute.SkillWorkshop,
             verbatimText(skillWorkshopSummaryText(skillWorkshopSummary)),
-            Icons.Default.Settings,
             status = skillWorkshopStatus(skillWorkshopSummary),
-            route = SettingsRoute.SkillWorkshop,
           ),
-          SettingsRow(nativeText("Dreaming"), verbatimText(dreamingSummaryText(dreamingSummary)), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
-          SettingsRow(nativeText("Terminal"), nativeText("Shell in the agent workspace"), Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
-          if (desktopObserveAvailable) {
-            SettingsRow(nativeText("Desktop"), nativeText("View a machine screen"), Icons.Outlined.DesktopWindows, status = isConnected, route = SettingsRoute.Desktop)
-          } else {
-            null
-          },
-          SettingsRow(nativeText("Voice"), if (speakerEnabled) nativeText("Speaker on") else nativeText("Speaker muted"), Icons.Default.Mic, route = SettingsRoute.Voice),
-          SettingsRow(nativeText("Notifications"), if (notificationForwardingEnabled) nativeText("Smart delivery") else nativeText("Off"), Icons.Default.Notifications, route = SettingsRoute.Notifications),
-          SettingsRow(nativeText("Phone Capabilities"), if (cameraEnabled) nativeText("Camera enabled") else nativeText("Locked"), Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
+          SettingsRow(SettingsRoute.Dreaming, dreamingState.summaryText(::dreamingSummaryText), status = if (dreamingState.errorText != null) false else dreamingSummary?.let(::dreamingStatus)),
+          SettingsRow(SettingsRoute.Terminal, nativeText("Shell in the agent workspace"), status = isConnected),
+          SettingsRow(SettingsRoute.Desktop, nativeText("View a machine screen"), status = isConnected),
+          SettingsRow(SettingsRoute.Voice, if (speakerEnabled) nativeText("Speaker on") else nativeText("Speaker muted")),
+          SettingsRow(SettingsRoute.Notifications, if (notificationForwardingEnabled) nativeText("Smart delivery") else nativeText("Off")),
+          SettingsRow(SettingsRoute.PhoneCapabilities, if (cameraEnabled) nativeText("Camera enabled") else nativeText("Locked"), status = !cameraEnabled),
           SettingsRow(
-            nativeText("Appearance"),
+            SettingsRoute.Appearance,
             joinedNativeText(
               separator = " · ",
               parts = listOf(verbatimText(appearanceThemeSummary(appearanceThemeMode)), verbatimText(appLanguage.displayName)),
             ),
-            Icons.Default.Palette,
-            route = SettingsRoute.Appearance,
           ),
-          SettingsRow(nativeText("About"), nativeText("Version and update"), Icons.Default.Storage, route = SettingsRoute.About),
-          SettingsRow(nativeText("Health"), nativeText("Diagnostics"), Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
-        )
+          SettingsRow(SettingsRoute.About, nativeText("Version and update")),
+          SettingsRow(SettingsRoute.Health, nativeText("Diagnostics"), status = isConnected),
+        ).filter { it.route.isAvailable(desktopObserveAvailable) }
 
       settingsSections(settingsRows).forEach { section ->
         item {
@@ -1633,11 +1645,15 @@ private fun SettingsShellScreen(
         SettingsSectionTitle(nativeText("Account"))
       }
       item {
-        SettingsGroup(
-          rows = listOf(SettingsRow(nativeText("Sign Out"), nativeText("Return to setup"), Icons.AutoMirrored.Filled.ExitToApp)),
-          onOpen = { },
-          onAction = { viewModel.pairNewGateway() },
-        )
+        ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+          SettingsListRow(
+            title = nativeText("Sign Out"),
+            value = nativeText("Return to setup"),
+            icon = Icons.AutoMirrored.Filled.ExitToApp,
+            opensRoute = false,
+            onClick = viewModel::pairNewGateway,
+          )
+        }
       }
 
       item {
@@ -1645,7 +1661,7 @@ private fun SettingsShellScreen(
       }
       item {
         SettingsGroup(
-          rows = listOf(SettingsRow(nativeText("Licenses"), verbatimText(""), Icons.Default.Storage, route = SettingsRoute.Licenses)),
+          rows = listOf(SettingsRow(SettingsRoute.Licenses, verbatimText(""))),
           onOpen = onRouteChange,
         )
       }
@@ -1688,7 +1704,10 @@ private fun cronJobsSummary(count: Int): String =
     else -> nativeString("\$count scheduled", count)
   }
 
-/** Summarizes provider usage buckets without exposing detailed billing data. */
+private fun <T> GatewaySummaryState<T>.summaryText(format: (T) -> String): NativeText =
+  errorText ?: summary?.let { verbatimText(format(it)) }
+    ?: if (refreshing) nativeText("Refreshing") else nativeText("Load from gateway")
+
 private fun usageSummaryText(count: Int): String =
   when (count) {
     0 -> nativeString("No provider usage")
@@ -1813,11 +1832,9 @@ private fun dreamingStatus(summary: GatewayDreamingSummary): Boolean? =
   }
 
 internal data class SettingsRow(
-  val title: NativeText,
+  val route: SettingsRoute,
   val value: NativeText,
-  val icon: ImageVector,
   val status: Boolean? = null,
-  val route: SettingsRoute? = null,
 )
 
 internal data class SettingsSection(
@@ -1826,54 +1843,9 @@ internal data class SettingsSection(
 )
 
 internal fun settingsSections(rows: List<SettingsRow>): List<SettingsSection> =
-  settingsSectionOrder.mapNotNull { title ->
-    val sectionRows = rows.filter { row -> row.route?.let(::settingsSectionTitleForRoute) == title }
-    if (sectionRows.isEmpty()) null else SettingsSection(title = title, rows = sectionRows)
-  }
-
-private val settingsSectionOrder =
-  listOf(
-    nativeText("Connection"),
-    nativeText("Agents & automation"),
-    nativeText("Phone context & privacy"),
-    nativeText("Profile & device"),
-    nativeText("Diagnostics"),
-  )
-
-internal fun settingsSectionTitleForRoute(route: SettingsRoute): NativeText =
-  when (route) {
-    SettingsRoute.Gateway,
-    SettingsRoute.NodesDevices,
-    SettingsRoute.Channels,
-    -> nativeText("Connection")
-
-    SettingsRoute.Agents,
-    SettingsRoute.SystemAgent,
-    SettingsRoute.ProvidersModels,
-    SettingsRoute.Approvals,
-    SettingsRoute.CronJobs,
-    SettingsRoute.Usage,
-    SettingsRoute.Skills,
-    SettingsRoute.SkillWorkshop,
-    SettingsRoute.Dreaming,
-    SettingsRoute.Terminal,
-    SettingsRoute.Desktop,
-    -> nativeText("Agents & automation")
-
-    SettingsRoute.Voice,
-    SettingsRoute.Notifications,
-    SettingsRoute.PhoneCapabilities,
-    -> nativeText("Phone context & privacy")
-
-    SettingsRoute.Profile,
-    SettingsRoute.Appearance,
-    SettingsRoute.About,
-    SettingsRoute.Licenses,
-    -> nativeText("Profile & device")
-
-    SettingsRoute.Health -> nativeText("Diagnostics")
-
-    SettingsRoute.Home -> nativeText("Diagnostics")
+  SettingsCategory.entries.mapNotNull { category ->
+    val sectionRows = rows.filter { row -> row.route.category == category }
+    if (sectionRows.isEmpty()) null else SettingsSection(title = category.title, rows = sectionRows)
   }
 
 @Composable
@@ -1935,21 +1907,15 @@ private fun ProfilePanel(
 private fun SettingsGroup(
   rows: List<SettingsRow>,
   onOpen: (SettingsRoute) -> Unit,
-  onAction: (() -> Unit)? = null,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
       SettingsListRow(
-        row = row,
-        showDisclosure = row.route != null || onAction != null,
-        onClick = {
-          val rowRoute = row.route
-          if (rowRoute == null) {
-            onAction?.invoke()
-          } else {
-            onOpen(rowRoute)
-          }
-        },
+        title = row.route.title,
+        value = row.value,
+        icon = row.route.icon,
+        status = row.status,
+        onClick = { onOpen(row.route) },
       )
     }
   }
@@ -1957,42 +1923,35 @@ private fun SettingsGroup(
 
 @Composable
 private fun SettingsListRow(
-  row: SettingsRow,
-  showDisclosure: Boolean,
+  title: NativeText,
+  value: NativeText,
+  icon: ImageVector,
+  status: Boolean? = null,
+  opensRoute: Boolean = true,
   onClick: () -> Unit,
 ) {
-  val localizedTitle = row.title.resolveNativeTextResource()
-  val localizedValue = row.value.resolveNativeTextResource()
-  Row(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .heightIn(min = 54.dp)
-        .clip(RoundedCornerShape(ClawTheme.radii.row))
-        .clickable(onClick = onClick)
-        .padding(horizontal = 0.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
-  ) {
-    Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
-    Text(text = localizedTitle, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-      if (localizedValue.isNotBlank()) {
-        Text(text = localizedValue, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      }
-      row.status?.let { active ->
-        Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
-      }
-      if (showDisclosure) {
+  val localizedTitle = title.resolveNativeTextResource()
+  ClawListItem(
+    title = localizedTitle,
+    subtitle = value.resolveNativeTextResource().takeIf { it.isNotBlank() },
+    leading = {
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
+    },
+    trailing = {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        status?.let { active ->
+          Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
+        }
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-          contentDescription = settingsRowDisclosureDescription(localizedTitle, opensRoute = row.route != null),
+          contentDescription = settingsRowDisclosureDescription(localizedTitle, opensRoute = opensRoute),
           modifier = Modifier.size(17.dp),
           tint = ClawTheme.colors.text,
         )
       }
-    }
-  }
+    },
+    onClick = onClick,
+  )
 }
 
 internal fun settingsRowDisclosureDescription(

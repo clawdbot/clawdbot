@@ -1,5 +1,6 @@
 // Exercises slower TUI PTY paths against real local and Gateway backends.
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, type TestFunction } from "vitest";
+import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -14,7 +16,7 @@ import {
 import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -125,7 +127,9 @@ const GATEWAY_SCENARIOS = {
     agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-empty-reply",
     toolsProfile: "minimal",
-    replyText: "[[reply_to_current]]",
+    // Nonempty runtime output reaches late reply filtering without triggering
+    // the embedded empty-response retry, unlike a directive-only response.
+    replyText: "HEARTBEAT_OK",
     holdFirstResponse: false,
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
@@ -214,6 +218,8 @@ async function writeResponsesSse(
   const events = [
     {
       type: "response.output_item.added",
+      output_index: 0,
+      sequence_number: 0,
       item: { type: "message", id, role: "assistant", content: [], status: "in_progress" },
     },
     {
@@ -221,6 +227,8 @@ async function writeResponsesSse(
       item_id: id,
       output_index: 0,
       content_index: 0,
+      sequence_number: 1,
+      logprobs: [],
       delta: text,
     },
     {
@@ -228,10 +236,14 @@ async function writeResponsesSse(
       item_id: id,
       output_index: 0,
       content_index: 0,
+      sequence_number: 2,
+      logprobs: [],
       text,
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
+      sequence_number: 3,
       item: {
         type: "message",
         id,
@@ -242,6 +254,7 @@ async function writeResponsesSse(
     },
     {
       type: "response.completed",
+      sequence_number: 4,
       response: {
         id: "resp_tui_pty_local",
         status: "completed",
@@ -290,11 +303,13 @@ function writeInvalidEditCallSse(res: ServerResponse, requestIndex: number) {
     {
       type: "response.output_item.added",
       output_index: 0,
+      sequence_number: 0,
       item: { ...item, status: "in_progress" },
     },
-    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.output_item.done", output_index: 0, sequence_number: 1, item },
     {
       type: "response.completed",
+      sequence_number: 2,
       response: {
         id: `resp_tui_validation_${requestIndex}`,
         status: "completed",
@@ -303,14 +318,7 @@ function writeInvalidEditCallSse(res: ServerResponse, requestIndex: number) {
       },
     },
   ];
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  res.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(res, events);
 }
 
 async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -556,6 +564,11 @@ async function startLocalModeTui(
       tempDir: string;
       stateDir: string;
     }) => Promise<OpenClawConfig> | OpenClawConfig;
+    prepareEnv?: (params: {
+      env: NodeJS.ProcessEnv;
+      tempDir: string;
+      stateDir: string;
+    }) => Promise<NodeJS.ProcessEnv> | NodeJS.ProcessEnv;
   } = {},
 ) {
   const replyText = opts.replyText ?? "LOCAL_PTY_RESPONSE";
@@ -567,7 +580,7 @@ async function startLocalModeTui(
   const xdgDataHome = path.join(tempDir, "xdg-data");
   const xdgCacheHome = path.join(tempDir, "xdg-cache");
   const configPath = path.join(tempDir, "openclaw.json");
-  const env: NodeJS.ProcessEnv = {
+  let env: NodeJS.ProcessEnv = {
     HOME: homeDir,
     OPENCLAW_HOME: homeDir,
     OPENCLAW_CONFIG_PATH: configPath,
@@ -600,6 +613,7 @@ async function startLocalModeTui(
         tempDir,
         stateDir,
       })) ?? config;
+    env = (await opts.prepareEnv?.({ env, tempDir, stateDir })) ?? env;
     await Promise.all([
       mkdir(workspaceDir, { recursive: true }),
       mkdir(homeDir, { recursive: true }),
@@ -924,6 +938,7 @@ async function startGatewayModeTui(
   const outputOffset = run.visibleOutput().length;
   return {
     kind: "gateway" as const,
+    controlClient,
     run,
     gateway: shared.gateway,
     mockModel: {
@@ -1038,12 +1053,88 @@ describe("TUI PTY real backends", () => {
       async ({ onTestFinished }) => {
         const replyText = `${alias.toUpperCase()}_ALIAS_RESPONSE`;
         const prompt = `message through ${alias} alias`;
+        const cliModelId = "claude-sonnet-5";
+        const cliModelRef = `claude-cli/${cliModelId}`;
+        const canonicalModelRef = `anthropic/${cliModelId}`;
         const fixture = await startLocalModeTui(onTestFinished, {
           cliArgs: [alias],
           replyText,
+          ...(alias === "chat"
+            ? {
+                prepareConfig: ({ config }: { config: OpenClawConfig }) => {
+                  const mockProvider = config.models?.providers?.["tui-pty-mock"];
+                  if (!mockProvider) {
+                    throw new Error("local PTY fixture model provider is missing");
+                  }
+                  const cliProvider = structuredClone(mockProvider);
+                  for (const model of cliProvider.models) {
+                    model.id = cliModelId;
+                    model.name = cliModelId;
+                  }
+                  return {
+                    ...config,
+                    plugins: {
+                      enabled: true,
+                      allow: ["anthropic"],
+                      entries: { anthropic: { enabled: true } },
+                      slots: { memory: "none" },
+                    },
+                    agents: {
+                      ...config.agents,
+                      defaults: {
+                        ...config.agents?.defaults,
+                        models: {
+                          ...config.agents?.defaults?.models,
+                          [cliModelRef]: {},
+                        },
+                      },
+                    },
+                    models: {
+                      ...config.models,
+                      providers: {
+                        ...config.models?.providers,
+                        "claude-cli": cliProvider,
+                      },
+                    },
+                  } satisfies OpenClawConfig;
+                },
+              }
+            : {}),
         });
         try {
           await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+          if (alias === "chat") {
+            const modelOffset = fixture.run.visibleOutput().length;
+            await fixture.run.write(`/model ${cliModelRef}\r`, { delay: false });
+            const confirmation = await waitFor({
+              timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+              read: () => {
+                const output = fixture.run.visibleOutput().slice(modelOffset);
+                return output.includes(`model set to ${canonicalModelRef}`) ||
+                  output.includes(`model set to ${cliModelRef}`)
+                  ? output
+                  : null;
+              },
+              onTimeout: () => new Error(`model selection did not finish\n${fixture.run.output()}`),
+            });
+            expect.soft(confirmation).toContain(`model set to ${canonicalModelRef}`);
+            expect(fixture.mockModel.requests()).toHaveLength(0);
+            console.log(
+              `[behavior-evidence] tui-local-cli-model-identity ${JSON.stringify({
+                requested: cliModelRef,
+                confirmation: confirmation.match(/model set to [^\r\n]+/u)?.[0],
+                modelRequests: fixture.mockModel.requests().length,
+              })}`,
+            );
+
+            const restoreOffset = fixture.run.visibleOutput().length;
+            await fixture.run.write("/model tui-pty-mock/gpt-5.5\r", { delay: false });
+            await waitForOutputAfter(
+              fixture.run,
+              "model set to tui-pty-mock/gpt-5.5",
+              restoreOffset,
+            );
+          }
           await fixture.run.write(`${prompt}\r`);
           await waitFor({
             timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -1054,7 +1145,16 @@ describe("TUI PTY real backends", () => {
           expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(prompt);
           await fixture.run.waitForOutput(replyText, LOCAL_OUTPUT_TIMEOUT_MS);
           await fixture.run.write("/exit\r", { delay: false });
-          expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+          const exitCode = (await fixture.run.waitForExit()).exitCode;
+          expect(exitCode).toBe(0);
+          console.log(
+            `[behavior-evidence] tui-local-model-roundtrip ${JSON.stringify({
+              alias,
+              modelRequests: fixture.mockModel.requests().length,
+              replyVisible: fixture.run.visibleOutput().includes(replyText),
+              exitCode,
+            })}`,
+          );
         } finally {
           await fixture.cleanup();
         }
@@ -1413,6 +1513,122 @@ describe("TUI PTY real backends", () => {
         expect(isProcessAlive(descendantPid)).toBe(false);
       } finally {
         killPidIfAlive(descendantPid);
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reports a flooded local-shell control pipe and reclaims its command group",
+    async ({ onTestFinished }) => {
+      let rolePidPath = "";
+      const trackedPids: number[] = [];
+      const fixture = await startLocalModeTui(onTestFinished, {
+        prepareEnv: async ({ env, tempDir }) => {
+          const preloadPath = path.join(tempDir, "control-flood.cjs");
+          rolePidPath = path.join(tempDir, "control-flood-pids.txt");
+          await writeFile(
+            preloadPath,
+            `
+              const fs = require("node:fs");
+              const { Socket } = require("node:net");
+              const role = /service-child-(relay|group-anchor)\\.[cm]?[jt]s$/.exec(process.argv[1] || "")?.[1];
+              if (role) {
+                fs.appendFileSync(process.env.OPENCLAW_CONTROL_PROBE_PATH, role + " " + process.pid + "\\n");
+              }
+              const originalWrite = Socket.prototype.write;
+              let flooded = false;
+              Socket.prototype.write = function (chunk, ...args) {
+                const text = String(chunk);
+                if (
+                  !flooded &&
+                  role === "group-anchor" &&
+                  text.includes('"type":"ready"')
+                ) {
+                  flooded = true;
+                  const ready = JSON.parse(text);
+                  fs.appendFileSync(
+                    process.env.OPENCLAW_CONTROL_PROBE_PATH,
+                    "root " + ready.commandPid + "\\n",
+                  );
+                  const accepted = originalWrite.call(this, chunk, ...args);
+                  setTimeout(() => originalWrite.call(this, "é".repeat(131_073) + "\\n"), 500);
+                  return accepted;
+                }
+                return originalWrite.call(this, chunk, ...args);
+              };
+            `,
+            "utf8",
+          );
+          return {
+            ...env,
+            NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${preloadPath}`.trim(),
+            OPENCLAW_CONTROL_PROBE_PATH: rolePidPath,
+          };
+        },
+      });
+      const commandPath = path.join(fixture.stateDir, "control-flood-command.cjs");
+      const commandPidPath = path.join(fixture.stateDir, "control-flood-command-pids.txt");
+      try {
+        await writeFile(
+          commandPath,
+          `
+            const fs = require("node:fs");
+            const { spawn } = require("node:child_process");
+            const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+              stdio: "ignore",
+            });
+            fs.writeFileSync(
+              ${JSON.stringify(commandPidPath)},
+              "command " + process.pid + "\\ndescendant " + descendant.pid + "\\n",
+            );
+            setInterval(() => {}, 1000);
+          `,
+          "utf8",
+        );
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write(
+          `!${JSON.stringify(process.execPath)} ${JSON.stringify(commandPath)}\r`,
+        );
+        await fixture.run.waitForOutput("Allow local shell commands for this session?");
+        await fixture.run.write("\u001b[B\r", { delay: false });
+        await fixture.run.waitForOutput("local shell: enabled for this session");
+        const pidEntries = await waitFor({
+          timeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+          read: () => {
+            if (!existsSync(rolePidPath) || !existsSync(commandPidPath)) {
+              return null;
+            }
+            const entries = new Map<string, number>();
+            for (const line of `${readFileSync(rolePidPath, "utf8")}${readFileSync(commandPidPath, "utf8")}`
+              .trim()
+              .split("\n")) {
+              const match = /^(relay|group-anchor|root|command|descendant) (\d+)$/u.exec(line);
+              if (!match?.[1] || !match[2]) {
+                throw new Error(`unexpected control-flood PID line: ${JSON.stringify(line)}`);
+              }
+              entries.set(match[1], Number.parseInt(match[2], 10));
+            }
+            return entries.size === 5 ? entries : null;
+          },
+          onTimeout: () => new Error("local shell did not report its complete process group"),
+        });
+        trackedPids.push(...pidEntries.values());
+        await fixture.run.waitForOutput(
+          "[local] error: service child cleanup identity lost: control pipe pending line exceeded cap",
+          LOCAL_EXIT_TIMEOUT_MS,
+        );
+        await waitFor({
+          timeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+          read: () => (trackedPids.every((pid) => !isProcessAlive(pid)) ? true : null),
+          onTimeout: () => new Error("local shell control-pipe failure left its group alive"),
+        });
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        trackedPids.forEach(killPidIfAlive);
         await fixture.cleanup();
       }
     },
@@ -2102,7 +2318,7 @@ export default {
     "executes Gateway status model new and reset RPCs through a real TUI PTY",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("command", onTestFinished);
-      const { controlClient } = await requireSharedGatewayFixture();
+      const { controlClient, mockModel } = await requireSharedGatewayFixture();
       try {
         await fixture.run.write("/gateway-status\r", { delay: false });
         await fixture.waitForOutput("Default model: tui-pty-validation (128k ctx)");
@@ -2174,14 +2390,16 @@ export default {
             Boolean(sessionInfo?.activeLeafEntryId) &&
             sessionInfo?.activeLeafEntryId !== selectedInfo.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
-            findOrderedTurn(messages, resetMarker, seedReply) >= 0,
+            messages.every(
+              (message) =>
+                ![resetMarker, seedReply].includes(extractTextFromMessage(message).trim()),
+            ),
         );
         const postMarker = "T02_POST_RESET";
         const postOffset = fixture.run.visibleOutput().length;
         await fixture.run.write(`${postMarker}\r`, { delay: false });
         await waitForOutputAfter(fixture.run, GATEWAY_SCENARIOS.reconnect.replyText, postOffset);
         await waitForHistoryMessages(controlClient, createdKey!, ({ messages, sessionInfo }) => {
-          const serialized = JSON.stringify(messages);
           return (
             Boolean(sessionInfo?.activeLeafEntryId) &&
             sessionInfo?.sessionId === selectedInfo.sessionId &&
@@ -2189,11 +2407,19 @@ export default {
             (sessionInfo?.updatedAt as number) >= (reset.sessionInfo?.updatedAt as number) &&
             sessionInfo?.activeLeafEntryId !== reset.sessionInfo?.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
-            findOrderedTurn(messages, resetMarker, seedReply) >= 0 &&
-            serialized.indexOf(postMarker) > serialized.indexOf(seedReply) &&
+            messages.every(
+              (message) =>
+                ![resetMarker, seedReply].includes(extractTextFromMessage(message).trim()),
+            ) &&
             findOrderedTurn(messages, postMarker, GATEWAY_SCENARIOS.reconnect.replyText) >= 0
           );
         });
+        const postRequest = JSON.stringify(
+          mockModel.requests(GATEWAY_SCENARIOS.reconnect.modelId).at(-1)?.body,
+        );
+        expect(postRequest).toContain(postMarker);
+        expect(postRequest).not.toContain(resetMarker);
+        expect(postRequest).not.toContain(seedReply);
       } finally {
         await fixture.cleanup();
       }
@@ -2371,6 +2597,14 @@ export default {
     "renders a non-deliverable direct reply failure through the real Gateway and TUI",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("emptyReply", onTestFinished);
+      const failureText =
+        "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
+      const chatEvents: unknown[] = [];
+      fixture.controlClient.onEvent = ({ event, payload }) => {
+        if (event === "chat") {
+          chatEvents.push(payload);
+        }
+      };
       try {
         await fixture.run.write("non-deliverable first turn\r");
         await waitFor({
@@ -2386,7 +2620,7 @@ export default {
             fixture.visibleOutput().includes("did not produce a visible reply") ? true : null,
           onTimeout: () =>
             new Error(
-              `empty-reply fallback was not rendered\nrequests=${JSON.stringify(
+              `empty-reply fallback was not rendered\nchatEvents=${JSON.stringify(chatEvents)}\nrequests=${JSON.stringify(
                 fixture.mockModel.requests(),
                 null,
                 2,
@@ -2394,7 +2628,14 @@ export default {
             ),
         });
         expect(fixture.mockModel.requests()).toHaveLength(1);
-        expect(fixture.visibleOutput()).not.toContain("[[reply_to_current]]");
+        // Final filtering does not erase text already streamed into the PTY history.
+        expect(chatEvents).toContainEqual(
+          expect.objectContaining({
+            sessionKey: fixture.sessionKey,
+            state: "error",
+            errorMessage: failureText,
+          }),
+        );
 
         await fixture.run.write("turn after empty reply\r");
         await waitFor({
@@ -2406,6 +2647,10 @@ export default {
             ),
         });
         await fixture.waitForOutput("FOLLOWUP_RUN_COMPLETE");
+        expect(fixture.mockModel.requests()).toHaveLength(2);
+        expect(JSON.stringify(fixture.mockModel.requests()[1]?.body)).toContain(
+          "turn after empty reply",
+        );
       } finally {
         await fixture.cleanup();
       }

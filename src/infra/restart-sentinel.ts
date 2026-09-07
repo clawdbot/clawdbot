@@ -24,12 +24,28 @@ import {
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
+import {
+  beginStaleUpdateFailureReportReceiptCleanupRowSync,
+  beginUpdateFailureReportReceiptCleanupRowSync,
+  claimUpdateFailureReportArtifactSweepRowSync,
+  completeUpdateFailureReportReceiptCleanupRowSync,
+  finalizeUpdateFailureReportReceiptRowSync,
+  hasUpdateFailureReportArtifactSweepLeaseRowSync,
+  markUpdateFailureReportReceiptPreparedRowSync,
+  markUpdateFailureReportReceiptPendingRowSync,
+  readUpdateFailureReportReceiptRowSync,
+  releaseUpdateFailureReportArtifactSweepRowSync,
+  refreshUpdateFailureReportReceiptPreparationRowSync,
+  reserveUpdateFailureReportReceiptRowSync,
+  type UpdateFailureReportReceipt,
+} from "./update-failure-report-receipt-store.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 
 export type {
   RestartSentinelContinuation,
   RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
+export type { UpdateFailureReportReceipt } from "./update-failure-report-receipt-store.js";
 
 export type VerifiedGitUpdateReceipt = {
   root: string;
@@ -57,6 +73,184 @@ export async function writeRestartSentinel(
     ({ db }) => writeRestartSentinelRowSync(db, payload),
     { env },
     { operationLabel: "restart-sentinel.write" },
+  );
+}
+
+export function reserveUpdateFailureReportReceipt(
+  attemptId: string,
+  reservationId: string,
+  previewDigest: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { receipt: UpdateFailureReportReceipt | null; reserved: boolean } {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      reserveUpdateFailureReportReceiptRowSync(db, attemptId, reservationId, previewDigest),
+    { env },
+    { operationLabel: "update-failure-report.reserve" },
+  );
+}
+
+export function beginUpdateFailureReportReceiptCleanup(
+  attemptId: string,
+  reservationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => beginUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
+    { env },
+    { operationLabel: "update-failure-report.begin-cleanup" },
+  );
+}
+
+export function beginStaleUpdateFailureReportReceiptCleanup(
+  attemptId: string,
+  reservationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => beginStaleUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
+    { env },
+    { operationLabel: "update-failure-report.begin-stale-cleanup" },
+  );
+}
+
+export function completeUpdateFailureReportReceiptCleanup(
+  attemptId: string,
+  reservationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => completeUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
+    { env },
+    { operationLabel: "update-failure-report.complete-cleanup" },
+  );
+}
+
+export function claimUpdateFailureReportArtifactSweep(
+  attemptId: string,
+  expectedReservationId: string,
+  sweepOwnerId: string,
+  sweepGeneration: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      claimUpdateFailureReportArtifactSweepRowSync(
+        db,
+        attemptId,
+        expectedReservationId,
+        sweepOwnerId,
+        sweepGeneration,
+      ),
+    { env },
+    { operationLabel: "update-failure-report.claim-artifact-sweep" },
+  );
+}
+
+export function hasUpdateFailureReportArtifactSweepLease(
+  attemptId: string,
+  expectedReservationId: string,
+  sweepOwnerId: string,
+  sweepGeneration: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) =>
+        hasUpdateFailureReportArtifactSweepLeaseRowSync(
+          db,
+          attemptId,
+          expectedReservationId,
+          sweepOwnerId,
+          sweepGeneration,
+        ),
+      { env },
+    ) ?? false
+  );
+}
+
+export function releaseUpdateFailureReportArtifactSweep(
+  attemptId: string,
+  expectedReservationId: string,
+  sweepOwnerId: string,
+  sweepGeneration: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      releaseUpdateFailureReportArtifactSweepRowSync(
+        db,
+        attemptId,
+        expectedReservationId,
+        sweepOwnerId,
+        sweepGeneration,
+      ),
+    { env },
+    { operationLabel: "update-failure-report.release-artifact-sweep" },
+  );
+}
+
+export function readUpdateFailureReportReceipt(
+  attemptId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): UpdateFailureReportReceipt | null {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => readUpdateFailureReportReceiptRowSync(db, attemptId),
+      { env },
+    ) ?? null
+  );
+}
+
+export function refreshUpdateFailureReportReceiptPreparation(
+  attemptId: string,
+  reservationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => refreshUpdateFailureReportReceiptPreparationRowSync(db, attemptId, reservationId),
+    { env },
+    { operationLabel: "update-failure-report.refresh-preparation" },
+  );
+}
+
+export function finalizeUpdateFailureReportReceipt(
+  attemptId: string,
+  receipt: UpdateFailureReportReceipt,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => finalizeUpdateFailureReportReceiptRowSync(db, attemptId, receipt),
+    { env },
+    { operationLabel: "update-failure-report.finalize" },
+  );
+}
+
+export function markUpdateFailureReportReceiptPending(
+  attemptId: string,
+  reservationId: string,
+  previewDigest: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      markUpdateFailureReportReceiptPendingRowSync(db, attemptId, reservationId, previewDigest),
+    { env },
+    { operationLabel: "update-failure-report.mark-pending" },
+  );
+}
+
+export function markUpdateFailureReportReceiptPrepared(
+  attemptId: string,
+  reservationId: string,
+  previewDigest: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      markUpdateFailureReportReceiptPreparedRowSync(db, attemptId, reservationId, previewDigest),
+    { env },
+    { operationLabel: "update-failure-report.mark-prepared" },
   );
 }
 
