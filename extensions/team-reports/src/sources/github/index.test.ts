@@ -86,16 +86,42 @@ describe("GitHub reports source", () => {
     ).toHaveLength(1);
   });
 
+  it("qualifies every issue search by type for fine-grained tokens", async () => {
+    const { api, fetchImpl } = source(emptyRoute);
+    const result = await api.collect(config, window, roster);
+    const queries = fetchImpl.mock.calls
+      .map(([input]) => new URL(input))
+      .filter((url) => url.pathname === "/search/issues")
+      .map((url) => url.searchParams.get("q") ?? "");
+
+    expect(result.status.warnings).toEqual([]);
+    expect(queries.length).toBeGreaterThan(0);
+    for (const query of queries) {
+      expect(query).toMatch(/(?:^|\s)is:(?:issue|pull-request)(?=\s|$)/);
+      if (query.includes(" merged:")) {
+        expect(query).toContain(" is:pull-request ");
+      }
+    }
+    expect(queries).toEqual([
+      "org:example is:issue created:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
+      "org:example is:pull-request created:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
+      "org:example is:issue closed:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
+      "org:example is:pull-request closed:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
+      "org:example is:pull-request merged:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
+    ]);
+  });
+
   it("credits event dates despite later updates and deduplicates overlapping searches", async () => {
     const { opened, merged, openedAndClosed } = issuesUpdatedAfterWindow;
     const { api, fetchImpl } = source((url) => {
       if (url.pathname === "/search/issues") {
         const query = url.searchParams.get("q") ?? "";
-        const items = query.includes(" created:")
+        const items = query.includes(" is:issue created:")
           ? [opened, openedAndClosed]
-          : query.includes(" closed:")
+          : query.includes(" is:issue closed:")
             ? [openedAndClosed]
-            : query.includes(" merged:")
+            : query.includes(" is:pull-request closed:") ||
+                query.includes(" is:pull-request merged:")
               ? [merged]
               : [];
         return json({ total_count: items.length, items });
@@ -118,9 +144,15 @@ describe("GitHub reports source", () => {
     );
   });
 
-  it.each(["created", "closed", "merged"])(
-    "splits and paginates capped %s searches, warns on incomplete results and deduplicates PR lookups",
-    async (qualifier) => {
+  it.each([
+    ["created", "issue"],
+    ["created", "pull-request"],
+    ["closed", "issue"],
+    ["closed", "pull-request"],
+    ["merged", "pull-request"],
+  ])(
+    "splits and paginates capped %s is:%s searches, warns on incomplete results and deduplicates PR lookups",
+    async (qualifier, type) => {
       const merged = { ...issue(2), pull_request: { merged_at: at }, closed_at: at };
       const oldMerge = {
         ...issue(3),
@@ -134,8 +166,9 @@ describe("GitHub reports source", () => {
         if (url.pathname === "/search/issues") {
           const query = url.searchParams.get("q") ?? "";
           queries.push(query);
-          if (!query.includes(` ${qualifier}:`)) {
-            return json({ total_count: 1, items: [merged] });
+          if (!query.includes(` is:${type} ${qualifier}:`)) {
+            const items = query.includes(" is:pull-request ") ? [merged] : [];
+            return json({ total_count: items.length, items });
           }
           searches++;
           if (searches === 1) {
@@ -143,12 +176,16 @@ describe("GitHub reports source", () => {
           }
           if (searches === 2) {
             return json(
-              { total_count: 3, items: [merged] },
+              { total_count: 3, items: [type === "issue" ? issue() : merged] },
               { Link: `<${url}&page=2>; rel="next"` },
             );
           }
           if (searches === 3) {
-            return json({ total_count: 3, incomplete_results: true, items: [oldMerge, merged] });
+            return json({
+              total_count: 3,
+              incomplete_results: true,
+              items: type === "issue" ? [issue()] : [oldMerge, merged],
+            });
           }
           return json({ total_count: 0, items: [] });
         }
@@ -167,12 +204,12 @@ describe("GitHub reports source", () => {
       expect(result.status.warnings).toEqual([
         expect.stringContaining("incomplete search results"),
       ]);
-      expect(queries).toHaveLength(6);
-      expect(queries.filter((query) => query.includes(` ${qualifier}:`))).toEqual([
-        `org:example ${qualifier}:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z`,
-        `org:example ${qualifier}:2026-08-20T00:00:00.000Z..2026-08-20T11:59:59.000Z`,
-        `org:example ${qualifier}:2026-08-20T00:00:00.000Z..2026-08-20T11:59:59.000Z`,
-        `org:example ${qualifier}:2026-08-20T12:00:00.000Z..2026-08-20T23:59:59.000Z`,
+      expect(queries).toHaveLength(8);
+      expect(queries.filter((query) => query.includes(` is:${type} ${qualifier}:`))).toEqual([
+        `org:example is:${type} ${qualifier}:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z`,
+        `org:example is:${type} ${qualifier}:2026-08-20T00:00:00.000Z..2026-08-20T11:59:59.000Z`,
+        `org:example is:${type} ${qualifier}:2026-08-20T00:00:00.000Z..2026-08-20T11:59:59.000Z`,
+        `org:example is:${type} ${qualifier}:2026-08-20T12:00:00.000Z..2026-08-20T23:59:59.000Z`,
       ]);
       expect(fetchImpl.mock.calls.filter(([url]) => String(url).includes("/pulls/2"))).toHaveLength(
         1,
@@ -241,7 +278,10 @@ describe("GitHub reports source", () => {
       if (url.pathname === "/orgs/example/repos") {
         return json([repo(), repo("other"), repo("old", true), repo("excluded")]);
       }
-      if (url.pathname === "/search/issues" && url.searchParams.get("q")?.includes(" created:")) {
+      if (
+        url.pathname === "/search/issues" &&
+        url.searchParams.get("q")?.includes(" is:issue created:")
+      ) {
         return json({
           total_count: 4,
           items: [issue(), issue(1, "other"), issue(3, "old"), issue(4, "excluded")],
@@ -330,13 +370,15 @@ describe("GitHub reports source", () => {
   it("emits opened/closed events and advisory credit within half-open windows", async () => {
     const { api } = source((url) => {
       if (url.pathname === "/search/issues" && url.searchParams.get("q")?.includes(" created:")) {
+        const items = url.searchParams.get("q")?.includes(" is:pull-request ")
+          ? [{ ...issue(2), pull_request: { merged_at: null }, closed_at: at }]
+          : [
+              { ...issue(), created_at: new Date(sinceMs).toISOString(), closed_at: at },
+              { ...issue(3), created_at: new Date(untilMs).toISOString() },
+            ];
         return json({
-          total_count: 3,
-          items: [
-            { ...issue(), created_at: new Date(sinceMs).toISOString(), closed_at: at },
-            { ...issue(2), pull_request: { merged_at: null }, closed_at: at },
-            { ...issue(3), created_at: new Date(untilMs).toISOString() },
-          ],
+          total_count: items.length,
+          items,
         });
       }
       if (url.pathname.endsWith("/security-advisories")) {
@@ -423,16 +465,22 @@ describe("GitHub reports source", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["created", "closed", "merged"])(
-    "aborts a %s search without fetching more pages or searches",
-    async (qualifier) => {
+  it.each([
+    ["created", "issue"],
+    ["created", "pull-request"],
+    ["closed", "issue"],
+    ["closed", "pull-request"],
+    ["merged", "pull-request"],
+  ])(
+    "aborts a %s is:%s search without fetching more pages or searches",
+    async (qualifier, type) => {
       const controller = new AbortController();
       const queries: string[] = [];
       const { api, fetchImpl } = source((url) => {
         if (url.pathname === "/search/issues") {
           const query = url.searchParams.get("q") ?? "";
           queries.push(query);
-          if (query.includes(` ${qualifier}:`)) {
+          if (query.includes(` is:${type} ${qualifier}:`)) {
             controller.abort(new Error(config.token));
             return json(
               { total_count: 2, items: [issue()] },
@@ -445,7 +493,7 @@ describe("GitHub reports source", () => {
       await expect(api.collect(config, window, roster)).rejects.toThrow(
         "GitHub collection aborted",
       );
-      expect(queries.at(-1)).toContain(` ${qualifier}:`);
+      expect(queries.at(-1)).toContain(` is:${type} ${qualifier}:`);
       expect(fetchImpl).toHaveBeenCalledTimes(queries.length + 1);
     },
   );

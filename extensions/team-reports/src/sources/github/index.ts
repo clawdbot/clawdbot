@@ -217,12 +217,17 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         for (const repo of candidates) {
           active.add(repo.full_name.toLowerCase());
         }
-        for (const qualifier of ["created", "closed", "merged"] as const) {
-          await client.attempt(`Issue ${qualifier} search for ${org}`, async () => {
+        for (const [qualifier, type] of [
+          ["created", "issue"],
+          ["created", "pull-request"],
+          ["closed", "issue"],
+          ["closed", "pull-request"],
+          ["merged", "pull-request"],
+        ] as const) {
+          await client.attempt(`${type} ${qualifier} search for ${org}`, async () => {
             for await (const issue of search(
               client,
-              "issues",
-              qualifier,
+              { kind: "issues", qualifier, type },
               org,
               window,
               issueSchema,
@@ -295,7 +300,11 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         } else {
           await client.attempt(`Commit search for ${org}`, async () => {
             const first = await client.get(
-              searchPath("commits", "committer-date", org, ...searchSeconds(window)),
+              searchPath(
+                { kind: "commits", qualifier: "committer-date" },
+                org,
+                ...searchSeconds(window),
+              ),
             );
             const count = parse(
               z.object({ total_count: z.number().int().nonnegative() }),
@@ -309,8 +318,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               strategies.add("search");
               for await (const commit of search(
                 client,
-                "commits",
-                "committer-date",
+                { kind: "commits", qualifier: "committer-date" },
                 org,
                 window,
                 searchCommitSchema,

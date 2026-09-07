@@ -27,6 +27,9 @@ token can access. For Discord, use a bot token with access to the selected
 guild, channels, threads, and message history. Only explicitly configured
 channels and their threads count.
 
+Fine-grained GitHub tokens are supported. Issue searches always specify
+`is:issue` or `is:pull-request`, with merge searches limited to pull requests.
+
 Model-written summaries use an agent's configured model and credentials. The
 evidence sent to that model can include repository activity and opted-in
 Discord excerpts. Set `summaries.enabled: false` to generate reports with
