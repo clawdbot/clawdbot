@@ -19,7 +19,7 @@ type GatewayProgramArgs = {
 
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
 
-export function normalizeHomebrewServiceEntrypoint(entrypointPath: string): string {
+function normalizeHomebrewServiceEntrypoint(entrypointPath: string): string {
   const match = entrypointPath.match(
     /^(.*?[/\\])Cellar[/\\]openclaw-cli[/\\][^/\\]+([/\\]libexec[/\\]lib[/\\]node_modules[/\\]openclaw[/\\]dist[/\\]index\.(?:c?js|mjs))$/i,
   );
