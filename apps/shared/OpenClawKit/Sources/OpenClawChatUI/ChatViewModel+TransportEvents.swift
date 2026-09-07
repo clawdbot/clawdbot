@@ -279,6 +279,18 @@ extension OpenClawChatViewModel {
             color: change.color,
             colorPresent: change.colorPresent)
         self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
+        // Only this session's own explicit lifecycle statement retires its
+        // Gateway-confirmed run. The event says nothing about other rows, and a
+        // snapshot that omits liveness merges the existing — possibly stale —
+        // value forward, so neither may be read as completion.
+        self.reconcileGatewayConfirmedActiveRuns(observing: [
+            GatewaySessionLivenessObservation(
+                identity: self.gatewayRunLivenessIdentity(
+                    forSessionKey: existing.key,
+                    agentID: existing.agentId ?? change.agentId,
+                    listedKey: existing.key),
+                hasActiveRun: snapshot.hasActiveRun),
+        ])
         self.persistSessionsToCache(
             self.sessions,
             agentID: self.currentSessionSnapshot().deliveryAgentID)

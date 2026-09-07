@@ -1,9 +1,36 @@
 import Foundation
+import OpenClawKit
 import OSLog
 
 private let chatSessionActionsLogger = Logger(
     subsystem: "ai.openclaw",
     category: "OpenClawChat")
+
+/// The immutable gateway route a liveness fact belongs to.
+///
+/// A presentation alias such as `main` names a different gateway session under
+/// each agent, so a latch keyed by the alias alone leaks across agent selection:
+/// it would disable the picker for whichever agent is selected next, and let
+/// that agent's idle observation retire the original agent's restriction. This
+/// reuses the same routed identity `modelPatchTarget` already establishes for
+/// model coordination rather than inventing a parallel rule.
+///
+/// The mutable routing contract is deliberately excluded: it can change while a
+/// run is in flight, and an identity that changes underneath a retained fact
+/// would strand the latch forever.
+struct GatewayRunLivenessIdentity: Hashable {
+    let canonicalSessionKey: String
+    let agentID: String?
+}
+
+/// One server-authoritative statement about a single routed session's liveness,
+/// as the source that applied it saw it. Reconciliation consumes these directly
+/// so a snapshot about one session can never retire another session's latch.
+struct GatewaySessionLivenessObservation {
+    let identity: GatewayRunLivenessIdentity
+    /// `nil` when the source carried no liveness for this session.
+    let hasActiveRun: Bool?
+}
 
 extension OpenClawChatViewModel {
     var canRequestSessionCompact: Bool {
@@ -582,10 +609,104 @@ extension OpenClawChatViewModel {
     }
 
     var canSwitchSessionBranch: Bool {
-        !self.hasBlockingRunActivity &&
+        !self.hasGatewayConfirmedActiveRunForCurrentSession &&
+            self.currentSessionEntry()?.hasActiveRun != true &&
+            !self.hasBlockingRunActivity &&
             !self.isSending &&
             !self.isAborting &&
             !self.hasUnresolvedOutboxCommandsForCurrentSession
+    }
+
+    /// The listed row can be stale — a refresh that never applied leaves the
+    /// pre-run entry in place — so the Gateway's own rejection is kept as an
+    /// independent liveness fact until the server contradicts it.
+    var hasGatewayConfirmedActiveRunForCurrentSession: Bool {
+        self.gatewayConfirmedActiveRunIdentities.contains(
+            self.gatewayRunLivenessIdentity(for: self.currentSessionSnapshot()))
+    }
+
+    /// Resolves the immutable routed identity that owns a session's liveness
+    /// facts, so a retained rejection cannot follow a presentation alias onto
+    /// another agent. `listedKey` supplies the canonical key when the session is
+    /// present in `sessions`; the routed agent is used when it is not.
+    func gatewayRunLivenessIdentity(
+        forSessionKey sessionKey: String,
+        agentID: String?,
+        listedKey: String? = nil) -> GatewayRunLivenessIdentity
+    {
+        let target = self.modelPatchTarget(
+            sessionKey: sessionKey,
+            canonicalSessionKey: listedKey,
+            agentID: agentID,
+            // Excluded on purpose: a mutable contract must not change the
+            // identity of a fact that is already retained.
+            sessionRoutingContract: nil)
+        return GatewayRunLivenessIdentity(
+            canonicalSessionKey: target.canonicalSessionKey.lowercased(),
+            agentID: target.agentID)
+    }
+
+    func gatewayRunLivenessIdentity(for session: SessionSnapshot) -> GatewayRunLivenessIdentity {
+        self.gatewayRunLivenessIdentity(
+            forSessionKey: session.key,
+            agentID: session.deliveryAgentID ?? session.agentID,
+            listedKey: self.sessions.first(where: { $0.key == session.key })?.key)
+    }
+
+    /// Records the liveness the Gateway asserted when it refused a mutation.
+    /// Callers must record before refreshing: a `sessions.list` failure returns
+    /// without touching `sessions`, and the stale inactive row would otherwise
+    /// re-enable the control into a loop of silently rejected requests.
+    func recordGatewayConfirmedActiveRun(for session: SessionSnapshot) {
+        self.gatewayConfirmedActiveRunIdentities.insert(
+            self.gatewayRunLivenessIdentity(for: session))
+    }
+
+    /// Applies a successful `sessions.list` result and reconciles latches
+    /// against that same result, so the two cannot drift apart. The list is
+    /// authoritative for the rows it returned and silent about any session it
+    /// omitted, which therefore keeps its latch. A failed refresh never reaches
+    /// here, so it keeps every Gateway-confirmed active run latched.
+    func applyListedSessions(_ listed: [OpenClawChatSessionEntry]) {
+        self.sessions = self.applyingLocalUnreadOverrides(to: listed)
+        self.reconcileGatewayConfirmedActiveRuns(
+            observing: listed.map {
+                GatewaySessionLivenessObservation(
+                    identity: self.gatewayRunLivenessIdentity(
+                        forSessionKey: $0.key,
+                        agentID: $0.agentId,
+                        listedKey: $0.key),
+                    hasActiveRun: $0.hasActiveRun)
+            })
+    }
+
+    /// Drops latches the server has since contradicted. Call this only right
+    /// after applying server-authoritative session liveness, and pass the
+    /// observation itself instead of rescanning `sessions`: a single-row
+    /// snapshot states nothing about any other session, whose cached row can
+    /// still be the stale pre-run entry its latch exists to outlive. An
+    /// unknown (`nil`) liveness is not a completion and keeps its latch.
+    ///
+    /// Matching is exact on the routed identity, so an idle observation for one
+    /// agent can never retire a restriction another agent's run established.
+    func reconcileGatewayConfirmedActiveRuns(
+        observing observations: [GatewaySessionLivenessObservation])
+    {
+        guard !self.gatewayConfirmedActiveRunIdentities.isEmpty else { return }
+        let idleIdentities = Set(
+            observations.filter { $0.hasActiveRun == false }.map(\.identity))
+        guard !idleIdentities.isEmpty else { return }
+        self.gatewayConfirmedActiveRunIdentities.subtract(idleIdentities)
+    }
+
+    private nonisolated static func branchSwitchIsBlockedByActiveRun(_ error: Error) -> Bool {
+        guard let error = error as? GatewayResponseError else { return false }
+        guard error.method == "sessions.branches.switch", error.code == "UNAVAILABLE" else { return false }
+        if let reason = error.detailsReason {
+            return reason == "session-run-active"
+        }
+        // Released gateways through v2026.8.x did not include the structured reason.
+        return error.message == "Branch switch is unavailable while the agent is working."
     }
 
     var canPerformMessageSessionAction: Bool {
@@ -637,6 +758,13 @@ extension OpenClawChatViewModel {
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
             guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
+            if Self.branchSwitchIsBlockedByActiveRun(error) {
+                self.recordGatewayConfirmedActiveRun(for: initiatingSession)
+                await self.fetchSessions(limit: 50, sessionSnapshot: initiatingSession)
+                chatSessionActionsLogger.info(
+                    "sessions.branches.switch blocked by active run; refreshed session liveness")
+                return
+            }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.branches.switch failed \(error.localizedDescription, privacy: .public)")
