@@ -2,7 +2,7 @@ services:
   - type: web
     name: openclaw
     runtime: docker
-    plan: starter
+    plan: free
     # The image CMD has no --allow-unconfigured, so a fresh disk with no
     # openclaw.json exits before binding. Render has no shell before the first
     # boot, so the flag has to come from the blueprint.
@@ -17,7 +17,3 @@ services:
         value: /data/workspace
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
-    disk:
-      name: openclaw-data
-      mountPath: /data
-      sizeGB: 1
