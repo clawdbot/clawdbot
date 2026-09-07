@@ -26,7 +26,12 @@ import {
   getActiveSessionLifecycleMutationCount,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-lifecycle-admission.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+import { createQueuedTaskRunCore } from "../../../tasks/task-executor.js";
+import { loadTaskRegistryStateFromSqlite } from "../../../tasks/task-registry.store.sqlite.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
+import { findTaskByRunIdForStatus } from "../../../tasks/task-status-access.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   enqueueSwarmRun,
@@ -44,12 +49,17 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   replaceSubagentRunAfterSteerCore,
   markSubagentRunTerminated,
   startQueuedSubagentRun,
   registerSubagentRun,
 } from "./subagent-registry.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
+} from "./subagent-registry.store.sqlite.js";
 import {
   testing as subagentRegistryTesting,
   addSubagentRunForTests,
@@ -93,17 +103,21 @@ const detachedTaskRuntimeMocks = vi.hoisted(() => ({
   finalizeTaskRunByRunId: vi.fn<(_params: unknown) => unknown[]>(() => []),
 }));
 
-vi.mock("../../../tasks/detached-task-runtime.js", () => ({
-  createQueuedTaskRun: vi.fn(() => null),
-  createRunningTaskRun: vi.fn(() => null),
-  startTaskRunByRunId: vi.fn(() => []),
-  recordTaskRunProgressByRunId: vi.fn(() => []),
-  finalizeTaskRunByRunId: detachedTaskRuntimeMocks.finalizeTaskRunByRunId,
-  completeTaskRunByRunId: vi.fn(() => []),
-  failTaskRunByRunId: vi.fn(() => []),
-  setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
-  findDetachedTaskRun: detachedTaskRuntimeMocks.findDetachedTaskRun,
-}));
+vi.mock("../../../tasks/detached-task-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../tasks/detached-task-runtime.js")>();
+  return {
+    createQueuedTaskRun: vi.fn(() => null),
+    createRunningTaskRun: vi.fn(() => null),
+    startTaskRunByRunId: vi.fn(() => []),
+    recordTaskRunProgressByRunId: vi.fn(() => []),
+    finalizeTaskRunByRunId: detachedTaskRuntimeMocks.finalizeTaskRunByRunId,
+    completeTaskRunByRunId: vi.fn(() => []),
+    failTaskRunByRunId: vi.fn(() => []),
+    setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
+    findDetachedTaskRun: detachedTaskRuntimeMocks.findDetachedTaskRun,
+    acceptDefaultPreparedTaskRunAtomically: actual.acceptDefaultPreparedTaskRunAtomically,
+  };
+});
 
 function setSubagentControlDepsForTest(overrides: Partial<ControlRuntime> = {}) {
   controlRuntimeMocks.abortEmbeddedAgentRun.mockReset();
@@ -2368,11 +2382,16 @@ describe("killAllControlledSubagentRuns", () => {
   it.each([false, true])(
     "preserves exactRunId=%s authority when an in-flight launch remaps the same row",
     async (exactRunId) => {
-      const runId = "launch-before-admission";
+      resetTaskRegistryForTests({ persist: false });
+      closeOpenClawStateDatabaseForTest();
+      const runId = `launch-before-admission-${exactRunId ? "exact" : "all"}`;
+      const acceptedRunId = `accepted-launch-${exactRunId ? "exact" : "all"}`;
       const childSessionKey = "agent:main:subagent:launch-remap";
       const controllerSessionKey = "agent:main:main";
       const entry = createSubagentRunRecord({
         runId,
+        taskRunId: runId,
+        swarmRunId: runId,
         childSessionKey,
         controllerSessionKey,
         requesterSessionKey: controllerSessionKey,
@@ -2383,9 +2402,26 @@ describe("killAllControlledSubagentRuns", () => {
         collect: true,
         swarmLaunchPending: true,
         schedulerSlotId: runId,
+        expectsCompletionMessage: false,
         execution: { status: "queued" },
+        completion: { required: false },
+        delivery: { status: "not_required" },
       });
       addSubagentRunForTests(entry);
+      saveSubagentRegistryChangesToSqlite(subagentRuns, [runId]);
+      expect(
+        createQueuedTaskRunCore({
+          runtime: "subagent",
+          sourceId: runId,
+          requesterSessionKey: controllerSessionKey,
+          ownerKey: controllerSessionKey,
+          scopeKind: "session",
+          childSessionKey,
+          runId,
+          task: entry.task,
+          deliveryStatus: "not_applicable",
+        }),
+      ).not.toBeNull();
       const sessionId = "launch-remap-session";
       const storePath = await writeSessionStoreFixture("launch-remap", {
         [childSessionKey]: { sessionId, updatedAt: 1 },
@@ -2413,7 +2449,7 @@ describe("killAllControlledSubagentRuns", () => {
           started.resolve();
           try {
             await response.promise;
-            expect(startQueuedSubagentRun(runId, "accepted-launch")).toBe(true);
+            expect(startQueuedSubagentRun(runId, acceptedRunId)).toBe(true);
           } finally {
             lease?.release();
             launchDone.resolve();
@@ -2450,12 +2486,25 @@ describe("killAllControlledSubagentRuns", () => {
           ).toMatchObject({ killed: 1 });
           expect(controlRuntimeMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
         }
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("accepted-launch");
+        expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe(acceptedRunId);
+        expect(loadSubagentRegistryFromSqlite().get(acceptedRunId)).toMatchObject({
+          runId: acceptedRunId,
+          swarmRunId: runId,
+        });
+        expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
+        const task = findTaskByRunIdForStatus(runId);
+        expect(task).toMatchObject({ runId, status: "running" });
+        expect(loadTaskRegistryStateFromSqlite().tasks.get(task!.taskId)).toMatchObject({
+          runId,
+          status: "running",
+        });
       } finally {
         response.resolve();
         await launchDone.promise;
         lease?.release();
         swarmSchedulerTesting.reset();
+        resetTaskRegistryForTests({ persist: false });
+        closeOpenClawStateDatabaseForTest();
       }
     },
   );

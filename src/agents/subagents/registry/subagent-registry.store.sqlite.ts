@@ -2,6 +2,7 @@
  * Persists subagent run records in the shared sqlite state database, with
  * query-bearing identity columns indexing canonical normalized payload JSON.
  */
+import { isDeepStrictEqual } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -150,6 +151,29 @@ export function deleteSubagentRunRowInDatabase(
       .deleteFrom("subagent_runs")
       .where("run_id", "=", runId),
   );
+}
+
+/** Replaces and optionally rekeys one exact run snapshot in the active state transaction. */
+export function replaceSubagentRunRowInCurrentTransaction(params: {
+  expected: BoundSubagentRunRecord;
+  next: BoundSubagentRunRecord;
+}): boolean {
+  const database = openOpenClawStateDatabase();
+  if (!database.db.isTransaction) {
+    throw new Error("subagent acceptance CAS requires an active state transaction");
+  }
+  const current = readSubagentRun(database, params.expected.run_id);
+  if (!current || !isDeepStrictEqual(bindSubagentRunRecord(current), params.expected)) {
+    return false;
+  }
+  const result = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
+      .updateTable("subagent_runs")
+      .set(params.next)
+      .where("run_id", "=", params.expected.run_id),
+  );
+  return Number(result.numAffectedRows ?? 0) === 1;
 }
 
 export function readSubagentRun(

@@ -1,5 +1,6 @@
 // Persists task registry records and events through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import type { Insertable, Selectable } from "kysely";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import {
@@ -175,7 +176,7 @@ function rowToTaskDeliveryState(row: TaskDeliveryStateRow): TaskDeliveryState {
   };
 }
 
-type BoundTaskRecord = Insertable<TaskRunsTable>;
+type BoundTaskRecord = Insertable<TaskRunsTable> & { task_id: string };
 
 /** Canonically serializes a task before an outer transaction acquires the write lock. */
 export function bindTaskRecord(record: TaskRecord): BoundTaskRecord {
@@ -330,6 +331,27 @@ export function upsertTaskRunRowInDatabase(
       .values(row)
       .onConflict((conflict) => conflict.column("task_id").doUpdateSet(updates)),
   );
+}
+
+/** Replaces one exact task snapshot while the caller owns the shared-state transaction. */
+export function replaceTaskRunRowInDatabase(params: {
+  database: OpenClawStateDatabase;
+  expected: BoundTaskRecord;
+  next: BoundTaskRecord;
+}): boolean {
+  const current = readTaskRecord(params.database.db, params.expected.task_id);
+  if (!current || !isDeepStrictEqual(bindTaskRecord(current), params.expected)) {
+    return false;
+  }
+  const { task_id: _taskId, ...updates } = params.next;
+  const result = executeSqliteQuerySync(
+    params.database.db,
+    getTaskRegistryKysely(params.database.db)
+      .updateTable("task_runs")
+      .set(updates)
+      .where("task_id", "=", params.expected.task_id),
+  );
+  return Number(result.numAffectedRows ?? 0) === 1;
 }
 
 function replaceTaskDeliveryStateRow(
