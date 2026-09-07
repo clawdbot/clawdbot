@@ -948,7 +948,7 @@ prepare_schema_expectation() {
   fi
   node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs \
     prepare "$baseline_version" "$CANDIDATE_SPEC" "$OPENCLAW_STATE_DIR" \
-    "$ARTIFACT_ROOT/schema-before.json"
+    "$ARTIFACT_ROOT/schema-before.json" "$OPENCLAW_CONFIG_PATH"
 }
 
 assert_schema_outcome() {

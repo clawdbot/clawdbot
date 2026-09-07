@@ -191,6 +191,17 @@ healthy upgrade. Agent schemas still use their published version. The observer
 opens databases read-only and never triggers migrations or publication. See
 [Schema bumps and older updaters](/reference/database-schemas#schema-bumps-and-older-updaters).
 
+The before snapshot also records the baseline's configured agent roster and
+agent-scoped legacy specimens, including session rows, transcript and trajectory
+files, trajectory pointers, and skill-prompt blobs. Before candidate probes or
+agent turns, each agent with existing SQLite or legacy session history must have
+a store at the candidate agent schema. The observer verifies imported session
+identities and transcript events, completed archive receipts and retained source
+bytes, and unchanged prompt blobs. An unused agent with no legacy history may
+still create its store lazily. These checks follow the [Doctor session SQLite
+migration contract](/cli/doctor#session-sqlite-migration); the observer never
+imports files or opens a writable database.
+
 Every supported baseline, including `2026.9.2`, must complete the update and
 migrate its databases to the candidate schemas. A typed
 `update-schema-bump-unfenced` refusal, a rollback, an unmigrated database, or an

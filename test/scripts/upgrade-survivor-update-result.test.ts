@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -221,6 +221,7 @@ function schemaFixture(
   baselineVersion = "2026.9.2",
   stateVersion: number | null = 15,
   agentVersion: number | null = 19,
+  seedState?: (stateDir: string) => void,
 ) {
   const root = tempDirs.make("survivor-schema-expectation-");
   const stateDir = join(root, "state");
@@ -232,6 +233,9 @@ function schemaFixture(
   if (agentVersion !== null) {
     writeSchema(agentDatabase, agentVersion);
   }
+  seedState?.(stateDir);
+  const configFile = join(root, "openclaw.json");
+  writeFileSync(configFile, JSON.stringify({ agents: { entries: { main: {}, ops: {} } } }));
   const candidateDir = join(root, "package");
   mkdirSync(candidateDir);
   // Main can retain the released version while its schema contract advances.
@@ -253,7 +257,7 @@ function schemaFixture(
       encoding: "utf8",
       timeout: 10_000,
     });
-  const prepared = run("prepare", baselineVersion, tarball, stateDir, snapshotFile);
+  const prepared = run("prepare", baselineVersion, tarball, stateDir, snapshotFile, configFile);
   expect(prepared.status, prepared.stderr).toBe(0);
   function checkSchemaOutcome(
     exitCode = 0,
@@ -271,6 +275,7 @@ function schemaFixture(
   }
   return {
     prepared,
+    stateDir,
     check: checkSchemaOutcome,
     stateDatabase,
     agentDatabase,
@@ -278,6 +283,96 @@ function schemaFixture(
     afterFile,
     candidateVersion,
   };
+}
+
+function legacyAgentFixture(agentId = "main") {
+  const sessionKey = `agent:${agentId}:explicit:seeded-turn`;
+  const events = [
+    { type: "session", id: "seeded-turn", version: 3 },
+    {
+      type: "message",
+      id: "user-message",
+      message: { role: "user", content: "Keep this history" },
+    },
+    {
+      type: "message",
+      id: "reply",
+      message: { role: "assistant", content: [{ type: "text", text: "Saved reply" }] },
+    },
+  ];
+  const index = { [sessionKey]: { sessionId: "seeded-turn" } };
+  const sourceNames = [
+    "sessions.json",
+    "seeded-turn.jsonl",
+    "seeded-turn.trajectory.jsonl",
+    "seeded-turn.trajectory-path.json",
+  ];
+  const lane = schemaFixture("2026.6.34", 1, null, (stateDir) => {
+    const sessions = join(stateDir, "agents", agentId, "sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(join(sessions, "sessions.json"), JSON.stringify(index));
+    writeFileSync(
+      join(sessions, "seeded-turn.jsonl"),
+      events.map((event) => JSON.stringify(event)).join("\n") + "\n",
+    );
+    writeFileSync(join(sessions, "seeded-turn.trajectory.jsonl"), '{"type":"session.started"}\n');
+    writeFileSync(join(sessions, "seeded-turn.trajectory-path.json"), '{"version":1}');
+    const prompt = join(sessions, "skills-prompts", "sha256", "aa", `${"a".repeat(64)}.txt`);
+    mkdirSync(dirname(prompt), { recursive: true });
+    writeFileSync(prompt, "Retained prompt");
+  });
+  const sessions = join(lane.stateDir, "agents", agentId, "sessions");
+  const databasePath = join(lane.stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
+  const archiveDir = join(lane.stateDir, "agents", agentId, "session-sqlite-import-archive");
+  const promptPath = join(sessions, "skills-prompts", "sha256", "aa", `${"a".repeat(64)}.txt`);
+  const manifestPath = join(lane.stateDir, "session-sqlite-migration-runs", "import.json");
+  function migrate() {
+    writeSchema(lane.stateDatabase, 16);
+    writeSchema(databasePath, 19);
+    const db = new DatabaseSync(databasePath);
+    try {
+      db.exec(
+        "CREATE TABLE session_nodes (session_key TEXT PRIMARY KEY, current_session_id TEXT); CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT)",
+      );
+      db.prepare("INSERT INTO session_nodes VALUES (?, ?)").run(sessionKey, "seeded-turn");
+      for (const [seq, event] of events.entries()) {
+        db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?)").run(
+          "seeded-turn",
+          seq,
+          JSON.stringify(event),
+        );
+      }
+    } finally {
+      db.close();
+    }
+    mkdirSync(archiveDir, { recursive: true });
+    const completedMoves = sourceNames.map((name) => {
+      const sourcePath = join(sessions, name);
+      const archivePath = join(archiveDir, `${name}.imported-1`);
+      renameSync(sourcePath, archivePath);
+      return {
+        sourcePath,
+        archivePath,
+        kind:
+          name === "sessions.json"
+            ? "legacy-store"
+            : name.includes("trajectory")
+              ? "trajectory"
+              : "transcript",
+      };
+    });
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        completedAt: "2026-09-07",
+        targets: [
+          { agentId, sqlitePath: databasePath, validationBeforeArchive: "passed", completedMoves },
+        ],
+      }),
+    );
+  }
+  return { ...lane, migrate, databasePath, archiveDir, sessions, promptPath, manifestPath };
 }
 
 describe("published survivor schema outcome", () => {
@@ -319,6 +414,133 @@ describe("published survivor schema outcome", () => {
       const result = lane.check();
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).toBe("success");
+    },
+  );
+
+  it.each(["main", "ops"])("requires the legacy %s store before candidate probes", (agentId) => {
+    const lane = legacyAgentFixture(agentId);
+    writeSchema(lane.stateDatabase, 16);
+    const result = lane.check();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `required agent database missing before candidate probes: ${agentId}`,
+    );
+  });
+
+  it("records the seeded roster and every legacy specimen, allowing the unused agent to stay lazy", () => {
+    const lane = legacyAgentFixture();
+    const snapshot = JSON.parse(readFileSync(lane.snapshotFile, "utf8"));
+    expect(
+      snapshot.agents.map((agent: { agentId: string; requiresDatabase: boolean }) => [
+        agent.agentId,
+        agent.requiresDatabase,
+      ]),
+    ).toEqual([
+      ["main", true],
+      ["ops", false],
+    ]);
+    expect(snapshot.agents[0].files.map((file: { kind: string }) => file.kind).toSorted()).toEqual([
+      "legacy-store",
+      "skill-prompt",
+      "trajectory",
+      "trajectory",
+      "transcript",
+    ]);
+    lane.migrate();
+    const preserved = [
+      lane.databasePath,
+      lane.promptPath,
+      lane.manifestPath,
+      join(lane.archiveDir, "seeded-turn.jsonl.imported-1"),
+    ];
+    const before = preserved.map((file) => readFileSync(file));
+    const result = lane.check();
+    expect(result.status, result.stderr).toBe(0);
+    expect(preserved.map((file) => readFileSync(file))).toEqual(before);
+    expect(existsSync(join(lane.stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite"))).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    [
+      "required store removed",
+      (lane: ReturnType<typeof legacyAgentFixture>) => rmSync(lane.databasePath),
+      "required agent database missing",
+    ],
+    [
+      "old agent schema",
+      (lane: ReturnType<typeof legacyAgentFixture>) => writeSchema(lane.databasePath, 18),
+      "required agent database lacks candidate schema",
+    ],
+    [
+      "active legacy source",
+      (lane: ReturnType<typeof legacyAgentFixture>) =>
+        writeFileSync(join(lane.sessions, "sessions.json"), "{}"),
+      "specimen was not retired",
+    ],
+    [
+      "missing archive receipt",
+      (lane: ReturnType<typeof legacyAgentFixture>) => rmSync(lane.manifestPath),
+      "lacks completed archive receipt",
+    ],
+    [
+      "lost transcript archive",
+      (lane: ReturnType<typeof legacyAgentFixture>) =>
+        rmSync(join(lane.archiveDir, "seeded-turn.jsonl.imported-1")),
+      "archive missing",
+    ],
+    [
+      "changed trajectory",
+      (lane: ReturnType<typeof legacyAgentFixture>) =>
+        writeFileSync(join(lane.archiveDir, "seeded-turn.trajectory.jsonl.imported-1"), "changed"),
+      "archive changed",
+    ],
+    [
+      "lost prompt blob",
+      (lane: ReturnType<typeof legacyAgentFixture>) => rmSync(lane.promptPath),
+      "skill prompt missing",
+    ],
+    [
+      "changed prompt blob",
+      (lane: ReturnType<typeof legacyAgentFixture>) => writeFileSync(lane.promptPath, "changed"),
+      "skill prompt changed",
+    ],
+  ] as const)("rejects %s before candidate probes", (_label, corrupt, diagnostic) => {
+    const lane = legacyAgentFixture();
+    lane.migrate();
+    corrupt(lane);
+    const result = lane.check();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(diagnostic);
+  });
+
+  it.each([
+    ["session row", "DELETE FROM session_nodes", "legacy session was not imported"],
+    [
+      "transcript event",
+      "DELETE FROM transcript_events WHERE seq = 2",
+      "legacy transcript event was not imported",
+    ],
+    [
+      "message content",
+      `UPDATE transcript_events SET event_json = '{"type":"message","id":"reply","message":{"role":"assistant","content":"lost reply"}}' WHERE seq = 2`,
+      "legacy transcript event was not imported",
+    ],
+  ])(
+    "rejects missing or changed %s despite a current schema and archived sources",
+    (_label, sql, diagnostic) => {
+      const lane = legacyAgentFixture();
+      lane.migrate();
+      const db = new DatabaseSync(lane.databasePath);
+      try {
+        db.exec(sql);
+      } finally {
+        db.close();
+      }
+      const result = lane.check();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(diagnostic);
     },
   );
 
@@ -414,7 +636,7 @@ describe("published survivor schema outcome", () => {
     [
       "agent database lost",
       (lane: ReturnType<typeof schemaFixture>) => rmSync(lane.agentDatabase),
-      "baseline database missing after update",
+      "required agent database missing before candidate probes: ops",
     ],
   ] as const)("rejects %s after a reported successful update", (_name, change, diagnostic) => {
     const lane = schemaFixture("2026.9.2", 15, 18);
