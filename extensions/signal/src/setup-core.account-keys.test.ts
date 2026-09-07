@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeCompatibilityConfig } from "../doctor-contract-api.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalSetupAdapter } from "./setup-core.js";
 
@@ -161,6 +162,42 @@ describe("signalSetupAdapter account keys", () => {
       }),
     ).toBe(
       'Signal account "work-phone" is stored under channels.signal.accounts."Work Phone"; run openclaw doctor --fix to move it to its normalized key, then rerun setup.',
+    );
+  });
+
+  it("sends a named add to doctor when promotion would write a key Signal lists as default", () => {
+    const cfg = rootNumberConfig({
+      transport: { kind: "container", url: "http://signal-container:8080" },
+      accounts: { "!!!": { name: "Bang" } },
+    });
+
+    // Signal lists "!!!" as default (listConfiguredAccountIds in
+    // src/channels/plugins/account-helpers.ts) and the promotion, with one map key, writes the root
+    // number into that key however it is spelled (src/channels/plugins/setup-helpers.ts:357-358),
+    // while the account lookup never selects it. An oracle that drops keys with no optional
+    // normalized form would preview no write there and let the number vanish into "!!!".
+    expect(
+      signalSetupAdapter.validateInput?.({ cfg, accountId: "work", input: externalNativeInput }),
+    ).toBe(
+      'Signal account "default" is stored under channels.signal.accounts."!!!"; run openclaw doctor --fix to move it to its normalized key, then rerun setup.',
+    );
+
+    const repaired = reload(normalizeCompatibilityConfig({ cfg }).config);
+    expect(repaired.channels?.signal?.accounts).toEqual({ default: { name: "Bang" } });
+    expect(
+      signalSetupAdapter.validateInput?.({
+        cfg: repaired,
+        accountId: "work",
+        input: externalNativeInput,
+      }),
+    ).toBeNull();
+    const reloaded = reload(addNamedAccount(repaired, "work"));
+
+    expect(Object.keys(reloaded.channels?.signal?.accounts ?? {})).toEqual(["default", "work"]);
+    expect(reloaded.channels?.signal?.account).toBe(ROOT_NUMBER);
+    expect(reloaded.channels?.signal?.accounts?.default).toEqual({ name: "Bang" });
+    expect(resolveSignalAccount({ cfg: reloaded, accountId: "default" }).config.account).toBe(
+      ROOT_NUMBER,
     );
   });
 

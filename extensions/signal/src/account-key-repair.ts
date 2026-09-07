@@ -1,9 +1,5 @@
 // Signal doctor repair moves authored account map keys onto their normalized account id.
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "openclaw/plugin-sdk/account-resolution";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -37,6 +33,18 @@ function quoteAccountKeys(keys: string[]): string {
   return keys.map((key) => `"${key}"`).join(", ");
 }
 
+/**
+ * The id Signal lists a map key under. The list helper keeps every non-empty key and maps it
+ * through `normalizeAccountId` (`listConfiguredAccountIds` in
+ * src/channels/plugins/account-helpers.ts), which sends a key with no canonical form such as "!!!"
+ * and a prototype-named key such as "__proto__" to `default` (src/routing/account-id.ts:30-35,
+ * :50-56). An empty key is never listed. The assessment reads the same id, so an id the list helper
+ * surfaces is either repaired onto its key or reported, and an unlisted key is left alone.
+ */
+function listedAccountIdOf(key: string): string | undefined {
+  return key ? normalizeAccountId(key) : undefined;
+}
+
 // Signal lists accounts under normalizeAccountId(key) but the shared account resolver and the
 // policy readers select the entry with the exact/case-folded lookup, so a key that normalizes to
 // something else loses its account settings. Doctor owns the one-time key move and runtime keeps
@@ -53,9 +61,9 @@ function assessSignalAccountKeys(
   const keys = Object.keys(accounts);
   const selectedKeysByAccountId = groupKeysBy(keys, normalizeLowercaseStringOrEmpty);
   const authoredKeysByAccountId = groupKeysBy(keys, (key) => {
-    const accountId = normalizeOptionalAccountId(key);
-    // A key with no normalized form names no account to move the entry to, and a key the shared
-    // lookup already selects under its listed id keeps its own entry.
+    const accountId = listedAccountIdOf(key);
+    // An unlisted key names no account to move the entry to, and a key the shared lookup already
+    // selects under its listed id keeps its own entry.
     return !accountId || normalizeLowercaseStringOrEmpty(key) === accountId ? undefined : accountId;
   });
   const inheritedAccount = normalizeOptionalString(rootAccount);
@@ -73,12 +81,14 @@ function assessSignalAccountKeys(
       continue;
     }
     const entry = accounts[authoredKey];
-    // The unselected entry never overrode the inherited number, so promoting it must not let an
-    // explicitly empty account override start winning; identity has to survive the move. Scoped to
-    // an empty string on the default account: any other value is an authored identity that the
-    // ordinary validator owns, and doctor must not guess how to repair it.
+    // Every account inherits the channel root number unless its own entry overrides it. The merge
+    // spreads the entry over the root (src/config/channel-account-config.ts:24), and a named
+    // account gets the root fields minus the transport (extensions/signal/src/accounts.ts:58-78).
+    // The unselected entry never overrode that number, so the move must not let an explicitly
+    // empty account override start winning, on the default account or a named one. The rule stops
+    // at an empty or whitespace-only string beside a root number. Any other value is an authored
+    // identity the ordinary validator owns, and doctor must not guess how to repair it.
     const dropEmptyAccount =
-      accountId === DEFAULT_ACCOUNT_ID &&
       Boolean(inheritedAccount) &&
       isRecord(entry) &&
       typeof entry.account === "string" &&
@@ -142,7 +152,7 @@ export function findSignalAccountKeySetupBlock(params: {
   const promotedWrites = Object.entries(promotedAccounts ?? {})
     .filter(([key, entry]) => signal?.accounts?.[key] !== entry)
     .flatMap(([key]) => {
-      const id = normalizeOptionalAccountId(key);
+      const id = listedAccountIdOf(key);
       return id ? [{ key, id, promoted: true }] : [];
     });
   // Default numbers and transports are written at the channel root, so a default entry reaches the
@@ -181,7 +191,7 @@ export function findSignalAccountKeySetupBlock(params: {
         );
     if (promoted && selectedKey !== undefined && key !== selectedKey) {
       const others = Object.keys(accounts).filter(
-        (candidate) => candidate !== selectedKey && normalizeOptionalAccountId(candidate) === id,
+        (candidate) => candidate !== selectedKey && listedAccountIdOf(candidate) === id,
       );
       return `${stored} ${quoteAccountKeys([selectedKey, ...others])}, and setup would write "${key}", which the account lookup does not select. Rename them so one key is "${id}", then rerun setup.`;
     }
