@@ -53,6 +53,16 @@ export class SkillLookup {
     return this.pool;
   }
 
+  /** Validate an administrator-published name before a queue message can select it. */
+  async isPublishedPublicSkill(name: string): Promise<boolean> {
+    const pool = await this.getPool();
+    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      "SELECT id FROM skills WHERE user_id = ? AND name = ? AND category = 'builtin' AND is_enable = 1 LIMIT 1",
+      [126, name],
+    );
+    return rows.length > 0;
+  }
+
   /** List enabled skills owned by one user without exposing their instruction bodies. */
   async listForUser(userId: string, logger: PluginLogger): Promise<SkillSummary[]> {
     const normalizedUserId = userId.trim();

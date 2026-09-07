@@ -6,7 +6,7 @@ import {
   type SessionTurnCurrencyPolicy,
 } from "../api.js";
 import { materializeAttachments } from "./attachment-materializer.js";
-import { inferBuiltinSkillName } from "./builtin-skill-routing.js";
+import { inferBuiltinSkillName, validateBuiltinSkillSelection } from "./builtin-skill-routing.js";
 import {
   buildCitationDirective,
   splitCitations,
@@ -594,6 +594,10 @@ export async function processChatMessage(
     // catalog made identical report requests follow different evidence/search
     // workflows depending on whether the skill picker happened to be used.
     const builtinSkillName = chatMsg.builtinSkillName ?? inferBuiltinSkillName(userMessage);
+    await validateBuiltinSkillSelection(
+      builtinSkillName,
+      skillLookup ? (name) => skillLookup.isPublishedPublicSkill(name) : undefined,
+    );
     const inferredBuiltinSkillName = chatMsg.builtinSkillName ? undefined : builtinSkillName;
     if (inferredBuiltinSkillName) {
       logger.info(

@@ -42,6 +42,17 @@ describe("SkillLookup", () => {
     vi.clearAllMocks();
   });
 
+  it("checks administrator ownership, publication and enablement for new built-in names", async () => {
+    mockExecute.mockResolvedValueOnce([[{ id: 99 }], undefined]);
+    await expect(lookup.isPublishedPublicSkill("new-skill")).resolves.toBe(true);
+    expect(mockExecute).toHaveBeenCalledWith(
+      "SELECT id FROM skills WHERE user_id = ? AND name = ? AND category = 'builtin' AND is_enable = 1 LIMIT 1",
+      [126, "new-skill"],
+    );
+    mockExecute.mockResolvedValueOnce([[], undefined]);
+    await expect(lookup.isPublishedPublicSkill("private-skill")).resolves.toBe(false);
+  });
+
   it("lists enabled owned skills as metadata only", async () => {
     mockExecute.mockResolvedValueOnce([
       [

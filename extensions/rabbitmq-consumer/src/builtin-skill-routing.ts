@@ -2,6 +2,32 @@ export type PublicOpinionBuiltinSkillName =
   | "ai-public-opinion-brief"
   | "gov-public-opinion-analysis-agent";
 
+const bundledSkillNames = new Set([
+  "infringement-judgment",
+  "institution-violation-judgment",
+  "gov-public-opinion-analysis-agent",
+  "ai-public-opinion-brief",
+  "ai-collaboration-diagnostic",
+]);
+
+/** Fail closed before execution even if a queue producer bypasses the web API. */
+export async function validateBuiltinSkillSelection(
+  name: string | undefined,
+  isPublished?: (name: string) => Promise<boolean>,
+): Promise<void> {
+  if (!name || bundledSkillNames.has(name)) {
+    return;
+  }
+  if (
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name) ||
+    name.length > 100 ||
+    !isPublished ||
+    !(await isPublished(name))
+  ) {
+    throw new Error("Selected built-in skill is not published or is disabled");
+  }
+}
+
 const REQUEST_ACTION = "(?:请|帮我|给我|根据|围绕|针对|就|写|撰写|生成|形成|制作|出一份|更新|研判)";
 
 const BRIEF_REQUEST = new RegExp(

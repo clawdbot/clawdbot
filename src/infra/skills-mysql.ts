@@ -40,13 +40,16 @@ export const PUBLIC_SKILL_NAMES = [
 ] as const;
 
 const publicSkillNames = new Set<string>(PUBLIC_SKILL_NAMES);
+const isPublicSkillRow = (row: SkillRow): boolean =>
+  row.user_id === PUBLIC_SKILL_OWNER_ID &&
+  (publicSkillNames.has(row.name) || row.category === "builtin");
 const SKILL_SELECT_COLUMNS =
   "id, user_id, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at";
 
 /**
- * Merge rows defensively even if a caller supplies a broader result set. A
- * user's private Skills remain visible, while only owner 126's five reserved
- * public names are shared. The public row always wins a same-name collision.
+ * Merge rows defensively even if a caller supplies a broader result set.
+ * A user's private Skills remain visible alongside the administrator's public
+ * skills. The public row always wins a same-name collision.
  */
 export function mergeVisibleSkillRows(rows: SkillRow[], userId: number): SkillRow[] {
   const merged = new Map<string, SkillRow>();
@@ -56,15 +59,11 @@ export function mergeVisibleSkillRows(rows: SkillRow[], userId: number): SkillRo
     }
   }
   for (const row of rows) {
-    if (
-      row.is_enable === 1 &&
-      row.user_id === PUBLIC_SKILL_OWNER_ID &&
-      publicSkillNames.has(row.name)
-    ) {
+    if (row.is_enable === 1 && isPublicSkillRow(row)) {
       merged.set(row.name, row);
     }
   }
-  return [...merged.values()];
+  return [...merged.values()].toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 interface MySqlConfig {
@@ -199,7 +198,7 @@ async function fetchVisibleSkillRows(p: mysql.Pool, userId: number): Promise<Ski
     `SELECT ${SKILL_SELECT_COLUMNS}
        FROM skills
       WHERE is_enable = 1
-        AND (user_id = ? OR (user_id = ? AND name IN (${placeholders})))
+        AND (user_id = ? OR (user_id = ? AND (category = 'builtin' OR name IN (${placeholders}))))
       ORDER BY name ASC`,
     [userId, PUBLIC_SKILL_OWNER_ID, ...PUBLIC_SKILL_NAMES],
   );
@@ -606,9 +605,9 @@ async function doMaterializeSkills(
     if (!safeName) {
       continue;
     }
-    const isPublicSkill = row.user_id === PUBLIC_SKILL_OWNER_ID && publicSkillNames.has(row.name);
+    const isPublicSkill = isPublicSkillRow(row);
     const baseDir = path.join(isPublicSkill ? publicSkillsRoot : skillsRoot, safeName);
-    if (bundledSkillsDir && isPublicSkill) {
+    if (bundledSkillsDir && isPublicSkill && publicSkillNames.has(row.name)) {
       await fs.cp(path.join(bundledSkillsDir, row.name), baseDir, {
         recursive: true,
         force: true,

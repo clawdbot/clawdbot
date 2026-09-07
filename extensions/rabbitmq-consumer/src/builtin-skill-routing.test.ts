@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { inferBuiltinSkillName } from "./builtin-skill-routing.js";
+import { inferBuiltinSkillName, validateBuiltinSkillSelection } from "./builtin-skill-routing.js";
+
+describe("validateBuiltinSkillSelection", () => {
+  it("keeps bundled skills available and requires publication for every new name", async () => {
+    await expect(validateBuiltinSkillSelection("ai-public-opinion-brief")).resolves.toBeUndefined();
+    await expect(
+      validateBuiltinSkillSelection("new-skill", async () => true),
+    ).resolves.toBeUndefined();
+    await expect(validateBuiltinSkillSelection("new-skill", async () => false)).rejects.toThrow(
+      "not published",
+    );
+    await expect(validateBuiltinSkillSelection("new-skill")).rejects.toThrow("not published");
+    await expect(validateBuiltinSkillSelection("../private", async () => true)).rejects.toThrow(
+      "not published",
+    );
+    await expect(
+      validateBuiltinSkillSelection("new-skill", async () => {
+        throw new Error("DB unavailable");
+      }),
+    ).rejects.toThrow("DB unavailable");
+  });
+});
 
 describe("inferBuiltinSkillName", () => {
   it("routes explicit public-opinion brief requests to the brief skill", () => {

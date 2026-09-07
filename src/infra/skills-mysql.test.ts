@@ -72,6 +72,21 @@ describe("sanitizeSkillSegment (path-traversal guard)", () => {
 });
 
 describe("mergeVisibleSkillRows", () => {
+  it("shares newly published administrator skills with a stable prompt order", () => {
+    const published = { ...skillRow(50, 126, "new-builtin"), category: "builtin" };
+    const rows = [
+      skillRow(51, 999, "new-builtin"),
+      published,
+      { ...skillRow(52, 777, "other-public"), category: "builtin" },
+      skillRow(53, 126, "admin-private"),
+      { ...skillRow(54, 126, "disabled-public"), category: "builtin", is_enable: 0 },
+      skillRow(55, 999, "my-skill"),
+      { ...skillRow(56, 126, "old-shared-skill"), category: "public" },
+    ];
+    expect(mergeVisibleSkillRows(rows, 999).map((row) => row.id)).toEqual([55, 50]);
+    expect(mergeVisibleSkillRows(rows.toReversed(), 999)).toEqual(mergeVisibleSkillRows(rows, 999));
+  });
+
   it("publishes only the five reserved owner-126 skills to another user", () => {
     expect(PUBLIC_SKILL_OWNER_ID).toBe(126);
     expect(PUBLIC_SKILL_NAMES).toEqual([
@@ -89,7 +104,7 @@ describe("mergeVisibleSkillRows", () => {
       skillRow(4, 126, "owner-private-skill"),
     ];
 
-    expect(mergeVisibleSkillRows(rows, 999).map((row) => row.id)).toEqual([1, 2, 3]);
+    expect(mergeVisibleSkillRows(rows, 999).map((row) => row.id)).toEqual([2, 3, 1]);
   });
 
   it("makes the public owner row win over a user's same-named custom row", () => {

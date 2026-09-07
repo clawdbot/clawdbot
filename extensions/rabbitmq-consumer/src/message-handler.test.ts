@@ -118,9 +118,16 @@ describe("parseMessage", () => {
     expect(nested?.builtinSkillName).toBe("ai-public-opinion-brief");
   });
 
-  it("drops an unknown bundled skill name without dropping the turn", () => {
+  it("accepts administrator-created names without a transport allowlist", () => {
     const msg = parseMessage(
-      buf({ id: 5, message: "hello", user_id: 42, builtin_skill_name: "unknown-skill" }),
+      buf({ id: 5, message: "hello", user_id: 42, builtin_skill_name: "new-public-skill" }),
+    );
+    expect(msg?.builtinSkillName).toBe("new-public-skill");
+  });
+
+  it("drops a malformed bundled skill name without dropping the turn", () => {
+    const msg = parseMessage(
+      buf({ id: 5, message: "hello", user_id: 42, builtin_skill_name: "../private" }),
     );
     expect(msg).not.toBeNull();
     expect(msg?.builtinSkillName).toBeUndefined();

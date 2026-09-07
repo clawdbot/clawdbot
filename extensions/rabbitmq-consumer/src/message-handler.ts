@@ -43,17 +43,13 @@ const skillIdsSchema = z
     return ids.length ? ids.slice(0, SKILL_IDS_MAX) : undefined;
   });
 
-const BUILTIN_SKILL_NAMES = new Set([
-  "infringement-judgment",
-  "institution-violation-judgment",
-  "gov-public-opinion-analysis-agent",
-  "ai-public-opinion-brief",
-  "ai-collaboration-diagnostic",
-]);
+// Both the web producer and chat pipeline validate public catalog membership.
+// Keep transport validation extensible for administrator-created skills.
 const builtinSkillNameSchema = z
   .string()
+  .max(100)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u)
   .optional()
-  .transform((value) => (value && BUILTIN_SKILL_NAMES.has(value) ? value : undefined))
   .catch(undefined);
 
 // Attachment reference (see types.AttachmentRef). Additive and optional:
