@@ -1470,7 +1470,7 @@ Use `accountId` to select a configured Slack account and `teamId` for an explici
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
 - `channels.slack.implicitMentions.replyToBot` controls whether a reply to the bot's own message bypasses mention gating (default `true`).
-- `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied bypass mention gating (default `true`). Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive canonical flag.
+- `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied, or is still processing an accepted human request, bypass mention gating (default `true`). Active work allows same-thread follow-ups before the first reply; if it ends without a reply, that temporary participation ends too. Bot messages and control commands do not establish this temporary participation. Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive canonical flag.
 - Account overrides live at `channels.slack.accounts.<id>.implicitMentions`; shared defaults live at `channels.defaults.implicitMentions`.
 
 Reply threading controls:

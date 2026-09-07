@@ -74,6 +74,7 @@ import type { SlackMediaResult } from "../media-types.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
+import { getSlackSessionRuns } from "../session-run-targets.js";
 import { resolveSlackThreadStarter, type SlackThreadStarter } from "../thread.js";
 import { qualifySlackRoutePeerId } from "../workspace-routing.js";
 import {
@@ -969,12 +970,23 @@ export async function prepareSlackMessage(params: {
         ? replyToBotKinds
         : implicitMentionKindWhen(
             "bot_thread_participant",
-            await hasSlackThreadParticipationWithPersistence({
-              accountId: account.accountId,
-              channelId: message.channel,
-              threadTs: message.thread_ts,
-              teamId: opts.eventScope?.teamId,
-            }),
+            (!isBotMessage &&
+              getSlackSessionRuns(ctx, {
+                channelId: message.channel,
+                threadTs: message.thread_ts,
+                eventScope: opts.eventScope,
+              }).some(
+                (run) =>
+                  run.route.accountId === account.accountId &&
+                  run.allowImplicitReplies &&
+                  run.isActive(),
+              )) ||
+              (await hasSlackThreadParticipationWithPersistence({
+                accountId: account.accountId,
+                channelId: message.channel,
+                threadTs: message.thread_ts,
+                teamId: opts.eventScope?.teamId,
+              })),
           );
   }
 
@@ -1795,6 +1807,13 @@ export async function prepareSlackMessage(params: {
     message,
     ...(opts.relayIdentity ? { relayIdentity: opts.relayIdentity } : {}),
     eventScope: opts.eventScope,
+    allowImplicitThreadReplies:
+      isRoom &&
+      !isBotMessage &&
+      effectiveWasMentioned &&
+      !hasControlCommandInMessage &&
+      !hasAbortRequest &&
+      !isRoomEvent,
     route,
     channelConfig,
     replyTarget,
