@@ -151,7 +151,7 @@ describe("createChildAdapter", () => {
       expect(spawnArgs.fallbacks).toStrictEqual([]);
     } else {
       expect(spawnArgs.options?.detached).toBe(true);
-      expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+      expect(spawnArgs.fallbacks?.[0]?.detached).toBe(false);
     }
 
     adapter.kill();
@@ -469,7 +469,6 @@ describe("createChildAdapter", () => {
     spawnWithFallbackMock.mockResolvedValue({
       child,
       usedFallback: true,
-      fallbackLabel: "no-detach",
     });
     const adapter = await createChildAdapter({
       argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
@@ -526,7 +525,6 @@ describe("createChildAdapter", () => {
     spawnWithFallbackMock.mockResolvedValue({
       child,
       usedFallback: true,
-      fallbackLabel: "no-detach",
     });
     const adapter = await createChildAdapter({
       argv: ["node", "-e", "setTimeout(() => {}, 1000)"],

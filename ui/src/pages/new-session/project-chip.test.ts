@@ -48,6 +48,11 @@ describe("What chip state", () => {
         folder: "/workspace/scratch",
         displayName: "scratch",
       };
+      const repositoryRecent = {
+        kind: "repository" as const,
+        url: "https://github.com/octocat/hello-world.git",
+        displayName: "hello-world",
+      };
       const state = resolveProjectChip({
         folder: "",
         workspace: "/workspace",
@@ -57,6 +62,7 @@ describe("What chip state", () => {
         recents: [
           { kind: "project", projectId: "openclaw", displayName: "OpenClaw" },
           folderRecent,
+          repositoryRecent,
         ],
         projectQuery,
       });
@@ -64,7 +70,11 @@ describe("What chip state", () => {
       expect(state.recents).toEqual(
         projectQuery
           ? []
-          : [{ kind: "project", projectId: "openclaw", displayName: "OpenClaw" }, folderRecent],
+          : [
+              { kind: "project", projectId: "openclaw", displayName: "OpenClaw" },
+              folderRecent,
+              repositoryRecent,
+            ],
       );
       expect(state.localProjects.map((project) => project.id)).toEqual(
         projectQuery ? ["openclaw"] : ["website"],

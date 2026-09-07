@@ -1,9 +1,62 @@
 import { describe, expect, it } from "vitest";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { formatUserFacingAssistantErrorText } from "../embedded-agent-helpers/error-text.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { renderAssistantRequestFailureCopy } from "./assistant-request-failure-copy.js";
 
 describe("renderAssistantRequestFailureCopy", () => {
   const target = { provider: "openai", model: "test-model" };
   const runFailure = "⚠️ Agent run failed (model: openai/test-model).";
+
+  it.each([
+    [{ errcode: 261 }, "SQLITE_BUSY"],
+    [{ errcode: 13, message: "database is locked" }, "SQLITE_FULL"],
+    [{ errstr: "attempt to write a readonly database" }, "SQLITE_READONLY"],
+    [{ errorCode: "SQLITE_IOERR_WRITE", errorMessage: "PRIVATE_CANARY" }, "SQLITE_IOERR"],
+    [{ code: "SQLITE_LOCKED_SHAREDCACHE" }, "SQLITE_LOCKED"],
+    [
+      { errorMessage: "session writer claim changed before transcript persistence" },
+      "transcript_writer_fenced",
+    ],
+  ] as const)("classifies storage facts %j", (error, expected) => {
+    expect(classifyGatewayStorageFailure(error)).toBe(expected);
+    expect(
+      renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(error) }),
+    ).not.toContain("PRIVATE_CANARY");
+  });
+
+  it.each([
+    ["database is locked", "was busy", "Retry; if it repeats, check Gateway storage health."],
+    ["database or disk is full", "was full", "Free disk space on the Gateway host and retry."],
+    [
+      "attempt to write a readonly database",
+      "was read-only",
+      "Check Gateway storage permissions and retry.",
+    ],
+    [
+      "disk I/O error",
+      "had an I/O error",
+      "Check Gateway storage health and filesystem access before retrying.",
+    ],
+  ])(
+    "names the internal storage failure %s without provider attribution",
+    (errorMessage, detail, nextStep) => {
+      expect(
+        formatUserFacingAssistantErrorText(
+          makeAssistantMessageFixture({ ...target, errorMessage }),
+        ),
+      ).toBe(
+        `⚠️ Agent run failed: the Gateway state database ${detail} (SQLite: ${errorMessage}). ${nextStep}`,
+      );
+    },
+  );
+
+  it("keeps provider bodies containing SQLite text redacted", () => {
+    const errorMessage = '{"error":{"message":"database is locked PRIVATE_CANARY"}}';
+    expect(
+      formatUserFacingAssistantErrorText(makeAssistantMessageFixture({ ...target, errorMessage })),
+    ).toBe(runFailure);
+  });
 
   it.each([undefined, null, "unclassified", "unknown"] as const)(
     "keeps the model as context when reason is %s",

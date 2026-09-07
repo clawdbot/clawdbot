@@ -45,6 +45,7 @@ final class DashboardManager {
     }
 
     @ObservationIgnored private var controller: DashboardWindowController?
+    @ObservationIgnored let alertPresenter = DashboardAlertPresenter()
     @ObservationIgnored private var mainTarget: DashboardGatewayTarget
     @ObservationIgnored private let selection: MacGatewaySelectionPreferences
     @ObservationIgnored private var pendingInitialSelection: String?
@@ -557,10 +558,12 @@ final class DashboardManager {
         controller.showFailure(
             title: "Dashboard unavailable",
             message: message,
-            detail: "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.")
+            detail: "Open Connection or use Debug → Reset Remote Tunnel, then try again.")
     }
 
     func close() {
+        // Pending gateway alerts end before their host windows close; termination cleanup runs through here.
+        self.alertPresenter.dismissAll()
         self.windowLifetime &+= 1
         self.gatewaySnapshotGeneration &+= 1
         self.endpointGeneration &+= 1
@@ -773,7 +776,7 @@ final class DashboardManager {
                 current.pendingGatewaySwitch = nil
                 _ = current.takePendingNativeActions()
                 guard !(error is CancellationError) else { return }
-                Self.showGatewayError(error, message: String(localized: "Could Not Switch Gateway"))
+                self.presentGatewayError(error, title: String(localized: "Could Not Switch Gateway"), over: window)
             }
         }
     }
@@ -854,7 +857,7 @@ final class DashboardManager {
                 if opensMain {
                     self.showFailure(error)
                 } else {
-                    Self.showGatewayError(error, message: String(localized: "Could Not Open Gateway Window"))
+                    self.presentGatewayError(error, title: String(localized: "Could Not Open Gateway Window"))
                 }
             }
         }
@@ -1271,7 +1274,10 @@ extension DashboardManager {
             Task { await self.refreshGatewaySnapshots() }
         } catch {
             guard isCurrent() else { return }
-            Self.showGatewayError(error, message: String(localized: "Could Not Open Background Session"))
+            self.presentGatewayError(
+                error,
+                title: String(localized: "Could Not Open Background Session"),
+                over: currentController()?.window)
         }
     }
 
@@ -1389,7 +1395,7 @@ extension DashboardManager {
         switch WebChatManager.promptForGatewayProfile(profiles: available, preferredID: nil) {
         case let .profile(profile): return .profile(profile.id)
         case .manage:
-            AppNavigationActions.openSettings(tab: .gateways)
+            AppNavigationActions.openConnection(tab: .gateways)
             return nil
         case nil:
             self.pendingOpenCommands.removeAll()
@@ -1466,13 +1472,12 @@ extension DashboardManager {
         case let .select(target):
             self.switchTarget(target, in: source)
         case let .openWindow(target):
-            self.retireNavigation(for: target)
-            self.openWindow(for: target)
+            self.openNewDashboardWindow(for: target)
         case let .setPrimary(target):
             guard self.target(for: source) == target else { return }
             self.presentSetPrimaryConfirmation(target, source: source)
         case .openSettings:
-            AppNavigationActions.openSettings(tab: .gateways)
+            AppNavigationActions.openConnection(tab: .gateways)
         }
     }
 
@@ -1484,22 +1489,25 @@ extension DashboardManager {
                 let alert = DashboardWindowController.makeGatewaySetupAlert(title: title, message: message)
                 return alert.runModal() == .alertFirstButtonReturn
             },
-            presentError: { title, message in
-                let alert = NSAlert()
-                alert.messageText = title
-                alert.informativeText = message
-                alert.alertStyle = .warning
-                alert.runModal()
+            presentError: { [weak self] title, message in
+                self?.presentGatewayError(title: title, message: message)
             },
             openConnectionSettings: {
-                AppNavigationActions.openSettings(tab: .connection)
+                AppNavigationActions.openConnection()
             })
         coordinator.handle(link)
     }
 
-    func openOrFocusDashboard(for target: DashboardGatewayTarget) {
+    @discardableResult
+    func openOrFocusDashboard(for target: DashboardGatewayTarget) -> Task<Void, Never> {
         self.retireNavigation(for: target)
-        self.openWindow(for: target, reuseExisting: true)
+        return self.openWindow(for: target, reuseExisting: true)
+    }
+
+    @discardableResult
+    func openNewDashboardWindow(for target: DashboardGatewayTarget) -> Task<Void, Never> {
+        self.retireNavigation(for: target)
+        return self.openWindow(for: target)
     }
 
     private func dashboardControllers() -> [(target: DashboardGatewayTarget, controller: DashboardWindowController)] {
@@ -1512,6 +1520,10 @@ extension DashboardManager {
             return (instance.target, instance.controller)
         }
         return result
+    }
+
+    func openWindowCount(for target: DashboardGatewayTarget) -> Int {
+        self.dashboardControllers().count(where: { $0.target == target })
     }
 
     func frontmostDashboard()
@@ -1545,15 +1557,6 @@ extension DashboardManager {
             .compactMap { self.auxiliaryWindows[$0] }
             .first { $0.target == target && $0.controller.isWindowOpen }?
             .controller
-    }
-
-    @discardableResult
-    func performSwitchFrontmostDashboard(to target: DashboardGatewayTarget) -> Task<Void, Never>? {
-        guard let frontmost = frontmostDashboard() else {
-            self.retireNavigation(for: target)
-            return self.openWindow(for: target, reuseExisting: true)
-        }
-        return self.switchTarget(target, in: frontmost.controller, present: true)
     }
 }
 
@@ -1591,10 +1594,6 @@ extension DashboardManager {
         await self.switchTarget(target, in: source)?.value
     }
 
-    func _testSwitchFrontmostDashboard(to target: DashboardGatewayTarget) async {
-        await self.performSwitchFrontmostDashboard(to: target)?.value
-    }
-
     func _testHandleControlChannelStateChange(_ state: ControlChannel.ConnectionState) async {
         await self.handleControlChannelStateChange(state)
     }
@@ -1605,6 +1604,10 @@ extension DashboardManager {
 
     func _testAuxiliaryWindows() -> [(target: DashboardGatewayTarget, controller: DashboardWindowController)] {
         self.auxiliaryWindows.values.map { ($0.target, $0.controller) }
+    }
+
+    func _testPendingGatewayAlerts() -> [NSAlert] {
+        self.alertPresenter._testPendingAlerts
     }
 
     func _testSetMainTarget(_ target: DashboardGatewayTarget) {

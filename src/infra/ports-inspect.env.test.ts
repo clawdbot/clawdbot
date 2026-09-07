@@ -60,7 +60,7 @@ if (command === 'lsof') {
 } else if (command === 'ss') {
   process.stdout.write(${JSON.stringify(ssOutput)});
 } else {
-  process.stdout.write(process.argv.includes('ppid=') ? '1\n' : process.argv.includes('user=') ? 'fixture-user\n' : 'node fixture-server\n');
+  process.stdout.write(process.argv.includes('user=') ? 'fixture-user\n' : '1 node fixture-server\n');
 }
 `,
         { mode: 0o755 },
@@ -102,9 +102,7 @@ if (command === 'lsof') {
         .map((line) => JSON.parse(line));
       expect(
         reports.map((entry) => entry.command).toSorted((left, right) => left.localeCompare(right)),
-      ).toEqual(
-        (fallback ? ["lsof", "ss", "ps", "ps", "ps"] : ["lsof", "ps", "ps", "ps"]).toSorted(),
-      );
+      ).toEqual((fallback ? ["lsof", "ss", "ps", "ps"] : ["lsof", "ps", "ps"]).toSorted());
       for (const entry of reports) {
         expect(entry, `${entry.command} inherited canary presence`).toEqual({
           command: entry.command,

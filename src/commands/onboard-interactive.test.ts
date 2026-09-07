@@ -17,13 +17,16 @@ import type { BoundVerifySetupInferenceResult } from "../system-agent/setup-infe
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentClaudeCliBackendTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
 } from "../system-agent/system-agent.test-helpers.js";
 import { resolveSystemAgentVerifiedInferenceRoute } from "../system-agent/verified-inference.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { runConversationalOnboarding, runInteractiveSetup } from "./onboard-interactive.js";
-import { runSystemAgentWithInference } from "./system-agent-with-inference.js";
+import {
+  runConversationalOnboarding as runConversationalOnboardingImpl,
+  runInteractiveSetup,
+} from "./onboard-interactive.js";
+import { runSystemAgentWithInference as runSystemAgentWithInferenceImpl } from "./system-agent-with-inference.js";
 
 const mocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(() => ({ id: "prompter" })),
@@ -63,8 +66,12 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
 
 describe("runConversationalOnboarding", () => {
   let home: Awaited<ReturnType<typeof createTempHomeEnv>>;
-  let metadata: ReturnType<typeof installSystemAgentPluginMetadataTestSnapshot> | undefined;
+  let metadata: ReturnType<typeof createSystemAgentPluginMetadataTestSnapshot> | undefined;
   let restoreCliBackend: (() => void) | undefined;
+  const runConversationalOnboarding: typeof runConversationalOnboardingImpl = (...args) =>
+    metadata!.run(() => runConversationalOnboardingImpl(...args));
+  const runSystemAgentWithInference: typeof runSystemAgentWithInferenceImpl = (...args) =>
+    metadata!.run(() => runSystemAgentWithInferenceImpl(...args));
   let previousRegistry: ReturnType<typeof captureActivePluginRegistrySnapshot>;
   let rootRegistry: ReturnType<typeof createEmptyPluginRegistry>;
   let terminal: PassThrough & { isTTY: boolean };
@@ -80,7 +87,7 @@ describe("runConversationalOnboarding", () => {
 
   afterEach(async () => {
     terminal.destroy();
-    metadata?.restore();
+
     metadata = undefined;
     restoreCliBackend?.();
     restoreCliBackend = undefined;
@@ -106,11 +113,11 @@ describe("runConversationalOnboarding", () => {
       },
       plugins: { entries: { codex: { enabled: true }, "fixture-runtime": { enabled: true } } },
     };
-    metadata = installSystemAgentPluginMetadataTestSnapshot(config);
+    metadata = createSystemAgentPluginMetadataTestSnapshot(config);
     if (runner === "cli") {
       restoreCliBackend = installSystemAgentClaudeCliBackendTestFixture();
     }
-    const fixture = await createSystemAgentVerifiedInferenceTestFixture(config);
+    const fixture = await metadata.run(() => createSystemAgentVerifiedInferenceTestFixture(config));
     // Keep the handoff's actual registry lookup and artifact validation; the binding
     // factory's validator override is only for constructing synthetic probe evidence.
     const { validateAgentHarnessRuntimeArtifact: _fixtureValidator, ...ownerDeps } = fixture.deps;

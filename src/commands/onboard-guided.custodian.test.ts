@@ -10,6 +10,7 @@ describe("runGuidedOnboarding custodian flow", () => {
     candidate,
     detection,
     existingModelCandidate,
+    ensureAuthProfileStore,
     localOnboarding,
     makeRuntime,
     pendingLocalSetup,
@@ -20,6 +21,103 @@ describe("runGuidedOnboarding custodian flow", () => {
     setupDeps,
     withConfigMutationExclusive,
   } = setupGuidedCustodianTestSuite();
+
+  it.each(["quick", "custom"] as const)(
+    "waits for an explicit detected-provider choice in the %s lane",
+    async (lane) => {
+      const prompter = createWizardPrompter({}, { selectValues: [lane, "full"] });
+      let selected = false;
+      const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+        expect(selected).toBe(true);
+        params.onCommitStarted?.(localOnboarding.persisted.config ?? {});
+        return { ok: true, modelRef: "fixture/selected", latencyMs: 1, lines: [] };
+      });
+      const deps = {
+        ...setupDeps({
+          prompter,
+          activate,
+          detect: async () =>
+            detection({
+              candidates: [
+                { ...candidate("claude-cli", "Demo first"), modelRef: "fixture/first" },
+                { ...candidate("codex-cli", "Demo selected"), modelRef: "fixture/selected" },
+              ],
+            }),
+        }),
+        runForegroundGateway: vi.fn(async () => {}),
+      };
+      promptAuthChoiceGrouped.mockImplementationOnce(async () => {
+        expect(activate).not.toHaveBeenCalled();
+        expect(ensureAuthProfileStore).not.toHaveBeenCalled();
+        expect(localOnboarding.begin).not.toHaveBeenCalled();
+        expect(deps.applySetup).not.toHaveBeenCalled();
+        selected = true;
+        return "candidate:codex-cli";
+      });
+
+      await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+      expect(activate).toHaveBeenCalledOnce();
+      expect(activate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "codex-cli",
+          modelRef: "fixture/selected",
+          prompter,
+        }),
+      );
+    },
+  );
+
+  it.each(["reject", "cancel"] as const)(
+    "preserves the configured route after the selected provider returns %s",
+    async (outcome) => {
+      localOnboarding.persisted.config = {
+        gateway: { mode: "local" },
+        agents: { defaults: { model: "fixture/original" } },
+      };
+      const prompter = createWizardPrompter();
+      const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async () => {
+        if (outcome === "cancel") {
+          throw new WizardCancelledError();
+        }
+        return { ok: false, status: "auth", error: "Synthetic provider rejection" };
+      });
+      const deps = setupDeps({
+        prompter,
+        activate,
+        detect: async () =>
+          detection({
+            setupComplete: true,
+            candidates: [
+              { ...existingModelCandidate(), modelRef: "fixture/original" },
+              { ...candidate("codex-cli", "Demo alternative"), modelRef: "fixture/alternative" },
+            ],
+          }),
+      });
+      promptAuthChoiceGrouped
+        .mockResolvedValueOnce("candidate:existing-model")
+        .mockImplementationOnce(async () => {
+          expect(activate).toHaveBeenCalledOnce();
+          return "skip";
+        });
+
+      await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(outcome === "cancel" ? 1 : 2);
+      expect(activate).toHaveBeenCalledOnce();
+      expect(activate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "existing-model",
+          modelRef: "fixture/original",
+        }),
+      );
+      expect(localOnboarding.persisted.config?.agents?.defaults?.model).toBe("fixture/original");
+      expect(deps.applySetup).not.toHaveBeenCalled();
+      expect(deps.launchHatchTui).not.toHaveBeenCalled();
+      expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
+    },
+  );
 
   it("records setup ownership at inference commit and completes before optional imports", async () => {
     const prompter = createWizardPrompter();
@@ -71,6 +169,7 @@ describe("runGuidedOnboarding custodian flow", () => {
         allowWorkspaceChange: true,
         assertCommitPreconditions: expect.any(Function),
       }),
+      { beforePersistentApply: expect.any(Function) },
     );
   });
 
@@ -147,6 +246,7 @@ describe("runGuidedOnboarding custodian flow", () => {
 
     expect(retry.applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/approved-workspace", resume: true }),
+      { beforePersistentApply: expect.any(Function) },
     );
     expect(localOnboarding.states.get("/tmp/openclaw.json")).toMatchObject({
       status: "completed",
@@ -679,39 +779,32 @@ describe("runGuidedOnboarding custodian flow", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
   });
 
-  it("keeps the working route when other options are explored and skipped", async () => {
+  it("skips the picker without verifying or replacing a configured route", async () => {
+    localOnboarding.persisted.config = {
+      gateway: { mode: "local" },
+      agents: { defaults: { model: "fixture/original" } },
+    };
     promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
-    const prompter = createWizardPrompter(undefined, { selectValues: ["custom", "full", "other"] });
+    const prompter = createWizardPrompter();
     const deps = setupDeps({
       prompter,
-      detect: vi.fn(async () =>
+      detect: async () =>
         detection({
-          candidates: [candidate("claude-cli", "Claude Code"), candidate("codex-cli", "Codex")],
+          setupComplete: true,
+          candidates: [existingModelCandidate(), candidate("codex-cli", "Codex")],
         }),
-      ),
     });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({
-        additionalGroups: [
-          expect.objectContaining({
-            label: "Detected on this machine",
-            hint: "Claude Code, Codex",
-            methodMessage: "Use which detected AI?",
-          }),
-        ],
-      }),
-    );
-    const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
-    expect(notes).toContain("Keeping the working AI you already have.");
-    expect(notes).not.toContain("Add AI later");
-    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+    expect(deps.activate).not.toHaveBeenCalled();
+    expect(deps.applySetup).not.toHaveBeenCalled();
+    expect(localOnboarding.persisted.config?.agents?.defaults?.model).toBe("fixture/original");
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
   });
 
-  it("names the configured model in the recommended route confirmation", async () => {
+  it("names the configured model in the explicit candidate picker", async () => {
     const prompter = createWizardPrompter(undefined, { selectValues: ["custom", "full", "use"] });
     const deps = setupDeps({
       prompter,
@@ -726,15 +819,18 @@ describe("runGuidedOnboarding custodian flow", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-    expect(prompter.select).toHaveBeenCalledWith(
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Use Current model (acme/workspace-model)?",
-        options: expect.arrayContaining([
+        additionalGroups: [
           expect.objectContaining({
-            value: "use",
-            label: "Continue with Current model (acme/workspace-model) — recommended",
+            options: [
+              expect.objectContaining({
+                value: "candidate:existing-model",
+                label: expect.stringContaining("acme/workspace-model"),
+              }),
+            ],
           }),
-        ]),
+        ],
       }),
     );
   });

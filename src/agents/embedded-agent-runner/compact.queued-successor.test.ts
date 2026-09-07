@@ -16,6 +16,7 @@ import {
   resetCompactHooksHarnessMocks,
   resolveContextEngineMock,
 } from "./compact.hooks.harness.js";
+import type { QueuedCompactionHostOptions } from "./compact.queued-execution.js";
 import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
 
 const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness();
@@ -312,6 +313,9 @@ describe("queued compaction successor ownership", () => {
     "commits the successor before observers, with caller abort=%s",
     async (abortAfterCommit) => {
       const controller = new AbortController();
+      const hostCommitHeld = createDeferred();
+      const releaseHostCommit = createDeferred();
+      let observerReturned = false;
       const onCommitted = vi.fn((accepted: AcceptedCompactionSuccessor) => {
         expect(loadSessionEntry(target())).toMatchObject({
           ...owner,
@@ -326,28 +330,87 @@ describe("queued compaction successor ownership", () => {
         if (abortAfterCommit) {
           controller.abort(new Error("caller closed after commit"));
         }
+        observerReturned = true;
       });
+      const onHostCompactionCommitted = vi.fn<
+        NonNullable<QueuedCompactionHostOptions["onHostCompactionCommitted"]>
+      >(async (commit) => {
+        expect(observerReturned).toBe(true);
+        expect(commit).toMatchObject({
+          entry: {
+            ...owner,
+            sessionId: "successor",
+            previousSessionId: owner.sessionId,
+          },
+          tokensAfter: 40,
+          compactionKind: "context-engine",
+        });
+        hostCommitHeld.resolve();
+        await releaseHostCommit.promise;
+      });
+      const onHostCompactionTranscriptSettled = vi.fn<
+        NonNullable<QueuedCompactionHostOptions["onHostCompactionTranscriptSettled"]>
+      >(async (commit) => {
+        expect(commit).toMatchObject({
+          entry: {
+            ...owner,
+            sessionId: "successor",
+            previousSessionId: owner.sessionId,
+          },
+          tokensAfter: 40,
+          compactionKind: "context-engine",
+        });
+        expect(maintain).toHaveBeenCalledOnce();
+        expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+        expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+      });
+      const persistCheckpoint = vi.spyOn(compactionCheckpointStore, "persistCheckpoint");
+      const pending = compact(compactParams(controller.signal), {
+        onCommitted,
+        onHostCompactionCommitted,
+        onHostCompactionTranscriptSettled,
+      });
+      try {
+        await Promise.race([
+          hostCommitHeld.promise,
+          pending.then(() => {
+            throw new Error("Queued compaction settled before host accounting");
+          }),
+        ]);
+        expect(onHostCompactionCommitted).toHaveBeenCalledOnce();
+        expect(onHostCompactionTranscriptSettled).not.toHaveBeenCalled();
+        expect(persistCheckpoint).not.toHaveBeenCalled();
+        expect(maintain).not.toHaveBeenCalled();
+        expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+        expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+        releaseHostCommit.resolve();
 
-      const result = await compact(compactParams(controller.signal), { onCommitted });
-
-      expect(result).toMatchObject({
-        ok: true,
-        compacted: true,
-        result: { sessionId: "successor", tokensAfter: 40 },
-      });
-      expect(onCommitted).toHaveBeenCalledOnce();
-      expect(loadSessionEntry(target())).toMatchObject({
-        ...owner,
-        sessionId: "successor",
-        previousSessionId: owner.sessionId,
-      });
-      expect(maintain).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
-      expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
-      expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
-      const engineInput = contextEngineCompactMock.mock.calls[0]?.[0];
-      expect(engineInput).toBeDefined();
-      expect(engineInput?.runtimeContext).not.toHaveProperty("onCommitted");
-      expect(engineInput?.runtimeContext?.sessionEntry).not.toHaveProperty("activeWriterRunId");
+        const result = await pending;
+        expect(result).toMatchObject({
+          ok: true,
+          compacted: true,
+          result: { sessionId: "successor", tokensAfter: 40 },
+        });
+        expect(onCommitted).toHaveBeenCalledOnce();
+        expect(onHostCompactionCommitted).toHaveBeenCalledOnce();
+        expect(onHostCompactionTranscriptSettled).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
+        expect(loadSessionEntry(target())).toMatchObject({
+          ...owner,
+          sessionId: "successor",
+          previousSessionId: owner.sessionId,
+        });
+        expect(maintain).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
+        expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
+        expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
+        const engineInput = contextEngineCompactMock.mock.calls[0]?.[0];
+        expect(engineInput).toBeDefined();
+        expect(engineInput?.runtimeContext).not.toHaveProperty("onCommitted");
+        expect(engineInput?.runtimeContext?.sessionEntry).not.toHaveProperty("activeWriterRunId");
+      } finally {
+        releaseHostCommit.resolve();
+        await pending.catch(() => undefined);
+        persistCheckpoint.mockRestore();
+      }
     },
   );
 
@@ -887,20 +950,33 @@ describe("queued compaction successor ownership", () => {
     },
   );
 
-  it("preserves completed compaction when cancellation interrupts maintenance", async () => {
-    const controller = new AbortController();
-    maintain.mockImplementationOnce(async () => {
-      controller.abort(new Error("cancel during maintenance"));
-      return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
-    });
+  it("refreshes host state when cancellation follows a committed maintenance rewrite", async () => {
+    await withPersistentTranscriptFixture(async ({ request, transcriptBefore }) => {
+      const controller = new AbortController();
+      const onHostCompactionTranscriptSettled = vi.fn();
+      contextEngineCompactMock.mockResolvedValueOnce(completed(sessionId));
+      maintain.mockImplementationOnce(async ({ runtimeContext }) => {
+        const rewrite = runtimeContext?.rewriteTranscriptEntries;
+        if (!rewrite) {
+          throw new Error("expected an active maintenance rewrite capability");
+        }
+        const result = await rewrite(request);
+        controller.abort(new Error("cancel after maintenance rewrite"));
+        return result;
+      });
 
-    await expect(compact(compactParams(controller.signal))).resolves.toMatchObject({
-      ok: true,
-      compacted: true,
-      result: { sessionId: "successor", tokensAfter: 40 },
-    });
+      await expect(
+        compact(compactParams(controller.signal), { onHostCompactionTranscriptSettled }),
+      ).resolves.toMatchObject({
+        ok: true,
+        compacted: true,
+        result: { tokensAfter: 40 },
+      });
 
-    expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
-    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+      expect(loadTranscriptEventsSync(target())).not.toEqual(transcriptBefore);
+      expect(onHostCompactionTranscriptSettled).toHaveBeenCalledOnce();
+      expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+      expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    });
   });
 });

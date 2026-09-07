@@ -157,6 +157,7 @@ interface CopilotToolBridge {
   cleanup?: () => void;
   codeModeEngaged?: boolean;
   promptToolPolicy: {
+    requireExplicitMessageTarget?: boolean;
     apply: (params?: { toolsAllow?: string[]; forceToolNames?: readonly string[] }) => {
       tools: SdkTool[];
       callableToolNames: string[];
@@ -325,6 +326,7 @@ export async function createCopilotToolBridge(
     // as unset and telemetry cannot tell "off" from "harness did not report".
     codeModeEngaged: toolSurfaceRuntime.codeModeControlsEnabled,
     promptToolPolicy: {
+      requireExplicitMessageTarget: toolOptions.requireExplicitMessageTarget,
       apply: (params: { toolsAllow?: string[]; forceToolNames?: readonly string[] } = {}) => {
         const result = compactedTools.promptToolPolicy.apply({
           ...params,
@@ -422,24 +424,6 @@ function buildOpenClawCodingToolsOptions(
           },
         }
       : {}),
-    toolBindings: a.toolBindings,
-    chatType: a.chatType,
-    agentAccountId: a.agentAccountId,
-    messageTo: a.messageTo,
-    messageThreadId: a.messageThreadId,
-    nativeChannelId: a.chatId,
-    messageActionTurnCapability: a.messageActionTurnCapability,
-    groupId: a.groupId,
-    groupChannel: a.groupChannel,
-    groupSpace: a.groupSpace,
-    memberRoleIds: a.memberRoleIds,
-    spawnedBy: a.spawnedBy,
-    senderId: a.senderId,
-    senderName: a.senderName,
-    senderUsername: a.senderUsername,
-    senderE164: a.senderE164,
-    senderIsOwner: a.senderIsOwner,
-    scheduledToolPolicy: a.scheduledToolPolicy,
     allowGatewaySubagentBinding: a.allowGatewaySubagentBinding,
     sessionKey: sandboxSessionKey,
     runSessionKey,
@@ -468,16 +452,9 @@ function buildOpenClawCodingToolsOptions(
     modelAuthMode: resolveModelAuthMode(input.modelProvider, a.config, undefined, {
       workspaceDir,
     }),
-    currentChannelId: a.currentChannelId,
-    currentMessagingTarget: a.currentMessagingTarget,
-    currentThreadTs: a.currentThreadTs,
-    currentMessageId: a.currentMessageId,
-    replyToMode: a.replyToMode,
-    hasRepliedRef: a.hasRepliedRef,
     modelHasVision,
     requireExplicitMessageTarget:
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),
-    sourceReplyDeliveryMode: a.sourceReplyDeliveryMode,
     disableMessageTool: a.disableMessageTool,
     forceMessageTool: a.forceMessageTool,
     enableHeartbeatTool: a.enableHeartbeatTool,
@@ -558,6 +535,7 @@ function convertOpenClawToolToSdkTool(
     input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
+      result: error,
       arguments: executedArgs,
       executionStarted,
       outcome: "failure",
@@ -653,6 +631,7 @@ function convertOpenClawToolToSdkTool(
     input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
+      result,
       arguments: preparedArgs,
       executionStarted: true,
       outcome: resultIsError ? "failure" : "success",
@@ -718,6 +697,7 @@ async function executeCatalogTool(
     input.attemptParams?.observeToolTerminal?.({
       toolCallId: params.toolCallId,
       toolName: params.toolName,
+      result,
       arguments: preparedArgs,
       executionStarted,
       outcome: isError ? "failure" : "success",
@@ -746,6 +726,7 @@ async function executeCatalogTool(
       input.attemptParams?.observeToolTerminal?.({
         toolCallId: params.toolCallId,
         toolName: params.toolName,
+        result: error,
         arguments: preparedArgs,
         executionStarted,
         outcome: "failure",

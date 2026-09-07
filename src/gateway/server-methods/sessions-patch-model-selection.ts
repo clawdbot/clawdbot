@@ -17,27 +17,18 @@ export function persistSessionPatchModelSelection(params: {
   if (typeof params.patch.model !== "string") {
     return;
   }
+  const policy = resolveGatewayModelSelectionPolicy({
+    callerScopes: params.callerScopes,
+    cfg: params.cfg,
+  });
+  if (policy.target === "session") {
+    return;
+  }
   const agentId = resolveSessionAgentId({
     config: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.targetAgentId,
   });
-  const policy = resolveGatewayModelSelectionPolicy({
-    agentId,
-    callerScopes: params.callerScopes,
-    cfg: params.cfg,
-  });
-  if (
-    policy.target === "session" ||
-    // Selecting the effective default clears the pin. Preserve the legacy skip
-    // unless the operator explicitly configured an agent/global target.
-    (policy.scope === "effective" &&
-      (params.entry.modelOverrideSource !== "user" ||
-        !params.entry.providerOverride ||
-        !params.entry.modelOverride))
-  ) {
-    return;
-  }
   const resolved = resolveSessionModelRef(params.cfg, params.entry, agentId);
   persistStickyModelSelectionBestEffort({
     agentId,

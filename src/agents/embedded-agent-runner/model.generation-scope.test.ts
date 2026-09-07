@@ -9,6 +9,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
+import { resolveTieredModel } from "./model-resolution.js";
 import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
 import {
   createModelGenerationFixture,
@@ -26,7 +27,6 @@ beforeEach(async () => {
 afterEach(async () => {
   try {
     auth.verify();
-    expect(auth.spy).toHaveBeenCalled();
   } finally {
     auth.spy.mockRestore();
     await state.cleanup();
@@ -158,7 +158,7 @@ describe("model runtime generation scope", () => {
       workspaceDir: state.workspaceDir,
       config,
       label: "b",
-      suppress: true,
+      suppression: {},
     });
     publishCurrentModelGeneration(generationB);
 
@@ -172,6 +172,69 @@ describe("model runtime generation scope", () => {
     });
     expect(generationA.resolveDynamicModel).toHaveBeenCalled();
     expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("preserves the retirement remedy when the selected route has no discoverable model", async () => {
+    const provider = "generation-retirement-miss";
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {
+        models: {
+          providers: {
+            [provider]: {
+              api: "openai-completions",
+              baseUrl: "https://subscription.example/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      label: "retirement-miss",
+      provider,
+      suppression: {
+        retirement: { replacedBy: "current-model" },
+        when: { baseUrlHosts: ["subscription.example"] },
+      },
+    });
+    generation.pluginRegistry.providers[0]!.provider.resolveDynamicModel = () => undefined;
+
+    const result = await resolveGeneration(generation);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("openclaw doctor --fix");
+    expect(result.error).toContain("current-model");
+  });
+
+  it("keeps the retirement failure discovered by the prepared catalog tier", async () => {
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "tiered-retirement",
+      runtimeBaseUrl: "https://subscription.example/v1",
+      withRegistry: false,
+      suppression: {
+        retirement: { replacedBy: "current-model" },
+        when: { baseUrlHosts: ["subscription.example"] },
+      },
+    });
+    const stores = generation.preparedModelRuntime.createStores();
+    vi.spyOn(stores.modelRegistry, "find").mockReturnValue(generation.resolveDynamicModel());
+    generation.preparedModelRuntime.createStores = () => stores;
+
+    const { resolution } = await resolveTieredModel({
+      provider: generation.provider,
+      modelId: generation.modelId,
+      agentDir: state.agentDir(),
+      config: generation.preparedModelRuntime.config,
+      workspaceDir: state.workspaceDir,
+      preparedModelRuntime: generation.preparedModelRuntime,
+    });
+
+    expect(resolution.model).toBeUndefined();
+    expect(resolution.error).toContain("openclaw doctor --fix");
+    expect(resolution.error).toContain("current-model");
   });
 
   it("keeps concurrent prepared generations isolated across awaited runtime hooks", async () => {

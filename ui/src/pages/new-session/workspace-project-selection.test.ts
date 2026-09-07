@@ -36,7 +36,13 @@ it.each(["main", "work"])(
         method === "projects.list" ? { projects: [...projects, registered] } : {},
     });
     await place.browser.refreshProjects();
-    place.selectAgentId(agentId === "main" ? "work" : "main");
+    const otherAgentId = agentId === "main" ? "work" : "main";
+    place.selectAgentId(otherAgentId);
+    place.selectProjectId(`workspace:${agentId}`);
+    place.selectProjectId(`workspace:${otherAgentId}`);
+    expect(
+      place.buildSessionCreateParams({ message: "Switch workspace", visibility: "normal" }),
+    ).toMatchObject({ agentId: otherAgentId, projectId: `workspace:${otherAgentId}` });
     place.selectProjectId(`workspace:${agentId}`);
     vi.mocked(context.sessions.createResult).mockResolvedValue({
       key: `agent:${agentId}:new`,

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 // Tests miscellaneous run-reply-agent behaviors and artifact output.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,12 @@ import {
 import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
+  beginForegroundSessionMaintenance,
+  waitForSessionMaintenance,
+} from "../../agents/session-maintenance/coordinator.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
@@ -23,7 +30,6 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   onAgentEvent as subscribeAgentEvent,
   type AgentEventPayload,
@@ -33,12 +39,18 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.test-fixtures.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -49,6 +61,7 @@ import {
   createTestQueuedFollowupRun,
   createTestTemplateContext,
 } from "./agent-runner.test-fixtures.js";
+import { clearPendingFinalDeliveryAfterSuccess } from "./dispatch-from-config.pending-final.js";
 import type { FollowupRun } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
@@ -129,8 +142,11 @@ vi.mock("../../agents/model-auth.js", () => ({
 
 vi.mock("../../agents/embedded-agent.js", () => {
   return {
-    compactEmbeddedAgentSession: (params: unknown) =>
-      compactState.compactEmbeddedAgentSessionMock(params),
+    compactEmbeddedAgentSession: (
+      ...args: Parameters<
+        typeof import("../../agents/embedded-agent.js").compactEmbeddedAgentSession
+      >
+    ) => compactState.compactEmbeddedAgentSessionMock(...args),
     runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
     abortEmbeddedAgentRun: (sessionId: string) => {
       abortEmbeddedAgentRunMock(sessionId);
@@ -668,122 +684,243 @@ describe("runReplyAgent auto-compaction token update", () => {
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
   });
 
-  it("executes the next user turn in the default 32K early-flush interval without compaction", async () => {
-    const tmp = tempDirs.make("openclaw-early-flush-");
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 10_920,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 0,
-    };
-    const prompt = "What is two plus two? Answer in one short sentence without tools.";
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://example.test",
-            models: [
-              {
-                id: "claude-opus-4-6",
-                name: "Test model",
-                contextTokens: 32_768,
-                reasoning: false,
-                input: ["text"],
-                maxTokens: 8_192,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
+  it.each([
+    { preempted: false, retiredGateway: false },
+    { preempted: true, retiredGateway: false },
+    { preempted: false, retiredGateway: true },
+    { preempted: false, retiredGateway: false, compactAfterFlush: true },
+  ])(
+    "defers optional memory until real delivery settles ($preempted, retired=$retiredGateway, compact=$compactAfterFlush)",
+    async ({ preempted, retiredGateway, compactAfterFlush = false }) => {
+      const tmp = tempDirs.make("openclaw-early-flush-");
+      const logPath = path.join(tmp, "maintenance.log");
+      setLoggerOverride({ level: "debug", consoleLevel: "silent", file: logPath });
+      const storePath = path.join(tmp, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 10_920,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 0,
+      };
+      const prompt = "What is two plus two? Answer in one short sentence without tools.";
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId: "session",
+        resetTriggered: false,
+      });
+      const delivery = createDeferred();
+      const requestBudget = {
+        contextWindow: 32_768,
+        reserveTokens: 8_192,
+        fixedTokens: 9_500,
+        pendingTokens: 512,
+        pendingUserIdempotencyKey: "processed-user",
+      };
+      let memoryParams: RunEmbeddedAgentInternalParams | undefined;
+      let memoryScope: ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
+      let gatewayActive = true;
+      const gatewayContext = {
+        terminalSessions: {},
+        resolveGatewayContext: () => (gatewayActive ? gatewayContext : undefined),
+      } as never;
+      const resolveGatewayContext = () => gatewayContext;
+      let releaseForeground: (() => void) | undefined;
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://example.test",
+              models: [
+                {
+                  id: "claude-opus-4-6",
+                  name: "Test model",
+                  contextTokens: 32_768,
+                  reasoning: false,
+                  input: ["text"],
+                  maxTokens: 8_192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
           },
         },
-      },
-    };
-    registerMemoryFlushPlanResolverForTest(({ cfg, contextWindowTokens }) => {
-      expect(cfg?.models?.providers?.anthropic?.models).toMatchObject([
-        { id: "claude-opus-4-6", contextTokens: 32_768 },
-      ]);
-      expect(contextWindowTokens).toBe(32_768);
-      return {
-        softThresholdTokens: 4_000,
-        reserveTokensFloor: 20_000,
-        forceFlushTranscriptBytes: 1_000_000_000,
-        prompt: "Pre-compaction memory flush.",
-        systemPrompt: "Write durable memory, then reply NO_REPLY.",
-        relativePath: "memory/active.md",
       };
-    });
-    // The usage counters are from bounded QA metadata. This assembled prompt and
-    // transcript are synthetic; their estimates are not an observed second-turn budget.
-    const terminalEvent = (input: number, output: number) => ({
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-        stopReason: "stop",
-        usage: { input, output, totalTokens: input + output },
-      },
-    });
-    runEmbeddedAgentMock.mockImplementation(
-      async (params: { trigger?: string; prompt?: string; config?: OpenClawConfig }) => {
+      registerMemoryFlushPlanResolverForTest(({ cfg, contextWindowTokens }) => {
+        expect(cfg?.models?.providers?.anthropic?.models).toMatchObject([
+          { id: "claude-opus-4-6", contextTokens: 32_768 },
+        ]);
+        expect(contextWindowTokens).toBe(32_768);
+        return {
+          softThresholdTokens: 4_000,
+          reserveTokensFloor: 20_000,
+          forceFlushTranscriptBytes: 1_000_000_000,
+          prompt: "Pre-compaction memory flush.",
+          systemPrompt: "Write durable memory, then reply NO_REPLY.",
+          relativePath: "memory/active.md",
+        };
+      });
+      // The usage counters are from bounded QA metadata. This assembled prompt and
+      // transcript are synthetic; their estimates are not an observed second-turn budget.
+      const terminalMessage = (input: number, output: number) =>
+        makeAssistantMessageFixture({
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-opus-4-6",
+          content: [{ type: "text", text: "NO_REPLY" }],
+          stopReason: "stop",
+          errorMessage: undefined,
+          usage: {
+            input,
+            output,
+            totalTokens: input + output,
+            cacheRead: 0,
+            cacheWrite: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        });
+      runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentInternalParams) => {
         expect(params.config?.models?.providers?.anthropic?.models).toEqual(
           config.models?.providers?.anthropic?.models,
         );
         if (params.trigger === "memory") {
-          await replaceTranscriptEvents(scope, [terminalEvent(7_039, 34)]);
+          memoryParams = params;
+          memoryScope = getPluginRuntimeGatewayRequestScope();
+          const privateTranscript = expectDefined(params.sessionManager, "memory transcript");
+          expect(privateTranscript.getSessionTarget()).toBeUndefined();
+          privateTranscript.appendMessage(terminalMessage(7_039, 34));
           return {
             payloads: [],
             meta: { agentMeta: { lastCallUsage: { input: 7_039, output: 34 } } },
           };
         }
         expect(params.prompt).toContain(prompt);
-        return { payloads: [{ text: "Two plus two is four." }], meta: {} };
-      },
-    );
-    try {
-      // Memory-flush persistence reads runtime config again; share its authoritative source
-      // with the queued turn so the selected model cannot escape into real catalog discovery.
-      setRuntimeConfigSnapshot(config, config);
-      await replaceSessionEntry(scope, sessionEntry);
-      await replaceTranscriptEvents(scope, [terminalEvent(10_920, 10)]);
-      const result = await createBaseRun({
-        followup: { prompt },
-        run: {
-          agentId: "main",
-          agentDir: path.join(tmp, "agent"),
-          sessionKey,
-          sessionFile: path.join(tmp, "session.jsonl"),
-          workspaceDir: tmp,
-          model: "claude-opus-4-6",
-          config,
-        },
-        reply: {
-          commandBody: prompt,
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          sessionKey,
-          storePath,
-        },
-      }).run();
-
-      expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
-      expect(runtimeErrorMock).not.toHaveBeenCalled();
-      expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual([
-        "memory",
-        "user",
-      ]);
-      expectReplyText(result, "Two plus two is four.");
-      expect(loadSessionEntry(scope)?.memoryFlush).toMatchObject({
-        kind: "succeeded",
-        compactionCount: 0,
+        params.onSuccessfulAuthProfile?.(undefined);
+        params.onCompactionRequestBudget?.(requestBudget);
+        return {
+          payloads: [{ text: "Two plus two is four." }],
+          meta: {
+            agentMeta: {
+              sessionId: "session",
+              agentHarnessId: "openclaw",
+              provider: "anthropic",
+              model: "claude-opus-4-6",
+              lastCallUsage: { input: compactAfterFlush ? 26_000 : 10_920, output: 10 },
+            },
+          },
+        };
       });
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  });
+      try {
+        // Memory-flush persistence reads runtime config again; share its authoritative source
+        // with the queued turn so the selected model cannot escape into real catalog discovery.
+        setRuntimeConfigSnapshot(config, config);
+        await replaceSessionEntry(scope, sessionEntry);
+        SessionManager.open(scope, tmp).appendMessage(terminalMessage(10_920, 10));
+        const turn = createBaseRun({
+          followup: { prompt },
+          run: {
+            agentId: "main",
+            agentDir: path.join(tmp, "agent"),
+            sessionKey,
+            sessionFile: path.join(tmp, "session.jsonl"),
+            workspaceDir: tmp,
+            model: "claude-opus-4-6",
+            config,
+            timeoutMs: 600_000,
+            senderIsOwner: true,
+          },
+          reply: {
+            commandBody: prompt,
+            sessionEntry,
+            sessionStore: { [sessionKey]: sessionEntry },
+            sessionKey,
+            storePath,
+            replyOperation: operation,
+          },
+        });
+        const result = await withPluginRuntimeGatewayRequestScope(
+          {
+            isWebchatConnect: () => false,
+            resolveGatewayContext,
+            nodePlacementGrantAuthority: {
+              agentId: "main",
+              sessionKey,
+              runId: "foreground",
+              assertCurrent: () => {},
+            },
+          },
+          turn.run,
+        );
+
+        expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+        expect(runtimeErrorMock).not.toHaveBeenCalled();
+        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
+        expectReplyText(result, "Two plus two is four.");
+        expect(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
+        let maintenanceSettled = false;
+        const maintenance = waitForSessionMaintenance(sessionKey).then(() => {
+          maintenanceSettled = true;
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(maintenanceSettled).toBe(false);
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        operation.completeWithAfterClearBarrier(delivery.promise, 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
+        if (preempted) {
+          releaseForeground = await beginForegroundSessionMaintenance(sessionKey);
+        }
+        vi.useRealTimers();
+        const completion = getReplyPayloadMetadata(
+          expectDefined(Array.isArray(result) ? result[0] : result, "delivered reply"),
+        )?.pendingFinalDeliveryCompletion;
+        expect(completion).toBeDefined();
+        await settlePendingFinalDelivery({ kind: "pending-final", ...completion! }, "delivered");
+        await clearPendingFinalDeliveryAfterSuccess(completion);
+        gatewayActive = !retiredGateway;
+        delivery.resolve();
+        await operation.ownerSettlement;
+        await maintenance;
+        await flushLogger();
+        const diagnostic = await fs.readFile(logPath, "utf8");
+        expect(
+          runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger),
+          diagnostic,
+        ).toEqual(preempted || retiredGateway ? ["user"] : ["user", "memory"]);
+        if (preempted || retiredGateway) {
+          expect(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
+        } else {
+          expect(memoryParams?.senderIsOwner).toBe(false);
+          expect(memoryScope?.nodePlacementGrantAuthority).toBeUndefined();
+          expect(memoryScope?.resolveGatewayContext?.()).toBe(gatewayContext);
+          expect(loadSessionEntry(scope)?.memoryFlush).toMatchObject({
+            kind: "succeeded",
+            compactionCount: 0,
+          });
+          if (compactAfterFlush) {
+            expect(compactState.compactEmbeddedAgentSessionMock).toHaveBeenCalledWith(
+              expect.objectContaining({ trigger: "budget" }),
+              expect.objectContaining({
+                requestBudget: { ...requestBudget, pendingTokens: 0 },
+              }),
+            );
+          }
+        }
+      } finally {
+        vi.useRealTimers();
+        delivery.resolve();
+        operation.complete();
+        releaseForeground?.();
+        await waitForSessionMaintenance(sessionKey);
+        setLoggerOverride(null);
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     ["without side effects", { meta: { agentMeta: {} } }, true],

@@ -54,7 +54,7 @@ const wsMockState = vi.hoisted(() => ({
   } | null,
 }));
 
-vi.mock("ws", () => ({
+vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
   WebSocket: class MockWebSocket {
     static readonly OPEN = 1;
     on = vi.fn();

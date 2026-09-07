@@ -3,10 +3,8 @@
  * endpoint, including pagination and shared-client lease handling.
  */
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  CodexAppServerAuthRequirement,
-  resolveCodexAppServerAuthProfileIdForAgent,
-} from "./auth-bridge.js";
+import type { CodexAppServerAuthRequirement } from "./auth-bridge.js";
+import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel, CodexReasoningEffortOption } from "./protocol.js";

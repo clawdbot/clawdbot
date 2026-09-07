@@ -15,15 +15,12 @@ import {
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseCerebrasPricingCatalog } from "../extensions/cerebras/pricing-api.js";
-import { parseChutesPricingCatalog } from "../extensions/chutes/pricing-api.js";
-import { parseDeepInfraPricingCatalog } from "../extensions/deepinfra/pricing-api.js";
-import { parseVenicePricingCatalog } from "../extensions/venice/pricing-api.js";
 import type { ModelCatalogModel } from "../packages/model-catalog-core/src/model-catalog-types.js";
 import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogPricing,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
+import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 type ModelCatalogManifestInput = {
@@ -68,14 +65,14 @@ const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
 const CLIENT_BUNDLE_LIMIT_BYTES = 4 * 1024 * 1024;
 const defaultRootDir = resolveRepoRoot(import.meta.url);
-const NATIVE_CATALOG_PARSERS = {
-  cerebras: parseCerebrasPricingCatalog,
-  chutes: parseChutesPricingCatalog,
-  deepinfra: parseDeepInfraPricingCatalog,
-  venice: parseVenicePricingCatalog,
+const NATIVE_CATALOG_PARSER_EXPORTS = {
+  cerebras: "parseCerebrasPricingCatalog",
+  chutes: "parseChutesPricingCatalog",
+  deepinfra: "parseDeepInfraPricingCatalog",
+  venice: "parseVenicePricingCatalog",
 } satisfies Record<
   Exclude<Extract<PricingSource, { authoritative: true }>["id"], "openCode">,
-  (payload: unknown) => PricingCatalog | undefined
+  string
 >;
 
 function requireOptionValue(args: string[], index: number, flag: string): string {
@@ -135,12 +132,11 @@ export function readModelCatalogManifests(
 }
 
 async function loadClientBundleValidator() {
-  const { tsImport } = await import("tsx/esm/api");
   const modulePath = path.join(
     defaultRootDir,
     "packages/model-catalog-core/src/remote-catalog-bundle.ts",
   );
-  const module = await tsImport(pathToFileURL(modulePath).href, import.meta.url);
+  const module = await importToolingTypeScript(pathToFileURL(modulePath).href, import.meta.url);
   if (typeof module.validateAndSanitizeRemoteModelCatalogBundle !== "function") {
     throw new Error("remote catalog bundle validator export is unavailable");
   }
@@ -553,15 +549,21 @@ export async function hydrateModelCatalogFromModelsDev(options: {
   return result;
 }
 
-function parsePricingCatalog(
+async function parsePricingCatalog(
   source: PricingSource,
   body: unknown,
   policies: PricingPolicies,
-): LoadedPricingSource {
+): Promise<LoadedPricingSource> {
   const catalog: PricingCatalog = new Map();
   const aliases: string[][] = [];
   if (source.authoritative && source.id !== "openCode") {
-    const prices = NATIVE_CATALOG_PARSERS[source.id](body);
+    const moduleUrl = new URL(`../extensions/${source.id}/pricing-api.ts`, import.meta.url).href;
+    const module = await importToolingTypeScript(moduleUrl, import.meta.url);
+    const parser = module[NATIVE_CATALOG_PARSER_EXPORTS[source.id]];
+    if (typeof parser !== "function") {
+      throw new Error(`${source.label} pricing parser export is unavailable`);
+    }
+    const prices = parser(body);
     if (!prices) {
       throw new Error(`${source.label} pricing response is malformed`);
     }
@@ -639,7 +641,7 @@ async function fetchPricingSources(
     sources.map(async (source) => {
       try {
         const body = await loadSource(source.url, source.label);
-        return parsePricingCatalog(source, body, policies);
+        return await parsePricingCatalog(source, body, policies);
       } catch (cause) {
         return {
           source,

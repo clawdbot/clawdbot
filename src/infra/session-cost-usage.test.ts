@@ -3053,58 +3053,61 @@ describe("session cost usage", () => {
     expect(series?.points.map((point) => point.cumulativeCost)).toEqual([0.01, 0.03]);
   });
 
-  it("preserves totals and cumulative values when downsampling timeseries", async () => {
-    const root = await makeSessionCostRoot("timeseries-downsample");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "sess-downsample.jsonl");
-
-    const entries = Array.from({ length: 10 }, (_, i) => {
-      const idx = i + 1;
-      return {
+  it.each([3, 2.5, 0.5])(
+    "preserves sampled fields, stable ties, and cumulative values with maxPoints=%s",
+    async (maxPoints) => {
+      const root = await makeSessionCostRoot("timeseries-downsample");
+      const sessionFile = path.join(root, "session.jsonl");
+      // The tied points cross a bucket boundary and must retain transcript order.
+      const entries = [8, 3, 1, 5, 2, 4, 10, 6, 9, 7].map((idx) => ({
         type: "message",
-        timestamp: new Date(Date.UTC(2026, 1, 12, 10, idx, 0)).toISOString(),
+        timestamp: new Date(Date.UTC(2026, 1, 12, 10, idx === 5 ? 4 : idx)).toISOString(),
         message: {
           role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
           usage: {
             input: idx,
             output: idx * 2,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: idx * 3,
-            cost: { total: idx * 0.001 },
+            cacheRead: idx * 3,
+            cacheWrite: idx * 4,
+            totalTokens: idx * 11,
+            cost: { total: idx * 0.001, totalOrigin: "provider-billed" },
           },
         },
-      };
-    });
+      }));
+      await fs.writeFile(
+        sessionFile,
+        entries.map((entry) => JSON.stringify(entry)).join("\n"),
+        "utf-8",
+      );
 
-    await fs.writeFile(
-      sessionFile,
-      entries.map((entry) => JSON.stringify(entry)).join("\n"),
-      "utf-8",
-    );
-
-    const timeseries = await loadSessionUsageTimeSeries({
-      sessionFile,
-      maxPoints: 3,
-    });
-
-    const series = requireValue(timeseries, "session usage timeseries missing");
-    expect(series.points).toHaveLength(3);
-
-    const points = series.points;
-    const totalTokens = points.reduce((sum, point) => sum + point.totalTokens, 0);
-    const totalCost = points.reduce((sum, point) => sum + point.cost, 0);
-    const lastPoint = points[points.length - 1];
-
-    // Full-series totals: sum(1..10)*3 = 165 tokens, sum(1..10)*0.001 = 0.055 cost.
-    expect(totalTokens).toBe(165);
-    expect(totalCost).toBeCloseTo(0.055, 8);
-    expect(lastPoint?.cumulativeTokens).toBe(165);
-    expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
-  });
+      const series = requireValue(
+        await loadSessionUsageTimeSeries({ sessionFile, maxPoints }),
+        "session usage timeseries missing",
+      );
+      // Chronological groups are [1,2,3,5], [4,6,7,8], [9,10], or one complete bucket.
+      const expected =
+        maxPoints < 1
+          ? [{ weight: 55, cumulativeWeight: 55, minute: 10 }]
+          : [
+              { weight: 11, cumulativeWeight: 11, minute: 4 },
+              { weight: 25, cumulativeWeight: 36, minute: 8 },
+              { weight: 19, cumulativeWeight: 55, minute: 10 },
+            ];
+      expect(series.points).toEqual(
+        expected.map(({ weight, cumulativeWeight, minute }) => ({
+          timestamp: Date.UTC(2026, 1, 12, 10, minute),
+          input: weight,
+          output: weight * 2,
+          cacheRead: weight * 3,
+          cacheWrite: weight * 4,
+          totalTokens: weight * 11,
+          cost: expect.closeTo(weight * 0.001, 12),
+          cumulativeTokens: cumulativeWeight * 11,
+          cumulativeCost: expect.closeTo(cumulativeWeight * 0.001, 12),
+        })),
+      );
+    },
+  );
 
   it("returns empty points for zero, negative, and non-finite maxPoints", async () => {
     const root = await makeSessionCostRoot("timeseries-invalid-max-points");

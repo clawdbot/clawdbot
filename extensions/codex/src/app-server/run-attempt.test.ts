@@ -43,7 +43,7 @@ import * as attemptStartup from "./attempt-startup.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
-import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
 import {
   consumeCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
@@ -321,28 +321,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
   };
 }
 
-function createMessageDynamicTool(
-  description: string,
-  actions: string[] = ["send"],
-): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
-  return {
-    type: "function",
-    name: "message",
-    description,
-    inputSchema: {
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: actions,
-        },
-      },
-      required: ["action"],
-      additionalProperties: false,
-    },
-  };
-}
-
 function createNamedDynamicTool(
   name: string,
 ): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
@@ -471,7 +449,11 @@ function createCodexToolBridgeForTest(
     tools,
     registeredTools,
     signal,
-    directToolNames: testing.resolveCodexDynamicToolDirectNames(params, hostSystemAgentActive),
+    directToolNames: testing.resolveCodexDynamicToolDirectNames(
+      params,
+      registeredTools,
+      hostSystemAgentActive,
+    ),
   });
 }
 
@@ -1018,7 +1000,7 @@ function installCleanupTrackingClient(turnStartError?: Error) {
   const events: string[] = [];
   const closeAndWait = vi.fn(async () => {
     events.push("closeAndWait");
-    return true;
+    return { exited: true, cleanup: "closed" };
   });
   const state: {
     client?: unknown;
@@ -1712,34 +1694,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(binding.mcpServersFingerprint).toBeUndefined();
     expect((await readCodexAppServerBinding(sessionFile))?.mcpServersFingerprint).toBeUndefined();
   });
-  it("scopes Codex developer reply instructions to message-tool-only delivery", () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    expect(
-      testing.buildDeveloperInstructions(params, {
-        dynamicTools: [createMessageDynamicTool("Message test tool")],
-      }),
-    ).toContain("Visible source replies are not automatically delivered for this run.");
-    const withoutMessageToolInstructions = testing.buildDeveloperInstructions(params, {
-      dynamicTools: [],
-    });
-    expect(withoutMessageToolInstructions).toContain(
-      "reply normally in your final assistant message",
-    );
-    expect(withoutMessageToolInstructions).not.toContain("message(action=send)");
-    expect(withoutMessageToolInstructions).not.toContain("Use `message`");
-    expect(withoutMessageToolInstructions).not.toContain("reacting to its current message");
-    params.sourceReplyDeliveryMode = "automatic";
-    const automaticInstructions = testing.buildDeveloperInstructions(params);
-    expect(automaticInstructions).toContain("OpenClaw delivers your final response automatically.");
-    expect(automaticInstructions).not.toContain("message(action=send)");
-    expect(automaticInstructions).toContain(
-      "You can participate in the conversation throughout your work.",
-    );
-    expect(automaticInstructions).toContain("sending a message doesn’t end your task");
-  });
-
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
     registerPluginCommand("demo-plugin", {
       name: "codex_demo",
@@ -2893,6 +2847,7 @@ describe("runCodexAppServerAttempt", () => {
         phase: "update",
         title: "Plan updated",
         source: "openclaw",
+        explanation: "1/2 complete",
         steps: plan,
       },
     });
@@ -3190,7 +3145,7 @@ describe("runCodexAppServerAttempt", () => {
       sharedClientModule,
       "clearSharedCodexAppServerClientIfCurrentAndUnclaimed",
     );
-    const closeAndWait = vi.fn(async () => true);
+    const closeAndWait = vi.fn(async () => ({ exited: true, cleanup: "closed" }));
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
     const request = vi.fn(async (method: string) => {
       if (method === "configRequirements/read") {
@@ -3235,6 +3190,47 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     expect(retireSpy).not.toHaveBeenCalled();
     expect(closeAndWait).not.toHaveBeenCalled();
+  });
+
+  it("projects dynamic progress cards through the shared safe status contract", async () => {
+    const params = createRunParams();
+    const onAgentEvent = vi.fn();
+    params.onAgentEvent = onAgentEvent;
+    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+
+    await projector.recordDynamicProgressCardUpdate({
+      markdown: '<progress aria-label="private" value="1" max="2"></progress>',
+      plan: [{ step: "Ship", status: "completed" }],
+    });
+    await projector.recordDynamicProgressCardUpdate({ markdown: "Working" });
+    await projector.recordDynamicProgressCardUpdate({});
+
+    expect(onAgentEvent).toHaveBeenNthCalledWith(1, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        explanation: "1/1 complete",
+        steps: [{ step: "Ship", status: "completed" }],
+      },
+    });
+    expect(onAgentEvent).toHaveBeenNthCalledWith(2, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        explanation: "Progress updated",
+        steps: [],
+      },
+    });
+    expect(onAgentEvent).toHaveBeenNthCalledWith(3, {
+      stream: "plan",
+      data: { phase: "update", title: "Plan updated", source: "openclaw", steps: [] },
+    });
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("<progress");
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("private");
   });
 
   it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
@@ -3409,7 +3405,12 @@ describe("runCodexAppServerAttempt", () => {
     const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
+    params.config = {
+      ...params.config,
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    };
+    const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -3433,6 +3434,10 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     expect(hookContext.runId).toBe("run-1");
     expect(hookContext.sessionId).toBe("session-1");
+    expect(hookContext).toMatchObject({
+      modelProviderId: params.provider,
+      modelId: params.modelId,
+    });
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
     const wrappedPluginSystemContext = (text: string) =>
@@ -5149,13 +5154,30 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
     const onToolResult = vi.fn();
+    const executeRead = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "file contents" }],
+      details: {},
+    }));
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      const tools = createOpenClawCodingTools(options).filter((tool) => tool.name === "read");
+      for (const tool of tools) {
+        tool.execute = executeRead;
+      }
+      return tools;
+    });
     const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["read"];
     params.verboseLevel = "full";
     params.onToolResult = onToolResult;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
+    const startParams = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as { dynamicTools: CodexDynamicToolSpec[] };
+    expect(specNames(startParams.dynamicTools)).toContain("read");
     await harness.notify(
       itemNotification("item/started", {
         type: "dynamicToolCall",
@@ -5169,6 +5191,24 @@ describe("runCodexAppServerAttempt", () => {
         durationMs: null,
       }),
     );
+    expect(onToolResult).not.toHaveBeenCalled();
+    const response = await harness.handleServerRequest({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "tool-1",
+        namespace: null,
+        tool: "read",
+        arguments: { path: "README.md" },
+      },
+    });
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [{ type: "inputText", text: "file contents" }],
+    });
+    expect(executeRead).toHaveBeenCalledOnce();
     await harness.notify(
       itemNotification("item/completed", {
         type: "dynamicToolCall",
@@ -5189,7 +5229,7 @@ describe("runCodexAppServerAttempt", () => {
       text: "📖 Read: `from README.md`",
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+      text: "📖 Read\n```txt\nfile contents\n```",
     });
   });
 
@@ -7315,12 +7355,16 @@ describe("runCodexAppServerAttempt", () => {
   it("retains the prepared execution model across native resume without exposing it in lifecycle events", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const runtimeModelId = "test-runtime-model";
+    const beforePromptBuild = vi.fn(() => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+    );
     const freshHarness = createStartedThreadHarness(
       async (method) =>
         method === "thread/start" ? { ...threadStartResult(), model: runtimeModelId } : undefined,
       { persistedThreads: [] },
     );
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
     params.modelId = "gpt-5.6-sol";
     params.model = {
       ...params.model,
@@ -7335,6 +7379,10 @@ describe("runCodexAppServerAttempt", () => {
 
     const freshRun = runCodexAppServerAttempt(params, { runtimeModelId });
     await completeStartedRun(freshRun, freshHarness.waitForMethod, freshHarness.completeTurn);
+    expect(mockCall(beforePromptBuild, "before_prompt_build", -1)[1]).toMatchObject({
+      modelProviderId: params.provider,
+      modelId: params.modelId,
+    });
 
     for (const method of ["thread/start", "turn/start"]) {
       expect(freshHarness.requests.find((entry) => entry.method === method)).toMatchObject({
@@ -7360,6 +7408,10 @@ describe("runCodexAppServerAttempt", () => {
       { runtimeModelId },
     );
     await completeStartedRun(resumedRun, resumedHarness.waitForMethod, resumedHarness.completeTurn);
+    expect(mockCall(beforePromptBuild, "before_prompt_build", -1)[1]).toMatchObject({
+      modelProviderId: params.provider,
+      modelId: params.modelId,
+    });
 
     expectResumeRequest(resumedHarness.requests, {
       threadId: "thread-1",
@@ -7645,6 +7697,10 @@ describe("runCodexAppServerAttempt", () => {
   it("rejects a newly observed native model before inference with stale prepared host auth", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();
     const modelRef = { provider: "openai", model: "gpt-5.5" };
+    const beforePromptBuild = vi.fn(() => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+    );
     await writeExistingBinding(sessionFile, workspaceDir, {
       preserveNativeModel: true,
       authProfileId: "openai:host",
@@ -7688,6 +7744,10 @@ describe("runCodexAppServerAttempt", () => {
       }
       return error;
     });
+    expect(beforePromptBuild).toHaveBeenCalled();
+    const hookContext = mockCall(beforePromptBuild, "before_prompt_build")[1];
+    expect(hookContext).not.toHaveProperty("modelProviderId");
+    expect(hookContext).not.toHaveProperty("modelId");
     expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
     expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
     expect(result instanceof Error || Boolean(readAttemptTerminal(result).promptError)).toBe(true);
@@ -7710,6 +7770,10 @@ describe("runCodexAppServerAttempt", () => {
     "preserves supervised native model and transport/home guards over $transport (answer: $hasAnswer)",
     async ({ transport, hasAnswer }) => {
       const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+      const beforePromptBuild = vi.fn(() => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+      );
       const codexHome = path.join(tempDir, "review-codex-home");
       vi.stubEnv("CODEX_HOME", codexHome);
       const rolloutPath = path.join(codexHome, "sessions", "thread-existing.jsonl");
@@ -7875,6 +7939,12 @@ describe("runCodexAppServerAttempt", () => {
         });
         const result = await run;
         expect(result.terminal).toEqual({ kind: "ok" });
+        expect(beforePromptBuild).toHaveBeenCalled();
+        for (let index = 0; index < beforePromptBuild.mock.calls.length; index += 1) {
+          const context = mockCall(beforePromptBuild, "before_prompt_build", index)[1];
+          expect(context).not.toHaveProperty("modelProviderId");
+          expect(context).not.toHaveProperty("modelId");
+        }
         expect(result.runtimeModelSelection).toEqual({
           provider: "openai",
           model: "gpt-5.6-luna",
@@ -8122,6 +8192,43 @@ describe("runCodexAppServerAttempt", () => {
     },
   );
 
+  it("rejects a resumed provider mismatch before inference and preserves the binding", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return {
+            ...threadStartResult("thread-existing", { cwd: workspaceDir }),
+            model: "gpt-5.4",
+            modelProvider: "local-provider",
+          };
+        }
+        if (method === "turn/start") {
+          return { turn: { id: "turn-1", status: "completed", items: [] } };
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-existing"] },
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "openai";
+    params.modelId = "gpt-5.5";
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "Codex resumed a different model provider",
+    );
+    expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
+    expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-existing",
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+  });
+
   it("does not inherit a bound local provider for explicit native OpenAI resumed runs", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, {
@@ -8161,6 +8268,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequestParams?.model).toBe("gpt-5.5");
     expect(resumeRequestParams).not.toHaveProperty("modelProvider");
     expect(resumeRequestParams?.approvalsReviewer).toBe("auto_review");
+    expect(requests.find((request) => request.method === "turn/start")).toMatchObject({
+      params: {
+        model: "gpt-5.5",
+        collaborationMode: { settings: { model: "gpt-5.5" } },
+      },
+    });
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({ model: "gpt-5.5" });
   });
   it("does not apply bound local model providers to provider-qualified resumed models", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

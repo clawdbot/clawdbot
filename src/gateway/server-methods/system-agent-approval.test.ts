@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
@@ -27,7 +27,7 @@ import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db.
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   readLastSystemAgentAuditEntry,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "../../system-agent/system-agent.test-helpers.js";
@@ -66,11 +66,7 @@ describe("Full Access delegated chat", () => {
   let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
   beforeAll(() => {
-    pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
-  });
-
-  afterAll(() => {
-    pluginMetadataSnapshot?.restore();
+    pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
   });
 
   afterEach(async () => {
@@ -83,20 +79,22 @@ describe("Full Access delegated chat", () => {
     resetPluginStateStoreForTests();
     resetCommandQueueStateForTest();
     vi.unstubAllEnvs();
-    pluginMetadataSnapshot?.rebindForCurrentEnv();
+
     systemAgentTempDirs.cleanup();
   });
 
   async function createDelegatedChatFixture(
-    source: "typed" | "model tool" | "planner" = "typed",
+    source: "typed" | "model tool" = "typed",
     previousRun = "live",
   ) {
     const stateDir = systemAgentTempDirs.make("openclaw-full-access-change-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
     fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(verifiedConfig));
-    pluginMetadataSnapshot?.rebindForCurrentEnv();
-    const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+
+    const fixture = await pluginMetadataSnapshot!.run(() =>
+      createSystemAgentVerifiedInferenceTestFixture(verifiedConfig),
+    );
     setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
       fixture.binding.execution,
     );
@@ -125,9 +123,6 @@ describe("Full Access delegated chat", () => {
         if (source === "typed" || proposed) {
           return { text: "Config verified." };
         }
-        if (source === "planner") {
-          return null;
-        }
         proposed = true;
         const tool = createSystemAgentTool({
           surface: params.surface,
@@ -141,10 +136,6 @@ describe("Full Access delegated chat", () => {
           value: "debug",
         });
         return { text: "Change proposed." };
-      },
-      planWithAssistant: async () => {
-        proposed = true;
-        return { reply: "Change proposed.", command: "config set logging.level debug" };
       },
     });
     vi.spyOn(engine, "loadOverview").mockResolvedValue({
@@ -203,15 +194,17 @@ describe("Full Access delegated chat", () => {
     const callChat = async (params: Record<string, unknown>) => {
       const respond = vi.fn<(ok: boolean, payload?: unknown, error?: unknown) => void>();
       const handler = expectDefined(systemAgentHandlers["openclaw.chat"], "chat handler");
-      await handler({
-        params,
-        respond,
-        context,
-        client: {
-          connId: "conn-test",
-          connect: { device: { id: "device-test" } },
-        } as GatewayClient,
-      } as never);
+      await pluginMetadataSnapshot!.run(() =>
+        handler({
+          params,
+          respond,
+          context,
+          client: {
+            connId: "conn-test",
+            connect: { device: { id: "device-test" } },
+          } as GatewayClient,
+        } as never),
+      );
       const [ok, payload, error] = expectDefined(respond.mock.calls[0], "chat response");
       return { ok, payload, error };
     };
@@ -420,7 +413,7 @@ describe("Full Access delegated chat", () => {
   );
 
   it.each([
-    ...(["typed", "model tool", "planner"] as const).flatMap((source) =>
+    ...(["typed", "model tool"] as const).flatMap((source) =>
       (["closed", "live", "live-restricted"] as const).map((previousRun) => ({
         source,
         previousRun,

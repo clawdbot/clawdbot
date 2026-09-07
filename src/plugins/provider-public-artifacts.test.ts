@@ -184,18 +184,78 @@ describe("provider public artifacts", () => {
     });
   });
 
-  it("loads OpenCode Go DeepSeek V4 thinking policy before runtime registration", () => {
+  it.each(["opencode", "opencode-go"])(
+    "preserves %s effort metadata before runtime registration",
+    (provider) => {
+      const surface = resolveBundledProviderPolicySurface(provider);
+      const cases = [
+        [undefined, undefined, undefined],
+        [null, undefined, undefined],
+        [[], undefined, undefined],
+        [["none", "off"], ["off"], "off"],
+        [["max", "high", "low", "high", "none"], ["off", "max", "high", "low"], "high"],
+        [
+          ["high", "medium", "low", "minimal", "xhigh"],
+          ["off", "high", "medium", "low", "minimal", "xhigh"],
+          "medium",
+        ],
+        [["low"], ["off", "low"], "low"],
+        [["minimal", "xhigh", "max"], ["off", "minimal", "xhigh", "max"], "off"],
+        [["adaptive", "ultra", "HIGH", " low ", "provider-native", ""], ["off"], "off"],
+      ] as const;
+      for (const [efforts, levelIds, defaultLevel] of cases) {
+        expect(
+          surface?.resolveThinkingProfile?.({
+            provider,
+            modelId: "effort-fixture",
+            compat: { supportedReasoningEfforts: efforts },
+          }),
+          JSON.stringify(efforts),
+        ).toEqual(levelIds ? { levels: levelIds.map((id) => ({ id })), defaultLevel } : undefined);
+      }
+      expect(
+        surface?.resolveThinkingProfile?.({
+          provider,
+          modelId: "effort-fixture",
+          api: "openai-responses",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: [] },
+        }),
+      ).toEqual(
+        provider === "opencode"
+          ? { levels: [{ id: "off", label: "always on" }], defaultLevel: "off" }
+          : undefined,
+      );
+    },
+  );
+
+  it("loads OpenCode Go model overrides before runtime registration", () => {
     const surface = resolveBundledProviderPolicySurface("opencode-go");
 
-    expect(
-      surface?.resolveThinkingProfile?.({
-        provider: "opencode-go",
-        modelId: "deepseek-v4-pro",
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
-      defaultLevel: "high",
-    });
+    for (const [modelId, levelIds, defaultLevel] of [
+      ["deepseek-v4-pro", ["off", "high", "max"], "high"],
+      ["kimi-k3", ["off", "max"], "off"],
+      ["kimi-k2.6", ["off"], "off"],
+    ] as const) {
+      expect(
+        surface?.resolveThinkingProfile?.({
+          provider: "opencode-go",
+          modelId,
+          compat: { supportedReasoningEfforts: ["low"] },
+        }),
+      ).toEqual({ levels: levelIds.map((id) => ({ id })), defaultLevel });
+    }
+    for (const modelId of ["minimax-m2.7", "minimax-m3"]) {
+      expect(
+        surface?.resolveThinkingProfile?.({
+          provider: "opencode-go",
+          modelId,
+          api: "anthropic-messages",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["low"] },
+        }),
+      ).toEqual({ levels: [{ id: "off" }, { id: "low" }], defaultLevel: "low" });
+    }
     expect(
       surface?.resolveThinkingProfile?.({ provider: "opencode-go", modelId: "glm-5" }),
     ).toBeUndefined();

@@ -40,7 +40,6 @@ export type ImageRenderOptions = {
   canonicalMessageKey?: string;
   localSubmission?: boolean;
   connectionEpoch?: number;
-  localMediaPreviewRoots?: readonly string[];
   resourceBasePath?: string;
   authToken?: string | null;
   onRequestUpdate?: () => void;

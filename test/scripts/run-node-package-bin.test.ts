@@ -184,7 +184,6 @@ describe("Node package tool commands", () => {
         "scripts/lib/arg-utils.runtime.mjs",
         "scripts/lib/record-shared.mjs",
         "scripts/lib/repo-root.mjs",
-        "scripts/lib/windows-cmd-helpers-runtime.mts",
         "packages/normalization-core/src/record-coerce.ts",
         "packages/normalization-core/src/string-coerce.ts",
         "packages/normalization-core/src/utf16-slice.ts",

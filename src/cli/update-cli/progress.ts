@@ -31,6 +31,8 @@ function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
 type ProgressController = {
   progress: UpdateStepProgress;
   stop: () => void;
+  suspend: () => void;
+  resume: () => void;
   dispose: () => void;
 };
 
@@ -40,18 +42,30 @@ export function createUpdateProgress(
   run?: UpdateCommandOptions["run"],
 ): ProgressController {
   if (!enabled) {
-    return { progress: {}, stop: () => {}, dispose: () => {} };
+    return { progress: {}, stop: () => {}, suspend: () => {}, resume: () => {}, dispose: () => {} };
   }
 
   let currentSpinner: ReturnType<typeof spinner> | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let currentPhase: UpdateRunPhase | undefined;
+  let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
   const stop = () => {
     currentSpinner?.clear();
     currentSpinner = null;
   };
+  const clearTimer = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
   const refresh = () => {
+    // Candidate migrations can advance the ledger beyond this process's reader.
+    // Step callbacks and final cleanup must respect the same fence as the timer.
+    if (observation !== "active") {
+      return undefined;
+    }
     const record = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
     if (!record) {
       return undefined;
@@ -69,9 +83,8 @@ export function createUpdateProgress(
         defaultRuntime.log(`Phase: ${phase}`);
       }
     }
-    if (record.status !== "running" && timer) {
-      clearTimeout(timer);
-      timer = undefined;
+    if (record.status !== "running") {
+      clearTimer();
     }
     return record;
   };
@@ -113,14 +126,29 @@ export function createUpdateProgress(
   return {
     progress,
     stop,
-    dispose: () => {
-      flush();
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
+    suspend: () => {
+      if (observation === "active") {
+        observation = "suspended";
+        currentPhase = undefined;
+        clearTimer();
+        stop();
       }
-      if (run && activeUpdateProgress.get(run.runId) === flush) {
-        activeUpdateProgress.delete(run.runId);
+    },
+    resume: () => {
+      if (observation === "suspended") {
+        observation = "active";
+        poll();
+      }
+    },
+    dispose: () => {
+      try {
+        flush();
+      } finally {
+        observation = "disposed";
+        clearTimer();
+        if (run && activeUpdateProgress.get(run.runId) === flush) {
+          activeUpdateProgress.delete(run.runId);
+        }
       }
     },
   };

@@ -27,15 +27,15 @@ scenario:
         - {
             coverageId: tui.slash-commands,
             testFile: src/tui/tui-pty-harness.e2e.test.ts,
-            testNamePattern: "^TUI PTY harness lists and executes slash commands through authenticated real PTY frames$",
+            testNamePattern: "^TUI PTY harness > lists and executes slash commands through authenticated real PTY frames$",
           }
         - {
             coverageId: tui.pickers,
             testFile: src/tui/tui-pty-harness.e2e.test.ts,
-            testNamePattern: "^TUI PTY harness selects model and session pickers through authenticated real PTY frames$",
+            testNamePattern: "^TUI PTY harness > selects model and session pickers through authenticated real PTY frames$",
           }
         - {
             coverageId: tui.settings,
             testFile: src/tui/tui-pty-harness.e2e.test.ts,
-            testNamePattern: "^TUI PTY harness updates settings through an authenticated real PTY overlay$",
+            testNamePattern: "^TUI PTY harness > updates settings through an authenticated real PTY overlay$",
           }

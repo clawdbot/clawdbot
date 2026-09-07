@@ -296,7 +296,7 @@ function writeConsoleLine(level: LogLevel, line: string, opts: { redacted?: bool
 
 function shouldSuppressProbeConsoleLine(params: {
   level: LogLevel;
-  subsystem?: string | null;
+  suppressProbeMessages: boolean;
   message?: string | null;
   meta?: Record<string, unknown>;
 }): boolean {
@@ -306,14 +306,8 @@ function shouldSuppressProbeConsoleLine(params: {
   if (params.level === "error" || params.level === "fatal") {
     return false;
   }
-  const subsystem = normalizeSubsystemLabel(params.subsystem);
   const message = typeof params.message === "string" ? params.message : "";
-  const isProbeSuppressedSubsystem =
-    subsystem === "agent/embedded" ||
-    subsystem.startsWith("agent/embedded/") ||
-    subsystem === "model-fallback" ||
-    subsystem.startsWith("model-fallback/");
-  if (!isProbeSuppressedSubsystem) {
+  if (!params.suppressProbeMessages) {
     return false;
   }
   const runLikeId =
@@ -350,6 +344,12 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
+  // Namespace membership is fixed; verbosity and sink settings remain per-message.
+  const suppressProbeMessages =
+    resolvedSubsystem === "agent/embedded" ||
+    resolvedSubsystem.startsWith("agent/embedded/") ||
+    resolvedSubsystem === "model-fallback" ||
+    resolvedSubsystem.startsWith("model-fallback/");
   let fileChild: TsLogger<LogObj> | undefined;
   let formatConsoleLine: ReturnType<typeof createConsoleLineFormatter> | undefined;
 
@@ -385,7 +385,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     if (
       shouldSuppressProbeConsoleLine({
         level,
-        subsystem: resolvedSubsystem,
+        suppressProbeMessages,
         message: consoleMessage,
         meta: fileMeta,
       })
@@ -450,7 +450,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         if (
           shouldSuppressProbeConsoleLine({
             level: "info",
-            subsystem: resolvedSubsystem,
+            suppressProbeMessages,
             message,
           })
         ) {

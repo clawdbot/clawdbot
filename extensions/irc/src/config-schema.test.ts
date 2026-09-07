@@ -63,6 +63,22 @@ describe("irc config schema", () => {
     expect(config.accounts?.work?.configWrites).toBe(true);
   });
 
+  it("accepts healthMonitor at channel and account level", () => {
+    const config = expectValidConfig(
+      parseIrcConfig({
+        healthMonitor: { enabled: false },
+        accounts: {
+          work: {
+            healthMonitor: { enabled: true },
+          },
+        },
+      }),
+    );
+
+    expect(config.healthMonitor?.enabled).toBe(false);
+    expect(config.accounts?.work?.healthMonitor?.enabled).toBe(true);
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidConfig(
       parseIrcConfig({

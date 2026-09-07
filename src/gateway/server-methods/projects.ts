@@ -35,6 +35,7 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -194,15 +195,36 @@ function listProjectRecents(
   const seen = new Set<string>();
   const recents: ProjectRecent[] = [];
   for (const [sessionKey, entry] of candidates) {
+    // Reserved rows such as `global` carry no owner in their logical key. Keep the prepared
+    // combined-store owner so repository and project recents resolve to the session's agent.
+    const owner = expectDefined(targetsBySessionKey.get(sessionKey), "recent session owner");
+    if (entry.repositoryWorkspaceId) {
+      const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
+      if (
+        !repository ||
+        repository.sessionKey !== sessionKey ||
+        repository.agentId !== owner.agentId ||
+        seen.has(repository.url)
+      ) {
+        continue;
+      }
+      seen.add(repository.url);
+      recents.push({
+        kind: "repository",
+        url: repository.url,
+        displayName: path.posix.basename(repository.url, ".git"),
+      });
+      if (recents.length === 8) {
+        break;
+      }
+      continue;
+    }
     const projectId = normalizeOptionalString(entry.projectId);
     const explicitProject = projectId ? projectsById.get(projectId) : undefined;
     const worktreeRoot = normalizeOptionalString(entry.worktree?.repoRoot);
     const spawnedCwd = normalizeOptionalString(entry.spawnedCwd);
     const execCwd = normalizeOptionalString(entry.execCwd);
     const folder = worktreeRoot ?? spawnedCwd ?? execCwd;
-    // Reserved rows such as `global` carry no owner in their logical key. Keep the prepared
-    // combined-store owner so equal workspace paths still resolve to the session's agent.
-    const owner = expectDefined(targetsBySessionKey.get(sessionKey), "recent session owner");
     const project =
       explicitProject ?? (folder ? resolvePathProject(projects, folder, owner.agentId) : undefined);
     const key = project

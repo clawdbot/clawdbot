@@ -8,13 +8,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 
 export function resolveGatewayModelSelectionPolicy(params: {
-  agentId: string;
   callerScopes: readonly string[];
   cfg: OpenClawConfig;
   scope?: ModelSelectionScope;
 }): StickyModelSelectionPolicy {
   return resolveStickyModelSelectionPolicy({
-    agentId: params.agentId,
     canPersistConfig: params.callerScopes.includes(ADMIN_SCOPE) && !resolveIsNixMode(process.env),
     cfg: params.cfg,
     ...(params.scope ? { scope: params.scope } : {}),

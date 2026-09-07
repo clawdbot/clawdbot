@@ -9,33 +9,11 @@
  * the metadata system (built code loads .js; source/jiti paths resolve .ts).
  */
 import { createRequire } from "node:module";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-
-type CurrentSnapshotModule = Pick<
-  typeof import("./current-plugin-metadata-snapshot.js"),
-  "adoptCurrentPluginMetadataSnapshotIfAbsent" | "getCurrentPluginMetadataSnapshot"
->;
-type SnapshotLoaderModule = Pick<
-  typeof import("./plugin-metadata-snapshot.js"),
-  "resolvePluginMetadataSnapshot"
->;
-
-type SnapshotReaderSlot = {
-  adoptCurrentPluginMetadataSnapshotIfAbsent?: CurrentSnapshotModule["adoptCurrentPluginMetadataSnapshotIfAbsent"];
-  getCurrentPluginMetadataSnapshot?: CurrentSnapshotModule["getCurrentPluginMetadataSnapshot"];
-  resolvePluginMetadataSnapshot?: SnapshotLoaderModule["resolvePluginMetadataSnapshot"];
-};
-
-// globalThis-keyed so a require-loaded second module instance shares the slot.
-const snapshotReaderSlot = resolveGlobalSingleton<SnapshotReaderSlot>(
-  Symbol.for("openclaw.pluginMetadataSnapshotReaders"),
-  () => ({}),
-);
-
-/** Called by the snapshot modules at eval time; last registration wins. */
-export function registerPluginMetadataSnapshotReaders(readers: SnapshotReaderSlot): void {
-  Object.assign(snapshotReaderSlot, readers);
-}
+import {
+  snapshotReaderSlot,
+  type CurrentSnapshotModule,
+  type SnapshotLoaderModule,
+} from "./plugin-metadata-snapshot-readers.js";
 
 const require = createRequire(import.meta.url);
 

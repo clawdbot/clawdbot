@@ -143,10 +143,7 @@ describe("runSetupModelAuthStep", () => {
         runtime: createRuntime(),
       });
 
-      expect(ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/ops-agent", {
-        allowKeychainPrompt: false,
-        readOnly: true,
-      });
+      expect(ensureAuthProfileStore).not.toHaveBeenCalled();
       expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
         expect.objectContaining({
           workspaceDir: "/tmp/ops-workspace",
@@ -194,10 +191,7 @@ describe("runSetupModelAuthStep", () => {
     });
 
     const agentDir = expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/);
-    expect(ensureAuthProfileStore).toHaveBeenCalledWith(agentDir, {
-      allowKeychainPrompt: false,
-      readOnly: true,
-    });
+    expect(ensureAuthProfileStore).not.toHaveBeenCalled();
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(expect.objectContaining({ workspaceDir }));
     expect(applyAuthChoice).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "robby", agentDir, workspaceDir }),
@@ -237,10 +231,7 @@ describe("runSetupModelAuthStep", () => {
       runtime: createRuntime(),
     });
 
-    expect(ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/main-agent", {
-      allowKeychainPrompt: false,
-      readOnly: true,
-    });
+    expect(ensureAuthProfileStore).not.toHaveBeenCalled();
     expect(applyAuthChoice).toHaveBeenCalledWith(
       expect.objectContaining({
         authChoice: "anthropic-cli",
