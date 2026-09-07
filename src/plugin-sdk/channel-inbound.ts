@@ -274,6 +274,7 @@ export {
   resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
 };
 export {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
   type ChannelPartialDeliveryError,
