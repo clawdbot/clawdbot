@@ -333,6 +333,12 @@ exit "$status"`,
   );
   try {
     const checkout = cloneAncestrySource(fixture, "checkout");
+    fixtureGit(checkout, [
+      "config",
+      "--add",
+      "remote.origin.fetch",
+      "+refs/heads/*:refs/remotes/origin/*",
+    ]);
     expectPolicySuccess(
       runReleaseAncestry(checkout, "merge-base", {
         MOVE_MARKER: marker,

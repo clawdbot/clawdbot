@@ -68,6 +68,7 @@ def fetch_history(source_sha, target, depth_argument):
                 "--no-tags",
                 "--no-recurse-submodules",
                 "--filter=blob:none",
+                "--refmap=",
                 depth_argument,
                 "origin",
                 f"+{source_sha}:{source_local_ref}",
