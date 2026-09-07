@@ -21,6 +21,7 @@ import {
   pruneStaleEntries,
   pruneStaleModelRunEntries,
   resolveMaintenanceConfigFromInput,
+  normalizeResolvedMaintenanceConfigInput,
   resolveQuotaSuspensionEntryMaintenance,
   shouldPreserveMaintenanceEntry,
   shouldRunModelRunPrune,
@@ -29,6 +30,22 @@ import {
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+it("inherits deleted archive retention for older resolved callers but preserves explicit disablement", () => {
+  const base = {
+    mode: "enforce" as const,
+    pruneAfterMs: DAY_MS,
+    maxEntries: 100,
+    resetArchiveRetentionMs: 7 * DAY_MS,
+    maxDiskBytes: null,
+    highWaterBytes: null,
+  };
+  expect(normalizeResolvedMaintenanceConfigInput(base).deletedArchiveRetentionMs).toBe(7 * DAY_MS);
+  expect(
+    normalizeResolvedMaintenanceConfigInput({ ...base, deletedArchiveRetentionMs: null })
+      .deletedArchiveRetentionMs,
+  ).toBeNull();
+});
 
 const fixtureSuite = createFixtureSuite("openclaw-pruning-suite-");
 

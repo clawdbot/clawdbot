@@ -581,7 +581,11 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
           directories: [retention.archiveDirectory],
           rules: retention.rules,
         });
-        await prunePublishedSessionArchivesByRetention({ scope, rules: retention.rules });
+        await prunePublishedSessionArchivesByRetention({
+          scope,
+          rules: retention.rules,
+          isCurrent,
+        });
       }
     } catch (error) {
       getChildLogger({ subsystem: "session-sqlite" }).warn(

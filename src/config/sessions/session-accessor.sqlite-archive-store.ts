@@ -266,7 +266,12 @@ export async function prunePublishedSessionArchivesByRetention(params: {
   nowMs?: number;
   rules: readonly { olderThanMs: number; reason: "deleted" | "reset" }[];
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">;
+  isCurrent?: () => boolean;
 }): Promise<number> {
+  const isCurrent = params.isCurrent ?? (() => true);
+  if (!isCurrent()) {
+    return 0;
+  }
   const rules = new Map(
     params.rules
       .filter((rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0)
@@ -276,6 +281,9 @@ export async function prunePublishedSessionArchivesByRetention(params: {
     return 0;
   }
   const candidates = await runExclusiveSqliteSessionWrite(params.scope, async () => {
+    if (!isCurrent()) {
+      return [];
+    }
     const database = openOpenClawAgentDatabase(toDatabaseOptions(params.scope));
     const db = getSessionKysely(database.db);
     const exists = executeSqliteQueryTakeFirstSync(
@@ -325,7 +333,13 @@ export async function prunePublishedSessionArchivesByRetention(params: {
   if (removable.length === 0) {
     return 0;
   }
+  if (!isCurrent()) {
+    return 0;
+  }
   return await runExclusiveSqliteSessionWrite(params.scope, async () => {
+    if (!isCurrent()) {
+      return 0;
+    }
     let removed = 0;
     runOpenClawAgentWriteTransaction((transactionDb) => {
       const db = getSessionKysely(transactionDb.db);

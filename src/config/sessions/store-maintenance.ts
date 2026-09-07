@@ -226,6 +226,13 @@ export function normalizeResolvedMaintenanceConfigInput(
         : maintenance.archiveDashboardAfterMs,
     modelRunPruneAfterMs: maintenance.modelRunPruneAfterMs ?? DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
     preserveRecentMs: maintenance.preserveRecentMs ?? null,
+    // Resolved inputs predate the independent deleted-archive setting. Preserve
+    // the old shared cutoff when the new field is omitted, while retaining an
+    // explicit null as an intentional disable.
+    deletedArchiveRetentionMs:
+      maintenance.deletedArchiveRetentionMs === undefined
+        ? maintenance.resetArchiveRetentionMs
+        : maintenance.deletedArchiveRetentionMs,
   };
 }
 
