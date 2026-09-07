@@ -7844,6 +7844,19 @@ done
     expect(helper).not.toContain('.split("\\n")');
   });
 
+  it("accepts the image compatibility alias in installer E2E transcripts", () => {
+    const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+    const start = runner.indexOf("assert_session_used_tools() {");
+    const end = runner.indexOf("\nsession_jsonl_path()", start);
+    const helper = runner.slice(start, end);
+
+    expect(helper).toContain('spec.split("|").filter(Boolean)');
+    expect(helper).toContain("group.some((tool) => seen.has(tool))");
+    expect(runner).toContain(
+      'assert_session_used_tools "$profile" "$TURN4_SESSION_ID" "image|view_image" write',
+    );
+  });
+
   it("exports SQLite-backed installer E2E sessions before scanning tools", () => {
     const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
     const start = runner.indexOf("assert_session_used_tools() {");

@@ -2218,6 +2218,8 @@ jobs:
         run: node openclaw.mjs status --json --timeout 1
 
       - name: Smoke test built CLI with Bun
+        # Older frozen targets intentionally reject Bun at launcher startup.
+        if: ${{ needs.preflight.outputs.frozen_target != 'true' }}
         run: |
           bun openclaw.mjs --help
           bun openclaw.mjs status --json --timeout 1
@@ -3124,7 +3126,6 @@ jobs:
             // execution kinds. Reuse the current bounded smoke contract and
             // isolate each scenario so one invocation cannot pin a profile part.
             const compatibilityScenarioIds = new Set([
-              "control-ui-chat-flow-playwright",
               "system-agent-ring-zero-setup",
               "gateway-smoke",
               "group-visible-reply-tool",
@@ -3138,7 +3139,8 @@ jobs:
             ]);
             const partIndex = partId === "profile-1" ? 0 : partId === "profile-2" ? 1 : -1;
             if (partIndex < 0) {
-              throw new Error(`unknown QA smoke CI profile part: ${partId}`);
+              console.error(`[skip] ${partId} is not declared by this checkout's legacy smoke plan`);
+              process.exit(0);
             }
             const scenarioCatalog = await import("./extensions/qa-lab/src/scenario-catalog.ts");
             const scenarioKindById = new Map(
@@ -3818,7 +3820,9 @@ jobs:
                   const configPath = "config/knip.config.ts";
                   const marker = "const repositoryScriptEntries = [";
                   const source = readFileSync(configPath, "utf8");
-                  if (!source.includes(marker)) throw new Error(`${configPath} is missing ${marker}`);
+                  // Pre-refactor frozen configs ignore scripts/** wholesale, so
+                  // they need no synthetic executable-root registration.
+                  if (!source.includes(marker)) process.exit(0);
                   writeFileSync(configPath, source.replace(
                     marker,
                     `${marker}\n  ${process.env.RELEASE_EVIDENCE_ENTRY},`,

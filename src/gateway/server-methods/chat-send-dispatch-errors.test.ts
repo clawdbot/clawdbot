@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import * as sessionRunError from "../../sessions/session-run-error.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
@@ -166,13 +167,13 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         });
 
         await lifecycle.handleError(new Error("Cloud worker unavailable"));
+        expect(previewGroup?.signal.aborted).toBe(false);
+        await lifecycle.finalize();
         expect(broadcast).toHaveBeenLastCalledWith(
           "chat",
           expect.objectContaining({ state: "error" }),
           expect.objectContaining({ liveText: { group: previewGroup?.signal } }),
         );
-        expect(previewGroup?.signal.aborted).toBe(false);
-        await lifecycle.finalize();
         expect(chatRunState.runs.has(runId)).toBe(false);
         expect(previewGroup?.signal.aborted).toBe(true);
 
@@ -227,7 +228,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         restartRecoveryDeliveryRunId: "settled-run",
       });
       const report = vi
-        .spyOn(sessionLifecycleState, "recordGatewaySessionRunFailure")
+        .spyOn(sessionRunError, "recordGatewaySessionRunFailure")
         .mockRejectedValueOnce(new Error("notice write failed"));
       try {
         expect(
@@ -464,6 +465,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     });
 
     await lifecycle.handleError(new Error("dispatch rejected after restart"));
+    await lifecycle.finalize();
 
     expect(dedupe.get("chat:signal-only-dispatch-rejection")).toMatchObject({
       ok: false,
@@ -564,6 +566,8 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       });
     const cleanupAdmittedRun = vi.fn();
     const activeRunCleanup = vi.fn();
+    const broadcast = vi.fn();
+    const dedupe = new Map();
     const clientRunId = "failed-ops-global-send";
     const chatAbortControllers = new Map([
       [
@@ -591,11 +595,11 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         },
         context: {
           agentRunSeq: new Map(),
-          broadcast: vi.fn(),
+          broadcast,
           broadcastToConnIds: vi.fn(),
           chatAbortControllers,
           chatRunState: createChatRunState(),
-          dedupe: new Map(),
+          dedupe,
           getRuntimeConfig: () => cfg,
           getSessionEventSubscriberConnIds: () => new Set<string>(),
           logGateway: { warn: vi.fn() },
@@ -621,6 +625,8 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       await lifecycle.handleError(new Error("dispatch rejected"));
       const finalization = lifecycle.finalize();
       await persistenceEntered.promise;
+      expect(dedupe.get(`chat:${clientRunId}`)).toBeUndefined();
+      expect(broadcast).not.toHaveBeenCalled();
       expect(persistLifecycleEvent).toHaveBeenCalledWith({
         sessionKey: "global",
         agentId: "ops",
@@ -633,6 +639,15 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       expect(cleanupAdmittedRun).not.toHaveBeenCalled();
       releasePersistence.resolve();
       await finalization;
+      expect(dedupe.get(`chat:${clientRunId}`)).toMatchObject({
+        ok: false,
+        payload: { runId: clientRunId, status: "error" },
+      });
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId: clientRunId, state: "error" }),
+        expect.anything(),
+      );
       expect(activeRunCleanup).toHaveBeenCalledExactlyOnceWith();
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
     } finally {
