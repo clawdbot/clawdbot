@@ -1,5 +1,6 @@
 {
   "id": "gandr",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

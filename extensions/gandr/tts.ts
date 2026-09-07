@@ -1,9 +1,7 @@
 // Gandr plugin module implements tts behavior.
-import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { MAX_AUDIO_BYTES, truncateUtf16Safe } from "openclaw/plugin-sdk/speech-provider";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DEFAULT_GANDR_BASE_URL = "https://tts.gandr.ai/v1";
 export const DEFAULT_GANDR_VOICE_ID = "gandr-mia";
@@ -59,6 +57,7 @@ class GandrErrorBodyOverflow extends Error {}
  * surface.
  */
 async function readGandrErrorBodySnippet(response: Response): Promise<string> {
+  const { readResponseWithLimit } = await import("openclaw/plugin-sdk/response-limit-runtime");
   let buffer: Buffer;
   try {
     buffer = await readResponseWithLimit(response, GANDR_ERROR_BODY_MAX_BYTES, {
@@ -125,6 +124,9 @@ export async function gandrTTS(params: {
     response_format: params.responseFormat ?? "mp3",
   });
 
+  // Runtime helpers load lazily so the capability catalog stays importable cold.
+  const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
+  const { readResponseWithLimit } = await import("openclaw/plugin-sdk/response-limit-runtime");
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init: {
