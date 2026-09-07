@@ -211,6 +211,55 @@ afterEach(() => {
   configureAiTransportHost(previousHost);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+describe.each([
+  {
+    name: "OpenAI",
+    model: openAIModel,
+    createStream: managedOpenAIStream,
+    defaultEncoding: "identity",
+  },
+  { name: "Azure", model: azureModel, createStream: managedAzureStream, defaultEncoding: null },
+])("$name Responses encoding", ({ model, createStream, defaultEncoding }) => {
+  it.each([
+    { source: "default", key: "Accept-Encoding", expected: "identity" },
+    { source: "environment", key: "aCcEpT-EnCoDiNg", expected: "gzip" },
+    { source: "model", key: "accept-encoding", expected: "gzip" },
+    { source: "caller", key: "ACCEPT-ENCODING", expected: "br" },
+    { source: "turn", key: "Accept-Encoding", expected: "gzip, br" },
+  ])(
+    "preserves the $source encoding on the final SDK request",
+    async ({ source, key, expected }) => {
+      vi.stubEnv(
+        "OPENAI_CUSTOM_HEADERS",
+        source === "default"
+          ? undefined
+          : `${key}: ${source === "environment" ? expected : "deflate"}`,
+      );
+      const fetchMock = vi.fn<typeof fetch>(async () => completedResponse());
+      configureAiTransportHost({
+        buildModelFetch: () => fetchMock,
+        plugin: {
+          ...previousHost.plugin,
+          resolveTransportTurnState: () =>
+            source === "turn" ? { headers: { [key]: expected } } : undefined,
+        },
+      });
+      const stream = createManagedFixtureStream(
+        createStream,
+        { ...model, ...(source === "model" ? { headers: { [key]: expected } } : {}) },
+        source === "caller" ? { headers: { [key]: expected } } : undefined,
+      );
+      expect((await stream.result()).stopReason).toBe("stop");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("accept-encoding")).toBe(
+        source === "default" ? defaultEncoding : expected,
+      );
+    },
+  );
 });
 
 describe.each(fixtures)("$name response hook", ({ createStream, installResponse, model }) => {
