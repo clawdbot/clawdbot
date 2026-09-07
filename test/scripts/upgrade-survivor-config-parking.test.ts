@@ -220,7 +220,17 @@ update_candidate() {
   [ "$#" -eq 3 ] && [ "$1" = 1 ] && [ "$2" = "file:$RUNTIME_ROOT/future.tgz" ] && [ "$3" = 2100.1.0 ] || return 99
   printf 'update\\n' >>"$PROBE_EVENTS"
 }
-assert_survival() { printf 'assert-survival\\n' >>"$PROBE_EVENTS"; }
+node() {
+  if [ "$#" -eq 3 ] && [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ] && [ "$2" = assert-restart-serving-turn ]; then
+    printf 'serving-turn\\n' >>"$PROBE_EVENTS"
+  else
+    command node "$@"
+  fi
+}
+assert_survival() {
+  [ "$survival_assert_stage" = post-inference ] || return 96
+  printf 'assert-survival\\n' >>"$PROBE_EVENTS"
+}
 probe_status=0
 repair_fixture_plugin_consent || probe_status=$?
 exit "$probe_status"
@@ -266,6 +276,7 @@ exit "$probe_status"
                   "readiness",
                   "authenticated",
                   "update",
+                  "serving-turn",
                   "assert-survival",
                 ],
       );
@@ -297,6 +308,59 @@ exit "$probe_status"
       }
     },
   );
+
+  it.each([
+    "assert-restart-serving-turn",
+    "assert-exec-approvals",
+    "assert-config",
+    "assert-state",
+    "installed-version",
+  ])("propagates guarded restart survival failure at %s", (failure) => {
+    const root = tempDirs.make("openclaw-survivor-guarded-assertion-");
+    const source = readFileSync(PUBLISHED_RUNNER_PATH, "utf8");
+    const setup = source.slice(0, source.indexOf("phase storage-preflight"));
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `${setup}
+trap - EXIT ERR INT TERM
+SCENARIO=base
+UPDATE_RESTART_MODE=auto-auth
+update_repair_required=0
+candidate_version=2026.9.3
+baseline_version=2026.9.2
+OPENCLAW_CLAWHUB_URL=fixture
+prepare_restart_inference() { :; }
+prepare_restart_fixture() { restart_fixture_package=/tmp/fixture.tgz; restart_fixture_version=2026.9.3; }
+install_update_restart_systemctl_shim() { :; }
+run_update_restart_probe_gateway() { :; }
+check_gateway_status() { :; }
+update_candidate() { :; }
+node() { if [ "$#" -ge 2 ] && [ "$2" = "$PROBE_FAILURE" ]; then return 47; fi; }
+read_installed_version() { [ "$PROBE_FAILURE" != installed-version ] || return 47; printf '2026.9.3'; }
+assert_prepublish_plugin_install() { touch "$PROBE_SIDE_EFFECT"; }
+probe_status=0
+repair_fixture_plugin_consent || probe_status=$?
+exit "$probe_status"
+`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: root,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.2",
+          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
+          OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
+          PROBE_FAILURE: failure,
+          PROBE_SIDE_EFFECT: path.join(root, "continued"),
+        },
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(47);
+    expect(existsSync(path.join(root, "continued"))).toBe(false);
+  });
 
   it.each([false, true])(
     "preserves phase failure without disabling normal errexit (conditional=%s)",
