@@ -24,6 +24,7 @@ import {
 } from "./session-accessor.js";
 import {
   patchSessionEntryTarget,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import {
@@ -137,6 +138,34 @@ async function expectAdmission(gate: ReturnType<typeof holdNative>, operation: P
     true,
   );
 }
+
+it.each(["sessions.json", "custom.json"])(
+  "keeps concurrent first writes in one custom store (%s)",
+  async (filename) => {
+    const root = roots.make("session-patch-first-writes-");
+    const env = { OPENCLAW_STATE_DIR: root };
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const storePath = path.join(root, "custom-store", filename);
+    const entries = ["first", "second", "third"].map((name) => ({
+      sessionKey: `agent:main:${name}`,
+      entry: {
+        sessionId: `session-${name}`,
+        updatedAt: Date.now(),
+      },
+    }));
+    await Promise.all(
+      entries.map(({ sessionKey, entry }) =>
+        own(replaceSessionEntry({ env, storePath, sessionKey }, entry)),
+      ),
+    );
+    expect(
+      entries.map(({ sessionKey }) => loadSessionEntry({ env, storePath, sessionKey })?.sessionId),
+    ).toEqual(entries.map(({ entry }) => entry.sessionId));
+    expect(
+      fs.readdirSync(path.dirname(storePath)).filter((filename) => filename.endsWith(".sqlite")),
+    ).toHaveLength(1);
+  },
+);
 
 it.each([
   ["entry", "preparation"],

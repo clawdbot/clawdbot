@@ -16,6 +16,7 @@ import {
   verifyAndRepairCanonicalSqliteIndexSteps,
 } from "../infra/sqlite-index-schema.js";
 import {
+  assertSqliteIntegrity,
   runSqliteIntegrityOperationSync,
   type SqliteIntegrityOperation,
 } from "../infra/sqlite-integrity.js";
@@ -528,6 +529,14 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
         assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
     });
     assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
+  } else if (
+    userVersion === 0 &&
+    !hasApplicationSchema &&
+    database.prepare("PRAGMA page_count").get()?.page_count === 0
+  ) {
+    // Publish a fresh empty database's owner before another local caller resolves its store.
+    // Yielding first leaves an occupied, unowned file that custom selectors must avoid.
+    assertSqliteIntegrity(database, pathname);
   } else {
     // Every physical open proves the full file before schema mutation or exposure.
     yield { database, databaseLabel: pathname };
