@@ -3,6 +3,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/installed-plugin-index-row.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 const rowSchema = z
   .object({
@@ -26,11 +29,7 @@ export type UpdateCheckpointPluginIndexMutation = z.infer<
 >;
 
 function readCheckpointPluginIndexRow(db: DatabaseSync) {
-  if (
-    !db
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='config_machine_state'")
-      .get()
-  ) {
+  if (!tableExists(db, "config_machine_state")) {
     return null;
   }
   // Exact snapshot primitive: preserve raw bytes and the transaction timestamp,
@@ -38,11 +37,13 @@ function readCheckpointPluginIndexRow(db: DatabaseSync) {
   return rowSchema
     .nullable()
     .parse(
-      db
-        .prepare(
-          "SELECT state_key, value_json, updated_at_ms FROM config_machine_state WHERE state_key=?",
-        )
-        .get(INSTALLED_PLUGIN_INDEX_STATE_KEY) ?? null,
+      executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "config_machine_state">>(db)
+          .selectFrom("config_machine_state")
+          .select(["state_key", "value_json", "updated_at_ms"])
+          .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
+      ) ?? null,
     );
 }
 

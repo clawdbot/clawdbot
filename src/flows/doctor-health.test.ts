@@ -72,6 +72,7 @@ describe("runDoctorHealthFlow", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.service.mockReset();
@@ -192,6 +193,7 @@ describe("runDoctorHealthFlow", () => {
                 : kind.endsWith("running") && !windows
                   ? "running"
                   : "stopped",
+            systemd: { managerUid: process.getuid?.() ?? 2001 },
             ...(kind.startsWith("absent") ? { missingUnit: true } : {}),
           }),
           isLoaded: async () => {
@@ -429,6 +431,7 @@ describe("runDoctorHealthFlow", () => {
           readCommand: async () => command,
           readRuntime: async () => ({
             status: running ? "running" : "stopped",
+            systemd: { managerUid: process.getuid?.() ?? 2001 },
             ...(outcome === "ancestor-blocked" ? { pid: process.pid } : {}),
           }),
           readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),

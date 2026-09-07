@@ -6,6 +6,7 @@ import {
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
+import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { isSqliteCorruptionError } from "./sqlite-transaction.js";
 
 type SqliteIntegrityChecks = {
@@ -298,4 +299,28 @@ function compareSqliteForeignKeyViolations(
 function formatSqliteForeignKeyViolation(violation: SqliteForeignKeyViolation): string {
   const row = violation.rowid === null ? "row without rowid" : `row ${violation.rowid.toString()}`;
   return `${violation.table} ${row} references ${violation.parent} (foreign key ${violation.fkid.toString()})`;
+}
+
+/** Read exact snapshot values without Kysely's runtime numeric conversion/cache.
+ * The caller owns the snapshot/read interval. Identifiers are quoted, rowid
+ * selectors are closed, integers stay bigint, and early return closes iteration. */
+export function* iterateSqliteSnapshotTableRows(
+  database: DatabaseSync,
+  table: string,
+  rowid: "rowid" | "_rowid_" | "oid" | null,
+  identityColumn: "checkpoint_rowid" | "__update_rowid",
+) {
+  if (rowid !== null && !["rowid", "_rowid_", "oid"].includes(rowid)) {
+    throw new Error("Invalid SQLite snapshot row identity selector");
+  }
+  const statement = database.prepare(
+    `SELECT ${rowid ? `${rowid} AS ${quoteSqliteIdentifier(identityColumn)}, ` : ""}* FROM ${quoteSqliteIdentifier(table)}`,
+  );
+  statement.setReadBigInts(true);
+  const iterator = statement.iterate();
+  try {
+    yield* iterator;
+  } finally {
+    iterator.return?.();
+  }
 }

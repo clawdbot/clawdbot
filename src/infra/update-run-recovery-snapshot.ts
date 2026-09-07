@@ -3,7 +3,13 @@ import { statSync } from "node:fs";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { assertSqliteIntegrity, iterateSqliteSnapshotTableRows } from "./sqlite-integrity.js";
+import {
+  readSqliteSchemaObjects,
+  readSqliteSnapshotHeader,
+  readSqliteTableList,
+  readSqliteTableColumns,
+} from "./sqlite-schema-contract.js";
 import { UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import {
   encodeUpdateRecovery,
@@ -35,9 +41,6 @@ export function assertSeparateUpdateRecoveryDatabases(
   }
 }
 
-function quoteIdentifier(name: string): string {
-  return `"${name.replaceAll('"', '""')}"`;
-}
 function serializeRow(row: Record<string, SQLOutputValue>): string {
   return JSON.stringify(
     Object.keys(row)
@@ -62,19 +65,17 @@ function serializeRow(row: Record<string, SQLOutputValue>): string {
  */
 function digestUpdateRecoveryDatabase(db: DatabaseSync, runId: string): string {
   const hash = createHash("sha256");
-  const schema = db
-    .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
-    .all();
-  for (const pragma of ["user_version", "application_id", "encoding"]) {
-    hash.update(JSON.stringify([pragma, db.prepare(`PRAGMA ${pragma}`).get()]));
+  const schema = readSqliteSchemaObjects(db);
+  for (const header of readSqliteSnapshotHeader(db)) {
+    hash.update(JSON.stringify(header));
   }
   hash.update(JSON.stringify(schema));
-  const tableList = db.prepare("PRAGMA table_list").all();
+  const tableList = readSqliteTableList(db);
   for (const table of schema.filter((entry) => entry.type === "table")) {
-    const name = String(table.name);
-    const columns = db.prepare(`PRAGMA table_xinfo(${quoteIdentifier(name)})`).all();
+    const name = table.name;
+    const columns = readSqliteTableColumns(db, name);
     const withoutRowid = tableList.some((entry) => entry.name === name && entry.wr === 1);
-    const rowid = ["rowid", "_rowid_", "oid"].find((candidate) =>
+    const rowid = (["rowid", "_rowid_", "oid"] as const).find((candidate) =>
       columns.every((column) => String(column.name).toLowerCase() !== candidate),
     );
     if (!withoutRowid && !rowid) {
@@ -83,12 +84,13 @@ function digestUpdateRecoveryDatabase(db: DatabaseSync, runId: string): string {
     if (columns.some((column) => column.name === "__update_rowid")) {
       throw new Error("Cannot bind a checkpoint table with ambiguous row identity");
     }
-    const statement = db.prepare(
-      `SELECT ${withoutRowid ? "" : `${rowid} AS ${quoteIdentifier("__update_rowid")}, `}* FROM ${quoteIdentifier(name)}`,
-    );
-    statement.setReadBigInts(true);
     const rows: string[] = [];
-    for (const row of statement.iterate()) {
+    for (const row of iterateSqliteSnapshotTableRows(
+      db,
+      name,
+      withoutRowid ? null : rowid!,
+      "__update_rowid",
+    )) {
       if (name === "config_machine_state" && row.state_key === UPDATE_RECOVERY_KEY_PREFIX + runId) {
         continue;
       }

@@ -38,6 +38,34 @@ function fixture() {
 }
 
 describe("checkpoint database preservation", () => {
+  it("preserves quoted identifiers, full-width integers and blobs without trusting pragma shadows", () => {
+    const sql = `CREATE TABLE "work.""quoted" (rowid TEXT, "value.""column" INTEGER, bytes BLOB);
+      CREATE TABLE "without.rowid" (key TEXT PRIMARY KEY, value INTEGER) WITHOUT ROWID;
+      CREATE TABLE pragma_table_list (name TEXT, wr INTEGER);
+      INSERT INTO pragma_table_list VALUES ('work."quoted', 1);`;
+    const checkpoint = database(sql),
+      staged = database(sql),
+      afterUpdate = database(sql),
+      current = database(sql);
+    current.exec(`INSERT INTO "work.""quoted" (_rowid_, rowid, "value.""column", bytes)
+      VALUES (9007199254740997, 'declared rowid', 9223372036854775806, X'00ff807f');
+      INSERT INTO "without.rowid" VALUES ('key', 9223372036854775805);`);
+    carryForwardUpdateCheckpointSqlite({ checkpoint, staged, afterUpdate, current });
+    const rows = staged.prepare('SELECT _rowid_ AS identity, * FROM "work.""quoted"');
+    rows.setReadBigInts(true);
+    expect(rows.all()).toEqual([
+      {
+        identity: 9007199254740997n,
+        rowid: "declared rowid",
+        'value."column': 9223372036854775806n,
+        bytes: new Uint8Array([0, 255, 128, 127]),
+      },
+    ]);
+    const keyed = staged.prepare('SELECT * FROM "without.rowid"');
+    keyed.setReadBigInts(true);
+    expect(keyed.all()).toEqual([{ key: "key", value: 9223372036854775805n }]);
+  });
+
   it("retains a searchable online turn in the canonical agent FTS schema", () => {
     const checkpoint = database(OPENCLAW_AGENT_SCHEMA_SQL),
       afterUpdate = database(OPENCLAW_AGENT_SCHEMA_SQL),
@@ -72,17 +100,22 @@ describe("checkpoint database preservation", () => {
     },
   );
 
-  it("undoes update-owned lowered sequences without reusing old deleted identities", () => {
-    const checkpoint = database(before),
-      staged = database(before),
-      afterUpdate = database(before),
-      current = database(before);
-    for (const db of [checkpoint, staged]) {
-      db.exec("UPDATE sqlite_sequence SET seq=100 WHERE name='work'");
-    }
-    carryForwardUpdateCheckpointSqlite({ checkpoint, staged, afterUpdate, current });
-    expect(staged.prepare("INSERT INTO work(text) VALUES('next')").run().lastInsertRowid).toBe(101);
-  });
+  it.each([100n, 9007199254740999n])(
+    "undoes lowered sequences without reusing deleted identity %s",
+    (highWater) => {
+      const checkpoint = database(before),
+        staged = database(before),
+        afterUpdate = database(before),
+        current = database(before);
+      for (const db of [checkpoint, staged]) {
+        db.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='work'").run(highWater);
+      }
+      carryForwardUpdateCheckpointSqlite({ checkpoint, staged, afterUpdate, current });
+      const insert = staged.prepare("INSERT INTO work(text) VALUES('next')");
+      insert.setReadBigInts(true);
+      expect(insert.run().lastInsertRowid).toBe(highWater + 1n);
+    },
+  );
 
   it("preserves shape-compatible interval and later work without inferring mutation ownership", () => {
     const checkpoint = database(before),

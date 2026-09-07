@@ -1,7 +1,14 @@
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/installed-plugin-index-row.js";
-import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { assertSqliteIntegrity, iterateSqliteSnapshotTableRows } from "./sqlite-integrity.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-readonly-location.js";
+import {
+  readSqliteSchemaObjects,
+  readSqliteSnapshotHeader,
+  readSqliteTableList,
+  readSqliteTableColumns,
+} from "./sqlite-schema-contract.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   checkpointPluginIndexMutationsMatch,
@@ -36,11 +43,7 @@ function quoteIdentifier(name: string): string {
 
 type SchemaObject = { type: string; name: string; tbl_name: string; sql: string | null };
 function schemaObjects(db: DatabaseSync): SchemaObject[] {
-  return db
-    .prepare(
-      "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
-    )
-    .all() as SchemaObject[]; // SAFETY: sqlite_schema defines these four typed system columns.
+  return readSqliteSchemaObjects(db, true);
 }
 function tableShape(objects: SchemaObject[], table: string): string {
   return JSON.stringify(objects.filter((entry) => entry.tbl_name === table));
@@ -59,17 +62,12 @@ function rowJson(row: Row | undefined): string | undefined {
     return value;
   });
 }
-function rowIdentityColumn(db: DatabaseSync, table: string): string | null {
-  if (
-    db
-      .prepare("PRAGMA table_list")
-      .all()
-      .some((row) => row.name === table && row.wr === 1)
-  ) {
+function rowIdentityColumn(db: DatabaseSync, table: string) {
+  if (readSqliteTableList(db).some((row) => row.name === table && row.wr === 1)) {
     return null;
   }
-  const columns = db.prepare(`PRAGMA table_xinfo(${quoteIdentifier(table)})`).all();
-  const alias = ["rowid", "_rowid_", "oid"].find((name) =>
+  const columns = readSqliteTableColumns(db, table);
+  const alias = (["rowid", "_rowid_", "oid"] as const).find((name) =>
     columns.every((column) => String(column.name).toLowerCase() !== name),
   );
   if (!alias || columns.some((column) => column.name === "checkpoint_rowid")) {
@@ -79,12 +77,7 @@ function rowIdentityColumn(db: DatabaseSync, table: string): string | null {
 }
 function readRows(db: DatabaseSync, table: string): Row[] {
   const rowid = rowIdentityColumn(db, table);
-  // Dynamic schema names belong to this snapshot primitive, not runtime queries.
-  const statement = db.prepare(
-    `SELECT ${rowid ? `${rowid} AS checkpoint_rowid, ` : ""}* FROM ${quoteIdentifier(table)}`,
-  );
-  statement.setReadBigInts(true);
-  return statement.all();
+  return [...iterateSqliteSnapshotTableRows(db, table, rowid, "checkpoint_rowid")];
 }
 function rowsEqual(left: Row[], right: Row[]): boolean {
   const a = left.map((row) => rowJson(row)).toSorted(),
@@ -133,13 +126,11 @@ export function assertUpdateCheckpointSqliteSchema(
   checkpoint: DatabaseSync,
   staged: DatabaseSync,
 ): void {
-  for (const pragma of ["user_version", "application_id", "encoding"]) {
-    if (
-      JSON.stringify(checkpoint.prepare(`PRAGMA ${pragma}`).get()) !==
-      JSON.stringify(staged.prepare(`PRAGMA ${pragma}`).get())
-    ) {
-      throw new Error("Checkpoint SQLite schema identity mismatch");
-    }
+  if (
+    JSON.stringify(readSqliteSnapshotHeader(checkpoint)) !==
+    JSON.stringify(readSqliteSnapshotHeader(staged))
+  ) {
+    throw new Error("Checkpoint SQLite schema identity mismatch");
   }
   if (JSON.stringify(schemaObjects(checkpoint)) !== JSON.stringify(schemaObjects(staged))) {
     throw new Error("Checkpoint SQLite schema objects mismatch");
@@ -246,10 +237,9 @@ export function carryForwardUpdateCheckpointSqlite(params: {
       // can remain untouched; changed contents cannot be copied with generic SQL.
       const virtual =
         /CREATE\s+VIRTUAL\s+TABLE/iu.test(definition) ||
-        params.current
-          .prepare("PRAGMA table_list")
-          .all()
-          .some((row) => row.name === table && row.type === "shadow");
+        readSqliteTableList(params.current).some(
+          (row) => row.name === table && row.type === "shadow",
+        );
       if (virtual) {
         if (
           currentBase
@@ -288,9 +278,7 @@ export function carryForwardUpdateCheckpointSqlite(params: {
       params.staged.exec(`DROP TRIGGER ${quoteIdentifier(trigger.name)}`);
     }
     for (const [table, rows] of copyRows) {
-      const columns = params.staged
-        .prepare(`PRAGMA table_xinfo(${quoteIdentifier(table)})`)
-        .all()
+      const columns = readSqliteTableColumns(params.staged, table)
         .filter((row) => row.hidden === 0)
         .map((row) => String(row.name));
       if (rowsEqual(rows, readRows(params.staged, table))) {
@@ -311,16 +299,24 @@ export function carryForwardUpdateCheckpointSqlite(params: {
       }
     }
     // AUTOINCREMENT must not reuse identities created and then deleted online.
-    const hasSequence = (db: DatabaseSync) =>
-      db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_sequence'").get();
+    const hasSequence = (db: DatabaseSync) => tableExists(db, "sqlite_sequence");
     if (hasSequence(params.current) && hasSequence(params.staged)) {
       const sequence = (db: DatabaseSync, name: string) => {
         if (!hasSequence(db)) {
           return 0n;
         }
-        const statement = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = ?");
-        statement.setReadBigInts(true);
-        const value = statement.get(name)?.seq ?? 0n;
+        let value: SQLOutputValue = 0n;
+        for (const row of iterateSqliteSnapshotTableRows(
+          db,
+          "sqlite_sequence",
+          null,
+          "checkpoint_rowid",
+        )) {
+          if (row.name === name) {
+            value = row.seq ?? 0n;
+            break;
+          }
+        }
         if (typeof value !== "bigint") {
           throw new UpdateCheckpointPreservationUnavailable("sqlite_sequence");
         }

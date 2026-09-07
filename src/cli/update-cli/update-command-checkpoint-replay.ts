@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../../infra/node-sqlite.js";
 import type { PackageRecoveryTransaction } from "../../infra/package-update-recovery.js";
 import { assertSqliteIntegrity } from "../../infra/sqlite-integrity.js";
@@ -6,6 +7,7 @@ import { validateUpdateCheckpointPreviousRuntimeDatabase } from "../../infra/upd
 import type { UpdateRecoveryRecord } from "../../infra/update-run-recovery.js";
 import { assertOpenClawStateDatabaseOwner } from "../../state/openclaw-state-db-maintenance.js";
 import { assertSupportedStateSchemaVersion } from "../../state/openclaw-state-db-schema-version.js";
+import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { UpdateCommandRecovery } from "./update-command-recovery.js";
 
@@ -27,8 +29,13 @@ export function createUpdateCommandCheckpointReplayAccess(params: {
       const version = assertSupportedStateSchemaVersion(db, databasePath);
       assertOpenClawStateDatabaseOwner(db, { pathname: databasePath });
       if (
-        db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key='primary'").get()
-          ?.schema_version !== version
+        executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<Pick<DB, "schema_meta">>(db)
+            .selectFrom("schema_meta")
+            .select("schema_version")
+            .where("meta_key", "=", "primary"),
+        )?.schema_version !== version
       ) {
         throw new Error("Restored schema metadata is inconsistent.");
       }

@@ -2,9 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import {
+  assertSqliteSchemaContains,
+  readSqliteSchemaCookie,
+} from "../infra/sqlite-schema-contract.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -18,6 +22,7 @@ import {
   runCoordinatedStateTransaction,
   withSharedStateWriteCoordinator,
 } from "./openclaw-state-db-write-coordination.js";
+import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   assertOpenClawStateWriteAllowed,
@@ -34,9 +39,13 @@ export function assertExistingOpenClawStateSchema(
 ): number {
   const version = assertSupportedStateSchemaVersion(db, pathname);
   assertOpenClawStateDatabaseOwner(db, { pathname });
-  const metadata = db
-    .prepare("SELECT schema_version FROM schema_meta WHERE meta_key='primary'")
-    .get();
+  const metadata = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<Pick<DB, "schema_meta">>(db)
+      .selectFrom("schema_meta")
+      .select("schema_version")
+      .where("meta_key", "=", "primary"),
+  );
   if (version < 1 || metadata?.schema_version !== version) {
     throw new Error("Existing-state schema metadata is inconsistent.");
   }
@@ -86,12 +95,12 @@ export function runExistingOpenClawStateWriteTransaction<T>(
               assertSameFile();
               assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
               const version = assertExistingOpenClawStateSchema(db, pathname, contract.schemaSql);
-              const schemaVersion = db.prepare("PRAGMA schema_version").get()?.schema_version;
+              const schemaVersion = readSqliteSchemaCookie(db);
               const result = operation({ db, path: pathname });
               assertSameFile();
               if (
                 readSqliteUserVersion(db) !== version ||
-                db.prepare("PRAGMA schema_version").get()?.schema_version !== schemaVersion
+                readSqliteSchemaCookie(db) !== schemaVersion
               ) {
                 throw new Error("Existing-state transaction cannot migrate schema.");
               }

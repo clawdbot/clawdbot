@@ -13,6 +13,7 @@ import {
 } from "./kysely-sync.js";
 import type { PackageRecoveryVerified } from "./package-update-recovery.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { readSqliteSchemaObjects } from "./sqlite-schema-contract.js";
 import { ensureUpdateRunLedgerSchema } from "./update-run-ledger.js";
 import { appendUpdateRecoveryAfterImage } from "./update-run-recovery-after-image.js";
 import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
@@ -629,11 +630,11 @@ export function prepareUpdateRecoveryCarryForward(params: {
     for (const db of [sourceDb, stagedDb]) {
       // Unknown triggers could mutate non-update rows while copying owned facts.
       if (
-        db
-          .prepare(
-            "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND tbl_name IN ('update_runs', 'config_machine_state') LIMIT 1",
-          )
-          .get()
+        readSqliteSchemaObjects(db).some(
+          (entry) =>
+            entry.type === "trigger" &&
+            (entry.tbl_name === "update_runs" || entry.tbl_name === "config_machine_state"),
+        )
       ) {
         throw new Error("Checkpoint update-owned tables have unsupported mutation triggers");
       }

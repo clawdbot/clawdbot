@@ -623,3 +623,43 @@ function isEqualTrigger(left: SqliteSchemaRow, right: SqliteSchemaRow): boolean 
 function compareJson(left: unknown, right: unknown): number {
   return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
+
+export type SqliteSchemaObject = {
+  type: string;
+  name: string;
+  tbl_name: string;
+  sql: string | null;
+};
+
+/** Actual catalog facts; no runtime open, schema repair, or publication. */
+export function readSqliteSchemaObjects(
+  database: DatabaseSync,
+  excludeInternal = false,
+): SqliteSchemaObject[] {
+  return database
+    .prepare(
+      `SELECT type, name, tbl_name, sql FROM sqlite_schema ${excludeInternal ? "WHERE name NOT LIKE 'sqlite_%' " : ""}ORDER BY type, name`,
+    )
+    .all() as SqliteSchemaObject[]; // SAFETY: SQLite defines these system catalog columns.
+}
+
+/** Use the pragma itself: a user table may shadow a table-valued pragma. */
+export function readSqliteTableList(database: DatabaseSync) {
+  return database.prepare("PRAGMA table_list").all();
+}
+
+export function readSqliteTableColumns(database: DatabaseSync, table: string) {
+  return database.prepare(`PRAGMA table_xinfo(${quoteSqliteIdentifier(table)})`).all();
+}
+
+/** Preserve each native value and key when comparing logical snapshot headers. */
+export function readSqliteSnapshotHeader(database: DatabaseSync) {
+  return ["user_version", "application_id", "encoding"].map((pragma) => [
+    pragma,
+    database.prepare(`PRAGMA ${pragma}`).get(),
+  ]);
+}
+
+export function readSqliteSchemaCookie(database: DatabaseSync) {
+  return database.prepare("PRAGMA schema_version").get()?.schema_version;
+}
