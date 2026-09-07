@@ -14,6 +14,7 @@ import {
   createGatewayStoreTestStore,
 } from "../../app/gateway-store.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createLiveActivity, type LiveActivity } from "./live-activity.ts";
 import type { ActivityRouteData, RunInspectorState } from "./run-inspector-model.ts";
@@ -83,6 +84,7 @@ function staleEntry(): ActivityEntry {
 const activeGateways = new Set<ApplicationContext["gateway"]>();
 const activePages = new Set<TestActivityPage>();
 const activeActivities = new Map<ApplicationContext["gateway"], LiveActivity>();
+const activeAgents = new Map<ApplicationContext["gateway"], ApplicationContext["agents"]>();
 
 function activityContext(source: ApplicationContext["gateway"]) {
   let liveActivity = activeActivities.get(source);
@@ -90,7 +92,12 @@ function activityContext(source: ApplicationContext["gateway"]) {
     liveActivity = createLiveActivity(source);
     activeActivities.set(source, liveActivity);
   }
-  return { gateway: source, liveActivity };
+  let agents = activeAgents.get(source);
+  if (!agents) {
+    agents = createAgentCapability(source);
+    activeAgents.set(source, agents);
+  }
+  return { gateway: source, liveActivity, agents };
 }
 
 function activityHello(recoveryScope = "activity-owner-a"): GatewayHelloOk {
@@ -148,12 +155,16 @@ afterEach(() => {
   for (const activity of activeActivities.values()) {
     activity.dispose();
   }
+  for (const agents of activeAgents.values()) {
+    agents.dispose();
+  }
   for (const source of activeGateways) {
     source.stop();
   }
   activePages.clear();
   activeGateways.clear();
   activeActivities.clear();
+  activeAgents.clear();
   setAvatarGatewayOrigin(null);
   localStorage.clear();
   sessionStorage.clear();
@@ -162,7 +173,7 @@ afterEach(() => {
 describe("ActivityPage gateway lifecycle", () => {
   it.each(["sessions", "run"] as const)("skips Live Activity rendering in %s mode", (mode) => {
     const page = document.createElement("openclaw-activity-page") as TestActivityPage;
-    page.context = { gateway: gateway(), basePath: "" } as unknown as ApplicationContext;
+    page.context = { ...activityContext(gateway()), basePath: "" } as ApplicationContext;
     page.entries = [staleEntry()];
     page.routeData =
       mode === "sessions"

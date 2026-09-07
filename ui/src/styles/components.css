@@ -5336,8 +5336,7 @@ td.data-table-key-col {
   display: inline;
 }
 
-/* Session row primitives shared by sidebar recents and the chat session picker.
-   Reserve hover-action width without moving the row or hiding trailing state. */
+/* Session rows reserve hover-action space while keeping activity in the leading slot. */
 .session-row-host {
   --session-row-actions-reserve: 52px;
   position: relative;
@@ -5605,7 +5604,6 @@ td.data-table-key-col {
   animation: session-run-spin 1.6s linear infinite;
 }
 
-.session-run-spinner--queued,
 .session-glyph__ring--queued {
   animation-play-state: paused;
 }
