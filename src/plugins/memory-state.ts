@@ -21,6 +21,7 @@ import type {
 } from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
+  getPluginRegistryForContext,
   getPluginRegistrationContext,
   requireActivePluginRegistry,
   resolveDirectPluginRegistrationOwner,
@@ -87,8 +88,9 @@ export function resolveMemoryCapabilityRegistration(
   return effective;
 }
 
+// Cleanup reads must not recreate the process registry after its owner has cleared it.
 const getMemoryCapability = () =>
-  resolveMemoryCapabilityRegistration(requireActivePluginRegistry().memoryCapabilities);
+  resolveMemoryCapabilityRegistration(getPluginRegistryForContext()?.memoryCapabilities ?? []);
 
 const preparedMemoryPromptSections = new WeakSet<PreparedMemoryPromptSection>();
 const activePreparedMemoryPromptSection = new AsyncLocalStorage<PreparedMemoryPromptSection>();

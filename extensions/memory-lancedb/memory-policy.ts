@@ -37,16 +37,6 @@ export function extractUserTextContent(message: unknown): string[] {
   return texts;
 }
 
-export function extractLatestUserText(messages: unknown[]): string | undefined {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const text = extractUserTextContent(messages[index]).join("\n").trim();
-    if (text) {
-      return text;
-    }
-  }
-  return undefined;
-}
-
 export function normalizeRecallQuery(
   text: string,
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,

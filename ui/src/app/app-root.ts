@@ -57,8 +57,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private loginGatewayUrl = "";
   @state() private loginToken = "";
   @state() private loginPassword = "";
-  @state() private loginShowGatewayToken = false;
-  @state() private loginShowGatewayPassword = false;
+  @state() private loginShowGatewaySecret = false;
   @state() private pendingGatewayUrl: string | null = null;
   @state() private onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
   @state() private focusDashboardRoute: FocusDashboardRouteState = { kind: "loading" };
@@ -212,8 +211,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   }
 
   private resetLoginSensitivePresentation() {
-    this.loginShowGatewayToken = false;
-    this.loginShowGatewayPassword = false;
+    this.loginShowGatewaySecret = false;
   }
 
   private updateLoginGatewayUrl(value: string) {
@@ -609,24 +607,17 @@ export class OpenClawApp extends OpenClawLightDomElement {
             hasToken: Boolean(this.loginToken.trim()),
             hasPassword: Boolean(this.loginPassword.trim()),
             gatewayUrl: this.loginGatewayUrl,
-            token: this.loginToken,
-            password: this.loginPassword,
-            showGatewayToken: this.loginShowGatewayToken,
-            showGatewayPassword: this.loginShowGatewayPassword,
+            secret: this.loginToken || this.loginPassword,
+            showGatewaySecret: this.loginShowGatewaySecret,
             onGatewayUrlChange: (value: string) => {
               this.updateLoginGatewayUrl(value);
             },
-            onTokenChange: (value: string) => {
+            onSecretChange: (value: string) => {
               this.loginToken = value;
+              this.loginPassword = "";
             },
-            onPasswordChange: (value: string) => {
-              this.loginPassword = value;
-            },
-            onToggleGatewayToken: () => {
-              this.loginShowGatewayToken = !this.loginShowGatewayToken;
-            },
-            onToggleGatewayPassword: () => {
-              this.loginShowGatewayPassword = !this.loginShowGatewayPassword;
+            onToggleGatewaySecret: () => {
+              this.loginShowGatewaySecret = !this.loginShowGatewaySecret;
             },
             onConnect: () => {
               this.loginGatePinned = true;

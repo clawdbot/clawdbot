@@ -2,6 +2,7 @@
 import type { ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 
 const signalProcessTreeMock = vi.hoisted(() => vi.fn());
 
@@ -231,6 +232,65 @@ describe("runRespawnChildWithSignalBridge", () => {
 
     expect(onError).toHaveBeenCalledWith(error);
     expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "waits for asynchronous spawn diagnostics to %s before exiting",
+    async (settlement) => {
+      const { child } = createChild();
+      const reporting = createDeferredCore();
+      const onError = vi.fn(() => reporting.promise);
+      const exit = vi.fn<RespawnChildRuntime["exit"]>();
+      runRespawnChildWithSignalBridge({
+        command: "missing-command",
+        args: [],
+        env: {},
+        runtime: {
+          spawn: vi.fn(() => child) as unknown as typeof spawn,
+          attachChildProcessBridge: vi.fn(),
+          exit,
+        },
+        onError,
+      });
+
+      const error = new Error("spawn failed");
+      try {
+        child.emit("error", error);
+        expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+        expect(exit).not.toHaveBeenCalled();
+      } finally {
+        if (settlement === "resolve") {
+          reporting.resolve();
+        } else {
+          reporting.reject(new Error("formatter unavailable"));
+        }
+        await reporting.promise.catch(() => undefined);
+      }
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(1));
+    },
+  );
+
+  it("preserves synchronous spawn exceptions without starting diagnostics", () => {
+    const error = new Error("invalid spawn options");
+    const onError = vi.fn();
+    const exit = vi.fn<RespawnChildRuntime["exit"]>();
+    expect(() =>
+      runRespawnChildWithSignalBridge({
+        command: "node",
+        args: [],
+        env: {},
+        runtime: {
+          spawn: vi.fn(() => {
+            throw error;
+          }) as unknown as typeof spawn,
+          attachChildProcessBridge: vi.fn(),
+          exit,
+        },
+        onError,
+      }),
+    ).toThrow(error);
+    expect(onError).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
   });
 
   it("keeps escalation active across repeated operational errors", () => {

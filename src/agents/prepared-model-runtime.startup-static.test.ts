@@ -734,7 +734,11 @@ describe("prepared model runtime Gateway catalog mode", () => {
     await expect(snapshot?.loadFullModelCatalog?.({ refresh: true })).rejects.toThrow(
       "refresh failed",
     );
-    expect(catalogPublicationEvents).toEqual(["catalog-published", "catalog-published"]);
+    expect(catalogPublicationEvents).toEqual([
+      "catalog-published",
+      "catalog-published",
+      "catalog-failed",
+    ]);
     unregisterCatalogPublication();
     expect(snapshot?.readFullModelCatalog?.()).toEqual(fullCatalog);
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);

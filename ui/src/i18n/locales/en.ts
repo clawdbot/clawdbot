@@ -199,7 +199,7 @@ export const en: TranslationMap & {
   },
   nativeLinkMenu: {
     label: "Link actions",
-    openInline: "Open in Sidebar",
+    openInline: "Open in Browser Panel",
     openExternal: "Open in Default Browser",
     copy: "Copy Link",
   },
@@ -2269,6 +2269,9 @@ export const en: TranslationMap & {
     uploadUnsupportedShell: "Cannot safely insert an uploaded path into unsupported shell: {shell}",
   },
   browser: {
+    nativeTab: "Mac tab",
+    remoteTab: "Agent browser tab",
+    stop: "Stop loading",
     profile: "Browser profile: {profile}",
     navigationBlocked:
       "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
@@ -4899,6 +4902,9 @@ export const en: TranslationMap & {
       sessionMenu: "External session actions",
       openInOpenClaw: "Open in OpenClaw",
       openInTerminal: "Open in terminal",
+      deleteSession: "Delete",
+      deleteSessionConfirm:
+        "Delete this external session from OpenClaw? Make sure no other runner is using it. Beamed sessions are deleted permanently. Sessions kept by another tool, such as Codex, are archived there and may be restorable.",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
@@ -5712,6 +5718,8 @@ export const en: TranslationMap & {
       expand: "Open {filename} in the side panel",
       open: "Open",
       previewUnavailable: "Preview unavailable",
+      textPreviewUnavailable:
+        "Could not preview this file. Text previews require UTF-8 files up to 256 KiB. Download it to read the full file.",
       readFailed: "Could not attach: {names}{more}",
       tooLarge: "Too large to send: {names}{more}",
       showInTextField: "Show in text field",

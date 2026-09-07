@@ -29,17 +29,18 @@ import {
   retireStaleChildSessionRows,
 } from "./app-sidebar-child-session-data.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
-import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
 import type {
   SidebarSessionMutationScope,
   SidebarSessionsScrollState,
 } from "./app-sidebar-session-types.ts";
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 import {
+  applySessionCatalogContinuation,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
   applySessionCatalogPresence as applySessionCatalogPresenceToData,
   loadMoreSessionCatalog as loadMoreSessionCatalogData,
   refreshSessionCatalogs as refreshSessionCatalogData,
+  requestSessionCatalogRefresh,
   resolveSessionCatalogAgentId,
   scheduleSessionCatalogRefresh,
   type SessionCatalogDataOwner,
@@ -328,29 +329,20 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private readonly handleCatalogSessionContinued = (
     event: CustomEvent<CatalogSessionContinuedDetail>,
   ) => {
-    const detail = event.detail;
-    const rawAgentId = typeof detail?.agentId === "string" ? detail.agentId.trim() : "";
-    const eventAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
-    const currentAgentId = this.sessionCatalogAgentId
-      ? normalizeAgentId(this.sessionCatalogAgentId)
-      : null;
-    if (!detail?.sessionKey || !eventAgentId || eventAgentId !== currentAgentId) {
-      return;
-    }
-    this.sessionCatalogs = bindAdoptedCatalogSession(this.sessionCatalogs, detail);
-    this.requestSessionDataUpdate();
-    // Invalidate in-flight polls and load-more merges so a pre-adoption
-    // snapshot cannot clobber the patched rows; the 30s poll reconfirms.
-    this.sessionCatalogRevision += 1;
-    this.sessionCatalogRevisions.set(
-      detail.catalogId,
-      (this.sessionCatalogRevisions.get(detail.catalogId) ?? 0) + 1,
-    );
+    applySessionCatalogContinuation(this, event.detail);
   };
 
   private readonly handleSessionCatalogPageActivation = (event: Event) => {
     scheduleSessionCatalogRefresh(this, event.type === "visibilitychange");
   };
+
+  invalidateSessionCatalogs(): void {
+    this.sessionCatalogRevision += 1;
+    for (const { id } of this.sessionCatalogs) {
+      this.sessionCatalogRevisions.set(id, (this.sessionCatalogRevisions.get(id) ?? 0) + 1);
+    }
+    requestSessionCatalogRefresh(this, true);
+  }
 
   refreshSessionCatalogs(): Promise<void> {
     return refreshSessionCatalogData(this);

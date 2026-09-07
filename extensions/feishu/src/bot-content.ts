@@ -7,7 +7,6 @@ import { saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { formatFeishuMediaContent } from "./message-content.js";
 import { parsePostContent } from "./post.js";
-import { getFeishuRuntime } from "./runtime.js";
 import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
 
 type FeishuMention = {
@@ -259,28 +258,6 @@ function toMessageResourceType(messageType: string): "image" | "file" {
   return messageType === "image" ? "image" : "file";
 }
 
-async function resolveSavedFeishuMedia(params: {
-  result:
-    | Awaited<ReturnType<typeof saveMessageResourceFeishu>>
-    | { buffer: Buffer; contentType?: string; fileName?: string };
-  maxBytes: number;
-  originalFilename?: string;
-}) {
-  if ("saved" in params.result) {
-    return params.result.saved;
-  }
-  const core = getFeishuRuntime();
-  const contentType =
-    params.result.contentType ?? (await core.media.detectMime({ buffer: params.result.buffer }));
-  return await core.channel.media.saveMediaBuffer(
-    params.result.buffer,
-    contentType,
-    "inbound",
-    params.maxBytes,
-    params.result.fileName ?? params.originalFilename,
-  );
-}
-
 function resolveFeishuMediaKind(messageType: string): FeishuMediaInfo["kind"] {
   switch (messageType) {
     case "image":
@@ -330,17 +307,12 @@ export async function resolveFeishuMediaList(params: {
       const fileName = attachment.kind === "file" ? attachment.fileName : undefined;
       const mediaKind = attachment.kind === "image" ? "image" : "video";
       try {
-        const result = await saveMessageResourceFeishu({
+        const { saved } = await saveMessageResourceFeishu({
           cfg,
           messageId,
           fileKey: attachment.key,
           type: attachment.kind,
           accountId,
-          maxBytes,
-          ...(fileName ? { originalFilename: fileName } : {}),
-        });
-        const saved = await resolveSavedFeishuMedia({
-          result,
           maxBytes,
           ...(fileName ? { originalFilename: fileName } : {}),
         });
@@ -372,17 +344,12 @@ export async function resolveFeishuMediaList(params: {
     if (!fileKey) {
       return [{ kind: resolveFeishuMediaKind(messageType) }];
     }
-    const result = await saveMessageResourceFeishu({
+    const { saved } = await saveMessageResourceFeishu({
       cfg,
       messageId,
       fileKey,
       type: toMessageResourceType(messageType),
       accountId,
-      maxBytes,
-      originalFilename: mediaKeys.fileName,
-    });
-    const saved = await resolveSavedFeishuMedia({
-      result,
       maxBytes,
       originalFilename: mediaKeys.fileName,
     });

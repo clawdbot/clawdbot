@@ -297,25 +297,22 @@ export function collectErrorGraphCandidates(
   err: unknown,
   resolveNested?: (current: Record<string, unknown>) => Iterable<unknown>,
 ): unknown[] {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
+  if (err == null) {
+    return [];
+  }
+  const candidates: unknown[] = [err];
+  const seen = new Set<unknown>().add(err);
 
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current == null || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
+  // First discovery fixes breadth-first order; the returned array is also the worklist.
+  for (const current of candidates) {
     if (!current || typeof current !== "object" || !resolveNested) {
       continue;
     }
     // SAFETY: Non-object nodes were excluded before the callback reads optional graph links.
     for (const nested of resolveNested(current as Record<string, unknown>)) {
       if (nested != null && !seen.has(nested)) {
-        queue.push(nested);
+        seen.add(nested);
+        candidates.push(nested);
       }
     }
   }

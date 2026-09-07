@@ -1,6 +1,6 @@
 // Control UI component renders the login gate.
 import { html, nothing, type TemplateResult } from "lit";
-import { property, state } from "lit/decorators.js";
+import { property } from "lit/decorators.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
@@ -11,11 +11,6 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
-import {
-  type CredentialMode,
-  renderCredentialModeSwitch,
-  resolveCredentialMode,
-} from "./credential-mode.ts";
 import { icons } from "./icons.ts";
 import {
   type LoginFailureFeedback,
@@ -30,15 +25,11 @@ registerLoginEnglish();
 type LoginGateProps = LoginFailureFeedbackParams & {
   resourceBasePath: string;
   gatewayUrl: string;
-  token: string;
-  password: string;
-  showGatewayToken: boolean;
-  showGatewayPassword: boolean;
+  secret: string;
+  showGatewaySecret: boolean;
   onGatewayUrlChange: (value: string) => void;
-  onTokenChange: (value: string) => void;
-  onPasswordChange: (value: string) => void;
-  onToggleGatewayToken: () => void;
-  onToggleGatewayPassword: () => void;
+  onSecretChange: (value: string) => void;
+  onToggleGatewaySecret: () => void;
   onConnect: () => void;
 };
 
@@ -150,20 +141,15 @@ function renderSecretToggle(
 function renderForm(params: {
   props: LoginGateProps;
   feedback: LoginFailureFeedback | null;
-  credentialMode: CredentialMode;
-  onCredentialMode: (mode: CredentialMode) => void;
   withSubmit: boolean;
 }) {
-  const { props, feedback, credentialMode } = params;
+  const { props, feedback } = params;
   const invalidField = feedback?.placement === "form" ? feedback.field : undefined;
   const submitOnEnter = (e: KeyboardEvent) => {
     if (e.key === "Enter") {
       props.onConnect();
     }
   };
-  const isPassword = credentialMode === "password";
-  const credentialValue = isPassword ? props.password : props.token;
-  const credentialRevealed = isPassword ? props.showGatewayPassword : props.showGatewayToken;
 
   return html`
     <div class="login-gate__form">
@@ -187,56 +173,28 @@ function renderForm(params: {
         />
       </div>
       <div class="field">
-        <div class="login-gate__field-head">
-          <label for="login-gate-credential">${t("login.credential")}</label>
-          ${renderCredentialModeSwitch({
-            mode: credentialMode,
-            onChange: params.onCredentialMode,
-            variant: "login",
-          })}
-        </div>
+        <label for="login-gate-credential">${t("login.secret")}</label>
         <span class="settings-secret">
           <input
             id="login-gate-credential"
-            type=${credentialRevealed ? "text" : "password"}
+            type=${props.showGatewaySecret ? "text" : "password"}
             autocomplete="off"
             spellcheck="false"
             enterkeyhint="go"
             aria-invalid=${invalidField === "credential" ? "true" : nothing}
-            .value=${credentialValue}
+            .value=${props.secret}
             @input=${(e: Event) => {
-              const value = (e.target as HTMLInputElement).value;
-              // Editing pins the visible mode; otherwise clearing a token while a
-              // password exists would flip this field and route keystrokes there.
-              params.onCredentialMode(credentialMode);
-              if (isPassword) {
-                props.onPasswordChange(value);
-              } else {
-                props.onTokenChange(value);
-              }
+              props.onSecretChange((e.target as HTMLInputElement).value);
             }}
             @keydown=${submitOnEnter}
-            placeholder=${isPassword ? t("login.passwordFieldPlaceholder") : t("login.tokenPlaceholder")}
+            placeholder=${t("login.secretPlaceholder")}
           />
-          ${
-            isPassword
-              ? renderSecretToggle(
-                  props.showGatewayPassword,
-                  [
-                    t("login.showPassword"),
-                    t("login.hidePassword"),
-                    t("login.togglePasswordVisibility"),
-                  ],
-                  props.onToggleGatewayPassword,
-                )
-              : renderSecretToggle(
-                  props.showGatewayToken,
-                  [t("login.showToken"), t("login.hideToken"), t("login.toggleTokenVisibility")],
-                  props.onToggleGatewayToken,
-                )
-          }
+          ${renderSecretToggle(
+            props.showGatewaySecret,
+            [t("login.showSecret"), t("login.hideSecret"), t("login.toggleSecretVisibility")],
+            props.onToggleGatewaySecret,
+          )}
         </span>
-        ${isPassword ? html`<span class="login-gate__field-hint">${t("login.passwordHint")}</span>` : nothing}
       </div>
       ${
         params.withSubmit
@@ -251,14 +209,11 @@ function renderForm(params: {
   `;
 }
 
-function renderConnectionSummary(props: LoginGateProps, credentialMode: CredentialMode) {
+function renderConnectionSummary(props: LoginGateProps) {
   const host = formatGatewayHost(props.gatewayUrl);
-  const credential =
-    credentialMode === "password" && props.password.trim()
-      ? t("login.connection.passwordEntered")
-      : props.token.trim()
-        ? t("login.connection.tokenSaved")
-        : t("login.connection.noCredential");
+  const credential = props.secret.trim()
+    ? t("login.connection.secretEntered")
+    : t("login.connection.noSecret");
   return html`
     <summary>
       <span class="login-gate__connection-target">
@@ -271,12 +226,7 @@ function renderConnectionSummary(props: LoginGateProps, credentialMode: Credenti
   `;
 }
 
-function renderStatusBody(params: {
-  props: LoginGateProps;
-  feedback: LoginFailureFeedback;
-  credentialMode: CredentialMode;
-  onCredentialMode: (mode: CredentialMode) => void;
-}) {
+function renderStatusBody(params: { props: LoginGateProps; feedback: LoginFailureFeedback }) {
   const { props, feedback } = params;
   const waitingForPairing = feedback.kind === "pairing-required" && props.reconnectPending;
   return html`
@@ -320,20 +270,14 @@ function renderStatusBody(params: {
         </button>
       </div>
       <details class="login-gate__connection">
-        ${renderConnectionSummary(props, params.credentialMode)}
-        ${renderForm({ ...params, withSubmit: false })}
+        ${renderConnectionSummary(props)} ${renderForm({ ...params, withSubmit: false })}
       </details>
       ${renderFailureFooter(feedback)}
     </section>
   `;
 }
 
-function renderFormBody(params: {
-  props: LoginGateProps;
-  feedback: LoginFailureFeedback | null;
-  credentialMode: CredentialMode;
-  onCredentialMode: (mode: CredentialMode) => void;
-}) {
+function renderFormBody(params: { props: LoginGateProps; feedback: LoginFailureFeedback | null }) {
   const { feedback } = params;
   return html`
     <section
@@ -383,22 +327,14 @@ function renderFormBody(params: {
   `;
 }
 
-function renderLoginGate(
-  props: LoginGateProps,
-  credentialModeOverride: CredentialMode | null,
-  onCredentialMode: (mode: CredentialMode) => void,
-) {
+function renderLoginGate(props: LoginGateProps) {
   const resourceBasePath = normalizeBasePath(props.resourceBasePath);
   const faviconSrc = controlUiPublicAssetPath("favicon.svg", resourceBasePath);
   const feedback = resolveLoginFailureFeedback(props);
-  const credentialMode = resolveCredentialMode(
-    { token: props.token, password: props.password, lastErrorCode: props.lastErrorCode },
-    credentialModeOverride,
-  );
   const body =
     feedback?.placement === "status"
-      ? renderStatusBody({ props, feedback, credentialMode, onCredentialMode })
-      : renderFormBody({ props, feedback, credentialMode, onCredentialMode });
+      ? renderStatusBody({ props, feedback })
+      : renderFormBody({ props, feedback });
 
   return html`
     <div class="login-gate">
@@ -416,15 +352,9 @@ function renderLoginGate(
 
 class LoginGate extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: LoginGateProps;
-  // Operator choice sticks across rerenders; otherwise the mode follows the props/error.
-  @state() private credentialMode: CredentialMode | null = null;
 
   override render() {
-    return this.props
-      ? renderLoginGate(this.props, this.credentialMode, (mode) => {
-          this.credentialMode = mode;
-        })
-      : nothing;
+    return this.props ? renderLoginGate(this.props) : nothing;
   }
 }
 

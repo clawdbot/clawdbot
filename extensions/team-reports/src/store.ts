@@ -36,6 +36,14 @@ export type PeriodListEntry = {
   untilMs: number;
   status: "partial" | "closed";
   generatedAtMs: number;
+  activeMembers: number;
+  memberCount: number;
+  githubTotal: number;
+  discordMessages: number;
+  commits: number;
+  prsOpened: number;
+  prsMerged: number;
+  securityAdvisories: number;
 };
 export type PersonDay = {
   dayKey: string;
@@ -230,6 +238,29 @@ export class TeamReportsStore {
         "status",
         "generated_at_ms as generatedAtMs",
       ])
+      // SQLite extracts only the chart totals instead of materializing every report in JavaScript.
+      .select((eb) => [
+        eb.fn<number>("json_extract", ["data_json", eb.val("$.activeMembers")]).as("activeMembers"),
+        eb.fn<number>("json_extract", ["data_json", eb.val("$.memberCount")]).as("memberCount"),
+        eb
+          .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.total")])
+          .as("githubTotal"),
+        eb
+          .fn<number>("json_extract", ["data_json", eb.val("$.totals.discord.messages")])
+          .as("discordMessages"),
+        eb
+          .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.commits")])
+          .as("commits"),
+        eb
+          .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.prsOpened")])
+          .as("prsOpened"),
+        eb
+          .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.prsMerged")])
+          .as("prsMerged"),
+        eb
+          .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.securityAdvisories")])
+          .as("securityAdvisories"),
+      ])
       .orderBy("since_ms", "desc")
       .orderBy("period", "asc");
     if (options.period) {
@@ -260,7 +291,31 @@ export class TeamReportsStore {
     options: { since?: string; until?: string; limit?: number } = {},
   ): PersonDay[] {
     this.assertOpen();
-    let query = this.query
+    let query = this.selectPersonDays()
+      .where("login", "=", login.toLowerCase())
+      .orderBy("day_key", "desc");
+    if (options.since) {
+      query = query.where("day_key", ">=", options.since);
+    }
+    if (options.until) {
+      query = query.where("day_key", "<", options.until);
+    }
+    return executeSqliteQuerySync(this.db, query.limit(options.limit ?? 28)).rows;
+  }
+
+  listPersonDaysSince(since: string): PersonDay[] {
+    this.assertOpen();
+    return executeSqliteQuerySync(
+      this.db,
+      this.selectPersonDays()
+        .where("day_key", ">=", since)
+        .orderBy("day_key", "desc")
+        .orderBy("login", "asc"),
+    ).rows;
+  }
+
+  private selectPersonDays() {
+    return this.query
       .selectFrom("team_reports_person_days")
       .select([
         "day_key as dayKey",
@@ -275,16 +330,7 @@ export class TeamReportsStore {
         "issue_comments as issueComments",
         "review_comments as reviewComments",
         "discord_messages as discordMessages",
-      ])
-      .where("login", "=", login.toLowerCase())
-      .orderBy("day_key", "desc");
-    if (options.since) {
-      query = query.where("day_key", ">=", options.since);
-    }
-    if (options.until) {
-      query = query.where("day_key", "<", options.until);
-    }
-    return executeSqliteQuerySync(this.db, query.limit(options.limit ?? 28)).rows;
+      ]);
   }
 
   startRun(run: {

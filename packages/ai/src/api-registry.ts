@@ -1,4 +1,3 @@
-// LLM Runtime module implements api registry behavior.
 import type {
   Api,
   AssistantMessageEventStreamContract,
