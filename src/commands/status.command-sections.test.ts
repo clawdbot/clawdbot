@@ -319,6 +319,11 @@ describe("status.command-sections", () => {
       status: "muted(OFF)",
       detail: "not configured",
     },
+    {
+      account: { enabled: false, lastError: "previous start failed" },
+      status: "muted(OFF)",
+      detail: "disabled (previous start failed)",
+    },
   ])("classifies the real channel health detail $detail", ({ account, status, detail }) => {
     const health: HealthSummary = {
       ok: true,

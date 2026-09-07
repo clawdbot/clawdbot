@@ -186,15 +186,15 @@ export const formatHealthChannelLines = (
       typeof selectedSummary.healthState === "string" && selectedSummary.healthState
         ? selectedSummary.healthState
         : null;
-    const linked = typeof selectedSummary.linked === "boolean" ? selectedSummary.linked : null;
-    const configured =
-      typeof selectedSummary.configured === "boolean" ? selectedSummary.configured : null;
+    const { linked, configured } = selectedSummary;
     const inactiveState =
-      statusState === "disabled" || statusState === "unconfigured"
-        ? formatChannelStatusState(statusState)
-        : configured === false
-          ? "not configured"
-          : null;
+      selectedSummary.enabled === false
+        ? "disabled"
+        : statusState === "disabled" || statusState === "unconfigured"
+          ? formatChannelStatusState(statusState)
+          : configured === false
+            ? "not configured"
+            : null;
     // Explicit inactive/degraded facts outrank probes; passive success waits until after them.
     // Otherwise a live probe can be hidden behind stale "healthy", "linked", or "configured".
     const preProbeState = inactiveState

@@ -307,7 +307,7 @@ export function buildStatusHealthRows(params: {
     const status =
       normalized === "healthy" || normalized.startsWith("ok") || normalized.startsWith("configured")
         ? params.ok("OK")
-        : normalized.startsWith("not configured")
+        : normalized.startsWith("not configured") || normalized.startsWith("disabled")
           ? params.muted("OFF")
           : normalized.startsWith("linked")
             ? params.ok("LINKED")
