@@ -417,6 +417,58 @@ describe("device management", () => {
     );
   });
 
+  it("approves a pending request when requestId has clipboard padding", async () => {
+    approveDevicePairingMock.mockResolvedValue({
+      status: "approved",
+      requestId: "req-padded-approve",
+      device: {
+        deviceId: "device-1",
+        publicKey: "pk-1",
+        approvedAtMs: 100,
+        createdAtMs: 50,
+      },
+    });
+    const notify = vi.fn();
+    const base = createOptions(
+      "device.pair.approve",
+      { requestId: "  req-padded-approve  " },
+      {
+        client: createClient(["operator.admin"], "device-admin", { isDeviceTokenAuth: true }),
+      },
+    );
+    const opts = {
+      ...base,
+      context: {
+        ...base.context,
+        scopeUpgradeCoordinator: { notify },
+      },
+    };
+
+    await expectDefined(
+      deviceHandlers["device.pair.approve"],
+      'deviceHandlers["device.pair.approve"] test invariant',
+    )(opts);
+
+    expect(approveDevicePairingMock).toHaveBeenCalledWith("req-padded-approve", {
+      callerScopes: ["operator.admin"],
+    });
+    expect(notify).toHaveBeenCalledWith("req-padded-approve", "approved");
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        requestId: "req-padded-approve",
+        device: {
+          deviceId: "device-1",
+          publicKey: "pk-1",
+          approvedAtMs: 100,
+          createdAtMs: 50,
+          tokens: undefined,
+        },
+      },
+      undefined,
+    );
+  });
+
   it("allows shared-auth operator sessions to approve operator roles within caller scopes", async () => {
     getPendingDevicePairingMock.mockResolvedValue({
       requestId: "req-1",
@@ -634,6 +686,42 @@ describe("device management", () => {
     expect(opts.respond).toHaveBeenCalledWith(
       true,
       { requestId: "req-1", deviceId: "device-1", rejectedAtMs: 123 },
+      undefined,
+    );
+  });
+
+  it("rejects a pending request when requestId has clipboard padding", async () => {
+    rejectDevicePairingMock.mockResolvedValue({
+      requestId: "req-padded-reject",
+      deviceId: "device-2",
+      rejectedAtMs: 456,
+    });
+    const notify = vi.fn();
+    const base = createOptions(
+      "device.pair.reject",
+      { requestId: "  req-padded-reject  " },
+      {
+        client: createClient(["operator.admin"], "device-admin", { isDeviceTokenAuth: true }),
+      },
+    );
+    const opts = {
+      ...base,
+      context: {
+        ...base.context,
+        scopeUpgradeCoordinator: { notify },
+      },
+    };
+
+    await expectDefined(
+      deviceHandlers["device.pair.reject"],
+      'deviceHandlers["device.pair.reject"] test invariant',
+    )(opts);
+
+    expect(rejectDevicePairingMock).toHaveBeenCalledWith("req-padded-reject");
+    expect(notify).toHaveBeenCalledWith("req-padded-reject", "rejected");
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      { requestId: "req-padded-reject", deviceId: "device-2", rejectedAtMs: 456 },
       undefined,
     );
   });
