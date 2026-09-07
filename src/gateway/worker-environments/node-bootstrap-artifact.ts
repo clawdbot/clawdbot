@@ -286,10 +286,11 @@ async function prepareNodeBootstrapArtifact(
   const files = (
     await collectPackageDistInventory(packageRoot, { packageManifest: packageJson })
   ).filter(
-    // Nodes install the Gateway's worker bundle separately through authenticated transfer.
-    // Carrying its deploy artifacts here duplicates staging, validation, and download work.
+    // The Gateway serves Control UI assets; nodes install their worker bundle separately.
+    // Neither belongs in the node runtime's staging, validation, or download work.
     (relative) =>
       !relative.startsWith("dist/worker/") &&
+      !relative.startsWith("dist/control-ui/") &&
       !externalPluginPrefixes.some((prefix) => relative.startsWith(prefix)),
   );
   if (!files.includes("dist/entry.js") && !files.includes("dist/entry.mjs")) {

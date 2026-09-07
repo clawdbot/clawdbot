@@ -523,29 +523,32 @@ export function createReadToolDefinition(
               const startLineDisplay = startLine + 1;
               const requestedLines =
                 limit === undefined ? undefined : normalizePositiveLimit(limit, DEFAULT_MAX_LINES);
-              let selectedLines: string[] = [];
               let totalFileLines = 0;
-              if (startLine === 0 && requestedLines === undefined) {
-                selectedLines = textContent.split("\n");
-                if (selectedLines.at(-1) === "") {
-                  selectedLines.pop();
-                }
-                totalFileLines = selectedLines.length;
-              } else {
-                // Count through EOF for continuation metadata, retaining only the requested range.
-                for (let start = 0; start < textContent.length;) {
-                  const newline = textContent.indexOf("\n", start);
-                  const end = newline === -1 ? textContent.length : newline;
-                  if (
-                    totalFileLines >= startLine &&
-                    (requestedLines === undefined || selectedLines.length < requestedLines)
-                  ) {
-                    selectedLines.push(textContent.slice(start, end));
+              let selectedStart = 0;
+              let selectedEnd = 0;
+              let selectedLineCount = 0;
+              let firstLineEnd = 0;
+              let selectedHasText = false;
+              // Count through EOF without materializing lines that the page budget may discard.
+              for (let start = 0; start < textContent.length;) {
+                const newline = textContent.indexOf("\n", start);
+                const end = newline === -1 ? textContent.length : newline;
+                if (
+                  totalFileLines >= startLine &&
+                  (requestedLines === undefined || selectedLineCount < requestedLines)
+                ) {
+                  if (selectedLineCount === 0) {
+                    selectedStart = start;
+                    firstLineEnd = end;
                   }
-                  totalFileLines += 1;
-                  start = end + 1;
+                  selectedEnd = end;
+                  selectedLineCount += 1;
+                  selectedHasText ||= end > start;
                 }
+                totalFileLines += 1;
+                start = end + 1;
               }
+              const firstLineLength = firstLineEnd - selectedStart;
               let outputText: string;
               if (totalFileLines === 0) {
                 outputText =
@@ -554,26 +557,24 @@ export function createReadToolDefinition(
                     : `File contains no readable text (${buffer.length} bytes).`;
               } else if (startLine >= totalFileLines) {
                 outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
-              } else if (cursor > 0 && cursor >= selectedLines[0]!.length) {
+              } else if (cursor > 0 && cursor >= firstLineLength) {
                 const nextLine =
                   startLine + 1 < totalFileLines
                     ? ` Use offset=${startLineDisplay + 1} to continue.`
                     : "";
-                outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${selectedLines[0]!.length} characters).${nextLine}`;
+                outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${firstLineLength} characters).${nextLine}`;
               } else {
-                const firstLine = selectedLines[0]!;
-                if (cursor > 0 && firstLine.codePointAt(cursor - 1)! > 0xffff) {
+                if (cursor > 0 && textContent.codePointAt(selectedStart + cursor - 1)! > 0xffff) {
                   throw new Error(
                     `Cursor ${cursor} splits a UTF-16 surrogate pair; retry with cursor=${cursor - 1} or cursor=${cursor + 1}.`,
                   );
                 }
-                const endLine = startLine + selectedLines.length;
-                selectedLines[0] = firstLine.slice(cursor);
+                const endLine = startLine + selectedLineCount;
                 const userLimitedLines = limit === undefined ? undefined : endLine - startLine;
-                let selectedContent = selectedLines.join("\n");
-                if (endLine === totalFileLines && textContent.endsWith("\n")) {
-                  selectedContent += "\n";
-                }
+                const selectedContent = textContent.slice(
+                  selectedStart + cursor,
+                  endLine === totalFileLines ? textContent.length : selectedEnd,
+                );
                 const noteBytes = note ? Buffer.byteLength(`${note}\n`, "utf8") : 0;
                 const page = createBoundedReadTextPage({
                   content: selectedContent,
@@ -590,8 +591,7 @@ export function createReadToolDefinition(
                 });
                 outputText = page.text;
                 textDetails = page.details;
-                if (selectedLines.every((line) => line.length === 0)) {
-                  const selectedLineCount = selectedLines.length;
+                if (!selectedHasText) {
                   const subject =
                     startLine === 0 && endLine === totalFileLines ? "File" : "Selected range";
                   outputText = `${subject} contains ${selectedLineCount} blank line${selectedLineCount === 1 ? "" : "s"}.`;
@@ -600,15 +600,13 @@ export function createReadToolDefinition(
                   }
                 }
               }
-              if (selectedLines.length === 1 && textDetails?.kind !== "truncated") {
-                // A singleton join can retain the decoded file. Copy only the bounded result,
+              if (textDetails?.kind === "text") {
+                // Full-fit custom decoder text can borrow a larger source. Copy both bounded channels,
                 // preserving UTF-16 code units from custom decoders, including lone surrogates.
                 outputText = Buffer.from(outputText, "utf16le").toString("utf16le");
-                if (textDetails) {
-                  textDetails.content = Buffer.from(textDetails.content, "utf16le").toString(
-                    "utf16le",
-                  );
-                }
+                textDetails.content = Buffer.from(textDetails.content, "utf16le").toString(
+                  "utf16le",
+                );
               }
               content = [{ type: "text", text: outputText }];
             }

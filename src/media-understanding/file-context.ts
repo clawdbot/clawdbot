@@ -241,7 +241,7 @@ export async function extractFileContext(params: {
       limits,
       skipAttachmentIndexes,
       assertCurrent: params.assertCurrent,
-    });
+    }).finally(() => cache.releaseBuffer(attachment.index));
     params.assertCurrent?.();
     if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
       images.push(

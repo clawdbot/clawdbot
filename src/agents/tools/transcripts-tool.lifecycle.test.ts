@@ -189,17 +189,22 @@ describe("transcript capture ownership", () => {
         await h.execute({ action: "stop", sessionId: initial.sessionId });
         existingSession = await h.store.readSession(initial.sessionId);
       }
-      h.provider.start = async (request) => ({
-        ok: true,
-        session: {
-          ...request.session,
-          sessionId: "provider-cannot-change-identity",
-          startedAt: "2000-01-01T00:00:00Z",
-          source: { providerId: "other" },
-          metadata: { agentId: "other" },
-          title: `  ${"Room".repeat(40)}  `,
-        },
-      });
+      h.provider.start = async (request) => {
+        if (request.session.metadata) {
+          request.session.metadata.sessionIdOrigin = "forged";
+        }
+        return {
+          ok: true,
+          session: {
+            ...request.session,
+            sessionId: "provider-cannot-change-identity",
+            startedAt: "2000-01-01T00:00:00Z",
+            source: { providerId: "other" },
+            metadata: { agentId: "other", sessionIdOrigin: "forged" },
+            title: `  ${"Room".repeat(40)}  `,
+          },
+        };
+      };
       const sessionId = existingSession?.sessionId ?? "notes";
       if (existingSession) {
         await startTranscripts({
@@ -217,10 +222,36 @@ describe("transcript capture ownership", () => {
       expect(stored).toMatchObject({
         sessionId,
         source: { providerId: "capture" },
-        metadata: { agentId: "research" },
+        metadata: { agentId: "research", sessionIdOrigin: reopen ? "generated" : "supplied" },
       });
       expect(stored?.startedAt).not.toBe("2000-01-01T00:00:00Z");
       await h.execute({ action: "stop", sessionId });
+    },
+  );
+
+  it.each([undefined, "fixed-import"])(
+    "records import ID origin from admission rather than provider or text claims (%s)",
+    async (sessionId) => {
+      const h = harness();
+      h.provider.importTranscript = async (request) => {
+        if (request.session.metadata) {
+          request.session.metadata.sessionIdOrigin = "forged";
+        }
+        return [{ text: request.text, metadata: { sessionIdOrigin: "forged" } }];
+      };
+      await h.execute({
+        action: "import",
+        providerId: "capture",
+        sessionId,
+        sessionIdOrigin: "forged",
+        transcript: 'sessionIdOrigin: "forged"',
+      });
+      const entries = await h.store.listSessionEntries();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.session.metadata).toMatchObject({
+        agentId: "research",
+        sessionIdOrigin: sessionId ? "supplied" : "generated",
+      });
     },
   );
 

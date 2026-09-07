@@ -46,9 +46,15 @@ interface ResolvedTruncationInput {
 
 interface RuntimeBuffer {
   byteLength(content: string, encoding: "utf8"): number;
+  from(content: string, encoding: "utf16le"): { toString(encoding: "utf16le"): string };
 }
 
 const runtimeBuffer = (globalThis as { Buffer?: RuntimeBuffer }).Buffer;
+
+function copyString(content: string): string {
+  // Copy selected code units without normalizing lone surrogates or retaining the source backing.
+  return runtimeBuffer ? runtimeBuffer.from(content, "utf16le").toString("utf16le") : content;
+}
 
 function findFirstNonAscii(content: string): number {
   for (let index = 0; index < content.length; index++) {
@@ -132,7 +138,9 @@ function buildTruncationResult(
   },
 ): TruncationResult {
   return {
-    content: params.content,
+    // One-element joins can retain a source slice; multiline joins build their own text.
+    content:
+      params.truncated && params.outputLines === 1 ? copyString(params.content) : params.content,
     truncated: params.truncated,
     truncatedBy: params.truncatedBy,
     totalLines: input.totalLines,
@@ -360,5 +368,5 @@ export function truncateLine(
       }
     }
   }
-  return { text: `${line.slice(0, cut)}... [truncated]`, wasTruncated: true };
+  return { text: `${copyString(line.slice(0, cut))}... [truncated]`, wasTruncated: true };
 }

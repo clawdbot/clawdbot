@@ -4,6 +4,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/i
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
+import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
 import {
   acquireBoardProviderForSession,
@@ -320,9 +321,14 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     }
     if (!board.provider.hasLoadedSnapshot) {
       const error = board.provider.loadError$.value;
-      return html`<div class="rail-empty" role=${error ? "alert" : "status"}>
-        ${error ? t("dashboardDocument.loadFailed", { error }) : t("common.loading")}
-      </div>`;
+      return error
+        ? html`<div
+            class="board-session-surface__state board-session-surface__state--error"
+            role="alert"
+          >
+            ${t("dashboardDocument.loadFailed", { error })}
+          </div>`
+        : renderPanelLoadingSkeleton("board", t("common.loading"));
     }
     // Only the loaded board acknowledgment supplies a missing owner; its display key
     // must not replace the original session target (notably global versus a literal key).

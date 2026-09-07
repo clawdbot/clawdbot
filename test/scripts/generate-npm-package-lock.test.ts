@@ -705,6 +705,16 @@ describe("generate-npm-package-lock", () => {
     ).toEqual(["extensions/acpx"]);
   });
 
+  it("does not normalize raw Git filename boundaries into package manifests", () => {
+    expect(
+      npmLockPackageDirsForChangedPaths([
+        " extensions/acpx/package.json",
+        "extensions/acpx/package.json ",
+        String.raw`extensions\acpx\package.json`,
+      ]),
+    ).toEqual([]);
+  });
+
   it("targets the changed publishable gateway protocol manifest", () => {
     expect(
       npmLockPackageDirsForChangedPaths(["packages/gateway-protocol/package.json"]).map(

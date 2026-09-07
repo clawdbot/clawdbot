@@ -42,6 +42,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
+import { projectTalkRealtimeRelayProviderError } from "./talk-realtime-relay-issues.js";
 import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-ledger.js";
 import {
@@ -61,6 +62,40 @@ import { prepareTalkSessionTarget } from "./talk-session-target.js";
 
 const activeRelaySessions = new Map<string, string>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const RELAY_AUTH_ERROR =
+  "Realtime provider authentication failed. Check the provider credentials and try again.";
+const RELAY_CONFIG_ERROR =
+  "Realtime session configuration was rejected. Check the provider and model settings.";
+const RELAY_RETRY_ERROR = "Realtime provider cannot start this session right now. Try again later.";
+const RELAY_UNAVAILABLE_ERROR = "Realtime provider is unavailable. Try again later.";
+const RELAY_GENERIC_ERROR = "Realtime provider error.";
+const providerErrorCases = [
+  {
+    name: "authentication",
+    error: { status: 401, message: "raw-auth-marker" },
+    expected: RELAY_AUTH_ERROR,
+  },
+  {
+    name: "configuration",
+    error: { status: 404, message: "raw-config-marker" },
+    expected: RELAY_CONFIG_ERROR,
+  },
+  {
+    name: "retry later",
+    error: { status: 429, message: "raw-rate-marker" },
+    expected: RELAY_RETRY_ERROR,
+  },
+  {
+    name: "unavailable",
+    error: { status: 503, message: "raw-unavailable-marker" },
+    expected: RELAY_UNAVAILABLE_ERROR,
+  },
+  {
+    name: "generic",
+    error: { message: "raw-generic-marker" },
+    expected: RELAY_GENERIC_ERROR,
+  },
+] as const;
 
 function makeRelayTransport<Overrides extends Partial<RealtimeVoiceBridge> = Record<never, never>>(
   overrides: Overrides = {} as Overrides,
@@ -142,6 +177,25 @@ function ensureActiveRelayTurnId(relaySessionId: string): string {
   }
   return relay.harness.talk.activeTurnId ?? "turn-1";
 }
+
+describe("talk realtime relay provider error projection", () => {
+  it.each(providerErrorCases)(
+    "projects public $name failures to fixed copy",
+    ({ error, expected }) => {
+      const message = projectTalkRealtimeRelayProviderError("relay-test", false, error);
+
+      expect(message).toBe(expected);
+      expect(message).not.toContain(error.message);
+    },
+  );
+
+  it.each(providerErrorCases)("keeps opaque $name failures generic", ({ error }) => {
+    const message = projectTalkRealtimeRelayProviderError("relay-test", true, error);
+
+    expect(message).toBe(RELAY_GENERIC_ERROR);
+    expect(message).not.toContain(error.message);
+  });
+});
 
 describe("talk realtime gateway relay", () => {
   let testState: OpenClawTestState | undefined;
@@ -289,6 +343,82 @@ describe("talk realtime gateway relay", () => {
     ).toHaveLength(2);
     expect(relaySessions.has(session.relaySessionId)).toBe(true);
     expect(close).not.toHaveBeenCalled();
+  });
+
+  it("redacts failed response outcome details from relay broadcasts", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return makeRelayTransport();
+      },
+    };
+    const events: Array<{ payload: unknown }> = [];
+    const context = {
+      broadcastToConnIds: (_event: string, payload: unknown) => {
+        events.push({ payload });
+      },
+    } as never;
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "be brief",
+      tools: [],
+    });
+    await Promise.resolve();
+    if (!bridgeRequest) {
+      throw new Error("expected realtime bridge request");
+    }
+
+    void sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("audio").toString("base64"),
+      timestamp: 1,
+    });
+    bridgeRequest.onEvent?.({
+      direction: "server",
+      type: "response.created",
+      responseId: "response-sensitive",
+    });
+    const markers = {
+      message: "raw-outcome-message",
+      reason: "raw-outcome-reason",
+      errorMessage: "raw-error-message",
+      errorCode: "raw-error-code",
+      errorType: "raw-error-type",
+    };
+    bridgeRequest.onResponseDone?.({
+      status: "incomplete",
+      responseId: "response-sensitive",
+      message: markers.message,
+      reason: markers.reason,
+      error: {
+        message: markers.errorMessage,
+        code: markers.errorCode,
+        type: markers.errorType,
+      },
+    });
+
+    const errorPayload = findEventPayload(events, (payload) => payload.type === "error");
+    expectRecordFields(errorPayload, { type: "error", message: RELAY_GENERIC_ERROR });
+    const talkEvent = expectRecordFields(errorPayload.talkEvent, {
+      type: "session.error",
+      final: true,
+    });
+    expectRecordFields(talkEvent.payload, {
+      code: "realtime_unavailable",
+      message: RELAY_GENERIC_ERROR,
+    });
+    const broadcastJson = JSON.stringify(events);
+    for (const marker of Object.values(markers)) {
+      expect(broadcastJson).not.toContain(marker);
+    }
   });
 
   afterEach(async () => {
@@ -587,10 +717,13 @@ describe("talk realtime gateway relay", () => {
     {
       name: "error before close",
       terminate: (request: RealtimeVoiceBridgeCreateRequest) => {
-        request.onError?.(new Error("provider rejected session"));
+        request.onError?.(
+          Object.assign(new Error("raw-synchronous-callback-marker"), { status: 401 }),
+        );
         request.onClose?.("error");
       },
-      expectedError: "provider rejected session",
+      expectedError: RELAY_AUTH_ERROR,
+      rawMarker: "raw-synchronous-callback-marker",
     },
     {
       name: "close before error",
@@ -599,10 +732,11 @@ describe("talk realtime gateway relay", () => {
         request.onError?.(new Error("late provider error"));
       },
       expectedError: "Realtime provider closed during session creation: completed",
+      rawMarker: "late provider error",
     },
   ])(
     "rejects a synchronous provider $name during bridge creation",
-    ({ terminate, expectedError }) => {
+    ({ terminate, expectedError, rawMarker }) => {
       const connect = vi.fn(async () => undefined);
       const sendAudio = vi.fn();
       const close = vi.fn();
@@ -618,7 +752,8 @@ describe("talk realtime gateway relay", () => {
       };
       const broadcastToConnIds = vi.fn();
 
-      expect(() =>
+      let thrown: unknown;
+      try {
         createTalkRealtimeRelaySession({
           context: {
             broadcastToConnIds,
@@ -631,15 +766,54 @@ describe("talk realtime gateway relay", () => {
           providerConfig: {},
           instructions: "brief",
           tools: [],
-        }),
-      ).toThrow(expectedError);
+        });
+      } catch (error) {
+        thrown = error;
+      }
 
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toBe(expectedError);
+      expect((thrown as Error).message).not.toContain(rawMarker);
       expect(connect).not.toHaveBeenCalled();
       expect(sendAudio).not.toHaveBeenCalled();
       expect(close).toHaveBeenCalledOnce();
       expect(broadcastToConnIds).not.toHaveBeenCalled();
     },
   );
+
+  it("sanitizes a direct provider construction failure", () => {
+    const rawMarker = "raw-construction-marker";
+    const provider = createIdleRelayProvider();
+    provider.createBridge = () => {
+      throw Object.assign(new Error(rawMarker), { status: 404 });
+    };
+    const broadcastToConnIds = vi.fn();
+
+    let thrown: unknown;
+    try {
+      createTalkRealtimeRelaySession({
+        context: {
+          broadcastToConnIds,
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-construction-error",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        model: "gpt-realtime-test-public",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(RELAY_CONFIG_ERROR);
+    expect((thrown as Error).message).not.toContain(rawMarker);
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -1785,7 +1959,6 @@ describe("talk realtime gateway relay", () => {
       autoRespondToAudio: true,
       interruptResponseOnInputAudio: true,
     });
-
     const readyPayload = findEventPayload(events, (payload) => payload.type === "ready");
     expectRecordFields(readyPayload, {
       relaySessionId: session.relaySessionId,
@@ -2025,7 +2198,8 @@ describe("talk realtime gateway relay", () => {
     expectDelivery(closePayload, false);
   });
 
-  it("emits generic issue details when relay connect fails", async () => {
+  it("emits bounded issue details when relay connect fails", async () => {
+    const rawMarker = "raw-connect-auth-marker";
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",
       label: "OpenAI Realtime",
@@ -2033,7 +2207,7 @@ describe("talk realtime gateway relay", () => {
       createBridge: () =>
         makeRelayTransport({
           connect: vi.fn(async () => {
-            throw new Error("OpenAI API key rejected with 401");
+            throw Object.assign(new Error(rawMarker), { status: 401 });
           }),
           isConnected: vi.fn(() => false),
         }),
@@ -2070,7 +2244,7 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(errorPayload, {
       relaySessionId: session.relaySessionId,
       type: "error",
-      message: "OpenAI API key rejected with 401",
+      message: RELAY_AUTH_ERROR,
       code: "realtime_unavailable",
       provider: "openai",
       model: "gpt-realtime-2",
@@ -2091,6 +2265,7 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(events.find((event) => event.payload === errorPayload)?.opts, {
       dropIfSlow: false,
     });
+    expect(JSON.stringify(events)).not.toContain(rawMarker);
   });
 
   it("emits an issue when the provider closes before ready", () => {
@@ -2167,7 +2342,8 @@ describe("talk realtime gateway relay", () => {
       model: "gpt-realtime-2",
     });
 
-    bridgeRequest?.onError?.(new Error("OpenAI API key rejected with 401"));
+    const rawMarker = "raw-active-auth-marker";
+    bridgeRequest?.onError?.(Object.assign(new Error(rawMarker), { status: 401 }));
     bridgeRequest?.onClose?.("error");
 
     const errorPayloads = events
@@ -2181,12 +2357,75 @@ describe("talk realtime gateway relay", () => {
     expect(errorPayloads).toHaveLength(1);
     expectRecordFields(errorPayloads[0], {
       type: "error",
+      message: RELAY_AUTH_ERROR,
       code: "realtime_unavailable",
       provider: "openai",
       model: "gpt-realtime-2",
       transport: "gateway-relay",
       phase: "connect",
     });
+    expect(JSON.stringify(events)).not.toContain(rawMarker);
+  });
+
+  it.each([
+    { name: "opaque", hideModel: true, model: "gpt-live-test-private" },
+    { name: "released", hideModel: false, model: "gpt-live-1-codex" },
+    { name: "public", hideModel: false, model: "gpt-realtime-test-public" },
+  ])("redacts provider details for a $name relay model", ({ hideModel, model }) => {
+    const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return makeRelayTransport();
+      },
+      ...(hideModel
+        ? {
+            [Symbol.for("openclaw.internal.realtime-voice-provider.v1")]: {
+              isBrowserSessionConfigured: () => true,
+              projectPublicProjection: ({ config }: { config: Record<string, unknown> }) => {
+                const { model: _model, ...publicConfig } = config;
+                return { config: publicConfig };
+              },
+            },
+          }
+        : {}),
+    };
+    const events: Array<{ payload: unknown }> = [];
+    const context = {
+      broadcastToConnIds: (_event: string, payload: unknown) => {
+        events.push({ payload });
+      },
+    } as never;
+
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-private-model",
+      provider,
+      providerConfig: { model },
+      instructions: "brief",
+      tools: [],
+      model,
+    });
+    bridgeRequest?.onError?.(
+      Object.assign(new Error(`provider rejected ${model} ${sensitiveDetails.join(" ")}`), {
+        status: 401,
+      }),
+    );
+
+    if (hideModel) {
+      expect(session).not.toHaveProperty("model");
+    } else {
+      expect(session).toHaveProperty("model", model);
+    }
+    const projected = JSON.stringify(events);
+    expect(projected).toContain(hideModel ? RELAY_GENERIC_ERROR : RELAY_AUTH_ERROR);
+    for (const privateValue of [...(hideModel ? [model] : []), ...sensitiveDetails]) {
+      expect(projected).not.toContain(privateValue);
+    }
   });
 
   it("does not route assistant echo transcripts back into the realtime model", async () => {

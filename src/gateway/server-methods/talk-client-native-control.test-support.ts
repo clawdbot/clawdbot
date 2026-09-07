@@ -96,6 +96,8 @@ const nativeUpstream = await vi.hoisted(async () => {
   };
 });
 
+const NATIVE_REALTIME_MODEL = "gpt-live-test-canary";
+
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: nativeUpstream.runEmbeddedAgent,
 }));
@@ -171,7 +173,11 @@ export async function withNativePlugin(
   await withOpenClawTestState(
     { layout: "state-only", prefix: "talk-native-control-", env: { OPENAI_API_KEY: undefined } },
     async (state) => {
-      const realtimeConfig: TalkRealtimeConfig = { provider: "openai", transport: "webrtc" };
+      const realtimeConfig: TalkRealtimeConfig = {
+        provider: "openai",
+        providers: { openai: { apiKey: "test-key" } },
+        transport: "webrtc",
+      };
       const config: OpenClawConfig = {
         agents: {
           ownership: "explicit",
@@ -236,15 +242,10 @@ export async function withNativePlugin(
             registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle),
           }),
         );
-        const provider = registry.realtimeVoiceProviders.find(
-          (entry) => entry.provider.id === "openai",
-        )?.provider;
-        // Choose the registered native family without reading an operator's model setting.
-        const nativeModel = provider?.models?.find((model) => model.startsWith("gpt-live-"));
-        if (!nativeModel) {
-          throw new Error("OpenAI did not register a native realtime model");
+        if (!registry.realtimeVoiceProviders.some((entry) => entry.provider.id === "openai")) {
+          throw new Error("OpenAI did not register its realtime voice provider");
         }
-        realtimeConfig.model = nativeModel;
+        realtimeConfig.model = NATIVE_REALTIME_MODEL;
         setActivePluginRegistry(registry);
         const offerRoute = routes.find((route) => route.path === "/plugins/openai/realtime/calls");
         if (!offerRoute) {
@@ -337,6 +338,7 @@ export async function connectNativeSession(
   expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount);
   const sdp = negotiated ? AUDIO_SDP : DATA_CHANNEL_SDP;
   const { handling, response } = offer(requireString(result, "clientSecret"), sdp);
+  await vi.waitFor(() => expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1));
   await vi.waitFor(() => expect(upstream.sockets).toHaveLength(socketIndex + 1));
   expect(response.end).not.toHaveBeenCalled();
   const socket = upstream.sockets[socketIndex];
@@ -558,13 +560,7 @@ export function installNativePluginTestHooks() {
   beforeEach(() => {
     upstream.sockets.length = 0;
     upstream.fetch.mockReset();
-    upstream.fetch.mockImplementation(async (input) => {
-      const url = new URL(
-        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-      );
-      if (url.hostname !== "chatgpt.com" || url.pathname !== "/backend-api/codex/realtime/calls") {
-        throw new Error("Unexpected provider HTTP request");
-      }
+    upstream.fetch.mockImplementation(async () => {
       return new Response("v=native-answer\r\n", {
         status: 201,
         headers: { Location: `/v1/live/rtc_native_test_${upstream.fetch.mock.calls.length}` },

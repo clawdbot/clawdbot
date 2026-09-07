@@ -416,12 +416,6 @@ function resolveApprovalForwardingConfig(params: {
     : params.cfg.approvals?.exec;
 }
 
-function normalizeApprovalForwardingMode(
-  mode: ExecApprovalForwardingConfig["mode"] | undefined,
-): ExecApprovalForwardingMode {
-  return mode ?? "session";
-}
-
 function approvalModeIncludesSession(mode: ExecApprovalForwardingMode): boolean {
   return mode === "session" || mode === "both";
 }
@@ -542,8 +536,7 @@ function isExplicitTargetApprovalEligibleViaForwarding(
 export function createChannelApprovalForwardingEvaluator(
   params: ChannelApprovalForwardingEvaluatorParams,
 ) {
-  const resolveForwardingMode = (config: ExecApprovalForwardingConfig) =>
-    normalizeApprovalForwardingMode(config.mode);
+  const resolveForwardingMode = (config: ExecApprovalForwardingConfig) => config.mode ?? "session";
 
   const isPotentialRoute = (input: ChannelApprovalPotentialRouteParams): boolean => {
     return canApprovalPotentiallyRoute({
@@ -604,22 +597,14 @@ export function createChannelApprovalForwardingEvaluator(
   };
 }
 
-function normalizeApprovalForwardingModeWithDefault(params: {
-  config: ExecApprovalForwardingConfig;
-  defaultForwardingMode: ExecApprovalForwardingMode;
-}): ExecApprovalForwardingMode {
-  return params.config.mode ?? params.defaultForwardingMode;
-}
-
 /** Create the standard route gates for native channel approval forwarding. */
 export function createNativeApprovalChannelRouteGates<TTarget extends NativeApprovalTarget>(
   params: NativeApprovalChannelRouteGateParams<TTarget>,
 ): NativeApprovalChannelRouteGates {
-  const resolveForwardingMode = (config: ExecApprovalForwardingConfig) =>
-    normalizeApprovalForwardingModeWithDefault({
-      config,
-      defaultForwardingMode: params.defaultForwardingMode,
-    });
+  const resolveForwardingMode = (config: ExecApprovalForwardingConfig) => {
+    const defaultForwardingMode = params.defaultForwardingMode;
+    return config.mode ?? defaultForwardingMode;
+  };
 
   const targetsMatch =
     params.targetsMatch ??

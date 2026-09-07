@@ -88,6 +88,7 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
     - A provider usage failure does not block the session/cost dashboard; unavailable provider cards show their own error state.
     - Incomplete session/cost totals stay readable while the visible, focused page checks for updates. Automatic checks are bounded; if they pause, select **Refresh** to check again.
     - The overview loads session summaries first. Full system-prompt breakdowns load when you select a session; the `has:context` filter still works before opening details.
+    - JSON exports keep the displayed usage snapshot and load prompt details for the same session instance. If that session has been replaced, refresh Usage and export again.
 
   </Accordion>
   <Accordion title="Debug, logs, update">

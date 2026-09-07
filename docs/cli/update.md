@@ -338,8 +338,14 @@ listed separately as requiring verification. Protected and blocked artifacts
 include reason codes.
 
 Before applying, stop the Gateway for that same profile/state directory and wait
-for other SQLite maintenance commands to finish. Cleanup requires exclusive
-offline state ownership and never stops or restarts a service itself.
+for other SQLite maintenance commands to finish. Stop database readers too,
+including watchers that repeatedly run `openclaw sessions --all-agents --json`,
+and keep them stopped until cleanup exits. Read-only SQLite connections can
+create or change WAL/SHM sidecars, invalidating cleanup's destination check even
+when session content is unchanged. If cleanup reports `Recovery destination
+database changed; preview cleanup again.`, stop those readers, preview again,
+and retry. Cleanup requires exclusive offline state ownership and never stops
+or restarts a service itself.
 
 <Warning>
 Cleanup permanently removes the selected rollback originals, including branches
@@ -423,11 +429,13 @@ aligned:
 
 ### Validation and activation
 
-If the resolved package version equals the installed version, or the Git target
-SHA equals `HEAD`, the run finishes `skipped` with reason `already-current`.
-It does not stop, replace, or restart the Gateway. Read-only plugin convergence
-checks can still report repair needs; use `openclaw update repair` to apply them.
-An explicit `--channel` selection still persists the channel for future updates.
+If the resolved package version equals the installed version without changing
+the selected channel or installation method, or the Git target SHA equals
+`HEAD`, the run finishes `skipped` with reason `already-current`. A same-version
+explicit `--channel` or installation-method change finishes successfully.
+Neither path stops or restarts the Gateway unless the installation method
+changes. Read-only plugin convergence checks can still report repair needs; use
+`openclaw update repair` to apply them.
 
 For targets that support candidate validation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the candidate entrypoint for Doctor lint

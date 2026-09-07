@@ -169,9 +169,11 @@ async function captureXaiResponsesPayloadWithThinking(
 }
 
 describe("xai stream wrappers", () => {
-  it("adds the Grok OAuth proxy request contract", () => {
+  it.each(["grok-4.5", "auto"])("adds the Grok OAuth proxy request contract for %s", (id) => {
     let capturedHeaders: Record<string, string> | undefined;
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    let capturedModelId: string | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      capturedModelId = model.id;
       capturedHeaders = options?.headers;
       return {} as ReturnType<StreamFn>;
     };
@@ -187,13 +189,21 @@ describe("xai stream wrappers", () => {
       {
         api: "openai-responses",
         provider: "xai",
-        id: "grok-4.5",
+        id,
+        name: "Subscription default",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 500_000,
+        maxTokens: 64_000,
+        params: { canonicalModelId: "grok-4.5" },
         baseUrl: "https://cli-chat-proxy.grok.com/v1",
-      } as Model<"openai-responses">,
-      { messages: [] } as Context,
+      },
+      { messages: [] },
       { headers: { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept" } },
     );
 
+    expect(capturedModelId).toBe("grok-4.5");
     expect(capturedHeaders).toEqual({
       "x-existing": "kept",
       "x-grok-client-version": "2026.7.2",

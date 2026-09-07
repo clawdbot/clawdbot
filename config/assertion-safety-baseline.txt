@@ -437,7 +437,7 @@ extensions/feishu/src/bot-content.ts	1
 extensions/feishu/src/bot-identity-cache.ts	1
 extensions/feishu/src/bot-name.ts	4
 extensions/feishu/src/bot-sender-name.ts	2
-extensions/feishu/src/bot.ts	9
+extensions/feishu/src/bot.ts	8
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
 extensions/feishu/src/channel.ts	7
@@ -643,7 +643,6 @@ extensions/matrix/src/matrix/actions/verification.ts	1
 extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	5
 extensions/matrix/src/matrix/client/logging.ts	3
-extensions/matrix/src/matrix/client/runtime.ts	1
 extensions/matrix/src/matrix/config-update.ts	4
 extensions/matrix/src/matrix/credentials-state.ts	2
 extensions/matrix/src/matrix/delivery-plan.ts	1
@@ -772,7 +771,6 @@ extensions/memory-wiki/src/compiled-cache.ts	1
 extensions/memory-wiki/src/gateway.ts	3
 extensions/memory-wiki/src/ingest.ts	2
 extensions/memory-wiki/src/log.ts	1
-extensions/memory-wiki/src/markdown.ts	1
 extensions/memory-wiki/src/mutation-coordinator.ts	1
 extensions/memory-wiki/src/okf.ts	1
 extensions/memory-wiki/src/source-sync-state.ts	1
@@ -892,8 +890,6 @@ extensions/openai/openai-provider.ts	5
 extensions/openai/provider-policy-api.ts	2
 extensions/openai/realtime-provider-shared.ts	2
 extensions/openai/realtime-quicksilver-bridge.ts	1
-extensions/openai/realtime-quicksilver-delegation-controller.ts	1
-extensions/openai/realtime-quicksilver.ts	1
 extensions/openai/realtime-voice-bridge.ts	3
 extensions/openai/realtime-voice-session-policy.ts	4
 extensions/openai/speech-provider.ts	2
@@ -1230,16 +1226,15 @@ extensions/telegram/src/message-cache.ts	10
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1
 extensions/telegram/src/miniapp/routes.ts	1
-extensions/telegram/src/monitor.ts	2
+extensions/telegram/src/monitor.ts	1
 extensions/telegram/src/network-config.ts	1
-extensions/telegram/src/network-errors.ts	8
+extensions/telegram/src/network-errors.ts	7
 extensions/telegram/src/outbound-adapter.ts	5
 extensions/telegram/src/outbound-media.ts	2
 extensions/telegram/src/outbound-message-context.ts	1
 extensions/telegram/src/poll-answer-context.ts	1
 extensions/telegram/src/polling-lease.ts	1
 extensions/telegram/src/polling-liveness.ts	1
-extensions/telegram/src/polling-session.ts	1
 extensions/telegram/src/probe.ts	3
 extensions/telegram/src/raw-update-log.ts	1
 extensions/telegram/src/reply-parameters.ts	2
@@ -1487,7 +1482,7 @@ packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
 packages/ai/src/transports/openai-responses-debug.ts	12
-packages/ai/src/transports/openai-responses-params-internal.ts	11
+packages/ai/src/transports/openai-responses-params-internal.ts	9
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	11
@@ -2354,7 +2349,6 @@ src/cli/program/register.migrate.ts	12
 src/cli/program/register.onboard.ts	27
 src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	29
-src/cli/program/route-specs.ts	1
 src/cli/run-main.ts	1
 src/cli/sandbox-cli.ts	4
 src/cli/secrets-cli.ts	2
@@ -2500,7 +2494,6 @@ src/commands/models/list.persisted-catalog.ts	2
 src/commands/models/list.probe.ts	2
 src/commands/models/list.registry.ts	3
 src/commands/models/list.rows.ts	3
-src/commands/models/list.status-command.ts	1
 src/commands/models/shared.ts	3
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
@@ -3070,7 +3063,6 @@ src/infra/package-dist-inventory.ts	2
 src/infra/package-json.ts	1
 src/infra/pairing-files.ts	1
 src/infra/path-case.ts	3
-src/infra/ports-inspect.ts	1
 src/infra/ports.ts	2
 src/infra/private-mode.ts	2
 src/infra/provider-usage.auth.ts	2
@@ -3102,7 +3094,6 @@ src/infra/sqlite-file-generation.ts	9
 src/infra/sqlite-files.ts	1
 src/infra/sqlite-index-schema.ts	2
 src/infra/sqlite-integrity.ts	2
-src/infra/sqlite-private-directory.ts	2
 src/infra/sqlite-readonly-location.ts	4
 src/infra/sqlite-schema-contract.ts	9
 src/infra/sqlite-snapshot.ts	2
@@ -3291,7 +3282,7 @@ src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3
-src/plugin-sdk/provider-onboard.ts	6
+src/plugin-sdk/provider-onboard.ts	5
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	10
@@ -3396,7 +3387,6 @@ src/plugins/memory-runtime.ts	1
 src/plugins/module-export.ts	2
 src/plugins/native-module-require.ts	3
 src/plugins/official-external-plugin-catalog-snapshot-store.ts	4
-src/plugins/official-external-plugin-targets.ts	1
 src/plugins/official-external-provider-endpoints.ts	1
 src/plugins/openai-compatible-embedding-provider.ts	2
 src/plugins/plugin-cache-primitives.ts	1

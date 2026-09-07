@@ -129,6 +129,12 @@ hashing. Activation and runtime service generations can change while their
 package metadata stays fixed. Account health and authentication state are not
 part of the immutable package inventory.
 
+The same cache generation prepares installed-index scope lookups, compiled model
+matching patterns, parsed install-record projections, and manifest fingerprints
+once per immutable index. Mutable management indexes remain uncached. Lookup
+methods and install-record results remain caller-owned; enablement and trust are
+evaluated from the current operation's policy rather than stored in these facts.
+
 Provider auth aliases are normalized and indexed with the snapshot. Lookups
 select among those prepared candidates using the current workspace trust config;
 they do not cache trust decisions or credentials. Callers supplying a partial
