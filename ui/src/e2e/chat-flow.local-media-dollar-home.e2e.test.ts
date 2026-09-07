@@ -3,22 +3,31 @@ import { expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("allows tilde local media previews when the preview root home contains a literal $ pattern", async () => {
+  it.each([
+    {
+      name: "tilde local media",
+      source: "~/media/report-voice.mp3",
+    },
+    {
+      name: "POSIX dot-segment local media",
+      source: "/workspace/project/../media/report-voice.mp3",
+    },
+    {
+      name: "Windows dot-segment local media",
+      source: "C:\\workspace\\project\\..\\media\\report-voice.mp3",
+    },
+  ])("allows $name", async ({ source }) => {
     const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactDirParent
       ? createControlUiE2eArtifactDir("chat-flow.local-media-dollar-home", artifactDirParent)
       : undefined;
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
-    const source = "~/media/report-voice.mp3";
     const requestedMediaUrls: URL[] = [];
 
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
@@ -43,7 +52,6 @@ suite.define(() => {
     });
 
     await installMockGateway(page, {
-      localMediaPreviewRoots: ["/home/us$&r/media"],
       historyMessages: [
         {
           id: "assistant-dollar-home-audio",

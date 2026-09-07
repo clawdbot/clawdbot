@@ -22,10 +22,15 @@ struct TalkRealtimeClientSession: Decodable {
     let model: String?
     let voice: String?
     let expiresAt: Double?
+    let clientControl: TalkRealtimeClientControl?
 
     var isWebRTC: Bool {
         self.transport.caseInsensitiveCompare("webrtc") == .orderedSame
     }
+}
+
+struct TalkRealtimeClientControl: Decodable {
+    let owner: String
 }
 
 enum TalkRealtimeTranscriptRole: String, Encodable {

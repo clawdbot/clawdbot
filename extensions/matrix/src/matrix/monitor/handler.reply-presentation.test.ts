@@ -1,8 +1,10 @@
+import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 // Matrix tests cover the handler's reply presentation wiring.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareMatrixReplyPayload } from "../../outbound.js";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
+import type { CoreConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixDraftController } from "./handler-draft-controller.js";
 import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
@@ -19,6 +21,7 @@ const editMessageMatrixMock = vi.hoisted(() => vi.fn(async () => "$edited"));
 const sendSingleTextMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async () => ({ messageId: "$draft1", roomId: "!room" })),
 );
+const reactMatrixMessageMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: editMessageMatrixMock,
@@ -28,7 +31,7 @@ vi.mock("../send.js", () => ({
     singleEventLimit: 4000,
     fitsInSingleEvent: true,
   })),
-  reactMatrixMessage: vi.fn(async () => {}),
+  reactMatrixMessage: reactMatrixMessageMock,
   resolveMatrixMentionsForBody: vi.fn(async () => ({})),
   sendMessageMatrix: sendMessageMatrixMock,
   sendSingleTextMessageMatrix: sendSingleTextMessageMatrixMock,
@@ -54,6 +57,7 @@ describe("matrix monitor handler reply presentation", () => {
     sendMessageMatrixMock.mockClear();
     editMessageMatrixMock.mockClear();
     sendSingleTextMessageMatrixMock.mockClear();
+    reactMatrixMessageMock.mockClear();
     deliverMatrixRepliesMock.mockReset().mockResolvedValue({
       messageIds: ["$reply1"],
       receipt: {
@@ -66,6 +70,45 @@ describe("matrix monitor handler reply presentation", () => {
       content: "delivered",
     });
   });
+
+  it.each([undefined, "off"] as const)(
+    "applies current acknowledgement scope while preserving account override %s",
+    async (accountScope) => {
+      const cfg: CoreConfig = {
+        messages: { ackReaction: "👀", ackReactionScope: "off" },
+        channels: {
+          matrix: {
+            dm: { allowFrom: ["*"] },
+            accounts: { ops: { ackReactionScope: accountScope } },
+          },
+        },
+      };
+      let currentConfig = cfg;
+      const dispatchInboundMessage = vi.fn(async () => ({
+        queuedFinal: false,
+        counts: { final: 0, block: 0, tool: 0 },
+      }));
+      const { handler } = createMatrixHandlerTestHarness({
+        cfg,
+        currentConfig: () => currentConfig,
+        shouldAckReaction,
+        dispatchInboundMessage,
+      });
+      for (const [index, scope] of (["off", "all", "off"] as const).entries()) {
+        currentConfig = { ...cfg, messages: { ...cfg.messages, ackReactionScope: scope } };
+        const eventId = `$reload-${index}`;
+        await handler(
+          "!room:example.org",
+          createMatrixTextMessageEvent({ eventId, body: "hello" }),
+        );
+        const reactions = reactMatrixMessageMock.mock.calls.filter((call) => call[1] === eventId);
+        expect(reactions.some((call) => call[2] === "👀")).toBe(
+          accountScope === undefined && scope === "all",
+        );
+      }
+      expect(dispatchInboundMessage).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it("resolves a reply's presentation before the room delivery reads it", async () => {
     const runGate = createDeferred<void>();

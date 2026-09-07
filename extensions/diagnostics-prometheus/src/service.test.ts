@@ -4,69 +4,16 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
 // Diagnostics Prometheus tests cover service plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import type {
-  DiagnosticEventMetadata,
-  DiagnosticEventPayload,
-  OpenClawPluginServiceContext,
-} from "../api.js";
+import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
-
-const trusted: DiagnosticEventMetadata = Object.freeze({ trusted: true });
-const untrusted: DiagnosticEventMetadata = Object.freeze({ trusted: false });
-type ExporterHealthReport = {
-  signal: "metrics";
-  transport: "prometheus-scrape";
-  status: "started" | "dropped";
-  reason?: "configured";
-};
-type TrustedExporterInternalDiagnostics = NonNullable<
-  OpenClawPluginServiceContext["internalDiagnostics"]
-> & {
-  reportExporterHealth?: (update: ExporterHealthReport) => void;
-};
-
-function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
-  return { seq: 1, ts: 1700000000000 };
-}
-
-function createMetricsHarness() {
-  const exporter = createDiagnosticsPrometheusExporter();
-  let listener:
-    | ((
-        event: DiagnosticEventPayload,
-        metadata: DiagnosticEventMetadata,
-        privateData: DiagnosticEventPrivateData,
-      ) => void)
-    | undefined;
-  exporter.service.start({
-    config: {} as never,
-    stateDir: "/tmp/openclaw-prometheus-test",
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    internalDiagnostics: {
-      emit() {},
-      onEvent(nextListener) {
-        listener = nextListener;
-        return () => {
-          listener = undefined;
-        };
-      },
-      reportExporterHealth() {},
-    } as TrustedExporterInternalDiagnostics,
-  });
-  return {
-    handler: exporter.handler,
-    record(event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) {
-      expectDefined(listener, "Prometheus diagnostics listener")(event, metadata, {});
-    },
-    render: exporter.render,
-    stop: () => exporter.service.stop?.(),
-  };
-}
+import {
+  baseEvent,
+  createMetricsHarness,
+  trusted,
+  untrusted,
+  type ExporterHealthReport,
+  type TrustedExporterInternalDiagnostics,
+} from "./service.test-helpers.js";
 
 describe("diagnostics-prometheus service", () => {
   it("records Gateway RPC timings by method and outcomes without method multiplication", () => {

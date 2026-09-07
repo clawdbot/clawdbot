@@ -72,6 +72,8 @@ type KeyboardShortcutsDialogElement = HTMLElement & {
   toggle: () => void;
 };
 
+let nativeCommandsOwner: AbortController | undefined;
+
 function isSettingsTakeover(routeId: RouteId | undefined): boolean {
   return routeId !== undefined && isSettingsNavigationRoute(routeId);
 }
@@ -154,12 +156,22 @@ export class ShellChromeOwner {
     if (isMobileNavLayout()) {
       this.navDrawerSwipe.load();
     }
+    // Document load can be a proxy sign-in page; the listener owner records readiness.
+    nativeCommandsOwner = this.listeners;
+    Object.assign(window, { __OPENCLAW_NATIVE_COMMANDS_READY__: true });
+    window.dispatchEvent(new Event("openclaw:native-commands-state"));
   }
 
   disconnect(): void {
+    const listenerOwner = this.listeners;
     this.listeners?.abort();
     this.listeners = undefined;
     this.navDrawerSwipe.disconnect();
+    if (listenerOwner && nativeCommandsOwner === listenerOwner) {
+      nativeCommandsOwner = undefined;
+      Object.assign(window, { __OPENCLAW_NATIVE_COMMANDS_READY__: false });
+      window.dispatchEvent(new Event("openclaw:native-commands-state"));
+    }
   }
 
   readonly toggleNavigationSurface = (trigger?: HTMLElement): void => {

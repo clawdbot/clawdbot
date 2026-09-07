@@ -1,4 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { CodexHistoryRejection } from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
 import { serializeCodexMirrorSourceEvidence } from "./transcript-mirror-attestation.js";
@@ -11,7 +12,7 @@ export type SettledTurnMessages = {
 };
 
 function rejectEvidence(): never {
-  throw new Error("Codex settled-turn transcript does not match the settled turn");
+  throw new CodexHistoryRejection("provenance_rejected");
 }
 
 /** The worker consumes this verifier lazily; rejection never acquires the remaining payloads. */

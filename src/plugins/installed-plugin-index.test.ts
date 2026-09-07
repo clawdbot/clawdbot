@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 // Covers installed plugin index read, write, and policy behavior.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -54,14 +53,6 @@ function writeRuntimeEntry(rootDir: string) {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-
-function readRecordField(record: Record<string, unknown>, key: string, label: string) {
-  const value = record[key];
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -226,7 +217,7 @@ describe("installed plugin index", () => {
         "activation-provider-hint",
       ],
     });
-    expectRecordFields(readRecordField(plugin, "packageInstall", "package install"), {
+    expectRecordFields(requireRecord(plugin.packageInstall, "package install"), {
       defaultChoice: "npm",
       npm: {
         spec: "@vendor/demo-plugin@1.2.3",
@@ -239,7 +230,7 @@ describe("installed plugin index", () => {
       },
       warnings: [],
     });
-    expectRecordFields(readRecordField(plugin, "packageChannel", "package channel"), {
+    expectRecordFields(requireRecord(plugin.packageChannel, "package channel"), {
       id: "demo",
       label: "Demo",
       blurb: "Demo channel",
@@ -249,7 +240,7 @@ describe("installed plugin index", () => {
         nativeSkillsAutoEnabled: false,
       },
     });
-    expectRecordFields(readRecordField(plugin, "packageBuild", "package build"), {
+    expectRecordFields(requireRecord(plugin.packageBuild, "package build"), {
       bundledDist: false,
     });
     expectSha256(plugin.manifestHash);
@@ -298,41 +289,70 @@ describe("installed plugin index", () => {
     expect(index.plugins[0]?.startup.sidecar).toBe(false);
   });
 
-  it("does not classify legacy plugins as startup sidecars", () => {
+  it.each([
+    {
+      name: "does not classify legacy plugins as startup sidecars",
+      manifest: { id: "legacy-sidecar" },
+      expected: { compat: [] },
+      sidecar: false,
+    },
+    {
+      name: "keeps explicit startup opt-outs out of startup sidecars",
+      manifest: { id: "modern-inert", activation: { onStartup: false } },
+      expected: { compat: [] },
+      sidecar: false,
+    },
+    {
+      name: "classifies explicit startup activation as a gateway startup sidecar",
+      manifest: {
+        id: "explicit-startup-provider",
+        providers: ["demo"],
+        activation: { onStartup: true },
+      },
+      expected: {},
+      sidecar: true,
+    },
+  ])("$name", ({ manifest, expected, sidecar }) => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
-    writePluginManifest(rootDir, {
-      id: "legacy-sidecar",
-      configSchema: { type: "object" },
-    });
+    writePluginManifest(rootDir, { ...manifest, configSchema: { type: "object" } });
 
     const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-        }),
-      ],
+      candidates: [createPluginCandidate({ rootDir })],
       env: hermeticEnv(),
     });
 
     expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
-      pluginId: "legacy-sidecar",
-      compat: [],
+      pluginId: manifest.id,
+      ...expected,
     });
-    expect(index.plugins[0]?.startup.sidecar).toBe(false);
+    expect(index.plugins[0]?.startup.sidecar).toBe(sidecar);
   });
 
-  it("tolerates stale manifest records without normalized channels", () => {
+  it.each([
+    {
+      name: "tolerates stale manifest records without normalized channels",
+      id: "stale-record",
+      idHint: "demo",
+      installOwner: undefined,
+    },
+    {
+      name: "does not read inherited prototype names as install records",
+      id: "toString",
+      idHint: "toString",
+      installOwner: "toString",
+    },
+  ])("$name", ({ id, idHint, installOwner }) => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");
 
     const records = buildInstalledPluginIndexRecords({
-      candidates: [createPluginCandidate({ rootDir })],
+      candidates: [createPluginCandidate({ rootDir, idHint, installOwner })],
       registry: {
         plugins: [
           {
-            id: "stale-record",
+            id,
             providers: [],
             cliBackends: [],
             skills: [],
@@ -350,40 +370,10 @@ describe("installed plugin index", () => {
     });
 
     expectRecordFields(requireRecord(records[0], "installed plugin record"), {
-      pluginId: "stale-record",
+      pluginId: id,
       compat: [],
     });
     expect(records[0]?.startup.sidecar).toBe(false);
-  });
-
-  it("does not read inherited prototype names as install records", () => {
-    const rootDir = makeTempDir();
-    writeRuntimeEntry(rootDir);
-    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-
-    const records = buildInstalledPluginIndexRecords({
-      candidates: [createPluginCandidate({ rootDir, idHint: "toString" })],
-      registry: {
-        plugins: [
-          {
-            id: "toString",
-            providers: [],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
-            origin: "global",
-            rootDir,
-            source: path.join(rootDir, "index.ts"),
-            manifestPath,
-          } as unknown as PluginManifestRecord,
-        ],
-        diagnostics: [],
-      },
-      diagnostics: [],
-      installRecords: {},
-    });
-
-    expect(records[0]?.pluginId).toBe("toString");
     expect(records[0]?.installRecordHash).toBeUndefined();
   });
 
@@ -450,60 +440,6 @@ describe("installed plugin index", () => {
     );
 
     expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
-  });
-
-  it("keeps explicit startup opt-outs out of startup sidecars", () => {
-    const rootDir = makeTempDir();
-    writeRuntimeEntry(rootDir);
-    writePluginManifest(rootDir, {
-      id: "modern-inert",
-      activation: {
-        onStartup: false,
-      },
-      configSchema: { type: "object" },
-    });
-
-    const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-        }),
-      ],
-      env: hermeticEnv(),
-    });
-
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
-      pluginId: "modern-inert",
-      compat: [],
-    });
-    expect(index.plugins[0]?.startup.sidecar).toBe(false);
-  });
-
-  it("classifies explicit startup activation as a gateway startup sidecar", () => {
-    const rootDir = makeTempDir();
-    writeRuntimeEntry(rootDir);
-    writePluginManifest(rootDir, {
-      id: "explicit-startup-provider",
-      providers: ["demo"],
-      activation: {
-        onStartup: true,
-      },
-      configSchema: { type: "object" },
-    });
-
-    const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-        }),
-      ],
-      env: hermeticEnv(),
-    });
-
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
-      pluginId: "explicit-startup-provider",
-    });
-    expect(index.plugins[0]?.startup.sidecar).toBe(true);
   });
 
   it("keeps bundle format metadata needed for manifest reconstruction", () => {
@@ -588,26 +524,37 @@ describe("installed plugin index", () => {
     },
   );
 
-  it("evaluates current enablement without retaining removed startup policy", () => {
+  it("retains disabled plugin metadata while evaluating live enablement", () => {
     const enabledFixture = createRichPluginFixture({ id: "enabled-demo" });
     const disabledFixture = createRichPluginFixture({ id: "disabled-demo" });
-    const index = loadInstalledPluginIndex({
-      candidates: [enabledFixture.candidate, disabledFixture.candidate],
-      config: {
-        plugins: {
-          entries: {
-            "disabled-demo": {
-              enabled: false,
-            },
+    const config = {
+      plugins: {
+        entries: {
+          "disabled-demo": {
+            enabled: false,
           },
         },
       },
+    };
+    const index = loadInstalledPluginIndex({
+      candidates: [enabledFixture.candidate, disabledFixture.candidate],
+      config,
       env: hermeticEnv(),
     });
 
-    expect(index.plugins.find((plugin) => plugin.pluginId === "disabled-demo")?.enabled).toBe(
-      false,
+    const disabled = index.plugins.find((plugin) => plugin.pluginId === "disabled-demo");
+    expect(disabled?.enabled).toBe(false);
+    expect(disabled?.contributions).toEqual(
+      expect.objectContaining({
+        channels: ["demo-chat"],
+        channelConfigs: ["demo-chat"],
+        providers: ["demo"],
+        modelCatalogProviders: ["demo"],
+        commandAliases: ["demo-command"],
+        contracts: { tools: ["demo-tool"] },
+      }),
     );
+    expect(isInstalledPluginEnabled(index, "disabled-demo", config)).toBe(false);
     expect(
       isInstalledPluginEnabled(index, "disabled-demo", {
         plugins: {
@@ -687,13 +634,11 @@ describe("installed plugin index", () => {
       },
     });
     expectRecordFields(
-      readRecordField(
-        readRecordField(
-          requireRecord(index.plugins[0], "installed plugin record"),
-          "packageInstall",
+      requireRecord(
+        requireRecord(
+          requireRecord(index.plugins[0], "installed plugin record").packageInstall,
           "package install",
-        ),
-        "npm",
+        ).npm,
         "npm package install",
       ),
       {
@@ -1090,37 +1035,6 @@ describe("installed plugin index", () => {
     expect(diffInstalledPluginIndexInvalidationReasons(migratedEnabledOnly, current)).toStrictEqual(
       [],
     );
-  });
-
-  it("marks disabled plugins without dropping their cold contributions", () => {
-    const fixture = createRichPluginFixture();
-
-    const index = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env: hermeticEnv(),
-    });
-
-    expect(
-      isInstalledPluginEnabled(index, "demo", {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      }),
-    ).toBe(false);
-    expect(index.plugins[0]?.enabled).toBe(false);
   });
 
   it("tracks refresh reason without using the manifest cache", () => {

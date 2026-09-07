@@ -4,6 +4,7 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import {
@@ -55,8 +56,16 @@ export function createInternalAgentTurnFacade(
   ): Promise<GatewayMethodDispatchResponse> => {
     const method = "agent";
     throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
+    dispatchOptions.assertAdmissionCurrent?.();
     options.assertContextCurrent?.();
     const context = options.getContext();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const {
+      agentId: expectedAgentId,
+      expectedExistingSessionId: expectedSessionId,
+      idempotencyKey: expectedRunId,
+      sessionKey: expectedSessionKey,
+    } = request;
     const entry = context.requestEntryLifetime?.enter({
       req: { method, params: request },
       client: options.client,
@@ -80,6 +89,7 @@ export function createInternalAgentTurnFacade(
         return { ok: false, error: validationError };
       }
       options.assertContextCurrent?.();
+      dispatchOptions.assertAdmissionCurrent?.();
       let acceptance: GatewayMethodDispatchResponse | undefined;
       let final: GatewayMethodDispatchResponse | undefined;
       let resolveAcceptance: ((response: GatewayMethodDispatchResponse) => void) | undefined;
@@ -90,6 +100,50 @@ export function createInternalAgentTurnFacade(
       // Acceptance publishes the abort owner before this callback runs. Retain that exact
       // entry so a late deadline cannot cancel a same-run-id successor.
       let acceptedAbortOwner: { entry: ChatAbortControllerEntry; runId: string } | undefined;
+      let startOwnerPublished = false;
+      const publishStartOwner = (runId: string, owner: ChatAbortControllerEntry) => {
+        if (
+          startOwnerPublished ||
+          !dispatchOptions.onStartOwner ||
+          runId !== expectedRunId ||
+          (expectedAgentId !== undefined && owner.agentId !== expectedAgentId) ||
+          owner.sessionKey !== expectedSessionKey ||
+          owner.sessionId !== expectedSessionId ||
+          owner.lifecycleGeneration !== lifecycleGeneration ||
+          context.chatAbortControllers.get(runId) !== owner
+        ) {
+          return;
+        }
+        startOwnerPublished = true;
+        const observe = () => {
+          try {
+            options.assertContextCurrent?.();
+          } catch {
+            return undefined;
+          }
+          return context.chatAbortControllers.get(runId) === owner &&
+            getAgentEventLifecycleGeneration() === lifecycleGeneration &&
+            owner.lifecycleGeneration === lifecycleGeneration &&
+            (expectedAgentId === undefined || owner.agentId === expectedAgentId) &&
+            owner.sessionId === expectedSessionId &&
+            owner.sessionKey === expectedSessionKey &&
+            !owner.controller.signal.aborted &&
+            owner.registrationCleanupRequested !== true
+            ? { executionStarted: owner.executionStarted === true, expiresAtMs: owner.expiresAtMs }
+            : undefined;
+        };
+        dispatchOptions.onStartOwner({
+          observe,
+          // Captured registration, not a later run-id lookup, owns cancellation.
+          abort: () =>
+            observe()?.executionStarted === false &&
+            abortChatRunById(context, {
+              runId,
+              sessionKey: owner.sessionKey,
+              stopReason: "timeout",
+            }).aborted,
+        });
+      };
       let pendingCancelReason: "rpc" | "timeout" | undefined;
       const cancelAcceptedRun = (reason: "rpc" | "timeout") => {
         pendingCancelReason ??= reason;
@@ -116,6 +170,7 @@ export function createInternalAgentTurnFacade(
           }
         });
       const io: AgentTurnIo = {
+        emitStartOwner: publishStartOwner,
         emitAcceptance: (frame, meta) => {
           if (!acceptance) {
             acceptance = {
@@ -134,6 +189,9 @@ export function createInternalAgentTurnFacade(
               acceptedAbortOwner = { entry: acceptedEntry, runId: acceptedRunId };
               if (pendingCancelReason) {
                 cancelAcceptedRun(pendingCancelReason);
+              }
+              if (meta?.cached === true) {
+                publishStartOwner(acceptedRunId, acceptedEntry);
               }
             }
             if (
@@ -160,37 +218,46 @@ export function createInternalAgentTurnFacade(
           ? { emitExecutionStarted: dispatchOptions.onExecutionStarted }
           : {}),
       };
-      const operation = runWithGatewayRequestEnvelope(
-        method,
-        options.client,
-        async () => {
-          entry?.assertOpen();
-          entry?.release();
-          const principal = captureAgentTurnPrincipal(options.client);
-          const preflight = prepareAgentRequestPreflight({
-            request,
+      const operation = context.trackExecution(() =>
+        runWithGatewayRequestEnvelope(
+          method,
+          options.client,
+          async () => {
+            entry?.assertOpen();
+            dispatchOptions.assertAdmissionCurrent?.();
+            entry?.release();
+            const principal = captureAgentTurnPrincipal(options.client);
+            const preflight = prepareAgentRequestPreflight({
+              request,
+              context,
+              client: principal,
+              io,
+            });
+            if (!preflight) {
+              return;
+            }
+            const onRunObserved = resolveAgentTurnRunObserver({
+              principal,
+              registerToolEventRecipient: context.registerToolEventRecipient,
+            });
+            await createAgentTurnService(
+              { context, isWebchatConnect },
+              options.assertContextCurrent,
+            ).startTurn({
+              preflight,
+              principal,
+              io,
+              onRunObserved,
+              assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
+            });
+          },
+          {
             context,
-            client: principal,
-            io,
-          });
-          if (!preflight) {
-            return;
-          }
-          const onRunObserved = resolveAgentTurnRunObserver({
-            principal,
-            registerToolEventRecipient: context.registerToolEventRecipient,
-          });
-          await createAgentTurnService(
-            { context, isWebchatConnect },
-            options.assertContextCurrent,
-          ).startTurn({ preflight, principal, io, onRunObserved });
-        },
-        {
-          context,
-          isWebchatConnect,
-          methodRegistry,
-          reject: (error) => io.emitAcceptance([false, undefined, error]),
-        },
+            isWebchatConnect,
+            methodRegistry,
+            reject: (error) => io.emitAcceptance([false, undefined, error]),
+          },
+        ),
       );
       void operation.then(
         () => {
@@ -289,20 +356,22 @@ export function createInternalAgentTurnFacade(
         return throwEnvelopeRejection(method, validationError);
       }
       options.assertContextCurrent?.();
-      const result = runWithGatewayRequestEnvelope(
-        method,
-        options.client,
-        () => {
-          entry?.assertOpen();
-          entry?.release();
-          return createAgentTurnService({ context, isWebchatConnect }).waitForTurn(params);
-        },
-        {
-          context,
-          isWebchatConnect,
-          methodRegistry,
-          reject: (error) => throwEnvelopeRejection(method, error),
-        },
+      const result = context.trackExecution(() =>
+        runWithGatewayRequestEnvelope(
+          method,
+          options.client,
+          () => {
+            entry?.assertOpen();
+            entry?.release();
+            return createAgentTurnService({ context, isWebchatConnect }).waitForTurn(params);
+          },
+          {
+            context,
+            isWebchatConnect,
+            methodRegistry,
+            reject: (error) => throwEnvelopeRejection(method, error),
+          },
+        ),
       );
       return (await waitForGatewayDispatch(method, result, timeoutMs, signal, onSignalAbort)) as T;
     } finally {

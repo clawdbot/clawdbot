@@ -199,6 +199,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         : this.providerKey;
       const syncProviderIdentities =
         this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
+      const hasIndexedChunks = this.hasIndexedChunks();
       const indexIdentity = resolveMemoryIndexIdentityState({
         meta,
         // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
@@ -218,10 +219,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
         vectorReady,
-        hasIndexedChunks: this.hasIndexedChunks(),
+        hasIndexedChunks,
         ftsTokenizer: this.settings.store.fts.tokenizer,
       });
-      const hasIndexedChunks = this.hasIndexedChunks();
       const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
       // Missing metadata cannot prove whether existing chunks were semantic.
       // Wait for the configured provider before replacing them with a rebuilt index,
@@ -323,9 +323,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
             progress: progress ?? undefined,
           });
-          if (shouldSyncMemory) {
-            this.clearMemoryRetryState();
-          }
           if (shouldSyncSessions) {
             this.clearSessionRetryState();
           } else {
@@ -334,7 +331,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         } else {
           if (shouldSyncMemory) {
             await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-            this.clearMemoryRetryState();
           }
 
           if (shouldSyncSessions) {
@@ -349,6 +345,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           }
         }
       } catch (err) {
+        this.dirty ||= this.sources.has("memory");
         const reason = formatErrorMessage(err);
         const shouldFallback = this.shouldFallbackOnError(err);
         if (shouldFallback) {
@@ -378,7 +375,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
       // Full rebuild failures (including forced preflight) leave the primary alone.
       if (!needsFullReindex) {
-        this.pruneEmbeddingCacheIfNeeded();
+        await this.pruneEmbeddingCacheIfNeeded();
       }
     }
   }
@@ -551,9 +548,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
               needsFullReindex: true,
               progress: params.progress,
             });
-            if (shouldSyncMemory) {
-              this.clearMemoryRetryState();
-            }
             if (shouldSyncSessions) {
               this.clearSessionRetryState();
             } else {
@@ -562,7 +556,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           } else {
             if (shouldSyncMemory) {
               await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-              this.clearMemoryRetryState();
             }
 
             if (shouldSyncSessions) {
@@ -608,7 +601,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           this.writeMeta(nextMeta);
           // Bound the cache before copying it into the shared agent database;
           // deleting overflow afterward does not undo primary-file growth.
-          this.pruneEmbeddingCacheIfNeeded();
+          await this.pruneEmbeddingCacheIfNeeded();
           return {
             nextMeta,
             vectorIndexComplete,

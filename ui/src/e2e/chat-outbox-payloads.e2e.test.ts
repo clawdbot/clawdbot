@@ -1,9 +1,11 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { assert, expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   controlUiSessionUrl,
@@ -12,6 +14,7 @@ import {
   requireRecord,
 } from "./chat-flow.test-support.ts";
 import {
+  holdOutboxPreviewReads,
   outboxPayloadFile as file,
   outboxPayloadHistory as history,
   outboxPaneFor as paneFor,
@@ -83,14 +86,14 @@ suite.define(() => {
         );
         const original = (await readQueue(page))[0]!;
         assert(original.attachmentPayload);
+        const releasePreviewReads = await holdOutboxPreviewReads(page);
         await page.reload();
         await waitForControlUiGatewayReady(page);
         await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
         await expectRequestCountStable(gateway, "chat.send", 0);
-        await paneFor(page)
-          .locator(".chat-group.user")
-          .getByRole("button", { name: /Retry/i })
-          .click();
+        // Reconnect parks the captured row while its real Blob read is pending.
+        // Adoption must preserve that newer delivery state and the original bytes.
+        expect(await releasePreviewReads()).toBeGreaterThan(0);
         await expect
           .poll(async () => (await readQueue(page))[0]?.attachmentPayload?.key)
           .not.toBe(original.attachmentPayload.key);
@@ -116,7 +119,7 @@ suite.define(() => {
           .click();
         const retried = await gateway.waitForRequest("chat.send");
         expect(retried.params).toEqual(sent.params);
-        await gateway.resolveDeferred("chat.send", { runId: original.sendRunId, status: "ok" });
+        await gateway.resolveDeferred("chat.send");
         await expect.poll(async () => (await readQueue(page)).length).toBe(0);
         await expect
           .poll(() => readPayloadBytes(page, recovered.attachmentPayload!.key))
@@ -292,7 +295,7 @@ suite.define(() => {
           expect(await readPayloadBytes(page, reference.key)).toEqual([
             file.buffer.toString("base64"),
           ]);
-          await gateway.resolveDeferred("chat.send", { runId: original.sendRunId, status: "ok" });
+          await gateway.resolveDeferred("chat.send");
           await expect.poll(async () => (await readQueue(page)).length).toBe(0);
           await expect.poll(() => payloadCount(page)).toBe(0);
           await expectRequestCountStable(gateway, "chat.send", 1);
@@ -351,11 +354,12 @@ suite.define(() => {
         await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
         await expectRequestCountStable(gateway, "chat.send", 0);
         expect((await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "reload-unconfirmed.png"),
-          fullPage: true,
-          animations: "disabled",
-        });
+        await writeFile(
+          path.join(suite.artifactDir, "reload-unconfirmed.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            paneFor(page).getByText("Delivery unconfirmed", { exact: true }),
+          ]),
+        );
       },
     );
   });

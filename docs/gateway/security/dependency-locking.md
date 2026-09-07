@@ -39,7 +39,7 @@ Published OpenClaw plugin packages bundle their runtime dependency files in the 
 
 Native-heavy plugins opt out of runtime dependency bundling because their dependency trees contain platform-specific or large native artifacts. Those plugins resolve dependencies at install time from exact-pinned direct dependencies. The root `openclaw` package also resolves dependencies at install time and does not bundle its full dependency tree.
 
-The bundled Anthropic plugin carries the official Claude Agent SDK transport as build-time package assets, preserving its package layout and license. It uses the separately installed `claude` executable selected by OpenClaw, so those assets omit the SDK's optional native CLI packages. The source SDK remains pinned in the plugin manifest and root development dependencies; installing OpenClaw does not install a second Claude executable through the SDK.
+The bundled Anthropic plugin communicates directly with the separately installed `claude` executable. It does not depend on or copy the Claude Agent SDK into OpenClaw's package. The external ACPX plugin independently declares an ACP adapter that depends on the SDK; ACPX leaves those dependencies to installation from npm instead of bundling them into its published package.
 
 Neither path publishes a lockfile:
 

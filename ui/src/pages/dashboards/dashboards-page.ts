@@ -2,6 +2,10 @@ import { consume } from "@lit/context";
 import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  DASHBOARD_DOCUMENT_ELEMENT,
+  ensureCustomElementDefined,
+} from "../../app/lazy-custom-element.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -24,19 +28,37 @@ class DashboardsPage extends OpenClawLightDomElement {
     ownerId: "",
     sort: "updated",
   };
+  @state() private previewError: string | null = null;
 
   private observedSessions?: ApplicationContext["sessions"];
   private observedScopeId?: string | null;
   private unsubscribeList?: () => void;
   private data?: DashboardsRouteData;
   private listGeneration = 0;
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.agentSelection,
-    (agentSelection) => {
-      this.bindList();
-      return agentSelection.subscribe(() => this.bindList());
-    },
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.agentSelection,
+      (agentSelection) => {
+        this.bindList();
+        return agentSelection.subscribe(() => this.bindList());
+      },
+    )
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+    );
+
+  override connectedCallback() {
+    super.connectedCallback();
+    void ensureCustomElementDefined(
+      DASHBOARD_DOCUMENT_ELEMENT.tagName,
+      DASHBOARD_DOCUMENT_ELEMENT.loadModule,
+    )
+      .then(() => this.requestUpdate())
+      .catch((error: unknown) => {
+        this.previewError = formatUiError(error);
+      });
+  }
 
   override disconnectedCallback() {
     this.listGeneration += 1;
@@ -161,6 +183,8 @@ class DashboardsPage extends OpenClawLightDomElement {
           this.filters = { ...this.filters, sort };
         },
       },
+      this.context?.gateway.snapshot,
+      this.previewError,
     );
   }
 }

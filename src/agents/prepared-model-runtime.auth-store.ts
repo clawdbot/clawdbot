@@ -1,8 +1,6 @@
 import { mergeAuthProfileStores } from "./auth-profiles/persisted.js";
-import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
-  getPreparedRuntimeAuthProfileStoreSnapshot,
-} from "./auth-profiles/store.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
+import { getPreparedRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 

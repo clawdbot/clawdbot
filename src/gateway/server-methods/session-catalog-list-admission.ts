@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 type QueuedProviderList = {
   start: () => void;
 };
@@ -34,10 +36,13 @@ export class SessionCatalogListAdmission {
     if (this.queue.length >= this.maxQueued) {
       return Promise.reject(new SessionCatalogListBusyError(this.maxConcurrent, this.maxQueued));
     }
+    // A released slot runs the next caller's plugin and root scope, never the
+    // preceding provider's context inherited by the queue drain.
+    const runInAsyncContext = AsyncLocalStorage.snapshot();
     return new Promise<T>((resolve, reject) => {
       this.queue.push({
         start: () => {
-          void this.start(task).then(resolve, reject);
+          void runInAsyncContext(() => this.start(task)).then(resolve, reject);
         },
       });
     });

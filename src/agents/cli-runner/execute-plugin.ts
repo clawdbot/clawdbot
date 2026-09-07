@@ -19,10 +19,11 @@ import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
+import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import {
-  closeCliLiveSession,
+  restartCliLiveSession,
   createCliLiveSessionCapability,
   getCliLiveSessionApprovalGrants,
 } from "./cli-live-session-registry.js";
@@ -383,6 +384,9 @@ async function closePluginIterator(
         timeout.unref();
       }),
     ]);
+  } catch (error) {
+    recordAgentCleanupFailure();
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -393,6 +397,7 @@ export async function executePluginOwnedProcess(params: {
   context: PreparedCliRunContext;
   execute: CliBackendExecute;
   executionCommand: string;
+  executionArgv0?: string;
   executionArgs: readonly string[];
   env: Record<string, string>;
   prompt: string;
@@ -402,6 +407,7 @@ export async function executePluginOwnedProcess(params: {
   sessionId?: string;
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
+  onOutstandingWorkChange?: (active: boolean) => void;
   activeToolCount?: () => number;
   onNoOutputTimeout?: (error: FailoverError) => void;
   onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
@@ -432,8 +438,12 @@ export async function executePluginOwnedProcess(params: {
     observed: false,
     replayUnsafe: false,
   };
-  const updatePendingApproval = (delta: number) =>
-    (outstanding.approvals = Math.max(0, outstanding.approvals + delta));
+  const reportOutstandingWork = () =>
+    params.onOutstandingWorkChange?.(outstanding.approvals > 0 || outstanding.background > 0);
+  const updatePendingApproval = (delta: number) => {
+    outstanding.approvals = Math.max(0, outstanding.approvals + delta);
+    reportOutstandingWork();
+  };
   let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
   const overallTimeoutMs = clampPositiveTimerTimeoutMs(run.timeoutMs);
   const noOutputTimeoutMs = clampPositiveTimerTimeoutMs(params.noOutputTimeoutMs);
@@ -512,23 +522,24 @@ export async function executePluginOwnedProcess(params: {
       if (params.liveSession.requiredGeneration) {
         throw new Error("The required CLI live session cannot be replaced by a fresh process.");
       }
-      await closeCliLiveSession(params.context, "restart");
+      await restartCliLiveSession(params.context, signal);
     }
     assertCurrent();
     if (params.liveSession) {
       liveSession = createCliLiveSessionCapability({
         context: params.context,
         argv: [command, ...params.executionArgs],
+        argv0: params.executionArgv0,
         env: params.env,
         ...params.liveSession,
         abortSignal: signal,
         claimResources: params.context.preparedBackend.claimLiveSessionResources,
       });
     }
-    run.assertCurrent?.();
-    signal.throwIfAborted();
+    assertCurrent();
     const execution = params.execute({
       command,
+      argv0: params.executionArgv0,
       args: params.executionArgs,
       cwd,
       env: params.env,
@@ -580,6 +591,7 @@ export async function executePluginOwnedProcess(params: {
         Array.isArray(next.value.tasks)
       ) {
         outstanding.background = next.value.tasks.filter(isRecord).length;
+        reportOutstandingWork();
       }
       params.consumeStdout(`${JSON.stringify(next.value)}\n`);
       outstanding.observed = true;
@@ -627,6 +639,7 @@ export async function executePluginOwnedProcess(params: {
   } finally {
     clearTimeout(overallTimer);
     clearTimeout(noOutputTimer);
+    params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
     if (!controller.signal.aborted) {

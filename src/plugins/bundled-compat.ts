@@ -10,6 +10,7 @@ export function withBundledPluginEnablementCompat(params: {
   pluginIds: readonly string[];
   env?: NodeJS.ProcessEnv;
   activation?: "defaults" | "selected";
+  artifactPreservingReadOnly?: boolean;
 }): OpenClawConfig | undefined {
   if (params.pluginIds.length === 0) {
     return params.config;
@@ -18,7 +19,10 @@ export function withBundledPluginEnablementCompat(params: {
   const selectPlugins = params.activation !== "defaults";
   const forcePluginsEnabled = selectPlugins && params.config?.plugins?.enabled === false;
   const allow = params.config?.plugins?.allow;
-  const bypassAllowlist = readBundledDiscoveryModeMemoized(params.env) === "compat";
+  const bypassAllowlist =
+    readBundledDiscoveryModeMemoized(params.env, {
+      artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+    }) === "compat";
   const allowSet =
     !bypassAllowlist && Array.isArray(allow) && allow.length > 0
       ? new Set(allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean))

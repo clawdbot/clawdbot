@@ -71,34 +71,42 @@ describe("plugin embedded-agent runtime admission", () => {
     mocks.runEmbeddedAgentCore.mockResolvedValue({ payloads: [] });
   });
 
-  it("binds plugin facts and closes the exact prepared admission after success", async () => {
-    await expect(
-      withPluginRuntimePluginIdScope("memory-plugin", () => runPluginEmbeddedAgent(params)),
-    ).resolves.toEqual({ payloads: [] });
+  it.each(["explicit", "runtime"] as const)(
+    "shares %s config between admission and execution and closes admission",
+    async (configSource) => {
+      const runParams = configSource === "explicit" ? params : { ...params, config: undefined };
+      if (configSource === "runtime") {
+        mocks.getRuntimeConfig.mockReturnValueOnce(config);
+      }
+      await expect(
+        withPluginRuntimePluginIdScope("memory-plugin", () => runPluginEmbeddedAgent(runParams)),
+      ).resolves.toEqual({ payloads: [] });
 
-    expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledWith({
-      cfg: config,
-      operationalRunInstance: { instanceId: "instance:run-plugin", runId: "run-plugin" },
-      facts: {
-        runId: "run-plugin",
-        agentId: "researcher",
-        ingress: {
-          kind: "plugin",
-          boundary: "plugin-runtime",
-          rawSourceRef: "memory-plugin",
-          state: "present",
+      expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledWith({
+        cfg: config,
+        operationalRunInstance: { instanceId: "instance:run-plugin", runId: "run-plugin" },
+        facts: {
+          runId: "run-plugin",
+          agentId: "researcher",
+          ingress: {
+            kind: "plugin",
+            boundary: "plugin-runtime",
+            rawSourceRef: "memory-plugin",
+            state: "present",
+          },
         },
-      },
-      onAdmitted: expect.any(Function),
-    });
-    expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...params,
-        preparedRunAdmission: expect.objectContaining({ close: mocks.close }),
-      }),
-    );
-    expect(mocks.close).toHaveBeenCalledOnce();
-  });
+        onAdmitted: expect.any(Function),
+      });
+      expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...params,
+          preparedRunAdmission: expect.objectContaining({ close: mocks.close }),
+        }),
+      );
+      expect(mocks.getRuntimeConfig).toHaveBeenCalledTimes(configSource === "runtime" ? 1 : 0);
+      expect(mocks.close).toHaveBeenCalledOnce();
+    },
+  );
 
   it("closes the prepared admission when core execution throws", async () => {
     mocks.runEmbeddedAgentCore.mockRejectedValueOnce(new Error("core failed"));

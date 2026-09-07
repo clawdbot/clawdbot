@@ -43,7 +43,7 @@ import type {
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
-import type { PluginJsonValue } from "./host-hooks.js";
+import type { PluginJsonValue } from "./host-hook-json.js";
 
 /** JSON-compatible provider settings for one configured worker profile. */
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;

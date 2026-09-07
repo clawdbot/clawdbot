@@ -15,6 +15,7 @@ import { peekSystemEvents } from "../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -755,6 +756,8 @@ describe("gateway server cron", () => {
         name: "daily",
         enabled: true,
         scheduleKind: "every",
+        schedule: { kind: "every", everyMs: 60_000 },
+        lastRunAt: null,
         lastRunStatus: null,
       });
       expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
@@ -762,13 +765,17 @@ describe("gateway server cron", () => {
           "enabled",
           "id",
           "lastRunAtMs",
+          "lastRunAt",
           "lastRunError",
           "lastRunStatus",
           "name",
           "nextRunAtMs",
+          "nextRunAt",
           "scheduleKind",
+          "schedule",
         ].toSorted(),
       );
+      expect(Date.parse(String(compactJobs?.[0]?.nextRunAt))).toBe(compactJobs?.[0]?.nextRunAtMs);
       expect(
         (compactListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,
       ).toBeUndefined();
@@ -1816,6 +1823,7 @@ describe("gateway server cron", () => {
       );
       const runtime = createPluginRuntime();
       const context = {
+        trackExecution: trackAsyncWork,
         cron: cronState.cron,
         cronStorePath: cronState.storePath,
         logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },

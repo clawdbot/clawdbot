@@ -278,9 +278,7 @@ export function normalizeWebSearchOutput(params: {
 
   // A results branch requires conforming rows; anything else is preserved as
   // raw so nonstandard external payloads are never silently gutted.
-  // Array.from densifies holes into undefined so sparse arrays cannot slip
-  // past row conformance and serialize as null rows.
-  const rows = Array.isArray(result.results) ? Array.from(result.results) : undefined;
+  const rows = Array.isArray(result.results) ? result.results : undefined;
   const conformingRows = rows?.every(
     (entry): entry is Record<string, unknown> =>
       isRecord(entry) &&

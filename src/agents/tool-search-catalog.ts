@@ -45,6 +45,7 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
         entry.name,
         entry.label ?? "",
         entry.description,
+        entry.directVisible === true,
         entry.source === "openclaw"
           ? stableStringify(entry.parameters)
           : untrustedSchemaFingerprint(entry.parameters),
@@ -473,8 +474,9 @@ export function applyToolCatalogCompaction(
       continue;
     }
     if (shouldCatalog(tool)) {
-      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
-      if (!params.isVisibleCatalogTool?.(tool)) {
+      const directVisible = params.isVisibleCatalogTool?.(tool) === true;
+      catalog.push({ ...toCatalogEntry(tool, undefined, params.toolHookContext), directVisible });
+      if (!directVisible) {
         continue;
       }
     }
@@ -485,36 +487,28 @@ export function applyToolCatalogCompaction(
   const existingCatalog = catalogRef.current;
   const incomingFingerprint = existingCatalog ? catalogEntriesFingerprint(catalog) : undefined;
   const metadata = existingCatalog && catalogMetadata.get(existingCatalog);
-  if (
+  const reboundEntries =
     existingCatalog &&
     metadata &&
     metadata.fingerprint === incomingFingerprint &&
     stableStringify(metadata.toolExecutionAllow) === stableStringify(params.toolExecutionAllow)
-  ) {
-    const reboundEntries = rebindCatalogExecutors(existingCatalog.entries, catalog);
-    if (reboundEntries) {
-      existingCatalog.entries = reboundEntries;
-      return {
-        tools: visible,
-        compacted: catalog.length > 0,
-        catalogToolCount: catalog.length,
-        catalogRegistered: true,
-        catalogReused: true,
-      };
-    }
+      ? rebindCatalogExecutors(existingCatalog.entries, catalog)
+      : undefined;
+  if (existingCatalog && reboundEntries) {
+    existingCatalog.entries = reboundEntries;
+  } else {
+    registerToolSearchCatalog({
+      catalogRef,
+      entries: catalog,
+      toolExecutionAllow: params.toolExecutionAllow,
+    });
   }
-
-  registerToolSearchCatalog({
-    catalogRef,
-    entries: catalog,
-    toolExecutionAllow: params.toolExecutionAllow,
-  });
   return {
     tools: visible,
     compacted: catalog.length > 0,
     catalogToolCount: catalog.length,
     catalogRegistered: true,
-    catalogReused: false,
+    catalogReused: reboundEntries !== undefined,
   };
 }
 

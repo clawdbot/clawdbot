@@ -3,7 +3,7 @@ import type {
   ProviderResolveTransportTurnStateContext,
   ProviderTransportTurnState,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-metadata";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 
