@@ -51,6 +51,11 @@ export const GATEWAY_EVENTS = [
   "session.typing",
   "session.tool",
   "sessions.changed",
+  /**
+   * Fired when a session is deleted, reset, or replaced, instructing clients to drop related state.
+   * Payload: { sessionKey: string, reason: string, ts: number, agentId?: string }
+   */
+  "socket.drain",
   "controlUi.sessionPullRequests.changed",
   "plugins.controlUi.changed",
   "presence",

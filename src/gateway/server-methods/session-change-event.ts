@@ -1,10 +1,12 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { tryResolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import {
   resolvePrivateSessionEventBroadcastScope,
   resolveSessionEventAgentScope,
+  tryResolveSessionCompatibilityOwnerAgentId,
   type SessionEventAgentScope,
 } from "../session-request-agent.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
@@ -20,12 +22,29 @@ type SessionChangedPayload = {
   compacted?: boolean;
 };
 
+export function resolveSessionMessageSubscriptionKey(params: {
+  canonicalKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
+}): string {
+  const agentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : params.canonicalKey === "global" && params.defaultAgentId
+      ? normalizeAgentId(params.defaultAgentId)
+      : undefined;
+  // Global session message subscriptions need per-agent channels to avoid cross-agent fanout.
+  return params.canonicalKey === "global" && agentId
+    ? `agent:${agentId}:global`
+    : params.canonicalKey;
+}
+
 type SessionChangeContext = Pick<
   GatewayRequestContext,
   | "broadcastToConnIds"
   | "chatAbortControllers"
   | "getRuntimeConfig"
   | "getSessionEventSubscriberConnIds"
+  | "getSessionMessageSubscriberConnIds"
   | "mentionInbox"
 >;
 
@@ -154,7 +173,45 @@ export function emitSessionsChanged(context: SessionChangeContext, payload: Sess
   invalidateSessionSharingSnapshot(payload.sessionKey);
   // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
   context.mentionInbox?.invalidate();
-  const connIds = context.getSessionEventSubscriberConnIds();
+  const evSubs = context.getSessionEventSubscriberConnIds();
+  const isTeardown =
+    payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
+
+  if (isTeardown) {
+    let msgSubs: ReadonlySet<string> = new Set<string>();
+    if (payload.sessionKey) {
+      const cfg = context.getRuntimeConfig();
+      const defaultAgentId =
+        payload.sessionKey === "global"
+          ? (tryResolveSessionCompatibilityOwnerAgentId(cfg, payload.sessionKey) ??
+            tryResolveDefaultAgentId(cfg))
+          : undefined;
+      const subscriptionKey = resolveSessionMessageSubscriptionKey({
+        canonicalKey: payload.sessionKey,
+        agentId: payload.agentId,
+        defaultAgentId,
+      });
+      msgSubs = context.getSessionMessageSubscriberConnIds?.(subscriptionKey) ?? new Set();
+    }
+    const drainConnIds = new Set<string>([...evSubs, ...msgSubs]);
+
+    if (drainConnIds.size > 0 && payload.sessionKey) {
+      context.broadcastToConnIds(
+        "socket.drain",
+        {
+          sessionKey: payload.sessionKey,
+          reason: payload.reason,
+          ts: Date.now(),
+          ...(payload.sessionKey === "global" && payload.agentId
+            ? { agentId: payload.agentId }
+            : {}),
+        },
+        drainConnIds,
+      );
+    }
+  }
+
+  const connIds = evSubs;
   if (!hasSessionChangeReceivers(connIds)) {
     return;
   }

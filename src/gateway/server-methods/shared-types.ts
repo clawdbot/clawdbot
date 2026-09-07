@@ -332,6 +332,7 @@ type GatewayTransportContext = {
   unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
+  getSessionMessageSubscriberConnIds?: (sessionKey: string) => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;
 };
 
