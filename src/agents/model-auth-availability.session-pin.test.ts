@@ -149,7 +149,17 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
           sessionAuthProfileId: pin,
           sessionAuthProfileSource: "user",
         }),
-      ).toThrow("is not configured");
+      ).toThrow(
+        state === "missing"
+          ? expect.objectContaining({
+              code: "selected_auth_profile_unavailable",
+              reason: "auth",
+              status: 401,
+              provider,
+              profileId: pin,
+            })
+          : "is not configured",
+      );
       expect(
         createModelAuthAvailabilityResolver({
           cfg: config,

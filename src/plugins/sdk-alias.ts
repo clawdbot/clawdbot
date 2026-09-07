@@ -522,6 +522,8 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
       "client-info",
       "connect-error-details",
       "frame-guards",
+      "gateway-error-details",
+      "restart-unavailable",
       "schema",
       "startup-unavailable",
       "version",

@@ -264,14 +264,16 @@ export async function* executeClaudeCli(
   context.assertCurrent?.();
   context.abortSignal?.throwIfAborted();
   const capability = context.liveSession;
-  let existing = capability?.current();
-  if (existing && (existing.fingerprint !== capability?.fingerprint || !sessions.has(existing))) {
-    existing.close("restart");
-    await existing.waitForExit();
-    existing = undefined;
+  const existing = capability?.current();
+  const reusable =
+    existing && existing.fingerprint === capability?.fingerprint
+      ? sessions.get(existing)
+      : undefined;
+  if (!reusable && capability) {
+    await capability.restart();
   }
   context.assertCurrent?.();
-  const session = (existing ? sessions.get(existing) : undefined) ?? createSession(capability);
+  const session = reusable ?? createSession(capability);
   session.capability = capability;
   if (session.closed || session.currentTurn) {
     throw new Error("Claude CLI live session is closed or already handling another turn.");
