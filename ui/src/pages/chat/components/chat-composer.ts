@@ -653,6 +653,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
     dictation,
+    clickToDictate: state.settings?.composerClickToDictate !== false,
     onDictationPointerDown: handleDictationPointerDown,
     onPrimaryActionPointerDown: (event) =>
       preserveComposerFocusOnPrimaryAction(event, state.composerTextarea),

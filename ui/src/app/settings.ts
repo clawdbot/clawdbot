@@ -215,6 +215,7 @@ export type UiSettings = {
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
   composerHoldToRecord?: boolean;
+  composerClickToDictate?: boolean;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;
