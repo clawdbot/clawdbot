@@ -782,13 +782,6 @@ vi.mock("../../provider-stream.js", () => ({
   registerProviderStreamForModel: vi.fn(),
 }));
 
-vi.mock("../../owner-display.js", () => ({
-  resolveOwnerDisplaySetting: () => ({
-    ownerDisplay: undefined,
-    ownerDisplaySecret: undefined,
-  }),
-}));
-
 vi.mock("../../sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatus: () => ({
     agentId: "main",
