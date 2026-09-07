@@ -380,9 +380,10 @@ export async function persistManualAuthProfiles(params: {
 
 async function rollbackManualAuthSecretStorage(
   receipt: ManualAuthPersistenceReceipt,
+  retainProfileIds?: ReadonlySet<string>,
 ): Promise<boolean> {
   try {
-    await receipt.protectedPersistence?.rollback();
+    await receipt.protectedPersistence?.rollback(retainProfileIds);
     return true;
   } catch {
     return false;
@@ -451,6 +452,7 @@ export async function rollbackManualAuthProfiles(
       return await rollbackManualAuthSecretStorage(receipt);
     }
   }
+  await rollbackManualAuthSecretStorage(receipt, receipt.insertedProfileIds);
   return false;
 }
 

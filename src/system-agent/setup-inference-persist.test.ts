@@ -14,7 +14,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { projectInferenceRoute, sameDefaultInferenceRoute } from "./inference-route.js";
 import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
-import { applyManualAuthConfig } from "./setup-inference-persist.js";
+import { applyManualAuthConfig, rollbackManualAuthProfiles } from "./setup-inference-persist.js";
 import { buildPreparedProviderTestPlan } from "./setup-inference-plan-helpers.js";
 import { completeSetupInferenceConfig } from "./setup-inference-verify.js";
 import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
@@ -197,6 +197,48 @@ describe("prepared provider config commit", () => {
     const applied = applyManualAuthConfig(config, fixture.manualAuth, config);
     expect(applied.gateway?.port).toBe(19000);
     expect(applied.plugins?.entries?.["fixture-provider"]?.enabled).toBe(true);
+  });
+});
+
+describe("manual auth rollback", () => {
+  it("settles protected storage after indeterminate profile removal", async () => {
+    const insertedProfileIds = new Set(["fixture:inserted"]);
+    const rollback = vi.fn(async (_retainProfileIds?: ReadonlySet<string>) => {});
+    const commit = vi.fn(async () => {});
+    const updateAuthProfileStoreWithLock = vi.fn(async () => null);
+
+    await expect(
+      rollbackManualAuthProfiles(
+        {
+          agentDir: "/synthetic/agent",
+          profiles: [
+            {
+              profileId: "fixture:inserted",
+              credential: {
+                type: "token",
+                provider: "fixture",
+                token: "synthetic-token",
+              },
+            },
+          ],
+          insertedProfileIds,
+          protectedPersistence: {
+            profiles: [],
+            rollback,
+            commit,
+          },
+        },
+        {
+          updateAuthProfileStoreWithLock,
+          loadPersistedAuthProfileStore: () => null,
+        },
+      ),
+    ).resolves.toBe(false);
+
+    expect(updateAuthProfileStoreWithLock).toHaveBeenCalledTimes(3);
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(rollback).toHaveBeenCalledWith(insertedProfileIds);
+    expect(commit).not.toHaveBeenCalled();
   });
 });
 
