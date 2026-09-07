@@ -4,6 +4,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { createRef, ref } from "lit/directives/ref.js";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { renderLazyViewError } from "../components/lazy-view-error.ts";
 import { renderLoadingState } from "../components/loading-state.ts";
 import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
@@ -259,7 +260,6 @@ class OpenClawRouterOutlet<
   private readonly retainedUnmountGate = new McpAppUnmountGate(this);
   private readonly transientUnmountGate = new McpAppUnmountGate(this);
   private readonly retainedPresentation = createRef<OpenClawRoutePresentation>();
-  private readonly transientPresentation = createRef<OpenClawRoutePresentation>();
   private retainedMatch?: RouteMatch<TRouteId, TModule, TData>;
   private retainedOwnerKey?: string;
   private retainedPresented = false;
@@ -289,9 +289,7 @@ class OpenClawRouterOutlet<
       routerChanged
         ? []
         : [...router.getState().matches, ...router.getState().pendingMatches]
-            .filter(
-              (match) => isRenderableModule<TData>(match.module) && match.module.retainOnNavigate,
-            )
+            .filter((match) => isSessionRouteId(match.routeId))
             .map((match) => match.id),
     );
     if (routerChanged) {
@@ -301,7 +299,7 @@ class OpenClawRouterOutlet<
     const scope = this.retentionScope;
     const state = router.getState();
     const target = state.pendingMatches[0] ?? state.matches[0];
-    if (context === undefined || !target) {
+    if (context === undefined || !target || !isSessionRouteId(target.routeId)) {
       return;
     }
     this.scopeRefreshing = true;
@@ -361,9 +359,9 @@ class OpenClawRouterOutlet<
     this.retainedPresented = presentRetained;
     const retained = this.retainedMatch;
     const retainedKey = `${this.scopeGeneration}:${this.retainedOwnerKey ?? "empty"}`;
-    const transientKey = `${this.scopeGeneration}:${presentRetained ? "empty" : (explicitOwnerKey ?? routeKey)}`;
-    const renderTransient = (presented: boolean) => {
-      if (!scopeReady) {
+    const transientKey = presentRetained ? "empty" : (explicitOwnerKey ?? routeKey);
+    const renderTransient = () => {
+      if (isSessionRouteId(renderedMatch?.routeId) && !scopeReady) {
         return !retiredSession && renderedMatch?.error !== undefined
           ? renderError(router, this.retryContext, renderedMatch.error, renderedMatch.routeId)
           : renderLoadingState();
@@ -375,7 +373,6 @@ class OpenClawRouterOutlet<
       }
       return renderRouterOutlet(router, snapshot, renderedMatch, {
         retryContext: this.retryContext,
-        presented,
       });
     };
     const rendered = html`
@@ -401,22 +398,10 @@ class OpenClawRouterOutlet<
       )}
       ${this.transientUnmountGate.render(
         transientKey,
-        () =>
-          presentRetained
-            ? nothing
-            : keyed(
-                transientKey,
-                html`<openclaw-route-presentation
-                  ${ref(this.transientPresentation)}
-                  .ownerKey=${transientKey}
-                  .presented=${true}
-                  .renderPage=${renderTransient}
-                ></openclaw-route-presentation>`,
-              ),
-        () => (this.transientPresentation.value ? [this.transientPresentation.value] : []),
+        () => (presentRetained ? nothing : renderTransient()),
+        () => [...this.children].filter((child) => child !== this.retainedPresentation.value),
         {
           retainRenderedValue:
-            scopeReady &&
             !module?.retainOnNavigate &&
             explicitOwnerKey !== undefined &&
             renderedMatch?.status === "pending" &&
@@ -433,12 +418,6 @@ class OpenClawRouterOutlet<
         presentRetained &&
         !this.retainedUnmountGate.retiring &&
         this.retainedPresentation.value.ownerKey === retainedKey;
-    }
-    if (this.transientPresentation.value) {
-      this.transientPresentation.value.presented =
-        !presentRetained &&
-        !this.transientUnmountGate.retiring &&
-        this.transientPresentation.value.ownerKey === transientKey;
     }
     return rendered;
   }
