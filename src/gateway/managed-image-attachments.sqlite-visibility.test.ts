@@ -12,7 +12,7 @@ import {
 import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
-} from "../config/sessions/session-accessor.sqlite-archive.js";
+} from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import {
   runWithSessionTranscriptReadFence,

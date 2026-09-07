@@ -27,6 +27,7 @@ import {
   readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import {
   createHistoryEvictionReclamationPlan,
   runExclusiveSqliteSessionReclamation,
@@ -459,7 +460,19 @@ export async function enforceSqliteSessionHistoryDiskBudget(
     queues: SESSION_HISTORY_MAINTENANCE_QUEUES,
     storePath: params.storePath,
     label: "enforceSqliteSessionHistoryDiskBudget",
-    fn: async () => await enforceSessionHistoryMaintenanceSerialized(params),
+    fn: async () => {
+      let result: SessionDiskBudgetSweepResult | null;
+      {
+        await using worker = new SqliteReclamationWorker();
+        result = await enforceSessionHistoryMaintenanceSerialized(params, worker);
+      }
+      // Worker close can checkpoint the WAL. Account only after its handle and lease join.
+      if (result?.overBudget && params.mode === "enforce") {
+        const usage = await measureSessionPhysicalDiskUsage(params.storePath);
+        return createPhysicalBudgetResult({ ...result, totalBytesAfter: usage.totalBytes });
+      }
+      return result;
+    },
   });
 }
 
@@ -469,6 +482,7 @@ export async function enforceSqliteSessionHistoryDiskBudget(
 // supplementary pressure pass.
 async function enforceSessionHistoryMaintenanceSerialized(
   params: SessionHistoryDiskBudgetParams,
+  worker: SqliteReclamationWorker,
 ): Promise<SessionDiskBudgetSweepResult | null> {
   const { highWaterBytes, maxDiskBytes } = params.maintenance;
   if (maxDiskBytes == null || highWaterBytes == null) {
@@ -568,6 +582,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
                 diagnostics,
                 forceInProcess: false,
                 plan: reclamationPlan,
+                worker,
               });
               if (reclaimed.kind !== reclamationPlan.kind) {
                 throw new Error(
@@ -670,6 +685,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
                 target: { canonicalKey: candidate.sessionKey, storeKeys: [candidate.sessionKey] },
               },
               resolved,
+              worker,
             ),
         });
         if (!deletion.deleted) {
@@ -692,7 +708,6 @@ async function enforceSessionHistoryMaintenanceSerialized(
   }
   if (removedEntries > 0) {
     await refreshSqliteSessionPlannerStatisticsBestEffort(resolved, removedEntries);
-    usage = await measureSessionPhysicalDiskUsage(params.storePath);
   }
 
   return createPhysicalBudgetResult({

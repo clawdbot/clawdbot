@@ -37,18 +37,17 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
-    runSqliteTranscriptArchiveWorkerOperation: (
-      params: Parameters<typeof actual.runSqliteTranscriptArchiveWorkerOperation>[0],
-    ) =>
-      actual.runSqliteTranscriptArchiveWorkerOperation({
-        ...params,
-        onCommitRequest: params.onCommitRequest
-          ? () => {
-              archiveMaterializationHook.beforeCommitRequest?.();
-              params.onCommitRequest?.();
-            }
-          : undefined,
-      }),
+    createSqliteTranscriptArchiveWorker: (
+      ...args: Parameters<typeof actual.createSqliteTranscriptArchiveWorker>
+    ) => {
+      const worker = actual.createSqliteTranscriptArchiveWorker(...args);
+      worker.prependListener("message", (message: { type: string }) => {
+        if (message.type === "commit-request") {
+          archiveMaterializationHook.beforeCommitRequest?.();
+        }
+      });
+      return worker;
+    },
     materializeSessionStateDeletePlans: async (
       ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
     ) => {

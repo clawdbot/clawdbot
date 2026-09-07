@@ -6,7 +6,7 @@ import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js"
 import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
-} from "../config/sessions/session-accessor.sqlite-archive.js";
+} from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
 import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { isGatewayProtocolResponseError } from "./client.js";
 import {
