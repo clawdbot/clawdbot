@@ -63,6 +63,15 @@
 /docs/reference/secretref-credential-surface.md @openclaw/openclaw-secops
 /docs/reference/secretref-user-supplied-credentials-matrix.json @openclaw/openclaw-secops
 
+# Heartbeat template, content emptiness check, template resolution, and doctor
+# repair are coupled. Changes to any of these can cause silent heartbeat
+# regressions or unintended API call triggers. Changes require maintainer
+# review for discussion.
+/src/agents/templates/HEARTBEAT.md @hxy91819 @vincentkoc
+/src/agents/workspace-templates.ts @hxy91819 @vincentkoc
+/src/auto-reply/heartbeat.ts @hxy91819 @vincentkoc
+/src/commands/doctor-heartbeat-template-repair.ts @hxy91819 @vincentkoc
+
 # Release workflow and its supporting release-path checks.
 /.github/workflows/openclaw-npm-release.yml @openclaw/openclaw-release-managers
 /docs/reference/RELEASING.md @openclaw/openclaw-release-managers
