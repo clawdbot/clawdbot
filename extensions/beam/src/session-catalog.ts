@@ -95,7 +95,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             source: session.source,
             archived: false,
             canContinue: true,
-            canArchive: false,
+            canArchive: true,
           })),
           ...(offset + page.length < sessions.length
             ? { nextCursor: String(offset + page.length) }
@@ -140,6 +140,15 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
           .toReversed(),
         ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
       };
+    },
+    async archive(params) {
+      if (params.hostId !== BEAM_HOST_ID) {
+        throw new Error(`unknown Beam host: ${params.hostId}`);
+      }
+      if (!(await store.delete(params.threadId))) {
+        throw new Error(`unknown Beam session: ${params.threadId}`);
+      }
+      return { ok: true };
     },
     async copyToGatewaySession(params) {
       if (params.hostId !== BEAM_HOST_ID) {

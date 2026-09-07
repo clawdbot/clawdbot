@@ -41,6 +41,7 @@ import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
+import { isTextAttachment } from "./chat-text-attachment.ts";
 import "./session-diff-panel.ts";
 
 type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
@@ -108,6 +109,15 @@ function renderSidebarAttachment(
     (content.attachmentKind === "image" || mimeType.startsWith("image/"))
   ) {
     return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
+  }
+  if (isTextAttachment(mimeType, content.title) && !isCrossOriginHttpSource(src)) {
+    return html`<openclaw-chat-text-attachment
+      .src=${src}
+      .sourceIdentity=${content.sourceIdentity ?? src}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+    ></openclaw-chat-text-attachment>`;
   }
   return renderCompactAttachmentCard({
     kind: content.attachmentKind ?? "document",

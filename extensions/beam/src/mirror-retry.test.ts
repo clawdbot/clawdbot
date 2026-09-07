@@ -192,6 +192,7 @@ describe("Beam terminal retry policy", () => {
           return session;
         }),
       get: (beamId) => keyedStore.lookup(beamId),
+      delete: (beamId) => keyedStore.delete(beamId),
       list: async () => (await keyedStore.entries()).map((entry) => entry.value),
     };
     let requestNumber = 0;

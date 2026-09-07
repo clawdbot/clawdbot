@@ -37,6 +37,13 @@ actor RemoteTunnelManager {
     private var lastRestartAt: Date?
     private let restartBackoffSeconds: TimeInterval = 2.0
 
+    func controlTunnelStatus() -> (running: Bool, localPort: UInt16?) {
+        guard !self.isShutDown, self.retirementInFlight == nil,
+              let active = self.controlTunnel, active.tunnel.isRunning
+        else { return (false, nil) }
+        return (true, active.tunnel.localPort)
+    }
+
     func controlTunnelRouteIfRunning() async -> Route? {
         guard !self.isShutDown, self.retirementInFlight == nil else { return nil }
         guard let configuration = try? RemotePortTunnel.configuration(
@@ -211,7 +218,7 @@ actor RemoteTunnelManager {
                   self.createInFlight == nil, currentConfiguration == configuration
             else { continue }
 
-            let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
+            let desiredPort = configuration.preferredLocalPort ?? UInt16(GatewayEnvironment.gatewayPort())
             let token = UUID()
             let task = Task {
                 try await RemotePortTunnel.create(

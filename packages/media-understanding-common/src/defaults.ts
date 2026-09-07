@@ -1,4 +1,3 @@
-// Media Understanding Common module implements defaults behavior.
 import type { MediaUnderstandingCapability } from "./types.js";
 
 // Shared defaults for media-understanding limits, prompts, and concurrency.

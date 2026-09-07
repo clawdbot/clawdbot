@@ -18,9 +18,9 @@ function safeDoctorSecretOwnerText(value: string, maxChars: number): string {
 
 /** Projects Gateway-owned secret degradation into the shared bounded Doctor display shape. */
 export function projectDoctorSecretRuntimeDegradations(
-  status: Pick<StatusSummary, "degradedSecretOwners">,
+  status: Pick<StatusSummary, "degradedSecretOwners" | "secretEgressProxy">,
 ) {
-  return (status.degradedSecretOwners ?? []).map((owner) => {
+  const findings = (status.degradedSecretOwners ?? []).map((owner) => {
     const ownerId = safeDoctorSecretOwnerText(owner.ownerId, DOCTOR_SECRET_OWNER_ID_MAX_CHARS);
     const target = `${owner.ownerKind}:${ownerId}`;
     const visiblePaths = owner.paths
@@ -38,4 +38,22 @@ export function projectDoctorSecretRuntimeDegradations(
       retryHint: SECRET_DEGRADATION_RETRY_HINT,
     };
   });
+  if (status.secretEgressProxy?.state !== "degraded") {
+    return findings;
+  }
+  return [
+    ...findings,
+    {
+      message:
+        "Secret egress proxy: " +
+        safeDoctorSecretOwnerText(
+          status.secretEgressProxy.message ??
+            "TLS certificate preparation unavailable. Check Gateway logs.",
+          512,
+        ),
+      path: "secrets.egressProxy.enabled",
+      target: "capability:secret-egress-proxy",
+      retryHint: "Correct the reported certificate or clock problem before retrying the request.",
+    },
+  ];
 }

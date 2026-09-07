@@ -691,6 +691,13 @@ describe("runDoctorHealthFlow", () => {
           path: initial.path,
           env: state.env,
         });
+        openOpenClawStateDatabase({ env: state.env }).db.exec(
+          "INSERT INTO gateway_boot_lifecycle (boot_id, pid, started_at_ms, completed_at_ms, outcome, startup_reason) VALUES ('maintenance', 1, 1, 2, 'startup_failed', 'gateway.maintenance_required')",
+        );
+        const maintenanceOutcome = () =>
+          openOpenClawStateDatabase({ env: state.env })
+            .db.prepare("SELECT outcome FROM gateway_boot_lifecycle WHERE boot_id = 'maintenance'")
+            .get();
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         mocks.runContributions.mockImplementation(async (ctx) => {
           const result = await migrateLegacyMediaPersistence();
@@ -715,6 +722,7 @@ describe("runDoctorHealthFlow", () => {
           expect(runtime.error).toHaveBeenCalledWith(
             expect.stringMatching(/Doctor.*database readiness.*schema version 17/),
           );
+          expect(maintenanceOutcome()).toEqual({ outcome: "startup_failed" });
           expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
             resultPath: state.path("advisory.json"),
             result: { status: "error", configHash: "unchanged" },
@@ -744,6 +752,7 @@ describe("runDoctorHealthFlow", () => {
           reopened.db.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
         ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
         expect(runtime.exit).not.toHaveBeenCalled();
+        expect(maintenanceOutcome()).toEqual({ outcome: "startup_failure_repaired" });
       });
     },
   );

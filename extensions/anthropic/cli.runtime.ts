@@ -81,6 +81,7 @@ async function authorizeTool(
         : await turn.context.requestToolPermission({
             toolName,
             toolInput: input,
+            cwd: typeof request.cwd === "string" ? request.cwd : undefined,
             toolCallId: toolUseId,
             abortSignal,
           });
@@ -137,6 +138,7 @@ async function handleRequest(
       {
         tool_name: input.tool_name,
         input: input.tool_input,
+        cwd: input.cwd,
         tool_use_id: request.tool_use_id ?? input.tool_use_id,
       },
       signal,

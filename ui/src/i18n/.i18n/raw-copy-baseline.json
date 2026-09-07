@@ -306,13 +306,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/panels-overview.ts",
-      "text": "&times;"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/channels/view.nostr.ts",
       "text": "NIP-05"
     },

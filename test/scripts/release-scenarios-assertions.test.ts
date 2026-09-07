@@ -154,6 +154,22 @@ describe("release scenario assertions", () => {
     }
   });
 
+  it("permits a selected interactive-onboarding target without a default session-memory hook", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
+    const configPath = path.join(root, "openclaw.json");
+    try {
+      writeJson(configPath, { wizard: { lastRunCommand: "onboard" } });
+      const result = runAssertion(["assert-session-memory-hook-enabled"], {
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE: "interactive",
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("unavailable in selected interactive onboarding");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("scans large request logs for image describe responses", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
     const outputPath = path.join(root, "describe.json");

@@ -606,55 +606,9 @@ openclaw-session-owner-chip {
   font-weight: 500;
 }
 
-.login-gate__field-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.login-gate__field-hint {
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .login-gate__form .field input[aria-invalid="true"] {
   border-color: var(--login-gate-tone, var(--danger));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--login-gate-tone, var(--danger)) 14%, transparent);
-}
-
-.login-gate__segmented {
-  display: inline-flex;
-  padding: 2px;
-  gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--bg-accent);
-}
-
-.login-gate__segmented button {
-  border: 0;
-  padding: 2px 10px;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.5;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
-}
-
-.login-gate__segmented button[aria-checked="true"] {
-  background: var(--card);
-  color: var(--text-strong);
-  box-shadow: var(--shadow-sm);
-}
-
-.login-gate__segmented button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .login-gate__connect {
@@ -4122,80 +4076,6 @@ td.data-table-key-col {
 .workspace-link:hover {
   opacity: 0.75;
   text-decoration: underline;
-}
-
-.agent-chip-input {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg-accent);
-  min-height: 38px;
-  cursor: text;
-  transition: border-color var(--duration-fast) ease;
-}
-
-.agent-chip-input:focus-within {
-  border-color: var(--accent);
-}
-
-.agent-chip-input input,
-.agent-chip-input input:focus-visible {
-  flex: 1;
-  min-width: 120px;
-  border: none;
-  background: transparent;
-  outline: none;
-  box-shadow: none;
-  font-size: 13px;
-  padding: 0;
-}
-
-.agent-chip-input .chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-}
-
-.agent-chip-input .chip-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  margin: 0;
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--muted);
-  line-height: 1;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    opacity var(--duration-fast) var(--ease-out);
-}
-
-.agent-chip-input .chip-remove:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-}
-
-.agent-chip-input .chip-remove:focus-visible:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.agent-chip-input .chip-remove:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 .agent-file-field {
