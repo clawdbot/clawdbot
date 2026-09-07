@@ -49,6 +49,50 @@ describe("Signal account media limits", () => {
     },
   );
 
+  it.each([
+    {
+      label: "channel cap is invalid",
+      maxBytes: undefined,
+      channelMediaMaxMb: Number.POSITIVE_INFINITY,
+      agentMediaMaxMb: 0.5 / (1024 * 1024),
+    },
+    {
+      label: "byte override is invalid",
+      maxBytes: Number.POSITIVE_INFINITY,
+      channelMediaMaxMb: 0.5 / (1024 * 1024),
+      agentMediaMaxMb: 1,
+    },
+  ])("falls back when the $label", async (testCase) => {
+    const state = await createOpenClawTestState({ prefix: "signal-agent-media-fallback-" });
+    const request = vi.spyOn(client, "signalRpcRequest");
+    try {
+      const mediaUrl = state.path("attachment.txt");
+      await writeFile(mediaUrl, "x");
+
+      await expect(
+        sendMessageSignal("+15555550123", "", {
+          cfg: {
+            agents: { defaults: { mediaMaxMb: testCase.agentMediaMaxMb } },
+            channels: {
+              signal: {
+                account: "+15550001111",
+                transport: { kind: "external-native", url: "http://signal.test" },
+                mediaMaxMb: testCase.channelMediaMaxMb,
+              },
+            },
+          },
+          mediaUrl,
+          mediaLocalRoots: [state.root],
+          maxBytes: testCase.maxBytes,
+        }),
+      ).rejects.toThrow(/exceeds.*limit/i);
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      request.mockRestore();
+      await state.cleanup();
+    }
+  });
+
   it.each(["work", undefined])("enforces the resolved account cap for %s", async (accountId) => {
     const state = await createOpenClawTestState({ prefix: "signal-account-media-" });
     const delivered: Buffer[] = [];

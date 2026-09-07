@@ -17,6 +17,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import {
   emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -83,9 +84,7 @@ function expectServiceContexts(
   config: Parameters<typeof startPluginServices>[0]["config"],
 ) {
   expect(contexts).not.toHaveLength(0);
-  contexts.forEach((ctx) => {
-    expectServiceContext(ctx, config);
-  });
+  contexts.forEach((ctx) => expectServiceContext(ctx, config));
 }
 
 function expectServiceLifecycleState(params: {
@@ -889,6 +888,36 @@ describe("startPluginServices", () => {
       "sidecars.plugin-services.plugin~003Atest.service_a",
     ]);
     expect(new Set(measured).size).toBe(measured.length);
+  });
+
+  it("retains filtered diagnostic interests only for the exporter service lifetime", async () => {
+    const received = vi.fn();
+    const service: OpenClawPluginService = {
+      id: "diagnostics-otel",
+      start: (ctx) => {
+        ctx.internalDiagnostics!.onEvent(received, { include: ["log.record"] });
+      },
+    };
+    const handle = await startPluginServices({
+      registry: createRegistry([service], service.id, "bundled"),
+      config: createServiceConfig(),
+    });
+    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);
+    expect(hasInternalDiagnosticEventInterest("gateway.event_loop.sample")).toBe(false);
+    expect(hasInternalDiagnosticEventInterest("gateway.rpc")).toBe(false);
+    emitTrustedDiagnosticEvent({ type: "log.record", level: "INFO", message: "synthetic" });
+    emitTrustedDiagnosticEvent({ type: "gateway.rpc", phase: "received", method: "health" });
+    emitTrustedDiagnosticEvent({
+      type: "gateway.event_loop.sample",
+      intervalMs: 1_000,
+      delayMaxMs: 1_500,
+    });
+    await waitForDiagnosticEventsDrained();
+    expect(received.mock.calls.map(([event]) => event.type)).toEqual(["log.record"]);
+    await handle.stop();
+    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
+    expect(hasInternalDiagnosticEventInterest("gateway.event_loop.sample")).toBe(false);
+    expect(hasInternalDiagnosticEventInterest("gateway.rpc")).toBe(false);
   });
 
   it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {

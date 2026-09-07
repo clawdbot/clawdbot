@@ -272,9 +272,7 @@ describe("command secret target ids", () => {
   });
 
   it("includes gateway auth targets for status command scans", () => {
-    const ids = getStatusCommandSecretTargetIds(undefined, undefined, {
-      includeChannelTargets: false,
-    });
+    const ids = getStatusCommandSecretTargetIds({});
 
     expect(ids.has("gateway.auth.token")).toBe(true);
     expect(ids.has("gateway.auth.password")).toBe(true);

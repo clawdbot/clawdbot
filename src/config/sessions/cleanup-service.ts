@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   createSessionsCleanupFailure,
@@ -80,6 +81,7 @@ type SessionsCleanupRunResult = {
     modelRunPrunedKeys: Set<string>;
     archivedKeys?: Set<string>;
     capArchivedKeys?: Set<string>;
+    ageArchivedKeys?: Set<string>;
     staleKeys: Set<string>;
     cappedKeys: Set<string>;
     dmScopeRetiredKeys: Set<string>;
@@ -305,6 +307,7 @@ async function previewStoreCleanup(params: {
   const modelRunPrunedKeys = new Set<string>();
   const archivedKeys = new Set<string>();
   const capArchivedKeys = new Set<string>();
+  const ageArchivedKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
   const missing =
     params.fixMissing === true
@@ -350,7 +353,7 @@ async function previewStoreCleanup(params: {
         },
       })
     : 0;
-  const archived = archiveStaleDashboardEntries(
+  let archived = archiveStaleDashboardEntries(
     previewStore,
     params.maintenance.archiveDashboardAfterMs,
     {
@@ -359,6 +362,7 @@ async function previewStoreCleanup(params: {
         archivedKeys.add(key);
       },
       preserveKeys: preserveSessionKeys,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
     },
   );
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
@@ -367,6 +371,10 @@ async function previewStoreCleanup(params: {
     preserveRecentMs: params.maintenance.preserveRecentMs,
     onPruned: ({ key }) => {
       staleKeys.add(key);
+    },
+    onArchived: ({ key }) => {
+      archived += 1;
+      ageArchivedKeys.add(key);
     },
   });
   let capArchived = 0;
@@ -464,6 +472,7 @@ async function previewStoreCleanup(params: {
     modelRunPrunedKeys,
     archivedKeys,
     capArchivedKeys,
+    ageArchivedKeys,
     staleKeys,
     cappedKeys,
     dmScopeRetiredKeys,
@@ -665,26 +674,40 @@ export async function runSessionsCleanup(params: {
 export async function purgeAgentSessionStoreEntries(
   cfg: OpenClawConfig,
   agentId: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    runDatabaseCleanup?: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
+  } = {},
 ): Promise<boolean> {
   const normalizedAgentId = normalizeAgentId(agentId);
   let storePath = typeof cfg.session?.store === "string" ? cfg.session.store : "<default>";
   try {
     storePath = resolveSessionStorePathCore(cfg.session?.store, {
       agentId: normalizedAgentId,
+      env: options.env,
     });
     const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: normalizedAgentId,
       defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
+      env: options.env,
     });
     if (!fs.existsSync(sqliteTarget.path)) {
       return false;
     }
-    await purgeDeletedAgentSessionEntries({
-      cfg,
-      agentId: normalizedAgentId,
-      storeAgentId: sqliteTarget.agentId ?? normalizedAgentId,
-      storePath,
-    });
+    const storeAgentId = sqliteTarget.agentId ?? normalizedAgentId;
+    const purge = () =>
+      purgeDeletedAgentSessionEntries({
+        cfg,
+        agentId: normalizedAgentId,
+        storeAgentId,
+        storePath,
+        env: options.env,
+      });
+    if (options.runDatabaseCleanup) {
+      await options.runDatabaseCleanup({ agentId: storeAgentId, path: sqliteTarget.path }, purge);
+    } else {
+      await purge();
+    }
     return false;
   } catch (error) {
     getLogger().warn("session store purge failed during agent deletion", {

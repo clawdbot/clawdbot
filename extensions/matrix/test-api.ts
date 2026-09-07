@@ -7,8 +7,8 @@ export {
 export {
   normalizeMatrixStorageMetadata,
   openMatrixStorageMetaStoreOptions,
-} from "./src/matrix/client/storage.js";
-export type { MatrixStorageMetadata } from "./src/matrix/client/storage.js";
+} from "./src/matrix/client/storage-metadata.js";
+export type { MatrixStorageMetadata } from "./src/matrix/client/storage-metadata.js";
 export type {
   EncryptedFile,
   MatrixDeviceVerificationStatus,

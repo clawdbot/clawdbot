@@ -1,6 +1,7 @@
 // Feishu plugin module implements docx behavior.
 import { resolve } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
@@ -1185,7 +1186,13 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
       defaultAccountId,
       requiredTool: { family: "doc", label: "Doc" },
     });
-    return Math.floor((account.config?.mediaMaxMb ?? 30) * 1024 * 1024);
+    return (
+      resolveChannelMediaMaxBytes({
+        cfg: api.config,
+        accountId: account.accountId,
+        resolveChannelLimitMb: () => account.config?.mediaMaxMb,
+      }) ?? 30 * 1024 * 1024
+    );
   };
 
   const getImageReadTimeoutMs = (

@@ -297,7 +297,20 @@ describe("Feishu upload contracts", () => {
     { label: "fractional maximum", mediaMaxMb: 0.001, size: 1048, accepted: true },
     { label: "next whole byte", mediaMaxMb: 0.001, size: 1049, accepted: false },
     { label: "positive sub-byte cap", mediaMaxMb: 0.5 / (1024 * 1024), size: 1, accepted: false },
-  ])("loads local attachments under the $label", async (testCase) => {
+    {
+      label: "invalid channel cap with an agent fallback",
+      mediaMaxMb: Number.POSITIVE_INFINITY,
+      agentMediaMaxMb: 0.5 / (1024 * 1024),
+      size: 1,
+      accepted: false,
+    },
+  ] as Array<{
+    label: string;
+    mediaMaxMb: number;
+    agentMediaMaxMb?: number;
+    size: number;
+    accepted: boolean;
+  }>)("loads local attachments under the $label", async (testCase) => {
     await withTempWorkspace(
       { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-media-cap-" },
       async (workspace) => {
@@ -307,7 +320,10 @@ describe("Feishu upload contracts", () => {
         mocks.loadWebMedia.mockImplementationOnce(loadWebMedia);
 
         const send = sendMediaFeishu({
-          cfg: emptyConfig,
+          cfg:
+            testCase.agentMediaMaxMb === undefined
+              ? emptyConfig
+              : { agents: { defaults: { mediaMaxMb: testCase.agentMediaMaxMb } } },
           to: "user:ou_target",
           mediaUrl,
           mediaLocalRoots: [workspace.dir],

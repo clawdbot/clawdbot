@@ -301,6 +301,28 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
   );
 
+  it.each([
+    ["direct", true],
+    ["direct", false],
+    ["public", true],
+    ["public", false],
+  ] as const)(
+    "keeps %s delivery when a rendered-empty chunk comes first=%s",
+    async (entry, first) => {
+      const empty = "Bad Request: text must be non-empty";
+      rejections.push(...(first ? [empty, empty, ""] : ["", empty, empty]));
+
+      await sendThrough(entry, `${"A".repeat(4000)}${"B".repeat(4000)}`, async () => {});
+
+      expect(requests.map(({ fields }) => fields.text)).toEqual(
+        (first ? ["A", "A", "B"] : ["A", "B", "B"]).map((text) => text.repeat(4000)),
+      );
+      expect(requests.map(({ fields }) => fields.parse_mode)).toEqual(
+        first ? ["HTML", undefined, "HTML"] : ["HTML", "HTML", undefined],
+      );
+    },
+  );
+
   it.each(["direct", "public"] as const)(
     "preserves %s accepted media after photo rejection falls back to a document",
     async (entry) => {
@@ -415,7 +437,14 @@ describe("Telegram physical send acceptance over HTTP", () => {
       accepted: true,
     },
     { label: "explicit zero override", mediaMaxMb: 30.1, maxBytes: 0, size: 1048, accepted: false },
-    { label: "default channel limit", mediaMaxMb: undefined, size: 1048, accepted: true },
+    {
+      label: "invalid byte override fallback",
+      mediaMaxMb: 0.001,
+      maxBytes: Number.POSITIVE_INFINITY,
+      size: 1049,
+      accepted: false,
+    },
+    { label: "agent fallback limit", mediaMaxMb: undefined, size: 1048, accepted: false },
   ])("enforces $label for a local document", async (testCase) => {
     const document = Buffer.alloc(testCase.size, 0x61);
     document.write("%PDF-1.4\n");
@@ -458,6 +487,14 @@ describe("Telegram physical send acceptance over HTTP", () => {
       override: 0.001,
       size: 1048,
       unavailable: false,
+    },
+    {
+      label: "inbound invalid override fallback",
+      direction: "inbound",
+      mediaMaxMb: 0.001,
+      override: Number.POSITIVE_INFINITY,
+      size: 1049,
+      unavailable: true,
     },
     {
       label: "reply configured decimal cap",

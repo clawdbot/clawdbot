@@ -268,10 +268,10 @@ configured default model is never replaced.
     (e.g. 400k for the gpt-5.x series, 1M for the internal
     `claude-opus-*-1m` variants).
 
-    The bundled static catalog stays as the visible fallback when discovery
-    is disabled, the user has no GitHub auth profile, runtime authentication
-    fails, or the `/models` HTTPS call errors. To opt out and rely entirely
-    on the static manifest catalog (offline / air-gapped scenarios):
+    Failed refreshes report the failure and retain the last successful inventory,
+    or bundled models before the first success. A successful empty response clears
+    discovered models. Disabled discovery or missing credentials makes no live
+    request. To use only bundled models (offline / air-gapped scenarios):
 
     ```json5
     {

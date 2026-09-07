@@ -59,6 +59,9 @@
     "properties": {}
   },
   "modelCatalog": {
+    "modelsDev": {
+      "novita": "novita-ai"
+    },
     "aliases": {
       "novita-ai": {
         "provider": "novita"

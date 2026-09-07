@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
+import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { resolveChannelMessageToolMediaSourceParamKeys } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -244,10 +245,12 @@ function resolveAttachmentMaxBytes(params: {
   channel: ChannelId;
   accountId?: string | null;
 }): number | undefined {
-  // Priority: account-specific > channel-level > global default
-  const limitMb =
-    resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
-  return typeof limitMb === "number" ? Math.floor(limitMb * 1024 * 1024) : undefined;
+  return resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    resolveChannelLimitMb: ({ cfg, accountId }) =>
+      resolveChannelAccountMediaMaxMb({ cfg, channel: params.channel, accountId }),
+  });
 }
 
 function inferAttachmentFilename(params: {

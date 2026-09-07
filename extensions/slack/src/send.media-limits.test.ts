@@ -147,7 +147,14 @@ describe("Slack configured limits on real local files", () => {
       accepted: true,
     },
     { label: "explicit zero override", mediaMaxMb: 30.1, maxBytes: 0, size: 1048, accepted: false },
-    { label: "absent channel cap", mediaMaxMb: undefined, size: 1048, accepted: true },
+    {
+      label: "invalid byte override fallback",
+      mediaMaxMb: 0.001,
+      maxBytes: Number.POSITIVE_INFINITY,
+      size: 1049,
+      accepted: false,
+    },
+    { label: "agent fallback cap", mediaMaxMb: undefined, size: 1048, accepted: false },
   ])("preserves the sender's $label", async (testCase) => {
     const state = await createOpenClawTestState({ label: "slack-send-limit" });
     try {
@@ -182,11 +189,28 @@ describe("Slack configured limits on real local files", () => {
   });
 
   it.each([
-    { mediaMaxMb: 30.1, override: undefined },
-    { mediaMaxMb: 0.1 / (1024 * 1024), override: 30.1 },
-    { mediaMaxMb: undefined, override: undefined },
+    { mediaMaxMb: 30.1, override: undefined, agentMediaMaxMb: undefined, accepted: true },
+    {
+      mediaMaxMb: 0.1 / (1024 * 1024),
+      override: 30.1,
+      agentMediaMaxMb: undefined,
+      accepted: true,
+    },
+    {
+      mediaMaxMb: undefined,
+      override: undefined,
+      agentMediaMaxMb: 0.1 / (1024 * 1024),
+      accepted: false,
+    },
+    {
+      mediaMaxMb: undefined,
+      override: Number.POSITIVE_INFINITY,
+      agentMediaMaxMb: 0.1 / (1024 * 1024),
+      accepted: false,
+    },
+    { mediaMaxMb: undefined, override: undefined, agentMediaMaxMb: undefined, accepted: true },
   ])(
-    "carries the monitor-selected limit ($mediaMaxMb, $override) to an Enterprise upload",
+    "carries the monitor-selected limit ($mediaMaxMb, $override, $agentMediaMaxMb) to an Enterprise upload",
     async (testCase) => {
       const state = await createOpenClawTestState({ label: "slack-monitor-limit" });
       const abort = new AbortController();
@@ -197,7 +221,12 @@ describe("Slack configured limits on real local files", () => {
         await fs.mkdir(path.dirname(mediaPath), { recursive: true });
         await fs.writeFile(mediaPath, document);
         const cfg: OpenClawConfig = {
-          agents: { defaults: { workspace: state.workspaceDir } },
+          agents: {
+            defaults: {
+              workspace: state.workspaceDir,
+              mediaMaxMb: testCase.agentMediaMaxMb,
+            },
+          },
           commands: { native: false, nativeSkills: false },
           channels: {
             slack: {
@@ -279,7 +308,7 @@ describe("Slack configured limits on real local files", () => {
         }
         // The maintained monitor fixture uses this admitted lifecycle to await the turn,
         // rather than returning after background queue admission.
-        await handler({
+        const handling = handler({
           event: {
             type: "message",
             user: "UOTHER123",
@@ -303,7 +332,17 @@ describe("Slack configured limits on real local files", () => {
           body: { api_app_id: "A_ENTERPRISE" },
           client: provider.client,
         });
+        if (testCase.accepted) {
+          await handling;
+        } else {
+          await expect(handling).rejects.toThrow(/exceeds.*limit/i);
+        }
         expect(dispatch).toHaveBeenCalledTimes(1);
+        if (!testCase.accepted) {
+          expect(provider.uploaded).toEqual([]);
+          expect(provider.client.files.completeUploadExternal).not.toHaveBeenCalled();
+          return;
+        }
         expect(provider.uploaded).toEqual([document]);
         expect(provider.client.files.completeUploadExternal).toHaveBeenCalledWith(
           expect.objectContaining({ channel_id: "C12345678" }),

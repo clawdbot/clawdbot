@@ -524,6 +524,7 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("verbose", "Toggle verbose mode.", "options", "standard", {
       textAliases: ["/verbose", "/v"],
       args: [defineCommandArgument("mode", "on, off, or full", { choices: ["on", "off", "full"] })],
+      argsMenu: "auto",
     }),
     defineBuiltinCommand("trace", "Toggle plugin trace lines.", "options", "power", {
       args: [defineCommandArgument("mode", "on, off, or raw", { choices: ["on", "off", "raw"] })],

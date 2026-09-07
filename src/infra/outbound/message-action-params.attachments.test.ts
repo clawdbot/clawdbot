@@ -221,6 +221,25 @@ describe("runMessageAction media behavior", () => {
     }
   });
 
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "falls back from invalid channel mediaMaxMb %s to the agent cap",
+    async (mediaMaxMb) => {
+      await expect(
+        hydrateAttachmentParamsForAction({
+          cfg: {
+            channels: { imessage: { mediaMaxMb } },
+            agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } },
+          },
+          channel: "imessage",
+          args: { buffer: onePixelPngBase64 },
+          action: "send",
+          dryRun: true,
+          mediaPolicy: { mode: "host" },
+        }),
+      ).rejects.toThrow(/limit: 1 bytes/u);
+    },
+  );
+
   it.each(["media", "mediaUrl", "path", "filePath"])(
     "keeps data URLs forbidden in the %s source field",
     async (field) => {

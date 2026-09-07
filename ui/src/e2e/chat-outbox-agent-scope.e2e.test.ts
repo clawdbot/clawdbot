@@ -1,4 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   controlUiSessionPath,
@@ -14,7 +17,10 @@ const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("drains an inactive agent outbox while the selected global agent is active", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-outbox-agent-scope", artifactRoot)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -112,10 +118,10 @@ suite.define(() => {
       const queue = page.locator(".chat-queue");
       await queue.getByText("Waiting for reconnect").waitFor({ timeout: 10_000 });
       if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/inactive-agent-offline.png`,
-          fullPage: true,
-        });
+        await writeFile(
+          `${artifactDir}/inactive-agent-offline.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [queue]),
+        );
       }
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.evaluate(() => {
@@ -229,10 +235,12 @@ suite.define(() => {
       await activePane.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/inactive-agent-dispatched.png`,
-          fullPage: true,
-        });
+        await writeFile(
+          `${artifactDir}/inactive-agent-dispatched.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            activePane.locator(".chat-group.user").getByText(prompt),
+          ]),
+        );
       }
 
       await gateway.emitGatewayEvent("chat", {
@@ -266,10 +274,10 @@ suite.define(() => {
         ],
       );
       if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/inactive-agent-delivered.png`,
-          fullPage: true,
-        });
+        await writeFile(
+          `${artifactDir}/inactive-agent-delivered.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [reply]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);

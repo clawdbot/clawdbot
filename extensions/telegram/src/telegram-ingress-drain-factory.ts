@@ -2,15 +2,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramBotInfo } from "./bot-info.js";
-import {
-  runWithTelegramUpdateProcessingFrame,
-  type TelegramMessageProcessingResult,
-} from "./bot-processing-outcome.js";
+import { runWithTelegramUpdateProcessingFrame } from "./bot-processing-outcome.js";
 import { startTelegramCallbackQueryAnswer } from "./callback-query-answer-state.js";
 import {
   createTelegramIngressMonitor,
   resolveTelegramAdoptionStallTimeoutMs,
-  type TelegramIngressDrainLifecycle,
 } from "./telegram-ingress-drain.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
 
@@ -32,14 +28,6 @@ type CreateTelegramTransportIngressMonitorParams = {
   onLog?: (message: string) => void;
   onError?: (error: unknown) => void;
   abortSignal?: AbortSignal;
-  /**
-   * Optional override for full dispatch (tests). Default: bot.handleUpdate under
-   * the drain lifecycle via bot-message spooled replay path.
-   */
-  dispatchUpdate?: (
-    update: unknown,
-    lifecycle: TelegramIngressDrainLifecycle,
-  ) => Promise<TelegramMessageProcessingResult | void>;
 };
 
 /**
@@ -80,10 +68,7 @@ export function createTelegramTransportIngressMonitor(
       }
       void startTelegramCallbackQueryAnswer(params.bot, callbackQueryId, context.isNew);
     },
-    dispatch: async (update, lifecycle) => {
-      if (params.dispatchUpdate) {
-        return await params.dispatchUpdate(update, lifecycle);
-      }
+    dispatch: async (update) => {
       // grammY returns void, so carry its middleware-owned outcome back to durable ingress.
       // The spooled lifecycle remains on its existing frame for complete-at-adoption.
       const { result } = await runWithTelegramUpdateProcessingFrame(async () => {

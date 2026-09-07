@@ -1,21 +1,23 @@
-import {
-  extractErrorCode,
-  formatErrorMessage,
-  readErrorName,
-  toErrorObject,
-} from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceGatewayControl,
+} from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
-  type RealtimeVoiceAgentConsultRunner,
-  type RealtimeVoiceGatewayControl,
-} from "openclaw/plugin-sdk/realtime-voice";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+  canonicalizeBase64,
+  extractErrorCode,
+  readErrorName,
+  rawDataToString,
+  toErrorObject,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { RawData } from "ws";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   buildOpenAIQuicksilverDelegationPrompt,
   type OpenAIQuicksilverTranscriptEntry,
 } from "./realtime-quicksilver-instructions.js";
+import { projectOpenAIQuicksilverErrorMessage } from "./realtime-quicksilver-redaction.js";
 import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
 import {
   boundOpenAIQuicksilverContextItems,
@@ -37,8 +39,10 @@ type PendingDelegation = {
 type OpenAIQuicksilverDelegationControllerOptions = {
   getSocket: () => OpenAIQuicksilverSocket | undefined;
   logger: Pick<PluginLogger, "debug" | "warn">;
+  model: string;
   onError?: (error: Error) => void;
   onFatalError: (error: Error) => void;
+  onAudio?: (audio: Buffer) => void;
   onSessionStarted?: (expiresAt: number | undefined) => void;
   onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
   handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
@@ -47,17 +51,35 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   signal: AbortSignal;
 };
 
-function shortFailureReason(error: unknown): string {
+function shortFailureReason(
+  error: unknown,
+  formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
+): string {
   return formatErrorMessage(error).replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
 }
 
-function readWireEventType(payload: string): string | undefined {
-  try {
-    const decoded = JSON.parse(payload) as Record<string, unknown>;
-    return typeof decoded.type === "string" ? decoded.type : undefined;
-  } catch {
-    return undefined;
+function projectWireEventType(event: OpenAIQuicksilverInboundEvent): string | undefined {
+  switch (event.kind) {
+    case "session-started":
+      return "session.started";
+    case "audio-cleared":
+      return "output_audio_buffer.cleared";
+    case "audio":
+      return "output_audio.delta";
+    case "transcript-delta":
+      return event.role === "user" ? "input_transcript.added" : "output_transcript.added";
+    case "transcript-done":
+      return "turn.done";
+    case "delegation":
+      return "delegation.created";
+    case "error":
+      return "error";
+    case "ignored":
+      return event.eventType === "session.updated" ? "session.updated" : undefined;
+    case "unknown":
+      return undefined;
   }
+  return undefined;
 }
 
 /** Owns the provider's single active delegation and its once-consumed transcript context. */
@@ -72,7 +94,10 @@ export class OpenAIQuicksilverDelegationController {
   private stopped = false;
   private transcript: OpenAIQuicksilverTranscriptEntry[] = [];
 
-  constructor(private readonly options: OpenAIQuicksilverDelegationControllerOptions) {
+  constructor(
+    private readonly options: OpenAIQuicksilverDelegationControllerOptions,
+    private readonly formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
+  ) {
     if (options.signal.aborted) {
       this.onSessionAbort();
     } else {
@@ -89,24 +114,22 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     const payload = rawDataToString(data);
-    if (this.options.onWireEventType) {
-      const eventType = readWireEventType(payload);
-      if (eventType) {
-        this.options.onWireEventType(eventType);
-      }
-    }
     const event = parseOpenAIQuicksilverEvent(payload);
     if (event) {
+      const eventType = projectWireEventType(event);
+      if (eventType) {
+        this.options.onWireEventType?.(eventType);
+      }
       this.handleEvent(event);
     }
   }
 
   handleEvent(event: OpenAIQuicksilverInboundEvent): void {
-    if (this.stopped || event.kind === "ignored") {
+    if (this.stopped || event.kind === "ignored" || event.kind === "audio-cleared") {
       return;
     }
     if (event.kind === "unknown") {
-      this.options.logger.debug?.(`OpenAI GPT-Live ignored sideband event: ${event.eventType}`);
+      this.options.logger.debug?.("OpenAI GPT-Live ignored an unsupported sideband event");
       return;
     }
     if (event.kind === "session-started") {
@@ -119,7 +142,7 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     if (event.kind === "error") {
-      const error = new Error(`OpenAI GPT-Live sideband error: ${event.message}`);
+      const error = new Error(projectOpenAIQuicksilverErrorMessage("provider"));
       this.options.logger.warn(error.message);
       if (event.fatalAuth) {
         this.options.onFatalError(error);
@@ -128,8 +151,17 @@ export class OpenAIQuicksilverDelegationController {
       }
       return;
     }
-    // Both consumers negotiate audio over WebRTC; sideband audio would duplicate it.
     if (event.kind === "audio") {
+      if (!this.options.onAudio) {
+        // Browser and OAuth Gateway sessions negotiate audio over WebRTC.
+        return;
+      }
+      const audio = canonicalizeBase64(event.data);
+      if (!audio) {
+        this.fail(new Error("OpenAI GPT-Live returned malformed base64 audio"));
+        return;
+      }
+      this.options.onAudio(Buffer.from(audio, "base64"));
       return;
     }
     this.startDelegation(event.id, event.prompt);
@@ -293,7 +325,7 @@ export class OpenAIQuicksilverDelegationController {
         return;
       }
       this.options.logger.warn(
-        `OpenAI GPT-Live delegation consult failed: ${shortFailureReason(error)}`,
+        `OpenAI GPT-Live delegation consult failed: ${shortFailureReason(error, this.formatErrorMessage)}`,
       );
       text = CONSULT_FAILURE_TEXT;
     }

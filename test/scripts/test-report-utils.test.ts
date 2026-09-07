@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,6 +10,9 @@ import {
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
 } from "../../scripts/test-report-utils.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 
 const { spawnSyncMock } = vi.hoisted(() => ({
   spawnSyncMock: vi.fn(),
@@ -91,47 +95,72 @@ describe("scripts/test-report-utils collectVitestAssertionDurations", () => {
 });
 
 describe("scripts/test-report-utils runVitestJsonReport", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
-    spawnSyncMock.mockReset();
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    // Keep process-cleanup probes native; report-only cases override the implementation below.
+    spawnSyncMock.mockReset().mockImplementation(actual.spawnSync);
   });
 
-  it("launches Vitest through pnpm exec", async () => {
-    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mts");
-    const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-${Date.now()}.json`);
-    spawnSyncMock.mockImplementation(() => {
-      fs.writeFileSync(reportPath, `${JSON.stringify({ testResults: [] })}\n`, "utf8");
-      return { status: 0 };
-    });
-
-    try {
+  it("creates and reuses a native JSON report without a package-manager PATH", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const lifetime = createFixtureLifetime();
+    onTestFinished(() => lifetime.cleanup());
+    await lifetime.run(async () => {
+      const root = lifetime.createTempDir("oc-report-cli-");
+      const bin = path.join(root, "bin");
+      fs.mkdirSync(bin);
+      fs.symlinkSync(
+        requireNodeTool("node"),
+        path.join(bin, process.platform === "win32" ? "node.exe" : "node"),
+        "file",
+      );
+      const repoRoot = process.cwd();
+      const config = path.join(root, "vitest.config.mjs");
+      const reportPath = path.join(root, "report.json");
+      const entry = path.join(root, "report.mts");
+      fs.writeFileSync(
+        config,
+        `export default { root: ${JSON.stringify(root)}, test: { include: ["case.test.mjs"], globals: true, maxWorkers: 1 } };`,
+      );
+      fs.writeFileSync(
+        path.join(root, "case.test.mjs"),
+        'test("native report fixture", () => expect(2 + 2).toBe(4));',
+      );
+      fs.writeFileSync(
+        entry,
+        `import assert from "node:assert/strict";
+import { runVitestJsonReport } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/test-report-utils.mts")).href)};
+assert.equal(runVitestJsonReport(${JSON.stringify({ config, reportPath })}), ${JSON.stringify(reportPath)});
+assert.equal(runVitestJsonReport(${JSON.stringify({ config: path.join(root, "missing.config.mjs"), reportPath })}), ${JSON.stringify(reportPath)});
+`,
+      );
+      const result = await lifetime.track(
+        runNodeScript(
+          ["--import", path.join(repoRoot, "scripts/tsx.mjs"), entry],
+          {
+            ...process.env,
+            PATH: bin,
+            OPENCLAW_LIVE_USE_REAL_HOME: "0",
+            TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
+          },
+          30_000,
+          { cwd: root, signal, requireProcessTreeExit: process.platform !== "win32" },
+        ),
+      );
+      expect(result.error, result.stdout + result.stderr).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+      expect(report.success).toBe(true);
       expect(
-        runVitestJsonReport({
-          config: "test/vitest/vitest.unit.config.ts",
-          reportPath,
-        }),
-      ).toBe(reportPath);
-    } finally {
-      fs.rmSync(reportPath, { force: true });
-    }
-
-    expect(spawnSyncMock).toHaveBeenCalledWith(
-      "pnpm",
-      [
-        "exec",
-        "vitest",
-        "run",
-        "--config",
-        "test/vitest/vitest.unit.config.ts",
-        "--reporter=json",
-        "--outputFile",
-        reportPath,
-      ],
-      {
-        stdio: "inherit",
-        env: process.env,
-      },
-    );
+        report.testResults.flatMap(
+          (file: { assertionResults: { title: string; status: string }[] }) =>
+            file.assertionResults.map(({ title, status }) => [title, status]),
+        ),
+      ).toEqual([["native report fixture", "passed"]]);
+    });
   });
 
   it("uses distinct default report paths when invocations share a clock tick", async () => {

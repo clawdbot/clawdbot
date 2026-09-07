@@ -20,5 +20,7 @@ func waitUntil(
         if await condition() { return }
         try await Task.sleep(nanoseconds: pollMs * 1_000_000)
     }
+    // Completion can arrive during the final suspension, before this waiter resumes.
+    if await condition() { return }
     throw AsyncWaitTimeoutError(label: label)
 }

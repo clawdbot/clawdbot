@@ -29,9 +29,9 @@ const CASES: Array<{
     accepted: true,
   },
   {
-    label: "default cap",
+    label: "agent fallback cap",
     cfg: { agents: { defaults: { mediaMaxMb: 0.1 / (1024 * 1024) } }, channels: { discord: {} } },
-    accepted: true,
+    accepted: false,
   },
   {
     label: "sub-byte cap",

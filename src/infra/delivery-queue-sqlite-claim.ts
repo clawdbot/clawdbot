@@ -42,7 +42,8 @@ export function transitionOwnedDeliveryQueueEntry(
     database?: OpenClawStateDatabase;
     platformSendAttemptId: string | null;
   },
-  transition: (entry: DeliveryQueueEntryState, database: OpenClawStateDatabase) => void,
+  // Unlike void, undefined rejects async callbacks before they can escape the transaction.
+  transition: (entry: DeliveryQueueEntryState, database: OpenClawStateDatabase) => undefined,
 ): boolean {
   return runOpenClawStateWriteTransaction(
     (database) => {

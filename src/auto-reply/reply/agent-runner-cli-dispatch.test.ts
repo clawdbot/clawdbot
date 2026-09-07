@@ -3,9 +3,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { clearCliSessionInStore } from "../../agents/cli-session-store.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
@@ -597,7 +597,16 @@ describe("runCliAgentWithLifecycle", () => {
       }
     });
     cliDispatchState.runCliAgentMock.mockRejectedValueOnce(
-      new FailoverError("CLI produced no output", { reason: "timeout" }),
+      createCliTimeoutError(
+        { provider: "claude-cli", model: "claude", sessionId: "session-1" },
+        {
+          mode: "no-output",
+          timeoutSeconds: 1,
+          observedActivity: false,
+          activeToolCount: 0,
+          backgroundTaskCount: 0,
+        },
+      ),
     );
 
     await expect(
@@ -887,6 +896,66 @@ describe("createCliToolSummaryTracker", () => {
     await tracker.noteToolEvent(resultEvent);
     expect(deliver).not.toHaveBeenCalled();
   });
+
+  it("leaves plan tools to the authoritative plan event instead of summarizing arguments", async () => {
+    const deliver = vi.fn();
+    const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: true,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => true,
+      deliver,
+    });
+    await tracker.noteToolEvent({
+      name: "progress_card",
+      phase: "start",
+      args: {
+        markdown: '<progress aria-label="CI · 2/3" value="2" max="3"></progress>',
+      },
+      toolCallId: "plan-1",
+    });
+    await tracker.noteToolEvent({
+      name: "progress_card",
+      phase: "result",
+      args: undefined,
+      toolCallId: "plan-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "Progress card updated" }] },
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "keeps card errors visible without arguments (full output: %s)",
+    async (fullOutput) => {
+      const deliver = vi.fn();
+      const tracker = createCliToolSummaryTracker({
+        commandDetailsVisible: false,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => fullOutput,
+        deliver,
+      });
+      await tracker.noteToolEvent({
+        name: "progress_card",
+        phase: "start",
+        args: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
+        toolCallId: "plan-error",
+      });
+      await tracker.noteToolEvent({
+        name: undefined,
+        phase: "result",
+        args: undefined,
+        toolCallId: "plan-error",
+        isError: true,
+        result: { content: [{ type: "text", text: "write failed" }] },
+      });
+
+      expect(deliver).toHaveBeenCalledWith({
+        text: fullOutput ? "🗺️ Progress Card\n```txt\nwrite failed\n```" : "🗺️ Progress Card",
+        isError: true,
+      });
+    },
+  );
 
   it("propagates tool errors on the summary payload", async () => {
     const deliver = vi.fn();

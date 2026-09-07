@@ -31,15 +31,11 @@ export function resolveConfiguredMediaEntryCapabilities(
 /** Resolves the capability set for an entry, inferring shared provider entries from metadata. */
 export function resolveEffectiveMediaEntryCapabilities(params: {
   entry: MediaUnderstandingModelConfig;
-  source: "shared" | "capability";
   providerRegistry: MediaUnderstandingCapabilityRegistry;
 }): MediaUnderstandingCapability[] | undefined {
   const configured = resolveConfiguredMediaEntryCapabilities(params.entry);
   if (configured) {
     return configured;
-  }
-  if (params.source !== "shared") {
-    return undefined;
   }
   if (resolveEntryType(params.entry) === "cli") {
     return undefined;
@@ -54,13 +50,9 @@ export function resolveEffectiveMediaEntryCapabilities(params: {
 /** Tests whether an entry should be considered for a requested media capability. */
 export function matchesMediaEntryCapability(params: {
   entry: MediaUnderstandingModelConfig;
-  source: "shared" | "capability";
   capability: MediaUnderstandingCapability;
   providerRegistry: MediaUnderstandingCapabilityRegistry;
 }): boolean {
   const capabilities = resolveEffectiveMediaEntryCapabilities(params);
-  if (!capabilities || capabilities.length === 0) {
-    return params.source === "capability";
-  }
-  return capabilities.includes(params.capability);
+  return capabilities?.includes(params.capability) ?? false;
 }

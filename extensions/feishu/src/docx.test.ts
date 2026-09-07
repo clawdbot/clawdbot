@@ -184,8 +184,11 @@ describe("feishu_doc image fetch hardening", () => {
     scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
   });
 
-  function resolveFeishuDocTool(context: Record<string, unknown> = {}) {
+  function resolveFeishuDocTool(context: Record<string, unknown> = {}, agentMediaMaxMb?: number) {
     const harness = createToolFactoryHarness({
+      ...(agentMediaMaxMb === undefined
+        ? {}
+        : { agents: { defaults: { mediaMaxMb: agentMediaMaxMb } } }),
       channels: {
         feishu: {
           enabled: true,
@@ -726,6 +729,33 @@ describe("feishu_doc image fetch hardening", () => {
               file: buffer,
             },
           });
+        },
+      );
+    },
+  );
+
+  it.each([undefined, Number.POSITIVE_INFINITY])(
+    "falls back from account mediaMaxMb %s to the agent cap for document uploads",
+    async (mediaMaxMb) => {
+      await withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-doc-agent-cap-" },
+        async (workspace) => {
+          const filePath = await workspace.write("test-local.txt", Buffer.from("x"));
+          resolveFeishuToolAccountMock.mockReturnValue({
+            accountId: "main",
+            config: mediaMaxMb === undefined ? {} : { mediaMaxMb },
+          });
+          loadWebMediaMock.mockImplementationOnce(loadWebMedia);
+
+          const result = await executeFeishuDocTool(resolveFeishuDocTool({}, 0.5 / (1024 * 1024)), {
+            action: "upload_file",
+            doc_token: "doc_1",
+            file_path: filePath,
+            filename: "test-local.txt",
+          });
+
+          expect(result.details.error).toContain("exceeds");
+          expect(driveUploadAllMock).not.toHaveBeenCalled();
         },
       );
     },

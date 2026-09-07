@@ -258,7 +258,10 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUserByUsername.mockReset();
     mockState.resolveMarkdownTableMode.mockClear();
     mockState.uploadMattermostFile.mockReset();
-    mockState.createMattermostClient.mockReturnValue({});
+    mockState.createMattermostClient.mockImplementation(({ baseUrl: clientBaseUrl, botToken }) => ({
+      baseUrl: clientBaseUrl,
+      token: botToken,
+    }));
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-1" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-user" });
@@ -313,13 +316,13 @@ describe("sendMessageMattermost", () => {
     expect(result.channelId).toBe("channel-second");
     expect(mockState.fetchMattermostChannelByName).toHaveBeenNthCalledWith(
       1,
-      {},
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
       "team-first",
       "release-alerts",
     );
     expect(mockState.fetchMattermostChannelByName).toHaveBeenNthCalledWith(
       2,
-      {},
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
       "team-second",
       "release-alerts",
     );
@@ -549,7 +552,9 @@ describe("sendMessageMattermost", () => {
       },
     );
     const uploadCall = uploadMattermostFileCall();
-    expect(uploadCall?.[0]).toEqual({});
+    expect(uploadCall?.[0]).toEqual(
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+    );
     expect(uploadCall?.[1]?.channelId).toBe("town-square");
     expect(uploadCall?.[1]?.fileName).toBe("photo.png");
     expect(uploadCall?.[1]?.contentType).toBe("image/png");
@@ -607,7 +612,9 @@ describe("sendMessageMattermost", () => {
     });
 
     const postCall = createMattermostPostCall();
-    expect(postCall?.[0]).toEqual({});
+    expect(postCall?.[0]).toEqual(
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+    );
     expect(postCall?.[1]?.channelId).toBe("town-square");
     expect(postCall?.[1]?.message).toBe("Pick a model");
     const attachments = postCall?.[1]?.props?.attachments;
@@ -640,14 +647,21 @@ describe("sendMessageMattermost", () => {
       mediaLocalRoots: ["/tmp/agent-workspace"],
     });
 
-    expect(mockState.fetchMattermostUser).toHaveBeenCalledWith({}, userId);
+    expect(mockState.fetchMattermostUser).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+      userId,
+    );
     const dmRetryCall = directChannelRetryCall();
-    expect(dmRetryCall?.[0]).toEqual({});
+    expect(dmRetryCall?.[0]).toEqual(
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+    );
     expect(dmRetryCall?.[1]).toEqual(["bot-user", userId]);
     expect(Object.keys(dmRetryCall?.[2] ?? {})).toEqual(["onRetry"]);
     expect(dmRetryCall?.[2]?.onRetry).toBeTypeOf("function");
     const uploadCall = uploadMattermostFileCall();
-    expect(uploadCall?.[0]).toEqual({});
+    expect(uploadCall?.[0]).toEqual(
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+    );
     expect(uploadCall?.[1]?.channelId).toBe("dm-channel-1");
     expect(result.channelId).toBe("dm-channel-1");
   });
@@ -676,10 +690,15 @@ describe("sendMessageMattermost", () => {
       mediaLocalRoots: ["/tmp/agent-workspace"],
     });
 
-    expect(mockState.fetchMattermostUser).toHaveBeenCalledWith({}, channelId);
+    expect(mockState.fetchMattermostUser).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+      channelId,
+    );
     expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
     const uploadCall = uploadMattermostFileCall();
-    expect(uploadCall?.[0]).toEqual({});
+    expect(uploadCall?.[0]).toEqual(
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+    );
     expect(uploadCall?.[1]?.channelId).toBe(channelId);
     expect(result.channelId).toBe(channelId);
   });
@@ -783,7 +802,10 @@ describe("sendMessageMattermost user-first resolution", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockState.createMattermostClient.mockReturnValue({});
+    mockState.createMattermostClient.mockImplementation(({ baseUrl: clientBaseUrl, botToken }) => ({
+      baseUrl: clientBaseUrl,
+      token: botToken,
+    }));
     mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
@@ -839,7 +861,10 @@ describe("sendMessageMattermost user-first resolution", () => {
 
     // Second call with a different token (new cache key) → retries user lookup
     vi.clearAllMocks();
-    mockState.createMattermostClient.mockReturnValue({});
+    mockState.createMattermostClient.mockImplementation(({ baseUrl: clientBaseUrl, botToken }) => ({
+      baseUrl: clientBaseUrl,
+      token: botToken,
+    }));
     mockState.createMattermostPost.mockResolvedValue({ id: "post-id-2" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
@@ -896,7 +921,9 @@ describe("sendMessageMattermost user-first resolution", () => {
     });
 
     const retryCall = directChannelRetryCall();
-    expect(retryCall?.[0]).toEqual({});
+    expect(retryCall?.[0]).toEqual(
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+    );
     expect(retryCall?.[1]).toEqual(["bot-id", userId]);
     expect(retryCall?.[2]?.maxRetries).toBe(retryOptions.maxRetries);
     expect(retryCall?.[2]?.initialDelayMs).toBe(retryOptions.initialDelayMs);
@@ -924,7 +951,9 @@ describe("sendMessageMattermost user-first resolution", () => {
     await sendMessageMattermost(`user:${userId}`, "hello", { cfg: TEST_CFG });
 
     const retryCall = directChannelRetryCall();
-    expect(retryCall?.[0]).toEqual({});
+    expect(retryCall?.[0]).toEqual(
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+    );
     expect(retryCall?.[1]).toEqual(["bot-id", userId]);
     expect(retryCall?.[2]?.maxRetries).toBe(4);
     expect(retryCall?.[2]?.initialDelayMs).toBe(2000);
@@ -958,7 +987,9 @@ describe("sendMessageMattermost user-first resolution", () => {
     });
 
     const retryCall = directChannelRetryCall();
-    expect(retryCall?.[0]).toEqual({});
+    expect(retryCall?.[0]).toEqual(
+      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+    );
     expect(retryCall?.[1]).toEqual(["bot-id", userId]);
     expect(retryCall?.[2]?.maxRetries).toBe(overrideOptions.maxRetries);
     expect(retryCall?.[2]?.timeoutMs).toBe(overrideOptions.timeoutMs);
@@ -977,7 +1008,10 @@ describe("sendMessageMattermost outbound cache bounds", () => {
       baseUrl,
       config: {},
     });
-    mockState.createMattermostClient.mockReturnValue({});
+    mockState.createMattermostClient.mockImplementation(({ baseUrl: clientBaseUrl, botToken }) => ({
+      baseUrl: clientBaseUrl,
+      token: botToken,
+    }));
     mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
     mockState.createMattermostDirectChannelWithRetry.mockImplementation(
       async (_client, userIds: string[]) => ({ id: `dm-${userIds[1]}` }),

@@ -1,3 +1,4 @@
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Matrix plugin module implements client behavior.
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -18,11 +19,11 @@ export function resolveMediaMaxBytes(
   }
   const resolvedCfg = requireRuntimeConfig(cfg, "Matrix media limits") as CoreConfig;
   const matrixCfg = resolveMatrixAccountConfig({ cfg: resolvedCfg, accountId });
-  const mediaMaxMb = matrixCfg.mediaMaxMb;
-  // Choose the positive MiB cap before flooring so sub-byte limits stay active at zero.
-  return typeof mediaMaxMb === "number" && mediaMaxMb > 0
-    ? Math.floor(mediaMaxMb * 1024 * 1024)
-    : undefined;
+  return resolveChannelMediaMaxBytes({
+    cfg: resolvedCfg,
+    accountId,
+    resolveChannelLimitMb: () => matrixCfg.mediaMaxMb,
+  });
 }
 
 export async function withResolvedMatrixSendClient<T>(

@@ -1,6 +1,6 @@
-// Discord plugin module implements send.outbound behavior.
 import type { APIChannel, APIGuildForumChannel, APIGuildMediaChannel } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -199,9 +199,11 @@ export async function sendMessageDiscord(
       ? Math.max(1, Math.min(Math.floor(opts.textLimit), 2000))
       : undefined;
   const mediaMaxBytes =
-    typeof accountInfo.config.mediaMaxMb === "number"
-      ? Math.floor(accountInfo.config.mediaMaxMb * 1024 * 1024)
-      : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
+    resolveChannelMediaMaxBytes({
+      cfg,
+      accountId: accountInfo.accountId,
+      resolveChannelLimitMb: () => accountInfo.config.mediaMaxMb,
+    }) ?? DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
   const renderedText = renderDiscordMarkdown(text ?? "", effectiveTableMode);
   const textWithMentions = rewriteDiscordKnownMentions(renderedText, {
     accountId: accountInfo.accountId,
@@ -507,8 +509,8 @@ async function resolveDiscordStructuredSendContext(
     channelId,
     account: accountInfo,
   } = await resolveDiscordSendTarget(to, opts);
-  const content = opts.content?.trim();
-  const rewrittenContent = content
+  const content = opts.content;
+  const rewrittenContent = content?.trim()
     ? rewriteDiscordKnownMentions(content, {
         accountId: accountInfo.accountId,
         mentionAliases: accountInfo.config.mentionAliases,

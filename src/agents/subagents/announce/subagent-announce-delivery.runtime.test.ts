@@ -8,10 +8,12 @@ import type {
 } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import { dispatchSubagentAnnounceAgent } from "./subagent-announce-delivery.runtime.js";
 
 function createContext(handlers: GatewayRequestHandlers): GatewayRequestContext {
   const context = {
+    trackExecution: trackAsyncWork,
     deps: {},
     getRuntimeConfig: () => ({}),
     getGatewayMethodRegistry: () => createRegistry(handlers),

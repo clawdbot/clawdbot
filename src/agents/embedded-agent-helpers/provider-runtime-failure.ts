@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
 import { extractHttpResponseBody } from "../../shared/http-error-response.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -14,6 +15,7 @@ import { matchesFormatErrorPattern, isTimeoutErrorMessage } from "../failover/me
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import type { FailoverSignal } from "../failover/signal.js";
 export type ProviderRuntimeFailureKind =
+  | "gateway_storage"
   | "auth_scope"
   | "auth_refresh"
   | "refresh_timeout"
@@ -168,6 +170,9 @@ export function classifyProviderRuntimeFailureKind(
   opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
 ): ProviderRuntimeFailureKind {
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
+  if (classifyGatewayStorageFailure(normalizedSignal)) {
+    return "gateway_storage";
+  }
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
   const hasStructuredErrorSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);

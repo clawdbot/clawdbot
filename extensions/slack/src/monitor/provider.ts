@@ -1,6 +1,7 @@
 // Slack provider module implements model/runtime integration.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -397,9 +398,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
     fallbackLimit: SLACK_TEXT_LIMIT,
   });
-  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
-  const mediaMaxBytes = Math.floor((opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024);
+  const mediaMaxBytes =
+    resolveChannelMediaMaxBytes({
+      cfg,
+      accountId: account.accountId,
+      resolveChannelLimitMb: () =>
+        [opts.mediaMaxMb, slackCfg.mediaMaxMb].find(
+          (value): value is number =>
+            typeof value === "number" && Number.isFinite(value) && value > 0,
+        ),
+    }) ?? 20 * 1024 * 1024;
   const slackDispatcher = resolveSlackProxyDispatcher();
   const clientOptions = resolveSlackWebClientOptions({}, slackDispatcher);
   const durableIngress = createSlackDurableIngress({
@@ -638,7 +647,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     threadInheritParent,
     slashCommand,
     textLimit,
-    ackReactionScope,
     typingReaction,
     mediaMaxBytes,
   });
@@ -706,6 +714,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const handleSlackMessage = createSlackMessageHandler({
     ctx,
     account,
+    abortSignal: opts.abortSignal,
     trackEvent,
     onPrepared: (prepared) => presenceMonitor?.observe(prepared),
   });

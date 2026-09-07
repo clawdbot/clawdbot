@@ -13,13 +13,13 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
+import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
   resolvePluginWebSearchProviders,
   resolveRuntimeWebSearchProviders,
 } from "../plugins/web-search-providers.runtime.js";
-import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import {
@@ -158,7 +158,7 @@ export function resolveWebSearchProviderId(params: {
 }): string {
   const config = resolveWebSearchRuntimeConfig({ config: params.config });
   const search = params.search ?? resolveSearchConfig(config);
-  const providers = sortWebSearchProvidersForAutoDetect(
+  const providers = sortPluginEntriesForAutoDetect(
     params.providers ??
       resolvePluginWebSearchProviders({
         config,
@@ -271,7 +271,7 @@ function loadSortedWebSearchProviders(
   const resolveProviders = params.preferRuntimeProviders
     ? resolveRuntimeWebSearchProviders
     : resolvePluginWebSearchProviders;
-  return sortWebSearchProvidersForAutoDetect(
+  return sortPluginEntriesForAutoDetect(
     resolveProviders({
       config: params.config,
       ...(pluginId ? { onlyPluginIds: [pluginId] } : {}),

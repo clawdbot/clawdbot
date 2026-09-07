@@ -200,7 +200,7 @@ function expectedMaturityScorePercent(): number {
 }
 
 describe("maturity docs renderer CLI", () => {
-  it("renders public docs redirects with destination fragments overriding source fragments", () => {
+  it("renders mirror routes and public redirects with destination fragment precedence", () => {
     const fixtureDir = tempDirs.make("openclaw-maturity-docs-links-");
     const docsRoot = path.join(fixtureDir, "docs");
     const taxonomyPath = path.join(fixtureDir, "taxonomy.yaml");
@@ -215,6 +215,13 @@ describe("maturity docs renderer CLI", () => {
       ["docs/guide.md#direct-section", "[Direct Section](/guide#direct-section)"],
       ["docs/direct.mdx#direct-section", "[Direct Section](/direct#direct-section)"],
       ["docs/legacy-page.md", "[Legacy Page](/guide)"],
+      ["docs/clawhub/publishing.md", "[Publishing](/clawhub/publishing)"],
+      ["docs/clawhub/skill-format.md", "[Skill Format](/clawhub/skill-format)"],
+      ["docs/clawhub/security-audits.md", "[Security Audits](/clawhub/security-audits)"],
+      ["docs/clawhub/index.md", "[Index](/clawhub/index)"],
+      ["docs/clawhub.md", "[Clawhub](/clawhub)"],
+      ["docs/clawhub/unknown.md", null],
+      ["docs/unpublished.md", null],
       ["docs/unknown.md", null],
       ["docs/legacy-missing.md", null],
       ["docs/internal/private.md", null],
@@ -233,6 +240,22 @@ describe("maturity docs renderer CLI", () => {
     fs.writeFileSync(
       path.join(docsRoot, "docs.json"),
       JSON.stringify({
+        navigation: {
+          groups: [
+            {
+              group: "Fixture routes",
+              pages: [
+                "unpublished",
+                "clawhub/index",
+                "clawhub/publishing",
+                {
+                  group: "Format and trust",
+                  pages: ["clawhub/skill-format", "clawhub/security-audits"],
+                },
+              ],
+            },
+          ],
+        },
         redirects: [
           ["/legacy-fragment", "/guide#destination-section"],
           ["/legacy-page", "/guide"],

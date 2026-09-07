@@ -138,7 +138,8 @@ for build_path in dist dist-runtime .artifacts; do
 done
 # The build owns cleanup under its checkout-local artifact lock. Deleting here
 # would race declaration writers and readers before that ownership is acquired.
-run_pnpm build
+# Match CLI updates: build runtime artifacts unless declarations were explicitly requested.
+OPENCLAW_UPDATE_IN_PROGRESS=1 run_pnpm build
 
 restart_cmd="${OPENCLAW_UPDATE_RESTART_CMD-openclaw gateway restart}"
 if [ -n "$restart_cmd" ]; then

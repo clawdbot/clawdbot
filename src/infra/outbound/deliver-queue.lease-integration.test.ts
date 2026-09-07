@@ -389,9 +389,10 @@ describe("delivery producer lease integration", () => {
       });
       await vi.advanceTimersByTimeAsync(20_001);
 
-      const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Delivery platform claim was lost: ${deliveryIntentId}`,
-      );
+      const rejected = expect(blocked.delivery).rejects.toMatchObject({
+        message: `Delivery platform claim was lost: ${deliveryIntentId}`,
+        queueCustody: "held",
+      });
       blocked.releasePreparation();
       await rejected;
 

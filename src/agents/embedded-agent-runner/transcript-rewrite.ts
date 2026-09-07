@@ -1,5 +1,6 @@
 /** Rewrites transcript entries by branching and re-appending the active suffix. */
 import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { withSessionPendingInputRelocation } from "../../config/sessions/session-accessor.js";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteResult,
@@ -61,9 +62,10 @@ function appendBranchEntry(params: {
 }): string {
   const { sessionManager, entry, rewrittenEntryIds, appendMessage } = params;
   if (entry.type === "message") {
-    return appendMessage(
-      stripStalePrefixReplay(entry.message) as Parameters<typeof sessionManager.appendMessage>[0],
-    );
+    const message = stripStalePrefixReplay(entry.message) as Parameters<
+      typeof sessionManager.appendMessage
+    >[0];
+    return withSessionPendingInputRelocation(entry.id, message, () => appendMessage(message));
   }
   if (entry.type === "compaction") {
     const { __openclaw: identity } = entry;
@@ -204,13 +206,16 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
             rewrittenEntryIds,
             appendMessage,
           })
-        : appendMessage(
-            (params.preserveReplacementCompactionReplay
-              ? replacement
-              : stripStalePrefixReplay(replacement)) as Parameters<
-              typeof params.sessionManager.appendMessage
-            >[0],
-          );
+        : (() => {
+            const message = (
+              params.preserveReplacementCompactionReplay
+                ? replacement
+                : stripStalePrefixReplay(replacement)
+            ) as Parameters<typeof params.sessionManager.appendMessage>[0];
+            return withSessionPendingInputRelocation(entry.id, message, () =>
+              appendMessage(message),
+            );
+          })();
     rewrittenEntryIds.set(entry.id, newEntryId);
   }
 

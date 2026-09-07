@@ -21,6 +21,16 @@ describe("document markdown", () => {
 
     expect(safe.querySelector("img")?.getAttribute("src")).toBe("https://example.com/img.png");
     expect(unsafe.querySelector("img")?.hasAttribute("src")).toBe(false);
+    const clickToOpen = htmlFragment(
+      toSanitizedMarkdownHtml("![Alt text](https://example.com/img.png)", {
+        mode: "document",
+        remoteImages: false,
+      }),
+    );
+    expect(clickToOpen.querySelector("img")).toBeNull();
+    expect(clickToOpen.querySelector("a")?.getAttribute("href")).toBe(
+      "https://example.com/img.png",
+    );
   });
 
   it("parses complete documents above message limits", () => {

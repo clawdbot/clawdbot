@@ -4,6 +4,7 @@ import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { sortPluginEntriesById } from "./plugin-entry-order.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
 type WebProviderContract = "webSearchProviders" | "webFetchProviders";
@@ -185,12 +186,9 @@ export function resolveBundledWebProviderResolutionConfig(params: {
 export function mapRegistryProviders<TProvider extends { id: string }>(params: {
   entries: readonly { pluginId: string; provider: TProvider }[];
   onlyPluginIds?: readonly string[];
-  sortProviders: (
-    providers: Array<TProvider & { pluginId: string }>,
-  ) => Array<TProvider & { pluginId: string }>;
 }): Array<TProvider & { pluginId: string }> {
   const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
-  return params.sortProviders(
+  return sortPluginEntriesById(
     params.entries
       .filter((entry) => !onlyPluginIdSet || onlyPluginIdSet.has(entry.pluginId))
       .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId })),

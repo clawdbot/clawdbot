@@ -2,6 +2,7 @@
 import { createHash, createHmac } from "node:crypto";
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import {
   createMessageReceiptFromOutboundResults,
   type ChannelMessageUnknownSendContext,
@@ -27,7 +28,7 @@ import {
   normalizeOptionalString as normalizeSlackApiString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
@@ -485,7 +486,7 @@ function resolveSlackTextChunks(params: {
     const chunks: string[] = [];
     let remaining = text;
     while (remaining) {
-      const chunk = sliceUtf16Safe(remaining, 0, chunkLimit) || Array.from(remaining)[0] || "";
+      const chunk = sliceUtf16Safe(remaining, 0, chunkLimit) || truncateCodePoints(remaining, 1);
       chunks.push(chunk);
       remaining = remaining.slice(chunk.length);
     }
@@ -1368,11 +1369,12 @@ async function sendMessageSlackQueuedInner(params: {
     ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
     ...(opts.textIsSlackPlainText ? { preservePlainText: true } : {}),
   });
-  const mediaMaxBytes =
-    opts.mediaMaxBytes ??
-    (typeof account.config.mediaMaxMb === "number"
-      ? Math.floor(account.config.mediaMaxMb * 1024 * 1024)
-      : undefined);
+  const mediaMaxBytes = resolveChannelMediaMaxBytes({
+    cfg,
+    accountId: account.accountId,
+    overrideMaxBytes: opts.mediaMaxBytes,
+    resolveChannelLimitMb: () => account.config.mediaMaxMb,
+  });
 
   let chunksToPost: string[];
   if (opts.mediaUrl) {

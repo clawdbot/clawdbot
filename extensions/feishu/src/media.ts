@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { detectMime, mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
@@ -971,7 +972,11 @@ export async function sendMediaFeishu(params: {
     return resolved;
   });
   const mediaMaxBytes = Math.min(
-    Math.floor((account.config?.mediaMaxMb ?? 30) * 1024 * 1024),
+    resolveChannelMediaMaxBytes({
+      cfg,
+      accountId: account.accountId,
+      resolveChannelLimitMb: () => account.config?.mediaMaxMb,
+    }) ?? FEISHU_MAX_FILE_UPLOAD_BYTES,
     FEISHU_MAX_FILE_UPLOAD_BYTES,
   );
 

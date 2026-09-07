@@ -227,6 +227,13 @@ async function awaitRealtimeTalkMediaRequest(
   }
 }
 
+export class RealtimeTalkSelectedMicrophoneError extends Error {
+  constructor() {
+    super(t("chat.composer.selectedMicrophoneUnavailable"));
+    this.name = "RealtimeTalkSelectedMicrophoneError";
+  }
+}
+
 async function openRealtimeTalkInput(
   inputDeviceId: string | undefined,
   options: { signal?: AbortSignal } = {},
@@ -251,12 +258,12 @@ async function openRealtimeTalkInput(
     if (!errorName || errorName === "AbortError") {
       throw error;
     }
-    acquisition = {
-      failure:
-        inputDeviceId?.trim() && errorName === "OverconstrainedError"
-          ? t("chat.composer.selectedMicrophoneUnavailable")
-          : describeRealtimeTalkInputError(error),
-    };
+    // Exact selection is consent, including legacy WebKit failures. Only the
+    // calling surface can offer an explicit choice to open a different input.
+    if (inputDeviceId?.trim() && errorName === "OverconstrainedError") {
+      throw new RealtimeTalkSelectedMicrophoneError();
+    }
+    acquisition = { failure: describeRealtimeTalkInputError(error) };
   }
   if ("failure" in acquisition) {
     throw new Error(acquisition.failure);

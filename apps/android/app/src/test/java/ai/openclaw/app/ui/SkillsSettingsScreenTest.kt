@@ -6,6 +6,7 @@ import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
@@ -77,7 +78,7 @@ class SkillsSettingsScreenTest {
     } finally {
       viewModels.clear()
       runtimeField.set(app, originalRuntime)
-      runtime.disconnect()
+      closeNodeRuntimeTestFixture(runtime)
     }
   }
 

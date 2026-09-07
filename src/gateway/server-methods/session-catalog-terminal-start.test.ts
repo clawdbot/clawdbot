@@ -73,15 +73,18 @@ describe("sessions.catalog.startTerminal", () => {
     activeProvider = provider();
   });
 
-  it("requires the cliAgents opt-in before terminal start", async () => {
+  it("honors the cliAgents opt-out before terminal start", async () => {
     const startTerminalSession = vi.fn();
     activeProvider = provider({ startTerminalSession });
 
-    const respond = await call({
-      catalogId: "codex",
-      agentId: "main",
-      cwd: process.cwd(),
-    });
+    const respond = await call(
+      {
+        catalogId: "codex",
+        agentId: "main",
+        cwd: process.cwd(),
+      },
+      { gateway: { cliAgents: { enabled: false } } },
+    );
 
     expect(startTerminalSession).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -328,7 +331,6 @@ describe("sessions.catalog.startTerminal", () => {
     activeProvider = provider({ startTerminalSession, resolveCreateSession });
 
     const config = {
-      gateway: { cliAgents: { enabled: true } },
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5" },
