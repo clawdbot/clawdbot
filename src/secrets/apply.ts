@@ -90,6 +90,7 @@ type ResolvedPlanTargetEntry = {
 
 type ConfigTargetMutationResult = {
   resolvedTargets: ResolvedPlanTargetEntry[];
+  survivingTargets: SecretsPlanTarget[];
   scrubbedValues: Set<string>;
   providerTargets: Set<string>;
   configChanged: boolean;
@@ -154,29 +155,48 @@ function scrubEnvRaw(
   raw: string,
   migratedValues: Set<string>,
   allowedEnvKeys: Set<string>,
+  retainableEnvValues: ReadonlyMap<string, string>,
 ): {
   nextRaw: string;
   removed: number;
+  retainedKeys: string[];
 } {
   if (migratedValues.size === 0 || allowedEnvKeys.size === 0) {
-    return { nextRaw: raw, removed: 0 };
+    return { nextRaw: raw, removed: 0, retainedKeys: [] };
   }
   const lines = raw.split(/\r?\n/);
+  const assignments = lines.map((line) =>
+    line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/),
+  );
+  const durableLineByKey = new Map<string, number>();
+  assignments.forEach((match, index) => {
+    const envKey = match?.[1] ?? "";
+    if (
+      allowedEnvKeys.has(envKey) &&
+      retainableEnvValues.get(envKey) === parseEnvAssignmentValue(match?.[2] ?? "")
+    ) {
+      durableLineByKey.set(envKey, index);
+    }
+  });
   const nextLines: string[] = [];
   let removed = 0;
-  for (const line of lines) {
-    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!match) {
+  for (const [index, line] of lines.entries()) {
+    const match = assignments[index];
+    const envKey = match?.[1] ?? "";
+    if (!match || !allowedEnvKeys.has(envKey)) {
       nextLines.push(line);
       continue;
     }
-    const envKey = match[1] ?? "";
-    if (!allowedEnvKeys.has(envKey)) {
-      nextLines.push(line);
+    const durableLine = durableLineByKey.get(envKey);
+    if (durableLine !== undefined) {
+      if (durableLine === index) {
+        nextLines.push(line);
+      } else {
+        removed += 1;
+      }
       continue;
     }
-    const parsedValue = parseEnvAssignmentValue(match[2] ?? "");
-    if (migratedValues.has(parsedValue)) {
+    if (migratedValues.has(parseEnvAssignmentValue(match[2] ?? ""))) {
       removed += 1;
       continue;
     }
@@ -190,6 +210,7 @@ function scrubEnvRaw(
         ? `${joined}${joined.endsWith("\n") ? "" : "\n"}`
         : joined,
     removed,
+    retainedKeys: [...durableLineByKey.keys()],
   };
 }
 
@@ -341,6 +362,8 @@ async function projectPlanState(params: {
     configPath,
     stateDir,
     scrubbedValues: targetMutations.scrubbedValues,
+    survivingTargets: targetMutations.survivingTargets,
+    env: params.env,
     changedFiles,
     enabled: options.scrubEnv,
   });
@@ -373,6 +396,30 @@ async function projectPlanState(params: {
   };
 }
 
+function getPlanTargetDestinationKey(params: {
+  target: SecretsPlanTarget;
+  resolved: NonNullable<ReturnType<typeof resolveValidatedPlanTarget>>;
+  nextConfig: OpenClawConfig;
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  const canonicalPath = JSON.stringify(params.resolved.pathSegments);
+  if (params.resolved.entry.configFile === "auth-profile-store") {
+    const agentId = (params.target.agentId ?? "").trim();
+    if (!agentId) {
+      throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
+    }
+    const authStoreTarget = resolveAuthStoreTargetForAgent({
+      nextConfig: params.nextConfig,
+      stateDir: params.stateDir,
+      env: params.env,
+      agentId,
+    });
+    return `auth-profile-store:${authStoreTarget.path}:${canonicalPath}`;
+  }
+  return `config:${canonicalPath}`;
+}
+
 function applyConfigTargetMutations(params: {
   planTargets: SecretsPlanTarget[];
   nextConfig: OpenClawConfig;
@@ -388,9 +435,18 @@ function applyConfigTargetMutations(params: {
   }));
   const scrubbedValues = new Set<string>();
   const providerTargets = new Set<string>();
+  const survivingTargetsByDestination = new Map<string, SecretsPlanTarget>();
   let configChanged = false;
 
   for (const { target, resolved } of resolvedTargets) {
+    const destinationKey = getPlanTargetDestinationKey({
+      target,
+      resolved,
+      nextConfig: params.nextConfig,
+      stateDir: params.stateDir,
+      env: params.env,
+    });
+    survivingTargetsByDestination.set(destinationKey, target);
     if (resolved.entry.configFile === "auth-profile-store") {
       const authStoreChanged = applyAuthProfileTargetMutation({
         target,
@@ -453,6 +509,7 @@ function applyConfigTargetMutations(params: {
 
   return {
     resolvedTargets,
+    survivingTargets: Array.from(survivingTargetsByDestination.values()),
     scrubbedValues,
     providerTargets,
     configChanged,
@@ -706,6 +763,8 @@ function scrubEnvFiles(params: {
   configPath: string;
   stateDir: string;
   scrubbedValues: Set<string>;
+  survivingTargets: readonly SecretsPlanTarget[];
+  env: NodeJS.ProcessEnv;
   changedFiles: Set<string>;
   enabled: boolean;
 }): Map<string, string> {
@@ -714,6 +773,15 @@ function scrubEnvFiles(params: {
     return envRawByPath;
   }
   const knownSecretEnvVars = new Set(listKnownSecretEnvVarNames());
+  const envRefValuesAwaitingSource = new Map<string, string>();
+  for (const target of params.survivingTargets) {
+    if (target.ref.source === "env") {
+      const value = params.env[target.ref.id];
+      if (isNonEmptyString(value)) {
+        envRefValuesAwaitingSource.set(target.ref.id, value);
+      }
+    }
+  }
   for (const envPath of listSecretsDotEnvPaths({
     configPath: params.configPath,
     stateDir: params.stateDir,
@@ -722,7 +790,15 @@ function scrubEnvFiles(params: {
       continue;
     }
     const current = fs.readFileSync(envPath, "utf8");
-    const scrubbed = scrubEnvRaw(current, params.scrubbedValues, knownSecretEnvVars);
+    const scrubbed = scrubEnvRaw(
+      current,
+      params.scrubbedValues,
+      knownSecretEnvVars,
+      envRefValuesAwaitingSource,
+    );
+    for (const retainedKey of scrubbed.retainedKeys) {
+      envRefValuesAwaitingSource.delete(retainedKey);
+    }
     if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
       envRawByPath.set(envPath, scrubbed.nextRaw);
       params.changedFiles.add(envPath);

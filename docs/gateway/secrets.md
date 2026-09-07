@@ -59,6 +59,8 @@ For production deployments where agent-accessible files are in scope, treat migr
 - `openclaw secrets audit --check` is clean after migration.
 - Any remaining unsupported or rotating credentials are protected by OS isolation, container isolation, or an external credential proxy.
 
+An `env` SecretRef does not satisfy this boundary. It resolves by reading its variable from the process environment, which a fresh process hydrates from the dotenv files described in [Retained dotenv sources](#retained-dotenv-sources), so `secrets apply` keeps the backing line in whichever of those files supplies it and the re-audit keeps reporting it as `PLAINTEXT_FOUND`. Migrating to `env` removes the credential from `openclaw.json` and from generated `models.json` files, which is a real config-exposure reduction, but the value stays readable by any agent file or shell tool. Where agent-accessible files are in scope, use `file` or `exec` SecretRefs, or isolate the directories holding those dotenv files, before calling the migration complete.
+
 This is why the audit/configure/apply workflow is a security migration gate, not just a convenience helper.
 
 <Warning>
@@ -847,6 +849,23 @@ Default operator flow:
 </Steps>
 
 Do not treat the migration as complete until the re-audit is clean. If the audit still reports plaintext values at rest, the agent-access risk remains even when runtime APIs return redacted values.
+
+### Retained dotenv sources
+
+An `env` SecretRef leaves its backing value on disk by design, so the re-audit keeps reporting that `.env` key as `PLAINTEXT_FOUND`. `secrets apply` retains exactly one assignment per ref: in the first file it scrubs whose effective value for that name equals the value apply validated the ref against. Deleting that line leaves the ref unresolvable in a fresh process that has no other source for the name.
+
+`secrets apply` scrubs up to two files:
+
+1. The state-directory `.env` (`OPENCLAW_STATE_DIR`, otherwise `~/.openclaw`).
+2. The active config directory's `.env`, when `OPENCLAW_CONFIG_PATH` points outside the state directory.
+
+Note that CLI dotenv resolution operates in two distinct stages when `OPENCLAW_STATE_DIR` is unset and `OPENCLAW_CONFIG_PATH` points outside `~/.openclaw`. First, normal CLI startup (`loadCliDotEnv` in `src/cli/dotenv.ts`) explicitly loads the state-directory dotenv file (`~/.openclaw/.env`) into `process.env`. Second, config snapshot initialization (`maybeLoadDotEnvForConfig`) invokes `loadDotEnv`, resolving `resolveConfigDir` to the external config directory and loading the config-adjacent `.env` without overriding existing environment keys. Consequently, if a credential variable is defined in both files, the state-directory assignment from the first stage takes precedence over the config-adjacent file. Gateway pre-bootstrap similarly loads both files in sequence without overwriting existing keys. To ensure predictable credential resolution across CLI commands (like `openclaw secrets audit`) and Gateway runtime, operators should explicitly configure `OPENCLAW_STATE_DIR` or maintain the backing assignment in the state directory's `.env`.
+
+Across files the first assignment of a name wins, and an inherited process-environment value wins over every file. Within one file the last assignment of a name wins, so apply removes other assignments of a retained name in that file; without that removal the ref could resolve after restart to a value apply never validated. A ref validated against a value exported only in the operator's shell has no retained file source at all, and that shell export has to keep supplying it. Working-directory `.env` files are never scrubbed and never retained.
+
+Scrubbing removes all instances of values present in `migratedValues` across scrubbed files. In addition, when an assignment is retained to back an `env` SecretRef, any other duplicate assignments of that retained key in the same file are removed to ensure deterministic resolution, even if their unmigrated values differ. For unreferenced keys, scrubbing does not delete assignments whose values were not among the migrated plaintext values.
+
+The retained line is unmigrated plaintext, not a completed migration, so both a clean re-audit and the agent-access boundary above still require `file` or `exec` SecretRefs, whose values live outside the agent-readable dotenv directories.
 
 If you save a plan instead of applying during `configure`, apply that saved plan with `openclaw secrets apply --from <plan-path>` before the re-audit.
 

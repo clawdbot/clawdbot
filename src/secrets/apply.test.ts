@@ -26,6 +26,7 @@ import {
 import { getRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/store.js";
 import { testing as storeTesting } from "../agents/auth-profiles/store.test-support.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { readDotEnvFile } from "../infra/dotenv-global.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -41,6 +42,7 @@ import {
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import type { SecretsApplyPlan } from "./plan.js";
+import { resolveSecretRefValue } from "./resolve.js";
 
 const { clearSecretsRuntimeSnapshotMock, prepareSecretsRuntimeSnapshotMock } = vi.hoisted(() => ({
   clearSecretsRuntimeSnapshotMock: vi.fn(),
@@ -217,6 +219,17 @@ function createOpenAiProviderTarget(params?: {
   };
 }
 
+function readStateDotEnvAsProcessEnv(...envPaths: string[]): NodeJS.ProcessEnv {
+  const processEnv: NodeJS.ProcessEnv = {};
+  for (const envPath of envPaths) {
+    const loaded = readDotEnvFile({ filePath: envPath, quiet: true });
+    for (const { key, value } of loaded?.entries ?? []) {
+      processEnv[key] ??= value;
+    }
+  }
+  return processEnv;
+}
+
 function createOpenAiExecProviderTarget(): SecretsApplyPlan["targets"][number] {
   return {
     type: "models.providers.apiKey",
@@ -359,6 +372,525 @@ describe("secrets apply", () => {
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
     expect(nextEnv).not.toContain("sk-openai-plaintext");
     expect(nextEnv).toContain("UNRELATED=value");
+  });
+
+  it("keeps the state .env source backing a newly written env SecretRef", async () => {
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({
+      plan,
+      env: { ...fixture.env, OPENAI_API_KEY: "sk-openai-plaintext" },
+      write: true,
+    });
+    expect(applied.changed).toBe(true);
+    expect(applied.changedFiles).not.toContain(fixture.envPath);
+
+    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+    };
+    expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
+
+    const freshProcessEnv = readStateDotEnvAsProcessEnv(fixture.envPath);
+    expect(freshProcessEnv.OPENAI_API_KEY).toBe("sk-openai-plaintext");
+    await expect(
+      resolveSecretRefValue(OPENAI_API_KEY_ENV_REF, {
+        config: nextConfig as never,
+        env: freshProcessEnv,
+      }),
+    ).resolves.toBe("sk-openai-plaintext");
+  });
+
+  it("scrubs a state .env value that does not back the validated env SecretRef", async () => {
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({ plan, env: fixture.env, write: true });
+    expect(applied.changed).toBe(true);
+    expect(applied.changedFiles).toContain(fixture.envPath);
+
+    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+    };
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("sk-openai-plaintext");
+    expect(nextEnv).toContain("UNRELATED=value");
+
+    const freshProcessEnv = readStateDotEnvAsProcessEnv(fixture.envPath);
+    expect(freshProcessEnv.OPENAI_API_KEY).toBeUndefined();
+    await expect(
+      resolveSecretRefValue(OPENAI_API_KEY_ENV_REF, {
+        config: nextConfig as never,
+        env: { ...freshProcessEnv, OPENAI_API_KEY: "sk-live-env" },
+      }),
+    ).resolves.toBe("sk-live-env");
+  });
+
+  it("scrubs a config-adjacent .env copy while keeping the state .env source", async () => {
+    const configDir = path.join(fixture.rootDir, "config");
+    const configPath = path.join(configDir, "openclaw.json");
+    const configEnvPath = path.join(configDir, ".env");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.copyFile(fixture.configPath, configPath);
+    await fs.copyFile(fixture.envPath, configEnvPath);
+
+    const applied = await runSecretsApply({
+      plan: createPlan({
+        targets: [createOpenAiProviderTarget()],
+        options: createOneWayScrubOptions(),
+      }),
+      env: {
+        ...fixture.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
+      },
+      write: true,
+    });
+
+    expect(applied.changedFiles).toContain(configEnvPath);
+    expect(applied.changedFiles).not.toContain(fixture.envPath);
+    await expect(fs.readFile(configEnvPath, "utf8")).resolves.toBe("UNRELATED=value\n");
+    await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toContain(
+      "OPENAI_API_KEY=sk-openai-plaintext",
+    );
+  });
+
+  it("keeps the config-adjacent .env source when the state .env cannot back the env SecretRef", async () => {
+    const configDir = path.join(fixture.rootDir, "config");
+    const configPath = path.join(configDir, "openclaw.json");
+    const configEnvPath = path.join(configDir, ".env");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.copyFile(fixture.configPath, configPath);
+    await fs.copyFile(fixture.envPath, configEnvPath);
+    await fs.writeFile(fixture.envPath, "UNRELATED=value\n", "utf8");
+
+    const applied = await runSecretsApply({
+      plan: createPlan({
+        targets: [createOpenAiProviderTarget()],
+        options: createOneWayScrubOptions(),
+      }),
+      env: {
+        ...fixture.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
+      },
+      write: true,
+    });
+
+    expect(applied.changedFiles).not.toContain(configEnvPath);
+    await expect(fs.readFile(configEnvPath, "utf8")).resolves.toContain(
+      "OPENAI_API_KEY=sk-openai-plaintext",
+    );
+
+    const nextConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+    };
+    expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
+
+    const freshProcessEnv = readStateDotEnvAsProcessEnv(fixture.envPath, configEnvPath);
+    await expect(
+      resolveSecretRefValue(OPENAI_API_KEY_ENV_REF, {
+        config: nextConfig as never,
+        env: freshProcessEnv,
+      }),
+    ).resolves.toBe("sk-openai-plaintext");
+  });
+
+  for (const { order, raw } of [
+    {
+      order: "before",
+      raw: "OPENAI_API_KEY=sk-openai-plaintext\nOPENAI_API_KEY=sk-openai-stale\nUNRELATED=value\n", // pragma: allowlist secret
+    },
+    {
+      order: "after",
+      raw: "OPENAI_API_KEY=sk-openai-stale\nOPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", // pragma: allowlist secret
+    },
+  ]) {
+    it(`removes a same-file duplicate declared ${order} the retained env SecretRef source`, async () => {
+      await fs.writeFile(fixture.envPath, raw, "utf8");
+
+      const applied = await runSecretsApply({
+        plan: createPlan({
+          targets: [createOpenAiProviderTarget()],
+          options: createOneWayScrubOptions(),
+        }),
+        env: { ...fixture.env, OPENAI_API_KEY: "sk-openai-plaintext" },
+        write: true,
+      });
+      expect(applied.changedFiles).toContain(fixture.envPath);
+      await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe(
+        "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n",
+      );
+
+      const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+        models: { providers: { openai: { apiKey: unknown } } };
+      };
+      const freshProcessEnv = readStateDotEnvAsProcessEnv(fixture.envPath);
+      expect(freshProcessEnv.OPENAI_API_KEY).toBe("sk-openai-plaintext");
+      await expect(
+        resolveSecretRefValue(OPENAI_API_KEY_ENV_REF, {
+          config: nextConfig as never,
+          env: freshProcessEnv,
+        }),
+      ).resolves.toBe("sk-openai-plaintext");
+    });
+  }
+
+  it("scrubs dotenv source when an env target is overwritten by a subsequent file target for the same destination", async () => {
+    const secretFilePath = path.join(fixture.rootDir, "secrets.json");
+    await writeJsonFile(secretFilePath, {
+      providers: { openai: { apiKey: "sk-openai-file" } },
+    });
+    await fs.chmod(secretFilePath, 0o600);
+
+    const fileRef = {
+      source: "file" as const,
+      provider: "filemain",
+      id: "/providers/openai/apiKey",
+    };
+
+    const plan = createPlan({
+      providerUpserts: {
+        filemain: {
+          source: "file",
+          path: secretFilePath,
+          mode: "json",
+        },
+      },
+      targets: [
+        createOpenAiProviderTarget(),
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.apiKey",
+          providerId: "openai",
+          ref: fileRef,
+        },
+      ],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({
+      plan,
+      env: { ...fixture.env, OPENAI_API_KEY: "sk-openai-plaintext" },
+      write: true,
+    });
+    expect(applied.changed).toBe(true);
+    expect(applied.changedFiles).toContain(fixture.envPath);
+
+    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+    };
+    expect(nextConfig.models.providers.openai.apiKey).toEqual(fileRef);
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("sk-openai-plaintext");
+    expect(nextEnv).toContain("UNRELATED=value");
+
+    const freshProcessEnv = readStateDotEnvAsProcessEnv(fixture.envPath);
+    expect(freshProcessEnv.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("scrubs dotenv plaintext when an env target is overwritten by a file target using equivalent bracket path syntax", async () => {
+    const secretFilePath = path.join(fixture.rootDir, "secrets.json");
+    await writeJsonFile(secretFilePath, {
+      providers: { openai: { apiKey: "sk-openai-file" } },
+    });
+    await fs.chmod(secretFilePath, 0o600);
+
+    const fileRef = {
+      source: "file" as const,
+      provider: "filemain",
+      id: "/providers/openai/apiKey",
+    };
+
+    const plan = createPlan({
+      providerUpserts: {
+        filemain: {
+          source: "file",
+          path: secretFilePath,
+          mode: "json",
+        },
+      },
+      targets: [
+        createOpenAiProviderTarget(),
+        {
+          type: "models.providers.apiKey",
+          path: 'models.providers["openai"].apiKey',
+          providerId: "openai",
+          ref: fileRef,
+        },
+      ],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({
+      plan,
+      env: { ...fixture.env, OPENAI_API_KEY: "sk-openai-plaintext" },
+      write: true,
+    });
+    expect(applied.changed).toBe(true);
+    expect(applied.changedFiles).toContain(fixture.envPath);
+
+    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+    };
+    expect(nextConfig.models.providers.openai.apiKey).toEqual(fileRef);
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("sk-openai-plaintext");
+    expect(nextEnv).toContain("UNRELATED=value");
+
+    const freshProcessEnv = readStateDotEnvAsProcessEnv(fixture.envPath);
+    expect(freshProcessEnv.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("retains surviving env SecretRef source while scrubbing an overwritten env target", async () => {
+    const secretFilePath = path.join(fixture.rootDir, "secrets.json");
+    await writeJsonFile(secretFilePath, {
+      providers: { openai: { apiKey: "sk-openai-file" } },
+    });
+    await fs.chmod(secretFilePath, 0o600);
+
+    const fileRef = {
+      source: "file" as const,
+      provider: "filemain",
+      id: "/providers/openai/apiKey",
+    };
+    const anthropicEnvRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "ANTHROPIC_API_KEY",
+    };
+
+    const config = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await writeJsonFile(fixture.configPath, {
+      ...config,
+      models: {
+        providers: {
+          openai: { apiKey: "sk-openai-plaintext" },
+          anthropic: { apiKey: "sk-anthropic-plaintext" },
+        },
+      },
+    });
+    await fs.writeFile(
+      fixture.envPath,
+      "OPENAI_API_KEY=sk-openai-plaintext\nANTHROPIC_API_KEY=sk-anthropic-plaintext\nUNRELATED=value\n",
+      "utf8",
+    );
+
+    const plan = createPlan({
+      providerUpserts: {
+        filemain: {
+          source: "file",
+          path: secretFilePath,
+          mode: "json",
+        },
+      },
+      targets: [
+        createOpenAiProviderTarget(),
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.apiKey",
+          providerId: "openai",
+          ref: fileRef,
+        },
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.anthropic.apiKey",
+          providerId: "anthropic",
+          ref: anthropicEnvRef,
+        },
+      ],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({
+      plan,
+      env: {
+        ...fixture.env,
+        OPENAI_API_KEY: "sk-openai-plaintext",
+        ANTHROPIC_API_KEY: "sk-anthropic-plaintext",
+      },
+      write: true,
+    });
+    expect(applied.changed).toBe(true);
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("OPENAI_API_KEY=sk-openai-plaintext");
+    expect(nextEnv).toContain("ANTHROPIC_API_KEY=sk-anthropic-plaintext");
+    expect(nextEnv).toContain("UNRELATED=value");
+
+    const freshProcessEnv = readStateDotEnvAsProcessEnv(fixture.envPath);
+    expect(freshProcessEnv.OPENAI_API_KEY).toBeUndefined();
+    expect(freshProcessEnv.ANTHROPIC_API_KEY).toBe("sk-anthropic-plaintext");
+  });
+
+  it("does not collide destinations when provider keys contain dots and preserves distinct env sources", async () => {
+    const config = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await writeJsonFile(fixture.configPath, {
+      ...config,
+      models: {
+        providers: {
+          openai: {
+            ...createOpenAiProviderConfig("sk-openai-plaintext"),
+            headers: {
+              apiKey: "sk-anthropic-header-plaintext",
+            },
+          },
+          "openai.headers": createOpenAiProviderConfig("sk-openai-dotted-plaintext"),
+        },
+      },
+    });
+
+    await fs.writeFile(
+      fixture.envPath,
+      "ANTHROPIC_API_KEY=sk-anthropic-header-plaintext\nOPENAI_API_KEY=sk-openai-dotted-plaintext\nUNRELATED=value\n",
+      "utf8",
+    );
+
+    const secretFilePath = path.join(fixture.rootDir, "secrets.json");
+    await writeJsonFile(secretFilePath, {
+      providers: {
+        openaiHeaders: { apiKey: "sk-file-key" },
+      },
+    });
+    await fs.chmod(secretFilePath, 0o600);
+
+    const fileRef = {
+      source: "file" as const,
+      provider: "filemain",
+      id: "/providers/openaiHeaders/apiKey",
+    };
+    const headerEnvRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "ANTHROPIC_API_KEY",
+    };
+
+    const plan = createPlan({
+      providerUpserts: {
+        filemain: {
+          source: "file",
+          path: secretFilePath,
+          mode: "json",
+        },
+      },
+      targets: [
+        {
+          type: "models.providers.headers",
+          path: "models.providers.openai.headers.apiKey",
+          pathSegments: ["models", "providers", "openai", "headers", "apiKey"],
+          ref: headerEnvRef,
+        },
+        {
+          type: "models.providers.apiKey",
+          path: 'models.providers["openai.headers"].apiKey',
+          pathSegments: ["models", "providers", "openai.headers", "apiKey"],
+          providerId: "openai.headers",
+          ref: fileRef,
+        },
+      ],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({
+      plan,
+      env: {
+        ...fixture.env,
+        ANTHROPIC_API_KEY: "sk-anthropic-header-plaintext",
+        OPENAI_API_KEY: "sk-openai-dotted-plaintext",
+      },
+      write: true,
+    });
+    expect(applied.changed).toBe(true);
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).toContain("ANTHROPIC_API_KEY=sk-anthropic-header-plaintext");
+    expect(nextEnv).not.toContain("OPENAI_API_KEY=sk-openai-dotted-plaintext");
+    expect(nextEnv).toContain("UNRELATED=value");
+  });
+
+  it("scrubs dotenv plaintext when an auth-profile env target is overwritten by an alias agentId file target", async () => {
+    const secretFilePath = path.join(fixture.rootDir, "secrets.json");
+    await writeJsonFile(secretFilePath, {
+      profiles: { "openai:default": { key: "sk-openai-file" } },
+    });
+    await fs.chmod(secretFilePath, 0o600);
+
+    const fileRef = {
+      source: "file" as const,
+      provider: "filemain",
+      id: "/profiles/openai:default/key",
+    };
+
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-openai-plaintext",
+        },
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        filemain: {
+          source: "file",
+          path: secretFilePath,
+          mode: "json",
+        },
+      },
+      targets: [
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "MAIN",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          ref: fileRef,
+        },
+      ],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({
+      plan,
+      env: { ...fixture.env, OPENAI_API_KEY: "sk-openai-plaintext" },
+      write: true,
+    });
+    expect(applied.changed).toBe(true);
+    expect(applied.changedFiles).toContain(fixture.envPath);
+
+    const nextAuthStore = (await readAuthStore(fixture)) as unknown as {
+      profiles: { "openai:default": { key?: string; keyRef?: unknown } };
+    };
+    expect(nextAuthStore.profiles["openai:default"].keyRef).toEqual(fileRef);
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("sk-openai-plaintext");
+    expect(nextEnv).toContain("UNRELATED=value");
+
+    const freshProcessEnv = readStateDotEnvAsProcessEnv(fixture.envPath);
+    expect(freshProcessEnv.OPENAI_API_KEY).toBeUndefined();
   });
 
   it("preserves auth-profile tokenRef during provider scrub", async () => {
@@ -1786,7 +2318,7 @@ describe("secrets apply", () => {
 
     const env = {
       HOME: homeDir,
-      OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
+      OPENAI_API_KEY: "sk-live-env", // pragma: allowlist secret
     };
 
     await writeJsonFile(configPath, {
@@ -1852,7 +2384,7 @@ describe("secrets apply", () => {
 
     const env = {
       HOME: homeDir,
-      OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
+      OPENAI_API_KEY: "sk-live-env", // pragma: allowlist secret
     };
 
     await writeJsonFile(configPath, {
