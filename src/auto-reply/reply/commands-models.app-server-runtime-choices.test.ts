@@ -15,11 +15,23 @@ import { buildPreparedModelsProviderData } from "./commands-models.js";
 const modelCatalogMocks = vi.hoisted(() => ({ loadModelCatalog: vi.fn() }));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  getPreparedModelCatalogOwnerSnapshot: () => undefined,
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: modelCatalogMocks.loadModelCatalog,
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await modelCatalogMocks.loadModelCatalog(...args);
     return { entries, routeVariants: entries };
+  },
+  // The browse path reads the catalog through a lifecycle owner, so the mock has to
+  // invoke the reader with an owner snapshot the way the real helper does rather than
+  // return a bare entry list.
+  withPreparedModelCatalogOwner: async (params: unknown, read: (owner: object) => unknown) => {
+    const entries = await modelCatalogMocks.loadModelCatalog(params);
+    return read({
+      modelCatalog: { entries, routeVariants: entries },
+      authModes: {},
+      isCurrent: () => true,
+    });
   },
 }));
 
