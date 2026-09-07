@@ -606,7 +606,6 @@ describe("OpenAI-compatible completions compatibility", () => {
         tools: ["alpha", "zeta"].map((name) => ({
           type: "function",
           function: { name, description: name, parameters: { type: "object", properties: {} } },
-          cache_control: name === "zeta" ? cacheControl : undefined,
         })),
       };
       // Compare wire JSON, where undefined cache fields must be omitted.

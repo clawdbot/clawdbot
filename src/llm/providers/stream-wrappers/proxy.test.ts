@@ -1,8 +1,10 @@
 // Proxy stream wrapper tests cover wrapper selection and provider passthrough.
+import { buildOpenAICompletionsParams } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../packages/ai/src/utils/system-prompt-cache-boundary.js";
 import { createOpenRouterSystemCacheWrapper, createOpenRouterWrapper } from "./proxy.js";
 
 function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
@@ -203,7 +205,83 @@ describe("proxy stream wrappers", () => {
     ]);
   });
 
-  it("does not forward OpenRouter Anthropic cacheRetention to the underlying OpenAI transport", () => {
+  it.each(["none", "short", "long"] as const)(
+    "composes managed requests with %s retention without marking volatile content",
+    (cacheRetention) => {
+      const model: Model<"openai-completions"> = {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4-6",
+        name: "Claude",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      };
+      let payload: Record<string, unknown> = {};
+      const base: StreamFn = (resolvedModel, context, options) => {
+        payload = buildOpenAICompletionsParams(resolvedModel, context, {
+          cacheRetention: options?.cacheRetention,
+        });
+        options?.onPayload?.(payload, resolvedModel);
+        return createAssistantMessageEventStream();
+      };
+      for (const stable of ["STABLE", ""]) {
+        for (const hasUser of [true, false]) {
+          void createOpenRouterSystemCacheWrapper(base, { cacheRetention })(model, {
+            systemPrompt: `${stable}${SYSTEM_PROMPT_CACHE_BOUNDARY}VOLATILE`,
+            messages: [
+              ...(hasUser ? [{ role: "user" as const, content: "Question", timestamp: 1 }] : []),
+              { role: "user", content: "Runtime", timestamp: 2, runtimeContextCarrier: true },
+            ],
+          });
+          const wire = JSON.stringify(payload);
+          expect(wire.match(/"cache_control":/g) ?? []).toHaveLength(
+            cacheRetention === "none" ? 0 : Number(Boolean(stable)) + Number(hasUser),
+          );
+          expect(wire).not.toContain('"text":"VOLATILE","cache_control"');
+          expect(wire).not.toContain('"text":"Runtime","cache_control"');
+          expect(wire.includes('"ttl":"1h"')).toBe(
+            cacheRetention === "long" && Boolean(stable || hasUser),
+          );
+        }
+      }
+    },
+  );
+
+  it("preserves native Anthropic Messages payloads", () => {
+    const model: Model<"anthropic-messages"> = {
+      api: "anthropic-messages",
+      provider: "openrouter",
+      id: "anthropic/claude-sonnet-4-6",
+      name: "Claude",
+      baseUrl: "https://openrouter.ai/api",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    };
+    const original = {
+      system: [{ type: "text", text: "system", cache_control: { type: "ephemeral" } }],
+      messages: [{ role: "user", content: [{ type: "text", text: "question" }] }],
+    };
+    const payload = structuredClone(original);
+    const base: StreamFn = (resolvedModel, _context, options) => {
+      options?.onPayload?.(payload, resolvedModel);
+      return createAssistantMessageEventStream();
+    };
+    void createOpenRouterSystemCacheWrapper(base)(
+      model,
+      { messages: [] },
+      { cacheRetention: "long" },
+    );
+    expect(payload).toEqual(original);
+  });
+
+  it("forwards OpenRouter Anthropic cacheRetention to the underlying transport", () => {
     const payload = {
       messages: [{ role: "system", content: "system prompt" }],
     };
@@ -225,7 +303,7 @@ describe("proxy stream wrappers", () => {
       { cacheRetention: "long" },
     );
 
-    expect(calls[0]).toEqual({ cacheRetention: undefined });
+    expect(calls[0]).toEqual({ cacheRetention: "long" });
     expect(payload.messages[0]?.content).toEqual([
       {
         type: "text",

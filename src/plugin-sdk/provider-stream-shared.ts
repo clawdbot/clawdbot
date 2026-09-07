@@ -721,3 +721,5 @@ export {
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
 export { createToolStreamWrapper } from "../llm/providers/stream-wrappers/zai.js";
+
+export { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";

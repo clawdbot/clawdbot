@@ -161,7 +161,10 @@ function resolveOpenAICompletionsCompatDefaults(
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
     cacheControlFormat:
       (isModelStudioLike && endpointClass !== "custom") ||
-      (provider === "openrouter" && modelId?.startsWith("anthropic/") === true)
+      (modelId?.toLowerCase().startsWith("anthropic/") === true &&
+        (endpointClass === "openrouter" ||
+          (isDefaultRoute && provider === "openrouter") ||
+          provider === "deepinfra"))
         ? "anthropic"
         : undefined,
     sessionAffinityFormat: isOpenRouterLike ? "openrouter" : "openai",

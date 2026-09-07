@@ -1459,7 +1459,7 @@ packages/ai/src/providers/mistral.ts	6
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	26
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
-packages/ai/src/providers/openai-completions.ts	10
+packages/ai/src/providers/openai-completions.ts	9
 packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	6
 packages/ai/src/providers/openai-responses-tools.ts	2
