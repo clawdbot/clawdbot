@@ -487,6 +487,10 @@ describe("active-memory plugin", () => {
     vi
       .mocked(api.logger.warn)
       .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
+  const hasInfoLine = (needle: string) =>
+    vi
+      .mocked(api.logger.info)
+      .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
   const expectPrependContextResult = (result: unknown) => {
     expect(typeof (result as { prependContext?: unknown } | undefined)?.prependContext).toBe(
       "string",
@@ -787,6 +791,22 @@ describe("active-memory plugin", () => {
     expect(assertActive).toHaveBeenCalled();
     expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("names the skip reason at info level when the turn authority denies recall tools", async () => {
+    const result = await runPromptBuild(
+      { prompt: "what wings should i order?" },
+      {
+        toolAuthority: {
+          fingerprint: "denied-memory-authority",
+          allows: () => false,
+          assertActive: () => undefined,
+        },
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasInfoLine("active-memory: recall skipped reason=policy-disabled")).toBe(true);
   });
 
   it("does not inject recall that completes after the turn authority closes", async () => {
@@ -1710,6 +1730,7 @@ describe("active-memory plugin", () => {
     expectPrependContextContains(result, skippedRecallContext);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
     expect(hasDebugLine("active-memory: recall skipped reason=no-recall-intent")).toBe(true);
+    expect(hasInfoLine("active-memory: recall skipped reason=no-recall-intent")).toBe(false);
   });
 
   it("does not run deep recall when the live active-memory plugin entry is removed", async () => {
