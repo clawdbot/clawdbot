@@ -1,8 +1,11 @@
 /** Verifies plugin loader behavior for native module loading and resolver hooks. */
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { publishedSdkBridgeEntrypoints } from "./loader-sdk-bridge-artifacts.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { resetPluginCache } from "./plugin-cache.js";
 import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
@@ -95,8 +98,8 @@ function writePreSplitSdkBridgeConsumerFixture() {
   // voice-call/matrix doctor contracts (runtime-doctor), whatsapp ack policy
   // (channel-feedback), slack progress-draft render (channel-outbound).
   // Covers both alias classes on purpose: runtime-doctor is private-local-only,
-  // the channel subpaths are public. A source checkout has no dist/, so every
-  // subpath listed here is evaluated through jiti — keep them light.
+  // the channel subpaths are public. The host fixture supplies real compiled
+  // SDK artifacts, matching the installed-package boundary.
   fs.writeFileSync(
     path.join(pluginRoot, "dist", "index.js"),
     [
@@ -195,10 +198,32 @@ describe("createPluginModuleLoader", () => {
 
   it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, Slack render)", () => {
     const pluginRoot = writePreSplitSdkBridgeConsumerFixture();
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", tempDirs.make("openclaw-plugin-loader-"));
+    const [entrypoint] = publishedSdkBridgeEntrypoints;
+    const artifact = fileURLToPath(resolveRuntimeWorkerUrl(entrypoint));
+    const hasCompiledSdk = path.extname(artifact) === ".js";
+    if (hasCompiledSdk) {
+      const hostRoot = tempDirs.make("openclaw-sdk-bridge-host-");
+      fs.cpSync(path.dirname(path.dirname(artifact)), path.join(hostRoot, "dist"), {
+        recursive: true,
+      });
+      fs.copyFileSync(
+        path.resolve(import.meta.dirname, "../../package.json"),
+        path.join(hostRoot, "package.json"),
+      );
+      fs.mkdirSync(path.join(hostRoot, "src"));
+      fs.mkdirSync(path.join(hostRoot, "extensions"));
+      fs.symlinkSync(path.resolve("node_modules"), path.join(hostRoot, "node_modules"), "junction");
+      vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", hostRoot);
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(hostRoot, "extensions"));
+    } else {
+      // Standalone and watch-mode Vitest deliberately retain source declarations.
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", tempDirs.make("openclaw-plugin-loader-"));
+    }
+    const before = getPluginModuleLoaderStats();
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      pluginSdkResolution: hasCompiledSdk ? "dist" : "auto",
       onlyPluginIds: ["sdk-bridge-consumer"],
       config: {
         plugins: {
@@ -213,5 +238,10 @@ describe("createPluginModuleLoader", () => {
     const entry = registry.plugins.find((plugin) => plugin.id === "sdk-bridge-consumer");
     expect(entry?.error ?? null).toBeNull();
     expect(entry?.status).toBe("loaded");
+    if (hasCompiledSdk) {
+      const after = getPluginModuleLoaderStats();
+      expect(after.nativeHits).toBeGreaterThan(before.nativeHits);
+      expect(after.sourceTransformFallbacks).toBe(before.sourceTransformFallbacks);
+    }
   });
 });
