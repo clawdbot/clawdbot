@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
 import type { FeishuMessageEvent } from "./bot.js";
-import { handleFeishuMessage } from "./bot.js";
+import { handleFeishuMessage as handleFeishuMessageImpl } from "./bot.js";
 import { feishuDedupeState } from "./dedup-state.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
@@ -144,6 +144,9 @@ describe("broadcast dispatch", () => {
     contentType: "video/mp4",
   });
   const runtimeStub = {
+    config: {
+      current: vi.fn(() => createBroadcastConfig()),
+    },
     system: {
       enqueueSystemEvent: vi.fn(),
     },
@@ -220,6 +223,11 @@ describe("broadcast dispatch", () => {
       detectMime: vi.fn(async () => "application/octet-stream"),
     },
   } as unknown as PluginRuntime;
+
+  async function handleFeishuMessage(params: Parameters<typeof handleFeishuMessageImpl>[0]) {
+    runtimeStub.config.current.mockReturnValue(params.cfg);
+    await handleFeishuMessageImpl(params);
+  }
 
   afterAll(() => {
     vi.doUnmock("./reply-dispatcher.js");
