@@ -1,3 +1,4 @@
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 // Msteams tests cover graph thread plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,14 +13,6 @@ import { fetchGraphJson } from "./graph.js";
 vi.mock("./graph.js", () => ({
   fetchGraphJson: vi.fn(),
 }));
-
-const firstGraphPath = () => {
-  const [call] = vi.mocked(fetchGraphJson).mock.calls;
-  if (!call) {
-    throw new Error("expected Graph fetch call");
-  }
-  return call[0].path;
-};
 
 describe("stripHtmlFromTeamsMessage", () => {
   it("preserves @mention display names from <at> tags", () => {
@@ -67,7 +60,7 @@ describe("fetchChannelMessage", () => {
 
   it("fetches the parent message with correct path", async () => {
     const mockMsg = { id: "msg-1", body: { content: "hello", contentType: "text" } };
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce(mockMsg as never);
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce(mockMsg);
 
     const result = await fetchChannelMessage("tok", "group-1", "channel-1", "msg-1");
 
@@ -79,14 +72,14 @@ describe("fetchChannelMessage", () => {
   });
 
   it("returns undefined on fetch error", async () => {
-    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("forbidden") as never);
+    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("forbidden"));
 
     const result = await fetchChannelMessage("tok", "group-1", "channel-1", "msg-1");
     expect(result).toBeUndefined();
   });
 
   it("URL-encodes group, channel, and message IDs", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({});
 
     await fetchChannelMessage("tok", "g/1", "c/2", "m/3");
 
@@ -109,7 +102,7 @@ describe("fetchChatMessageText", () => {
         content: "<p>San Francisco right now: <at>Bot</at> full text</p>",
         contentType: "html",
       },
-    } as never);
+    });
 
     const result = await fetchChatMessageText("tok", "19:chat@thread.v2", "1783379480258");
 
@@ -123,28 +116,28 @@ describe("fetchChatMessageText", () => {
   it("returns trimmed plain text when body is not HTML", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({
       body: { content: "  plain body  ", contentType: "text" },
-    } as never);
+    });
 
     const result = await fetchChatMessageText("tok", "19:chat", "m-1");
     expect(result).toBe("plain body");
   });
 
   it("returns undefined on fetch error", async () => {
-    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("not found") as never);
+    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("not found"));
 
     const result = await fetchChatMessageText("tok", "19:chat", "m-1");
     expect(result).toBeUndefined();
   });
 
   it("returns undefined when the message has no body", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({});
 
     const result = await fetchChatMessageText("tok", "19:chat", "m-1");
     expect(result).toBeUndefined();
   });
 
   it("forwards a shared deadline to the Graph request", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({});
     const deadline = {
       label: "MS Teams inbound preprocessing",
       timeoutMs: 10_000,
@@ -169,7 +162,7 @@ describe("fetchThreadReplies", () => {
   it("fetches replies with correct path and default limit", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({
       value: [{ id: "reply-1" }, { id: "reply-2" }],
-    } as never);
+    });
 
     const result = await fetchThreadReplies("tok", "group-1", "channel-1", "msg-1");
 
@@ -181,23 +174,25 @@ describe("fetchThreadReplies", () => {
   });
 
   it("clamps limit to 50 maximum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] });
 
     await fetchThreadReplies("tok", "g", "c", "m", 200);
 
-    expect(firstGraphPath()).toContain("$top=50");
+    const [request] = expectDefined(vi.mocked(fetchGraphJson).mock.calls[0], "Graph fetch call");
+    expect(request.path).toContain("$top=50");
   });
 
   it("clamps limit to 1 minimum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] });
 
     await fetchThreadReplies("tok", "g", "c", "m", 0);
 
-    expect(firstGraphPath()).toContain("$top=1");
+    const [request] = expectDefined(vi.mocked(fetchGraphJson).mock.calls[0], "Graph fetch call");
+    expect(request.path).toContain("$top=1");
   });
 
   it("returns empty array when value is missing", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({});
 
     const result = await fetchThreadReplies("tok", "g", "c", "m");
     expect(result).toStrictEqual([]);
