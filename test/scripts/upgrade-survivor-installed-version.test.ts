@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -149,7 +150,8 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
         .map((line) => JSON.parse(line));
       // Keep the existing failure probe; version discovery must add no CLI calls.
       expect(calls.map((args) => args[0])).toEqual(["update", "config"]);
-      expect(calls[0][calls[0].indexOf("--tag") + 1]).toBe(`file:${targetPackage}`);
+      const updateCall = expectDefined(calls[0], "expected the update command");
+      expect(updateCall[updateCall.indexOf("--tag") + 1]).toBe(`file:${targetPackage}`);
       expect(calls[1]).toEqual(["config", "validate", "--json"]);
       expect(summary.installedVersion).toBe(fixture.installedVersion);
     });
