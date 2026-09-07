@@ -132,7 +132,8 @@ const registryEnv = {
   OPENCLAW_NPM_REGISTRY_BIND_HOST: "127.0.0.1",
   OPENCLAW_NPM_REGISTRY_PORT: "0",
 };
-delete registryEnv.OPENCLAW_NPM_REGISTRY_DIST_TAGS;
+// Beta retains its tag policy; stable repair must ignore the stale latest tag.
+registryEnv.OPENCLAW_NPM_REGISTRY_DIST_TAGS = `beta=${expectedVersion}`;
 delete registryEnv.OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM;
 // The last version becomes latest. Both manifests and archives are real package bytes.
 let registry;
