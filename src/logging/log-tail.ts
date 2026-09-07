@@ -233,15 +233,6 @@ async function readLogSliceAttempt(
       truncated = start > 0;
     } else {
       start = cursor;
-      if (size - start > maxBytes) {
-        // Keep reset as the re-anchor signal for existing clients. The skipped byte count
-        // lets current clients distinguish this valid-cursor fast-forward from file shrink.
-        reset = true;
-        truncated = true;
-        const boundedStart = Math.max(0, size - maxBytes);
-        skippedBytes = boundedStart - start;
-        start = boundedStart;
-      }
     }
   } else {
     start = Math.max(0, size - maxBytes);
@@ -258,14 +249,16 @@ async function readLogSliceAttempt(
   const prefixLength = Math.min(64, size);
   const prefixSnapshot = await readBytes(0, prefixLength);
   const generationSnapshotStart = Math.max(0, start - LOG_GENERATION_WINDOW_BYTES);
+  // Cursor-follow reads drain a burst in bounded chunks; later polls continue at the returned cursor.
+  const generationSnapshotEnd = Math.min(size, start + maxBytes);
   const generationSnapshot = await readBytes(
     generationSnapshotStart,
-    size - generationSnapshotStart,
+    generationSnapshotEnd - generationSnapshotStart,
   );
   const buildGeneration = (generationCursor: number): LogFileGeneration | undefined => {
     if (
       prefixSnapshot.length !== prefixLength ||
-      generationSnapshot.length !== size - generationSnapshotStart
+      generationSnapshot.length !== generationSnapshotEnd - generationSnapshotStart
     ) {
       return undefined;
     }
@@ -317,7 +310,8 @@ async function readLogSliceAttempt(
     prefix = prefixBuf.toString("utf8", 0, prefixRead.bytesRead);
   }
 
-  const length = Math.max(0, size - start);
+  // Keep cursor continuation bounded instead of re-anchoring and skipping a burst.
+  const length = Math.max(0, Math.min(size - start, maxBytes));
   const buffer = Buffer.alloc(length);
   const bytesRead = await readFileWindowFully(handle, buffer, start);
   const text = buffer.toString("utf8", 0, bytesRead);
@@ -338,7 +332,8 @@ async function readLogSliceAttempt(
 
   // Keep an unterminated record pending so a later read can emit it whole.
   const lastNewline = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
-  cursor = text.endsWith("\n") ? size : start + lastNewline + 1;
+  const reachedEnd = start + bytesRead >= size;
+  cursor = reachedEnd && text.endsWith("\n") ? size : start + lastNewline + 1;
 
   return {
     cursor,

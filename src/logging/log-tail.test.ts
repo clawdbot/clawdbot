@@ -165,7 +165,7 @@ describe("readConfiguredLogTail", () => {
     });
   });
 
-  it("distinguishes a byte-budget re-anchor from file shrink", async () => {
+  it("bounds cursor continuation without confusing it with file shrink", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
     const file = path.join(tempDir, "openclaw-2026-01-22.log");
@@ -177,8 +177,10 @@ describe("readConfiguredLogTail", () => {
     await fs.appendFile(file, `${"x".repeat(40)}\n`.repeat(200));
     const byteBudget = await readConfiguredLogTail({ cursor: initial.cursor, maxBytes: 500 });
 
-    expect(byteBudget).toMatchObject({ truncated: true, reset: true });
-    expect(byteBudget.skippedBytes).toBeGreaterThan(0);
+    expect(byteBudget).toMatchObject({ truncated: false, reset: false });
+    expect(byteBudget.skippedBytes).toBeUndefined();
+    expect(byteBudget.cursor).toBeGreaterThan(initial.cursor);
+    expect(byteBudget.cursor).toBeLessThan(byteBudget.size);
 
     await fs.writeFile(file, "fresh\n");
     const fileShrink = await readConfiguredLogTail({ cursor: byteBudget.cursor, maxBytes: 500 });
