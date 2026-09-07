@@ -1557,7 +1557,9 @@ class SessionsPage extends OpenClawLightDomElement {
               }
               break;
             case "assign-owner":
-              void this.context?.sessions.assignOwner(row.key, action.owner);
+              void this.context?.sessions.assignOwner(row.key, action.owner, {
+                agentId: row.agentId,
+              });
               break;
             case "stop-cloud-worker":
               void this.stopCloudWorker(row);

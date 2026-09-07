@@ -15,7 +15,6 @@ import {
 import type { SessionPatch, SessionPatchOptions, SessionPatchResult } from "./patch.ts";
 import { createSessionArchiveState } from "./session-archive-state.ts";
 import type {
-  SessionCapability,
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionCreateReconciliation,
@@ -23,7 +22,8 @@ import type {
   SessionResetResult,
   SessionState,
 } from "./session-capability.ts";
-import { areUiSessionKeysEquivalent } from "./session-key.ts";
+import { areUiSessionKeysEquivalent, parseAgentSessionKey } from "./session-key.ts";
+import { createSessionOwnerAssignmentOverlay } from "./session-owner-assignment-overlay.ts";
 import type { SessionPermissionClaim } from "./session-permission-projection.ts";
 import { requestSessionPatch, requestSessionReset } from "./session-requests.ts";
 import type { SessionRefreshOutcome } from "./session-roster-refresh.ts";
@@ -37,7 +37,14 @@ type SessionMutationsHost = {
   connection: SessionConnectionOwner;
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
-  refreshReplacement: SessionCapability["refreshReplacement"];
+  refreshReplacement: (
+    agentId?: string | null,
+    reconcileOwner?: boolean,
+  ) => Promise<SessionsListResult | null | void>;
+  ownerAssignmentScopeRevisions: (agentId?: string | null) => {
+    revision: number;
+    scopes: ReadonlyMap<string, number>;
+  };
   refreshReplacementResult: (
     agentId?: string | null,
     isErrorCurrent?: () => boolean,
@@ -133,6 +140,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
   const archiveState = createSessionArchiveState(host.publishedRow, () =>
     host.publish({ ...host.readState() }),
   );
+  const ownerAssignments = createSessionOwnerAssignmentOverlay();
   const preparedWorkSessionKeys = new Set<string>();
   const pendingCreatedModelOverrides = new Set<string>();
 
@@ -607,41 +615,59 @@ export function createSessionMutations(host: SessionMutationsHost) {
     }
   };
 
-  const assignOwner = async (
+  const assignOwner = (
     key: string,
     owner: SessionsAssignOwnerParams["owner"],
     options: { agentId?: string | null } = {},
   ): Promise<SessionOwner | null> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return null;
-    }
-    try {
-      const result = await scope.client.request<SessionsAssignOwnerResult>("sessions.assignOwner", {
-        key,
-        owner,
-        ...(options.agentId ? { agentId: options.agentId } : {}),
-      });
-      if (!host.connection.isCurrent(scope)) {
+    const targetAgentId =
+      parseAgentSessionKey(key)?.agentId ?? options.agentId ?? host.publishedRow(key)?.agentId;
+    return ownerAssignments.enqueue(key, targetAgentId, async () => {
+      const scope = host.connection.capture();
+      if (!scope) {
         return null;
       }
-      patchRowLocal(result.key, { owner: result.owner });
-      return result.owner;
-    } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+      try {
+        const result = await scope.client.request<SessionsAssignOwnerResult>(
+          "sessions.assignOwner",
+          {
+            key,
+            owner,
+            ...(targetAgentId ? { agentId: targetAgentId } : {}),
+          },
+        );
+        if (!host.connection.isCurrent(scope)) {
+          return null;
+        }
+        const assignmentScope = host.ownerAssignmentScopeRevisions(targetAgentId);
+        const confirmedOwner = ownerAssignments.confirm(
+          result.key,
+          result.owner,
+          assignmentScope.revision,
+          assignmentScope.scopes,
+          host.publishedRow(result.key)?.sessionId,
+          targetAgentId,
+        );
+        host.redecorateLists();
+        void host.refreshReplacement(targetAgentId, true);
+        return confirmedOwner;
+      } catch (error) {
+        if (host.connection.isCurrent(scope)) {
+          host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+        }
+        return null;
       }
-      return null;
-    }
+    });
   };
 
   return {
     create,
     createResult,
     reconcileConfirmedPreviousConnection,
-    retireDeletedSession(this: void, key: string) {
+    retireDeletedSession(this: void, key: string, agentId?: string | null) {
       host.retirePullRequestSummary(key);
       archiveState.clear(key);
+      ownerAssignments.retire(key, agentId);
       preparedWorkSessionKeys.delete(key.trim());
       setModelOverride(key, undefined);
     },
@@ -656,6 +682,13 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return optimisticUnread.apply(optimisticPins.apply(result));
     },
     applyConfirmedArchives: archiveState.apply,
+    applyConfirmedOwners: (...args: Parameters<typeof ownerAssignments.decorate>) =>
+      ownerAssignments.decorate(...args),
+    observeCanonicalOwners: (...args: Parameters<typeof ownerAssignments.observeCanonical>) =>
+      ownerAssignments.observeCanonical(...args),
+    observeCanonicalOwnerEvent: (...args: Parameters<typeof ownerAssignments.observeRow>) =>
+      ownerAssignments.observeRow(...args),
+    retireCanonicalOwnerScope: (scope: string) => ownerAssignments.retireScope(scope),
     observeArchiveState: archiveState.observe,
     reset,
     retireModelOverride,
@@ -681,6 +714,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       optimisticPins.clear();
       optimisticUnread.clear();
       archiveState.clearAll();
+      ownerAssignments.clear();
       preparedWorkSessionKeys.clear();
       const state = host.readState();
       host.publish({ ...state, modelOverrides: {} });
@@ -691,6 +725,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       optimisticPins.clear();
       optimisticUnread.clear();
       archiveState.clearAll();
+      ownerAssignments.clear();
       preparedWorkSessionKeys.clear();
     },
   };

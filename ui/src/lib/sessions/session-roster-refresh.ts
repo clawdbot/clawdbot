@@ -28,6 +28,7 @@ import {
   sessionListQueryAgentId,
   type QueuedSessionRefresh,
 } from "./session-list-query.ts";
+import { sessionListAgentMatches } from "./session-list-scope.ts";
 import {
   buildSessionListParams,
   normalizeManagedSessionListQuery,
@@ -48,7 +49,17 @@ type SessionRosterRefreshHost = {
   decorate: (
     result: SessionsListResult | null,
     owner: { scope: SessionListScope },
+    scope?: string,
+    requestRevision?: number,
+    agentId?: string | null,
   ) => SessionsListResult | null;
+  observeCanonicalRows: (
+    result: SessionsListResult | null,
+    requestRevision: number,
+    scope?: string,
+    agentId?: string | null,
+  ) => void;
+  retireCanonicalScope: (scope: string) => void;
   reconcileList: (
     result: SessionsListResult | null,
     issuedRevision: number,
@@ -61,6 +72,8 @@ type SessionRosterRefreshHost = {
     observed?: SessionsListResult | null,
   ) => void;
 };
+
+const PRIMARY_LIST_SCOPE = "primary";
 
 type ManagedSessionListRefresh = {
   append: boolean;
@@ -95,6 +108,10 @@ function sessionListAgentMatcher(agentId?: string | null) {
     !normalized || !queryAgentId?.trim() || normalizeAgentId(queryAgentId) === normalized;
 }
 
+function managedSessionListScope(entry: ManagedSessionList): string {
+  return `managed:${entry.key}`;
+}
+
 export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let gatewayAvailable = isGatewayAvailable(host.snapshot());
   let requestRevision = 0;
@@ -113,6 +130,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
   let pageActive = !observesPageLifecycle || document.visibilityState !== "hidden";
   const managedLists = new Map<string, ManagedSessionList>();
+  const directListRequests = new Map<string, { agentId?: string; revision: number }>();
+
+  const activeManagedLists = (): ManagedSessionList[] =>
+    [...managedLists.values()].filter(
+      (entry) => entry.listeners.size > 0 || entry.pending !== null,
+    );
 
   const publishManagedList = (entry: ManagedSessionList, snapshot: SessionListSnapshot): void => {
     entry.snapshot = snapshot;
@@ -163,6 +186,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const release = () => {
         if (entry.listeners.size === 0 && managedLists.get(entry.key) === entry) {
           entry.coordinator.dispose();
+          host.retireCanonicalScope(managedSessionListScope(entry));
           managedLists.delete(entry.key);
         }
       };
@@ -224,6 +248,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           if (!response) {
             throw new Error("The session query did not return a result. Try again.");
           }
+          host.observeCanonicalRows(
+            response,
+            issuedRevision,
+            next.append ? undefined : managedSessionListScope(entry),
+            sessionListQueryAgentId(entry.query),
+          );
           const result = host.reconcileList(
             response,
             issuedRevision,
@@ -234,7 +264,13 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
             result && next.append && requestParams.offset && previous
               ? appendSessionResults(previous, result)
               : reconcileRosterPresentationMetadata(result, previous);
-          const decorated = host.decorate(nextResult, entry);
+          const decorated = host.decorate(
+            nextResult,
+            entry,
+            next.append ? undefined : managedSessionListScope(entry),
+            issuedRevision,
+            sessionListQueryAgentId(entry.query) ?? null,
+          );
           if (decorated) {
             entry.retainedLimit = Math.max(entry.retainedLimit, decorated.sessions.length);
           }
@@ -284,19 +320,33 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!scope) {
       return null;
     }
+    const issuedRevision = ++requestRevision;
+    const listScope = `direct:${issuedRevision}`;
+    directListRequests.set(listScope, {
+      revision: issuedRevision,
+      ...(options.agentId ? { agentId: options.agentId } : {}),
+    });
     try {
-      const issuedRevision = ++requestRevision;
       const result = await requestSessionList(scope.client, options);
-      return host.connection.isCurrent(scope)
-        ? host.decorate(host.reconcileList(result ?? null, issuedRevision, options.agentId), {
-            scope: options,
-          })
-        : null;
+      if (!host.connection.isCurrent(scope)) {
+        return null;
+      }
+      host.observeCanonicalRows(result ?? null, issuedRevision, listScope, options.agentId);
+      return host.decorate(
+        host.reconcileList(result ?? null, issuedRevision, options.agentId),
+        { scope: options },
+        listScope,
+        issuedRevision,
+        options.agentId,
+      );
     } catch (error) {
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
       throw error;
+    } finally {
+      directListRequests.delete(listScope);
+      host.retireCanonicalScope(listScope);
     }
   };
 
@@ -348,6 +398,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       if (!isCurrent()) {
         return null;
       }
+      host.observeCanonicalRows(
+        result,
+        issuedRevision,
+        append ? undefined : PRIMARY_LIST_SCOPE,
+        requestOptions.agentId,
+      );
       result = host.reconcileList(result, issuedRevision, requestOptions.agentId);
       const currentState = host.readState();
       const mergeWithCurrent = append && typeof requestOptions.offset === "number";
@@ -377,7 +433,13 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         primaryList = { scope: durableListOptions };
       }
       primaryList.scope = append ? lastListOptions : durableListOptions;
-      nextResult = host.decorate(nextResult, primaryList);
+      nextResult = host.decorate(
+        nextResult,
+        primaryList,
+        append ? undefined : PRIMARY_LIST_SCOPE,
+        issuedRevision,
+        requestOptions.agentId,
+      );
       host.onCanonicalList(nextResult, issuedRevision, requestOptions.agentId, result);
       const state = host.readState();
       const error = host.observerError();
@@ -667,6 +729,35 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return refreshInternal(options, true);
     },
     refreshReplacement: (agentId?: string | null) => refreshReplacementOwned(agentId),
+    async refreshOwnerAssignmentScopes(agentId?: string | null): Promise<void> {
+      const refreshes = activeManagedLists()
+        .filter((entry) => sessionListAgentMatches(sessionListQueryAgentId(entry.query), agentId))
+        .map((entry) => refreshManagedList(entry, { append: false, invalidated: true }));
+      if (sessionListAgentMatches(lastListOptions.agentId, agentId)) {
+        refreshes.push(refreshReplacementOwned().then(() => undefined));
+      }
+      await Promise.all(refreshes);
+    },
+    ownerAssignmentScopeRevisions(agentId?: string | null) {
+      return {
+        revision: requestRevision,
+        scopes: new Map([
+          ...(sessionListAgentMatches(lastListOptions.agentId, agentId)
+            ? ([[PRIMARY_LIST_SCOPE, requestRevision]] as const)
+            : []),
+          ...[...directListRequests].flatMap(([scope, request]) =>
+            sessionListAgentMatches(request.agentId, agentId)
+              ? [[scope, request.revision] as const]
+              : [],
+          ),
+          ...activeManagedLists()
+            .filter((entry) =>
+              sessionListAgentMatches(sessionListQueryAgentId(entry.query), agentId),
+            )
+            .map((entry) => [managedSessionListScope(entry), requestRevision] as const),
+        ]),
+      };
+    },
     refreshReplacementResult,
     publishedSession,
     publishedRow: (matches: (row: GatewaySessionRow, agentId?: string | null) => boolean) =>
@@ -675,12 +766,24 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
      * reaches the archived/all snapshots too, not just the primary state. */
     redecorateLists() {
       const state = host.readState();
-      const result = host.decorate(state.result, primaryList);
+      const result = host.decorate(
+        state.result,
+        primaryList,
+        PRIMARY_LIST_SCOPE,
+        undefined,
+        state.agentId,
+      );
       if (result !== state.result) {
         host.publish({ ...state, result });
       }
       for (const entry of managedLists.values()) {
-        const decorated = host.decorate(entry.snapshot.result, entry);
+        const decorated = host.decorate(
+          entry.snapshot.result,
+          entry,
+          managedSessionListScope(entry),
+          undefined,
+          sessionListQueryAgentId(entry.query) ?? null,
+        );
         if (decorated !== entry.snapshot.result) {
           publishManagedList(entry, { ...entry.snapshot, result: decorated });
         }
@@ -705,6 +808,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       queuedExplicitRefresh?.completions.forEach(({ complete }) => complete(null));
       queuedExplicitRefresh = null;
       eventRefreshQueued = false;
+      directListRequests.clear();
       for (const entry of managedLists.values()) {
         entry.coordinator.reset();
         entry.pending = entry.queued = null;
@@ -727,6 +831,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       inFlight = null;
       queuedExplicitRefresh?.completions.forEach(({ complete }) => complete(null));
       queuedExplicitRefresh = null;
+      directListRequests.clear();
       for (const entry of managedLists.values()) {
         entry.coordinator.dispose();
         entry.listeners.clear();

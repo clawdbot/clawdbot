@@ -53,7 +53,7 @@ type DeletionHost = {
     scope: NonNullable<ReturnType<SessionConnectionOwner["capture"]>>,
     agentId?: string | null,
   ) => Promise<boolean>;
-  retire: (key: string) => void;
+  retire: (key: string, agentId?: string | null) => void;
 };
 
 export function createSessionDeletions(host: DeletionHost) {
@@ -175,7 +175,7 @@ export function createSessionDeletions(host: DeletionHost) {
     }
     deletion.rows = new WeakMap();
     if (deletion.owner.active === deletion) {
-      host.retire(key);
+      host.retire(key, deletion.target.agentId);
     }
     publish(deletion);
   };

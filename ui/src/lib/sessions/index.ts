@@ -172,9 +172,19 @@ export function createSessionCapability(
   const decorateRows = (
     result: SessionsListResult | null,
     owner = roster.primaryList(),
+    scope?: string,
+    requestRevision?: number,
+    agentId?: string | null,
   ): SessionsListResult | null =>
     deletions.apply(
-      mutations.applyConfirmedArchives(mutations.applyPendingRows(swarmActivity.decorate(result))),
+      mutations.applyConfirmedOwners(
+        mutations.applyConfirmedArchives(
+          mutations.applyPendingRows(swarmActivity.decorate(result)),
+        ),
+        scope,
+        requestRevision,
+        agentId === undefined ? state.agentId : agentId,
+      ),
       owner,
     );
 
@@ -211,6 +221,9 @@ export function createSessionCapability(
     observerError: () => sessionEventSubscriptionError,
     bootstrap: (scope, list) => sessionEventSubscription.ensure(scope, list),
     decorate: decorateRows,
+    observeCanonicalRows: (result, requestRevision, scope, agentId) =>
+      mutations.observeCanonicalOwners(result, requestRevision, scope, agentId),
+    retireCanonicalScope: (scope) => mutations.retireCanonicalOwnerScope(scope),
     reconcileList: (result, revision, agentId) =>
       permissions.reconcileList(
         deletions.reconcileList(result, revision, agentId),
@@ -252,7 +265,11 @@ export function createSessionCapability(
     connection,
     readState: () => state,
     publish,
-    refreshReplacement: roster.refreshReplacement,
+    refreshReplacement: (agentId, reconcileOwner) =>
+      reconcileOwner
+        ? roster.refreshOwnerAssignmentScopes(agentId)
+        : roster.refreshReplacement(agentId),
+    ownerAssignmentScopeRevisions: (agentId) => roster.ownerAssignmentScopeRevisions(agentId),
     refreshReplacementResult: roster.refreshReplacementResult,
     publishedRow: (key) => roster.publishedRow((row) => row.key === key),
     redecorateLists: () => roster.redecorateLists(),
@@ -408,6 +425,7 @@ export function createSessionCapability(
         state.agentId,
       );
     }
+    mutations.observeCanonicalOwnerEvent(reconciled.row, eventInfo?.agentId);
     let claimChanged = false;
     if (reconciled.applied && reconciled.key && eventInfo) {
       const claimKey = sessionClaimKey(reconciled.key, eventInfo.agentId);
