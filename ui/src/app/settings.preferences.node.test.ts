@@ -1,4 +1,4 @@
-// @vitest-environment node
+﻿// @vitest-environment node
 // Browser-local preference persistence: chat, talk, theme, text scale, and the
 // local user identity. Split from settings.node.test.ts to keep each file under
 // the lint size budget.
@@ -679,16 +679,16 @@ describe("settings preference persistence", () => {
     });
     localStorage.setItem(
       "openclaw.control.user.v1",
-      JSON.stringify({ name: "Buns", avatar: "🦞" }),
+      JSON.stringify({ name: "Buns", avatar: "­ƒª×" }),
     );
 
     expect(loadLocalUserIdentity()).toEqual({
       name: "Buns",
-      avatar: "🦞",
+      avatar: "­ƒª×",
     });
     expect(JSON.parse(localStorage.getItem("openclaw.control.user.v1") ?? "{}")).toEqual({
       name: "Buns",
-      avatar: "🦞",
+      avatar: "­ƒª×",
     });
   });
 

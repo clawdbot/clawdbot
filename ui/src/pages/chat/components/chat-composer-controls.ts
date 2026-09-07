@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+﻿import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
@@ -461,6 +461,26 @@ export function renderComposerDictationStatus(dictation?: ComposerDictationContr
   `;
 }
 
+export function renderChatAbortAction(
+  props: Pick<ChatRunControlsProps, "canAbort" | "onAbort" | "onPrimaryActionPointerDown">,
+) {
+  return props.canAbort
+    ? html`
+        <openclaw-tooltip .content=${t("chat.runControls.stop")}>
+          <button
+            class="chat-send-btn chat-send-btn--stop"
+            @pointerdown=${props.onPrimaryActionPointerDown}
+            @click=${props.onAbort}
+            aria-label=${t("chat.runControls.stopGenerating")}
+          >
+            ${icons.stop}
+            <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+}
+
 export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const steersActiveRun = props.followUpMode === "steer";
@@ -493,25 +513,11 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const alternateShortcutAvailable =
     props.alternateFollowUpMode && props.canSend && hasComposedContent;
   const activeRunActionTooltip = alternateShortcutAvailable
-    ? `${activeRunActionLabel} ⏎ · ${alternateActionLabel} ${t("chat.sendShortcutModifierEnter")}`
+    ? `${activeRunActionLabel} ÔÅÄ ┬À ${alternateActionLabel} ${t("chat.sendShortcutModifierEnter")}`
     : activeRunActionLabel;
   // Preserve the click identity without mistaking it for a follow-up mode.
   const send = (event: Event) => props.onSend(event);
-  const abortAction = props.canAbort
-    ? html`
-        <openclaw-tooltip .content=${t("chat.runControls.stop")}>
-          <button
-            class="chat-send-btn chat-send-btn--stop"
-            @pointerdown=${props.onPrimaryActionPointerDown}
-            @click=${props.onAbort}
-            aria-label=${t("chat.runControls.stopGenerating")}
-          >
-            ${icons.stop}
-            <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
+  const abortAction = renderChatAbortAction(props);
 
   // Transports keep the session active while reporting status "error"; the
   // alert row above the composer owns the error message, so the control keeps
@@ -519,7 +525,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   // duplicate announcement.
   const voiceErrored = props.voiceStatus === "error";
   const voiceButton = renderComposerVoiceButton(props);
-  // Dictation and Talk are one affordance to the operator — a microphone — so
+  // Dictation and Talk are one affordance to the operator ÔÇö a microphone ÔÇö so
   // the control shows whenever either route exists, and it always sits ahead of
   // the primary action rather than standing in for it.
   const voiceControl = props.dictation || props.onToggleVoice ? voiceButton : nothing;

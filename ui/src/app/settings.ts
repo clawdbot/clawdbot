@@ -1,4 +1,4 @@
-import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
+﻿import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -223,7 +223,7 @@ export type UiSettings = {
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
-  navWidth: number; // Sidebar width when expanded (240–400px)
+  navWidth: number; // Sidebar width when expanded (240ÔÇô400px)
   sidebarEntries: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
@@ -770,7 +770,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
       unpersistedSettings = null;
     }
   } catch {
-    // best-effort — quota exceeded or security restrictions should not
+    // best-effort ÔÇö quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied;
     // unpersistedSettings keeps this tab consistent until storage recovers
   }

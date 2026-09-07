@@ -1,4 +1,4 @@
-/* @vitest-environment jsdom */
+﻿/* @vitest-environment jsdom */
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -532,10 +532,10 @@ describe("renderChatComposer controls", () => {
   );
 
   it.each([
-    ["queue", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
-    ["steer", "Steer ⏎ · Queue ⌘/Ctrl+Enter"],
-    ["collect", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
-    ["followup", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
+    ["queue", "Queue ÔÅÄ ┬À Steer Ôîÿ/Ctrl+Enter"],
+    ["steer", "Steer ÔÅÄ ┬À Queue Ôîÿ/Ctrl+Enter"],
+    ["collect", "Queue ÔÅÄ ┬À Steer Ôîÿ/Ctrl+Enter"],
+    ["followup", "Queue ÔÅÄ ┬À Steer Ôîÿ/Ctrl+Enter"],
   ] as const)(
     "teaches both actions for %s without changing ordinary Enter",
     (followUpMode, tooltip) => {
