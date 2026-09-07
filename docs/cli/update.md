@@ -314,10 +314,14 @@ A phase deadline produces exit code 1 and JSON with `status: "failed"`,
 command trees are stopped before the finalizer exits so the supervisor can
 recover. Preserve the phase diagnostic when reporting a stalled update.
 Shared CLI disposers have individual five-second deadlines. If the finalizer
-remains alive ten seconds after its terminal output, stderr and the ledger
+remains alive ten seconds after its terminal JSON, stderr and the ledger
 record active resource types and unsettled disposer names, then the process
 exits with its recorded outcome. A retained handle cannot withhold the
 supervisor's result indefinitely.
+Human repair can still wait for a recovery choice or repair agent; its exit grace
+starts after recovery finishes. Completion-cache refresh remains best effort
+when its child can be stopped within the phase budget. A phase that exceeds its
+overall deadline still fails finalization.
 
 Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not

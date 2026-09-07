@@ -103,6 +103,8 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         lifecycle.fail();
       }
       throw error;
+    } finally {
+      lifecycle.finishRecovery();
     }
   });
 }
@@ -248,16 +250,15 @@ async function updateFinalizeCommandInternal(
   );
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
   configSnapshot = completedPluginUpdate.configSnapshot;
+  const completionBudget = lifecycle.budget("completionCache");
+  // Leave shutdown time inside the phase deadline so optional cache failures can settle.
+  const completionTimeout = completionBudget - Math.min(1_000, completionBudget / 2);
   await lifecycle.run(
     "completionCache",
     async () =>
       opts.deferCompletionCache
         ? ("deferred" as const)
-        : await tryWriteCompletionCache(
-            root,
-            Boolean(opts.json),
-            lifecycle.budget("completionCache"),
-          ),
+        : await tryWriteCompletionCache(root, Boolean(opts.json), completionTimeout),
     (result) => result,
   );
 

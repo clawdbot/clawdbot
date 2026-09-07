@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listUpdateRuns } from "../infra/update-run-ledger.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -26,6 +27,7 @@ const scenarios = [
   "human",
   "human-plugin-error",
   "human-plugin-warning",
+  "human-recovery-plugin-error",
 ];
 const finalizeScenarios = ["json", "phase-hang", "completion-hang", "handle-hang"];
 
@@ -63,7 +65,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         }),
       );
       const json = !scenario.startsWith("human");
-      const stuckPhase =
+      const blockedPhase =
         scenario === "phase-hang"
           ? "configSnapshot"
           : scenario === "completion-hang"
@@ -75,10 +77,10 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         command,
         "--channel",
         "dev",
-        "--yes",
+        ...(scenario === "human-recovery-plugin-error" ? [] : ["--yes"]),
         "--no-restart",
         "--timeout",
-        stuckPhase ? "1" : "9",
+        blockedPhase ? "1" : "9",
         ...(json && scenario !== "inherited-json" ? ["--json"] : []),
       ];
       const readRun = () =>
@@ -135,8 +137,10 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       });
       const failure = formatCliProcessFailure({ reason: `${command} ${scenario}`, ...result });
       expect(result.signal, failure).toBeNull();
-      expect(result.code, failure).toBe(scenario.endsWith("error") || stuckPhase ? 1 : 0);
-      if (stuckPhase) {
+      expect(result.code, failure).toBe(
+        scenario.endsWith("error") || scenario === "phase-hang" ? 1 : 0,
+      );
+      if (blockedPhase) {
         if (scenario === "phase-hang") {
           expect(observedPhaseStart?.steps).toContainEqual(
             expect.objectContaining({
@@ -148,23 +152,30 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         }
         const output = JSON.parse(result.stdout);
         expect(output).toMatchObject({
-          status: "failed",
-          stuckPhase,
+          status: scenario === "phase-hang" ? "failed" : "ok",
           restart: false,
         });
+        if (scenario === "phase-hang") {
+          expect(output.stuckPhase).toBe(blockedPhase);
+        } else {
+          expect(output.stuckPhase).toBeUndefined();
+          const pid = Number(await fs.readFile(path.join(root, "completion.pid"), "utf8"));
+          expect(pid).toBeGreaterThan(0);
+          expect(isPidAlive(pid)).toBe(false);
+        }
         expect(output.phaseTimings).toContainEqual(
           expect.objectContaining({
-            phase: stuckPhase,
+            phase: blockedPhase,
             outcome: "failed",
             durationMs: expect.any(Number),
           }),
         );
-        expect(result.stderr).toContain(`finalize:${stuckPhase}`);
+        expect(result.stderr).toContain(`finalize:${blockedPhase}`);
         expect(readRun()).toMatchObject({
-          status: "failed",
+          status: scenario === "phase-hang" ? "failed" : "succeeded",
           steps: expect.arrayContaining([
             expect.objectContaining({
-              step: `finalize:${stuckPhase}`,
+              step: `finalize:${blockedPhase}`,
               status: "failed",
               startedAtMs: expect.any(Number),
               endedAtMs: expect.any(Number),
@@ -192,6 +203,12 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       }
       expect(diagnostics.match(/Doctor console diagnostic/gu), failure).toHaveLength(1);
       expect(result.stderr, failure).toContain("Doctor stderr diagnostic");
+      if (scenario === "human-recovery-plugin-error") {
+        expect(result.stdout, failure).toContain("Update finalization failed.");
+        expect(result.stdout, failure).toContain("Interactive recovery completed.");
+        expect(result.stderr, failure).not.toContain("Process still alive after terminal output");
+        return;
+      }
       const triageNotice = "Update failed. Entering triage...";
       if (!scenario.endsWith("error")) {
         expect(result.stdout + result.stderr, failure).not.toContain(triageNotice);

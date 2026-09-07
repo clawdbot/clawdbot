@@ -37,6 +37,7 @@ export class UpdateFinalizationLifecycle {
   private ledgerOptions?: { env: NodeJS.ProcessEnv };
   private ownsRun = false;
   private timer?: NodeJS.Timeout;
+  private deferredExitWatch?: () => void;
   completed = false;
   private active?: { phase: Phase; step: string; startedAtMs: number };
 
@@ -154,6 +155,12 @@ export class UpdateFinalizationLifecycle {
     this.finishLedger(1);
   }
 
+  finishRecovery(): void {
+    const watch = this.deferredExitWatch;
+    this.deferredExitWatch = undefined;
+    watch?.();
+  }
+
   complete(exitCode: number): void {
     if (this.completed) {
       return;
@@ -163,20 +170,30 @@ export class UpdateFinalizationLifecycle {
     this.finishLedger(exitCode);
     // This timer never keeps a healthy command alive. Once output has a terminal
     // outcome, retained handles or cleanup must not withhold EOF from supervisors.
-    watchCliExitAfterOutput(exitCode, () => {
-      const diagnostic = JSON.stringify({
-        activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
-        unsettledDisposers: getPendingCliDisposers(),
-      });
-      writeSync(2, `[update finalize] Process still alive after terminal output: ${diagnostic}\n`);
-      if (this.runId) {
-        try {
-          recordUpdateRunDiagnostic(this.runId, diagnostic, this.ledgerOptions);
-        } catch {
-          /* stderr still carries the diagnostic. */
+    const watch = () =>
+      watchCliExitAfterOutput(exitCode, () => {
+        const diagnostic = JSON.stringify({
+          activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
+          unsettledDisposers: getPendingCliDisposers(),
+        });
+        writeSync(
+          2,
+          `[update finalize] Process still alive after terminal output: ${diagnostic}\n`,
+        );
+        if (this.runId) {
+          try {
+            recordUpdateRunDiagnostic(this.runId, diagnostic, this.ledgerOptions);
+          } catch {
+            /* stderr still carries the diagnostic. */
+          }
         }
-      }
-      this.stopChildren();
-    });
+        this.stopChildren();
+      });
+    // Human repair may still await a recovery choice or agent after reporting failure.
+    if (this.json) {
+      watch();
+    } else {
+      this.deferredExitWatch = watch;
+    }
   }
 }

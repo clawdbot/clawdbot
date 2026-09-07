@@ -13,8 +13,14 @@ const [scenario, ...args] = process.argv.slice(2);
 if (scenario === "completion-hang") {
   await fs.writeFile(
     path.join(root, "openclaw.mjs"),
-    "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 10_000);",
+    `import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(path.join(root, "completion.pid"))}, String(process.pid));
+process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 10_000);`,
   );
+}
+if (scenario === "human-recovery-plugin-error") {
+  Object.defineProperty(process.stdin, "isTTY", { value: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: true });
 }
 const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
 const doctorSource = `
@@ -110,6 +116,17 @@ const stubs = new Map<string, string>([
     `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
+if (scenario === "human-recovery-plugin-error") {
+  stubs.set(
+    sourceUrl("./update-cli/update-command-report.ts"),
+    `
+export async function runInteractiveUpdateFailureAction({ runtime }) {
+  await new Promise(resolve => setTimeout(resolve, 11_000));
+  runtime.log('Interactive recovery completed.');
+  return 'handled';
+}`,
+  );
+}
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith(".") || specifier.startsWith("file:")) {
