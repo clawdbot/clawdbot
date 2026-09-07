@@ -117,9 +117,10 @@ async function buildDirectDmContext(
     access: { commands: { authorized: params.commandAuthorized === true } },
     channelIngress: params.channelIngress,
     extra: {
+      ...params.extraContext,
+      // Native direct-user and originating-channel identity stay host-owned.
       NativeDirectUserId: params.peer.id,
       OriginatingChannel: params.originatingChannel ?? params.channel,
-      ...params.extraContext,
     },
   });
 }
@@ -224,26 +225,26 @@ export async function dispatchInboundDirectDmWithRuntime(
     CommandBody: params.commandBody ?? params.rawBody,
     From: params.senderAddress,
     To: params.recipientAddress,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId ?? params.accountId,
-    ChatType: "direct",
     ConversationLabel: params.conversationLabel,
-    SenderId: params.senderId,
     Provider: params.provider ?? params.channel,
     Surface: params.surface ?? params.channel,
     MessageSid: params.messageId,
     MessageSidFull: params.messageId,
     Timestamp: params.timestamp,
     CommandAuthorized: params.commandAuthorized,
+    ConversationRoutePeerId: params.peer.id,
+    OriginatingTo: params.originatingTo ?? params.senderAddress,
+    ...params.extraContext,
+    SessionKey: route.sessionKey,
+    AccountId: route.accountId ?? params.accountId,
+    ChatType: "direct",
+    SenderId: params.senderId,
+    NativeDirectUserId: params.peer.id,
+    OriginatingChannel: params.originatingChannel ?? params.channel,
     ...(params.inboundAccessAuthorized === true ? { InboundAccessAuthorized: true } : {}),
     ...(params.inboundAccessAuthorized === true
       ? { ConversationRouteContextObserved: true as const }
       : {}),
-    ConversationRoutePeerId: params.peer.id,
-    OriginatingChannel: params.originatingChannel ?? params.channel,
-    OriginatingTo: params.originatingTo ?? params.senderAddress,
-    NativeDirectUserId: params.peer.id,
-    ...params.extraContext,
   });
   const plan = buildDirectDmTurnPlan(params, route, ctxPayload);
   await params.runtime.channel.inbound.run({

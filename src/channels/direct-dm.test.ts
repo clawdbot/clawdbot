@@ -207,4 +207,42 @@ describe("dispatchInboundDirectDm", () => {
     });
     expect(contextParams?.conversation.routePeer).toEqual({ kind: "direct", id: "peer-1" });
   });
+
+  it("keeps host native identity fields after extraContext is applied", async () => {
+    await dispatchInboundDirectDm({
+      channelIngress: "unsupported",
+      cfg: {} as OpenClawConfig,
+      channel: "nostr",
+      channelLabel: "Nostr",
+      accountId: "account-1",
+      peer: { kind: "direct", id: "peer-1" },
+      senderId: "peer-1",
+      senderAddress: "nostr:peer-1",
+      recipientAddress: "nostr:bot-1",
+      conversationLabel: "peer-1",
+      rawBody: "hello",
+      messageId: "event-extra-1",
+      originatingChannel: "nostr",
+      commandAuthorized: false,
+      extraContext: {
+        NativeDirectUserId: "extra-peer",
+        OriginatingChannel: "extra-channel",
+        CommandAuthorized: true,
+        InboundAccessAuthorized: false,
+        SessionKey: "extra:session",
+        SenderId: "extra-sender",
+        ChannelSpecificNote: "keep-me",
+      },
+      deliver: async () => undefined,
+      onRecordError: vi.fn(),
+      onDispatchError: vi.fn(),
+    });
+
+    const extra = vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0].extra;
+    expect(extra).toMatchObject({
+      NativeDirectUserId: "peer-1",
+      OriginatingChannel: "nostr",
+      ChannelSpecificNote: "keep-me",
+    });
+  });
 });

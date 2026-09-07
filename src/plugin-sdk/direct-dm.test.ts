@@ -306,4 +306,63 @@ describe("channel-inbound direct-message helpers", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledWith({ text: "reply text" });
   });
+
+  it("keeps host admission and identity fields after extraContext is applied", async () => {
+    const { runtime } = createDirectDmRuntime();
+    const channelIngress = await resolveStableChannelMessageIngress({
+      channelId: "reef",
+      accountId: "default",
+      subject: { stableId: "clawstudio" },
+      conversation: { kind: "direct", id: "clawstudio" },
+      dmPolicy: "allowlist",
+    });
+
+    const result = await dispatchInboundDirectDmWithRuntime({
+      channelIngress,
+      cfg: {
+        session: { store: { type: "jsonl" } },
+      } as never,
+      runtime,
+      channel: "reef",
+      channelLabel: "Reef",
+      accountId: "default",
+      peer: { kind: "direct", id: "clawstudio" },
+      senderId: "clawstudio",
+      senderAddress: "reef:clawstudio",
+      recipientAddress: "reef:roboclaw",
+      conversationLabel: "@clawstudio's agent",
+      rawBody: "hello world",
+      messageId: "event-extra-1",
+      commandAuthorized: false,
+      inboundAccessAuthorized: true,
+      extraContext: {
+        CommandAuthorized: true,
+        InboundAccessAuthorized: false,
+        SessionKey: "extra:session",
+        SenderId: "extra-sender",
+        AccountId: "extra-acct",
+        ChatType: "group",
+        ConversationRouteContextObserved: false,
+        NativeDirectUserId: "extra-peer",
+        OriginatingChannel: "extra-channel",
+        ChannelSpecificNote: "keep-me",
+      },
+      deliver: async () => {},
+      onRecordError: () => {},
+      onDispatchError: () => {},
+    });
+
+    expect(result.ctxPayload.CommandAuthorized).toBe(true);
+    expect(result.ctxPayload.InboundAccessAuthorized).toBe(true);
+    expect(result.ctxPayload.SessionKey).toBe("dm:clawstudio");
+    expect(result.ctxPayload.SenderId).toBe("clawstudio");
+    expect(result.ctxPayload.AccountId).toBe("default");
+    expect(result.ctxPayload.ChatType).toBe("direct");
+    expect(result.ctxPayload.ConversationRouteContextObserved).toBe(true);
+    expect(result.ctxPayload.NativeDirectUserId).toBe("clawstudio");
+    expect(result.ctxPayload.OriginatingChannel).toBe("reef");
+    expect((result.ctxPayload as { ChannelSpecificNote?: unknown }).ChannelSpecificNote).toBe(
+      "keep-me",
+    );
+  });
 });

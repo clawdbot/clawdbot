@@ -336,6 +336,39 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.CommandAuthorized).toBe(false);
   });
 
+  it("keeps host admission and identity fields after extra is applied", () => {
+    const ctx = buildTestInboundEventContext({
+      access: {
+        commands: {
+          authorized: false,
+        },
+      },
+      extra: {
+        CommandAuthorized: true,
+        InboundAccessAuthorized: false,
+        SessionKey: "extra:session",
+        SenderId: "extra-sender",
+        AccountId: "extra-acct",
+        AgentId: "extra-agent",
+        ChatType: "direct",
+        ConversationRouteContextObserved: false,
+        GroupSubject: "Boundary Room",
+        ChannelSpecificNote: "keep-me",
+      },
+    });
+
+    expect(ctx.CommandAuthorized).toBe(true);
+    expect(ctx.GroupSubject).toBe("Boundary Room");
+    expect(ctx.InboundAccessAuthorized).toBe(true);
+    expect(ctx.SessionKey).toBe("agent:main:test:group:room-1");
+    expect(ctx.SenderId).toBe("u1");
+    expect(ctx.AccountId).toBe("acct");
+    expect(ctx.AgentId).toBe("main");
+    expect(ctx.ChatType).toBe("group");
+    expect(ctx.ConversationRouteContextObserved).toBe(true);
+    expect((ctx as { ChannelSpecificNote?: unknown }).ChannelSpecificNote).toBe("keep-me");
+  });
+
   it("carries the routed agent for unscoped session keys", async () => {
     const ctx = buildTestInboundEventContext({
       route: {
