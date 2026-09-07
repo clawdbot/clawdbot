@@ -496,11 +496,15 @@ export async function loadChatRoute(
   if (!cached && defaultsUsable && !preferenceDerived) {
     await context.sessions.whenCachedRosterSettled();
     signal.throwIfAborted();
-    localRow = findLocalSessionReference(
-      context.sessions.state.result?.sessions ?? [],
-      target,
-      configuredMainKey(context),
-    );
+    // Only the pre-hello cached roster resolves a short id locally; a connected
+    // load keeps the Gateway's authoritative sessions.resolve answer.
+    if (context.sessions.state.resultCached) {
+      localRow = findLocalSessionReference(
+        context.sessions.state.result?.sessions ?? [],
+        target,
+        configuredMainKey(context),
+      );
+    }
   }
   const resolution = localRow
     ? ({ kind: "unique", session: localRow } as const)

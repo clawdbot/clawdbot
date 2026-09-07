@@ -253,7 +253,7 @@ describe("session route navigation handoffs", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("resolves a unique cached short route without a gateway request", async () => {
+  it("keeps a cold cached short route on the authoritative resolution path", async () => {
     const storedRow = row({ displayName: "Deploy monitor" });
     const { context, list } = contextFor({ ok: false }, [storedRow]);
     const request = installShortResolver(context, [storedRow]);
@@ -267,6 +267,6 @@ describe("session route navigation handoffs", () => {
 
     expect(loaded).toMatchObject({ kind: "session", sessionKey: storedRow.key });
     expect(list).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledOnce();
   });
 });
