@@ -2761,7 +2761,17 @@ function createCompactNodeTestShardBundles(
   });
   if (packsHostedTooling) {
     const anchors = packedBins
-      .map((bin) => bin.filter((group) => !isHostedToolingGroup(group)))
+      .flatMap((bin) => {
+        const groups = bin.filter((group) => !isHostedToolingGroup(group));
+        // Numbered-tooling inventory must not fuse the whole-config tooling anchor with CLI.
+        const isolatedTooling = groups.filter(
+          (group) => group.shard_name === "core-tooling-isolated",
+        );
+        return [
+          ...isolatedTooling.map((group) => [group]),
+          groups.filter((group) => group.shard_name !== "core-tooling-isolated"),
+        ];
+      })
       .filter((bin): bin is [NodeTestShardGroup, ...NodeTestShardGroup[]] => bin.length > 0);
     const hostedGroups = packedBins
       .flatMap((bin) => bin.filter(isHostedToolingGroup))
