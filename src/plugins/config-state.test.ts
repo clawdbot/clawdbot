@@ -158,6 +158,7 @@ describe("normalizePluginsConfig", () => {
       } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
       expected: {
         hasAllowedModelsConfig: true,
+        allowedModels: [],
       },
     },
   ] as const)("$name", ({ subagent, expected }) => {

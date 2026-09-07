@@ -75,4 +75,83 @@ describe("withBundledPluginEnablementCompat", () => {
       })?.plugins?.allow,
     ).toEqual(["openai", "deepseek"]);
   });
+
+  it("preserves explicit alias disables for canonical bundled plugin ids", () => {
+    const config = {
+      plugins: {
+        entries: {
+          "GOOGLE-GEMINI-CLI": {
+            enabled: false,
+            config: { projectId: "example" },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      withBundledPluginEnablementCompat({
+        config,
+        pluginIds: ["google"],
+      }),
+    ).toEqual({
+      plugins: {
+        entries: {
+          google: {
+            enabled: false,
+            config: { projectId: "example" },
+          },
+        },
+      },
+    });
+  });
+
+  it("canonicalizes compat aliases before extending the allowlist", () => {
+    readBundledDiscoveryModeMemoized.mockReturnValue("compat");
+    const config = {
+      plugins: {
+        allow: ["MINIMAX-PORTAL"],
+        entries: {
+          "MiNiMaX-PoRtAl-AuTh": { enabled: false },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      withBundledPluginEnablementCompat({
+        config,
+        pluginIds: [" MINIMAX-PORTAL-AUTH "],
+      }),
+    ).toEqual({
+      plugins: {
+        allow: ["minimax"],
+        entries: {
+          minimax: { enabled: false },
+        },
+      },
+    });
+  });
+
+  it("preserves empty model policy arrays through repeated alias normalization", () => {
+    const config = {
+      plugins: {
+        entries: {
+          "GOOGLE-GEMINI-CLI": {
+            subagent: { allowedModels: [] },
+            llm: { allowedModels: [], allowedCompletionModels: [] },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const first = withBundledPluginEnablementCompat({ config, pluginIds: ["google"] });
+    const second = withBundledPluginEnablementCompat({
+      config: first,
+      pluginIds: ["GOOGLE-GEMINI-CLI"],
+    });
+
+    const entry = second?.plugins?.entries?.google;
+    expect(entry?.subagent?.allowedModels).toEqual([]);
+    expect(entry?.llm?.allowedModels).toEqual([]);
+    expect(entry?.llm?.allowedCompletionModels).toEqual([]);
+  });
 });

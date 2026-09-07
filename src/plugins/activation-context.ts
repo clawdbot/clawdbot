@@ -4,7 +4,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import {
   createPluginActivationSource,
+  normalizePluginId,
   normalizePluginsConfig,
+  normalizePluginTargetConfig,
   type NormalizedPluginsConfig,
   type PluginActivationConfigSource,
 } from "./config-state.js";
@@ -55,22 +57,28 @@ export function withActivatedPluginIds(params: {
   }
   const originalAllow = params.config?.plugins?.allow ?? [];
   const useAllowlistDiscovery = originalAllow.length > 0;
-  const originalAllowSet = useAllowlistDiscovery ? new Set(originalAllow) : undefined;
-  const allow = new Set(originalAllow);
+  const originalAllowSet = useAllowlistDiscovery
+    ? new Set(originalAllow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean))
+    : undefined;
+  const activatedPluginIds = new Set(
+    params.pluginIds.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean),
+  );
+  let config = params.config ?? {};
+  for (const pluginId of activatedPluginIds) {
+    if (originalAllowSet && !originalAllowSet.has(pluginId)) {
+      activatedPluginIds.delete(pluginId);
+      continue;
+    }
+    config = normalizePluginTargetConfig(config, pluginId);
+  }
+  const allow = new Set(config.plugins?.allow ?? []);
   const entries = {
-    ...params.config?.plugins?.entries,
+    ...config.plugins?.entries,
   };
-  for (const pluginId of params.pluginIds) {
-    const normalized = pluginId.trim();
-    if (!normalized) {
-      continue;
-    }
-    if (originalAllowSet && !originalAllowSet.has(normalized)) {
-      continue;
-    }
-    allow.add(normalized);
-    const existingEntry = entries[normalized];
-    entries[normalized] = {
+  for (const pluginId of activatedPluginIds) {
+    allow.add(pluginId);
+    const existingEntry = entries[pluginId];
+    entries[pluginId] = {
       ...existingEntry,
       enabled: existingEntry?.enabled !== false || params.overrideExplicitDisable === true,
     };
@@ -78,9 +86,9 @@ export function withActivatedPluginIds(params: {
   const forcePluginsEnabled =
     params.overrideGlobalDisable === true && params.config?.plugins?.enabled === false;
   return {
-    ...params.config,
+    ...config,
     plugins: {
-      ...params.config?.plugins,
+      ...config.plugins,
       ...(forcePluginsEnabled ? { enabled: true } : {}),
       ...(allow.size > 0 ? { allow: [...allow] } : {}),
       entries,

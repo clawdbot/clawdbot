@@ -159,9 +159,7 @@ function normalizePluginEntries(
               ? { allowModelOverride: subagent.allowModelOverride }
               : {}),
             ...(subagent.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
-            ...(Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0
-              ? { allowedModels: subagent.allowedModels }
-              : {}),
+            ...(subagent.hasAllowedModelsConfig ? { allowedModels: subagent.allowedModels } : {}),
           }
         : undefined;
     const llmRaw = entry.llm;
@@ -207,13 +205,11 @@ function normalizePluginEntries(
               ? { allowModelOverride: llm.allowModelOverride }
               : {}),
             ...(llm.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
-            ...(Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0
-              ? { allowedModels: llm.allowedModels }
-              : {}),
+            ...(llm.hasAllowedModelsConfig ? { allowedModels: llm.allowedModels } : {}),
             ...(llm.hasAllowedCompletionModelsConfig
               ? { hasAllowedCompletionModelsConfig: true }
               : {}),
-            ...(Array.isArray(llm.allowedCompletionModels) && llm.allowedCompletionModels.length > 0
+            ...(llm.hasAllowedCompletionModelsConfig
               ? { allowedCompletionModels: llm.allowedCompletionModels }
               : {}),
             ...(typeof llm.allowAuthProfileOverride === "boolean"

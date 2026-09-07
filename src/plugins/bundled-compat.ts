@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
-import { normalizePluginId } from "./config-state.js";
+import { normalizePluginId, normalizePluginTargetConfig } from "./config-state.js";
 
 /** Returns config with selected bundled plugins explicitly enabled when compat rules require it. */
 export function withBundledPluginEnablementCompat(params: {
@@ -15,7 +15,6 @@ export function withBundledPluginEnablementCompat(params: {
   if (params.pluginIds.length === 0) {
     return params.config;
   }
-  const existingEntries = params.config?.plugins?.entries ?? {};
   const selectPlugins = params.activation !== "defaults";
   const forcePluginsEnabled = selectPlugins && params.config?.plugins?.enabled === false;
   const allow = params.config?.plugins?.allow;
@@ -27,16 +26,27 @@ export function withBundledPluginEnablementCompat(params: {
     !bypassAllowlist && Array.isArray(allow) && allow.length > 0
       ? new Set(allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean))
       : undefined;
-  let hasEligiblePlugin = false;
+  const eligiblePluginIds = [
+    ...new Set(params.pluginIds.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean)),
+  ].filter((pluginId) => !allowSet || allowSet.has(pluginId));
+  if (eligiblePluginIds.length === 0) {
+    return params.config;
+  }
+
+  let config = params.config ?? {};
+  for (const pluginId of eligiblePluginIds) {
+    config = normalizePluginTargetConfig(config, pluginId);
+  }
+
+  const existingEntries = config.plugins?.entries ?? {};
   let changed = false;
   const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
-  const nextAllow = bypassAllowlist && Array.isArray(allow) ? new Set(allow) : undefined;
+  const nextAllow =
+    bypassAllowlist && Array.isArray(config.plugins?.allow)
+      ? new Set(config.plugins.allow)
+      : undefined;
 
-  for (const pluginId of params.pluginIds) {
-    if (allowSet && !allowSet.has(pluginId)) {
-      continue;
-    }
-    hasEligiblePlugin = true;
+  for (const pluginId of eligiblePluginIds) {
     const beforeAllowSize = nextAllow?.size;
     nextAllow?.add(pluginId);
     if (nextAllow && nextAllow.size !== beforeAllowSize) {
@@ -50,15 +60,15 @@ export function withBundledPluginEnablementCompat(params: {
   }
 
   if (!changed) {
-    if (!forcePluginsEnabled || !hasEligiblePlugin) {
-      return params.config;
+    if (!forcePluginsEnabled) {
+      return config;
     }
   }
 
   return {
-    ...params.config,
+    ...config,
     plugins: {
-      ...params.config?.plugins,
+      ...config.plugins,
       ...(forcePluginsEnabled ? { enabled: true } : {}),
       ...(nextAllow ? { allow: [...nextAllow] } : {}),
       ...(selectPlugins ? { entries: nextEntries } : {}),
