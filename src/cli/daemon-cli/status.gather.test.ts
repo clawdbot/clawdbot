@@ -653,7 +653,9 @@ describe("gatherDaemonStatus", () => {
       { auth: { password: "explicit-password" }, remoteUrl: "wss://explicit.example:19445" },
       { auth: { token: "explicit-token" }, remoteUrl: "wss://remote.example:19443" },
       { auth: { token: "explicit-token" }, remoteUrl: "wss://explicit.example:19445/other" },
-    ].flatMap((testCase) => [false, true].map((requireRpc) => ({ ...testCase, requireRpc }))),
+    ].flatMap(({ auth, remoteUrl }) =>
+      [false, true].map((requireRpc) => ({ auth, remoteUrl, requireRpc })),
+    ),
   )(
     "isolates explicit status credentials $auth with remote=$remoteUrl and requireRpc=$requireRpc",
     async ({ auth, remoteUrl, requireRpc }) => {
@@ -1006,7 +1008,7 @@ describe("gatherDaemonStatus", () => {
       expect(probeInput.config).toEqual({
         ...cliLoadedConfig,
         gateway: {
-          ...cliLoadedConfig.gateway,
+          bind: "loopback",
           mode: "local",
           auth: undefined,
           remote: undefined,
