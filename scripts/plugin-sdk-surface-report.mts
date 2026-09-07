@@ -358,7 +358,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
       // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
       // +1: shared static UI guidance, separate from per-turn harness delivery policy.
-      4446,
+      // +1: shared root/account DM-policy validation for channel config schemas.
+      4447,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -485,7 +486,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
       // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
       // +1: shared static UI guidance, separate from per-turn harness delivery policy.
-      2630,
+      // +1: shared root/account DM-policy validation for channel config schemas.
+      2631,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
