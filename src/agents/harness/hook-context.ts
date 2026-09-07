@@ -35,6 +35,10 @@ export type AgentHarnessHookContext = {
   contextWindowReferenceTokens?: number;
   config?: OpenClawConfig;
   senderId?: string;
+  /** Authenticated current inbound message id, already projected by the caller. */
+  messageId?: string;
+  /** Host-resolved owner bit, already projected by the caller. */
+  senderIsOwner?: boolean;
   chatId?: string;
   channel?: string;
   channelContext?: PluginHookChannelContext;
@@ -67,6 +71,8 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...buildAgentHookContextIdentityFields({
       trigger: params.trigger,
       senderId: params.senderId,
+      messageId: params.messageId,
+      senderIsOwner: params.senderIsOwner,
       chatId: params.chatId,
       channelContext: params.channelContext,
     }),

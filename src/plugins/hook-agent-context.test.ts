@@ -80,7 +80,51 @@ describe("buildAgentHookContextIdentityFields", () => {
         trigger: "cron",
         senderId: "open-id-1",
         chatId: "chat-1",
+        messageId: "msg-1",
+        senderIsOwner: true,
       }),
     ).toEqual({});
+  });
+
+  it("carries the authenticated message id and owner bit for user turns", () => {
+    expect(
+      buildAgentHookContextIdentityFields({
+        trigger: "user",
+        senderId: "open-id-1",
+        chatId: "chat-1",
+        messageId: 4242,
+        senderIsOwner: true,
+      }),
+    ).toEqual({
+      senderId: "open-id-1",
+      chatId: "chat-1",
+      // Numeric provider ids (Telegram) stringify so plugins get one stable type.
+      messageId: "4242",
+      senderIsOwner: true,
+      channelContext: {
+        sender: { id: "open-id-1" },
+        chat: { id: "chat-1" },
+      },
+    });
+  });
+
+  it("keeps a host-resolved non-owner distinguishable from an unresolved sender", () => {
+    expect(buildAgentHookContextIdentityFields({ senderId: "s1", senderIsOwner: false })).toEqual({
+      senderId: "s1",
+      senderIsOwner: false,
+      channelContext: { sender: { id: "s1" } },
+    });
+    expect(buildAgentHookContextIdentityFields({ senderId: "s1" })).toEqual({
+      senderId: "s1",
+      channelContext: { sender: { id: "s1" } },
+    });
+  });
+
+  it("drops blank and unusable message ids instead of emitting an empty coordinate", () => {
+    for (const messageId of ["   ", null, undefined]) {
+      expect(buildAgentHookContextIdentityFields({ senderId: "s1", messageId })).not.toHaveProperty(
+        "messageId",
+      );
+    }
   });
 });
