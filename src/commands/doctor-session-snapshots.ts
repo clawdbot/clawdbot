@@ -17,6 +17,9 @@ import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
 const SESSION_SNAPSHOTS_CHECK_ID = "core/doctor/session-snapshots";
+// Session stores are JSON maps of session records. Cap reads so a corrupted or
+// hostile multi-GB store cannot OOM doctor during snapshot scan/repair.
+const MAX_SNAPSHOT_STORE_BYTES = 16 * 1024 * 1024;
 
 type SnapshotPathSource =
   | "skillsSnapshot.prompt"
@@ -35,9 +38,25 @@ type StaleSessionSnapshotPathFinding = {
   expectedPath: string;
 };
 
-type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
+type StaleSessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
   storePath: string;
+  kind: "stale-path";
 };
+
+type OversizedSessionSnapshotHealthIssue = {
+  kind: "store-too-large";
+  storePath: string;
+  size: number;
+  maxBytes: number;
+};
+
+type SessionSnapshotHealthIssue =
+  | StaleSessionSnapshotHealthIssue
+  | OversizedSessionSnapshotHealthIssue;
+
+function isOversizedStoreError(error: unknown): error is Error {
+  return error instanceof Error && error.message.includes("file too large");
+}
 
 function resolveSessionSnapshotBundledSkillsDir(params?: {
   bundledSkillsDir?: string;
@@ -331,8 +350,21 @@ function resolveSessionStorePaths(params: {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+function readSnapshotStoreRaw(storePath: string): string {
+  const storeStat = fs.statSync(storePath, { throwIfNoEntry: false });
+  if (!storeStat?.isFile()) {
+    throw new Error(`${storePath}: not a regular file`);
+  }
+  if (storeStat.size > MAX_SNAPSHOT_STORE_BYTES) {
+    throw new Error(
+      `${storePath}: file too large (${storeStat.size} bytes, max ${MAX_SNAPSHOT_STORE_BYTES})`,
+    );
+  }
+  return fs.readFileSync(storePath, "utf-8");
+}
+
 function loadSessionStoreForSnapshotScan(storePath: string): Record<string, SessionEntry> {
-  const parsed = JSON.parse(fs.readFileSync(storePath, "utf-8")) as unknown;
+  const parsed = JSON.parse(readSnapshotStoreRaw(storePath)) as unknown;
   if (!isRecord(parsed)) {
     return {};
   }
@@ -362,7 +394,16 @@ export async function detectSessionSnapshotHealthIssues(params?: {
     let store: Record<string, SessionEntry>;
     try {
       store = loadSessionStoreForSnapshotScan(storePath);
-    } catch {
+    } catch (error) {
+      if (isOversizedStoreError(error)) {
+        const storeStat = fs.statSync(storePath, { throwIfNoEntry: false });
+        issues.push({
+          kind: "store-too-large",
+          storePath,
+          size: storeStat?.size ?? 0,
+          maxBytes: MAX_SNAPSHOT_STORE_BYTES,
+        });
+      }
       continue;
     }
     const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
@@ -372,6 +413,7 @@ export async function detectSessionSnapshotHealthIssues(params?: {
     });
     for (const finding of findings) {
       issues.push({
+        kind: "stale-path",
         sessionKey: finding.sessionKey,
         field: finding.field,
         cachedPath: finding.cachedPath,
@@ -386,6 +428,17 @@ export async function detectSessionSnapshotHealthIssues(params?: {
 export function sessionSnapshotIssueToHealthFinding(
   issue: SessionSnapshotHealthIssue,
 ): HealthFinding {
+  if (issue.kind === "store-too-large") {
+    return {
+      checkId: SESSION_SNAPSHOTS_CHECK_ID,
+      severity: "warn",
+      message: `Session store is too large to scan for stale snapshot paths (${issue.size} bytes; max ${issue.maxBytes}).`,
+      path: issue.storePath,
+      requirement: `Keep session stores under ${issue.maxBytes} bytes for doctor snapshot health scans.`,
+      fixHint:
+        "Split or prune the oversized sessions.json, then re-run `openclaw doctor` to resume snapshot-path health checks.",
+    };
+  }
   return {
     checkId: SESSION_SNAPSHOTS_CHECK_ID,
     severity: "info",
@@ -401,6 +454,14 @@ export function sessionSnapshotIssueToHealthFinding(
 export function sessionSnapshotIssueToRepairEffect(
   issue: SessionSnapshotHealthIssue,
 ): HealthRepairEffect {
+  if (issue.kind === "store-too-large") {
+    return {
+      kind: "file",
+      action: "would-skip-oversized-session-store",
+      target: issue.storePath,
+      dryRunSafe: true,
+    };
+  }
   return {
     kind: "file",
     action: "would-rewrite-session-snapshot-path",
@@ -528,10 +589,17 @@ export async function noteSessionSnapshotHealth(params?: {
     try {
       store = loadSessionStoreForSnapshotScan(storePath);
     } catch (err) {
-      note(
-        `- Failed to inspect session snapshot metadata in ${shortenHomePath(storePath)}: ${String(err)}`,
-        "Session snapshots",
-      );
+      if (isOversizedStoreError(err)) {
+        note(
+          `- Skipped oversized session store ${shortenHomePath(storePath)} (${err.message}). Snapshot-path health was not scanned.`,
+          "Session snapshots",
+        );
+      } else {
+        note(
+          `- Failed to inspect session snapshot metadata in ${shortenHomePath(storePath)}: ${String(err)}`,
+          "Session snapshots",
+        );
+      }
       continue;
     }
     const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
@@ -566,7 +634,7 @@ export async function noteSessionSnapshotHealth(params?: {
         const repairResult = await updateLegacySessionStore(
           storePath,
           async (store) => {
-            const raw = fs.readFileSync(storePath, "utf-8");
+            const raw = readSnapshotStoreRaw(storePath);
             const parsed = JSON.parse(raw) as unknown;
             const rawStore = isRecord(parsed) ? parsed : {};
             const replacements = repairFreshSessionSnapshotPaths({
