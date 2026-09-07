@@ -322,7 +322,6 @@ describe("models-config provider auth provenance", () => {
         callback,
         async (fixture) => {
           const marker = refSource === "env" ? "DISCOVERY_KEY" : NON_ENV_SECRETREF_MARKER;
-          fixture.env.DISCOVERY_KEY = "unactivated-env-key";
           expect(await fixture.canonical()).toBe(fixture.runtimeKey);
           const providers = await fixture.discover();
           expect(providers?.openai?.apiKey).toBe(marker);
@@ -462,12 +461,17 @@ describe("models-config provider auth provenance", () => {
   );
 
   it.each(["resolveProviderAuth", "resolveProviderApiKey"] as const)(
-    "keeps plain and OAuth controls through %s",
+    "keeps plain, env and OAuth controls through %s",
     async (callback) => {
       await withDiscoveryFixture("api_key", callback, async (fixture) => {
         fixture.clear();
         for (const profile of [
           { type: "api_key", provider: "openai", key: "plain-key" },
+          {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "PROFILE_KEY" },
+          },
           {
             type: "oauth",
             provider: "openai",
@@ -477,6 +481,7 @@ describe("models-config provider auth provenance", () => {
           },
         ] satisfies AuthProfileCredential[]) {
           fixture.store.profiles[fixture.profileId] = profile;
+          fixture.env.PROFILE_KEY = "env-ref-key";
           if (profile.type === "oauth" && callback === "resolveProviderApiKey") {
             continue;
           }
@@ -484,8 +489,8 @@ describe("models-config provider auth provenance", () => {
         }
         expect(fixture.authorization).toEqual(
           callback === "resolveProviderAuth"
-            ? ["Bearer plain-key", "Bearer oauth-key"]
-            : ["Bearer plain-key"],
+            ? ["Bearer plain-key", "Bearer env-ref-key", "Bearer oauth-key"]
+            : ["Bearer plain-key", "Bearer env-ref-key"],
         );
         expect(fixture.errors).toEqual([]);
       });

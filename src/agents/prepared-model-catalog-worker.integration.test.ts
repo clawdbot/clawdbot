@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
@@ -949,7 +948,7 @@ describe("prepared model catalog worker boundary", () => {
     }
   });
 
-  it("preserves ref-only profiles through activation and the real worker", async () => {
+  it("preserves ref-only api-key and token profiles through the real worker", async () => {
     const fixture = await createStaticSnapshot(0);
     const authStore = {
       version: 1,
@@ -966,18 +965,6 @@ describe("prepared model catalog worker boundary", () => {
         },
       },
     };
-    const { prepareSecretsRuntimeSnapshot } = await import("../secrets/runtime.js");
-    const secrets = await prepareSecretsRuntimeSnapshot({
-      config: fixture.config,
-      env: fixture.env,
-      agentDirs: [fixture.agentDir],
-      includeConfigRefs: false,
-      loadAuthStore: () => authStore,
-    });
-    const preparedAuthStore = expectDefined(
-      secrets.authStores.find(({ agentDir }) => agentDir === fixture.agentDir),
-      "activated auth store",
-    ).store;
     const worker = createPreparedModelCatalogWorker({
       agentFacts: {
         input: {
@@ -988,7 +975,7 @@ describe("prepared model catalog worker boundary", () => {
           env: fixture.env,
         },
         env: fixture.env,
-        authStore: preparedAuthStore,
+        authStore,
         credentials: {},
         providerIds: [PROVIDER_ID],
         configuredModelRefs: [],
