@@ -14,6 +14,7 @@ import {
  * routes resulting outbound text back to ClickClack.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
 import { createClickClackClient } from "./http-client.js";
@@ -34,6 +35,13 @@ const CHANNEL_ID = "clickclack" as const;
 const CLICKCLACK_MESSAGE_ID_PATTERN = /^msg_[0-9a-hjkmnp-tv-z]{26}$/u;
 const CLICKCLACK_MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
 const CLICKCLACK_UPLOAD_READ_IDLE_TIMEOUT_MS = 30_000;
+
+class ClickClackPermanentMediaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ClickClackPermanentMediaError";
+  }
+}
 
 function hasClickClackReplyMedia(payload: {
   mediaUrl?: string;
@@ -80,7 +88,9 @@ async function stageClickClackInboundMedia(params: {
       throw params.abortSignal.reason ?? new Error("ClickClack attachment staging aborted");
     }
     if (attachment.byte_size > maxBytes) {
-      throw new Error(`ClickClack attachment ${attachment.id} exceeds the configured media limit`);
+      throw new ClickClackPermanentMediaError(
+        `ClickClack attachment ${attachment.id} exceeds the configured media limit`,
+      );
     }
     const sourceUrl = `${params.account.apiEndpoint}/api/uploads/${encodeURIComponent(attachment.id)}`;
     const saved = await client.consumeUpload(
@@ -104,6 +114,32 @@ async function stageClickClackInboundMedia(params: {
     });
   }
   return toInboundMediaFacts(staged);
+}
+
+function isPermanentMediaRejection(error: unknown): boolean {
+  return (
+    error instanceof ClickClackPermanentMediaError ||
+    (error instanceof MediaFetchError && error.code === "max_bytes")
+  );
+}
+
+async function sendClickClackInboundNotice(params: {
+  account: ResolvedClickClackAccount;
+  cfg: CoreConfig;
+  message: ClickClackMessage;
+  target: string;
+  text: string;
+  correlationId?: string;
+}) {
+  await sendClickClackText({
+    cfg: params.cfg,
+    accountId: params.account.accountId,
+    to: params.target,
+    text: params.text,
+    threadId: params.message.parent_message_id ? params.message.thread_root_id : undefined,
+    replyToId: params.message.id,
+    correlationId: params.correlationId,
+  });
 }
 
 async function dispatchModelReply(params: {
@@ -194,13 +230,50 @@ export async function handleClickClackInbound(params: {
     return;
   }
   const { discussionRoute, isDirect, route, target } = access.preparedRoute;
-  const media = await stageClickClackInboundMedia({
-    account: params.account,
-    cfg: params.config,
-    message,
-    correlationId: params.correlationId,
-    abortSignal: params.abortSignal,
-  });
+  if (params.abortSignal?.aborted) {
+    return;
+  }
+  const hasAttachments = (message.attachments?.length ?? 0) > 0;
+  if (params.account.replyMode === "model" && !discussionRoute && hasAttachments) {
+    await sendClickClackInboundNotice({
+      account: params.account,
+      cfg: params.config,
+      message,
+      target,
+      text: "This ClickClack bot is configured for text-only model replies and cannot process attachments.",
+      correlationId: params.correlationId,
+    });
+    return;
+  }
+  let media: ReturnType<typeof toInboundMediaFacts>;
+  try {
+    media = await stageClickClackInboundMedia({
+      account: params.account,
+      cfg: params.config,
+      message,
+      correlationId: params.correlationId,
+      abortSignal: params.abortSignal,
+    });
+  } catch (error) {
+    if (!isPermanentMediaRejection(error)) {
+      throw error;
+    }
+    if (params.abortSignal?.aborted) {
+      return;
+    }
+    await sendClickClackInboundNotice({
+      account: params.account,
+      cfg: params.config,
+      message,
+      target,
+      text: "I could not process this attachment because it exceeds this bot's media limit.",
+      correlationId: params.correlationId,
+    });
+    return;
+  }
+  if (params.abortSignal?.aborted) {
+    return;
+  }
   const progress = params.account.nativeProgress
     ? createClickClackAgentProgressPublisher({
         client: createClickClackClient({
@@ -224,7 +297,7 @@ export async function handleClickClackInbound(params: {
         },
       })
     : undefined;
-  if (params.account.replyMode === "model" && !discussionRoute && media.length === 0) {
+  if (params.account.replyMode === "model" && !discussionRoute) {
     if (access.botLoopProtection) {
       const loopResult = recordChannelBotPairLoopAndCheckSuppression(access.botLoopProtection);
       if (loopResult.suppressed) {

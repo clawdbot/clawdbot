@@ -1,10 +1,17 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
 import type { ClickClackMessage, ResolvedClickClackAccount } from "./types.js";
+
+const sendClickClackTextMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./outbound.js", () => ({
+  sendClickClackText: sendClickClackTextMock,
+}));
 
 function createRuntime(): PluginRuntime {
   return createPluginRuntimeMock({
@@ -42,7 +49,6 @@ function createAccount(replyMode: "agent" | "model" = "agent"): ResolvedClickCla
     token: "test-token-placeholder",
     workspace: "wsp_1",
     replyMode,
-    toolsAllow: [],
     defaultTo: "channel:general",
     allowFrom: ["*"],
     allowBots: false,
@@ -95,6 +101,7 @@ function createMessage(uploadId: string, byteSize: number): ClickClackMessage {
 
 describe("ClickClack inbound media", () => {
   afterEach(() => {
+    sendClickClackTextMock.mockReset();
     vi.unstubAllGlobals();
   });
 
@@ -138,15 +145,11 @@ describe("ClickClack inbound media", () => {
     ]);
   });
 
-  it("uses the agent pipeline for media in text-only model mode", async () => {
+  it("keeps media in text-only model mode from gaining agent or tool authority", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () => new Response(new Uint8Array([1]), { headers: { "Content-Type": "image/png" } }),
-      ),
-    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
 
     await handleClickClackInbound({
       account: createAccount("model"),
@@ -155,6 +158,68 @@ describe("ClickClack inbound media", () => {
     });
 
     expect(runtime.llm.complete).not.toHaveBeenCalled();
-    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sendClickClackTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("text-only model replies") }),
+    );
+  });
+
+  it("turns a permanent media limit failure into a visible terminal reply", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    vi.mocked(runtime.channel.media.saveResponseMedia).mockRejectedValueOnce(
+      new MediaFetchError("max_bytes", "payload exceeds maxBytes"),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => new Response(new Uint8Array([1]), { headers: { "Content-Type": "image/png" } }),
+      ),
+    );
+
+    await handleClickClackInbound({
+      account: createAccount(),
+      config: {},
+      message: createMessage("upl_too_large", 1),
+    });
+
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(sendClickClackTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("media limit") }),
+    );
+  });
+
+  it("does not dispatch when shutdown wins during final media staging", async () => {
+    const runtime = createRuntime();
+    const controller = new AbortController();
+    setClickClackRuntime(runtime);
+    vi.mocked(runtime.channel.media.saveResponseMedia).mockImplementationOnce(async () => {
+      controller.abort();
+      return {
+        id: "test-media.jpg",
+        path: "/tmp/test-media.jpg",
+        size: 1,
+        contentType: "image/jpeg",
+      };
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => new Response(new Uint8Array([1]), { headers: { "Content-Type": "image/png" } }),
+      ),
+    );
+
+    await handleClickClackInbound({
+      account: createAccount(),
+      config: {},
+      message: createMessage("upl_shutdown", 1),
+      abortSignal: controller.signal,
+    });
+
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(sendClickClackTextMock).not.toHaveBeenCalled();
   });
 });
