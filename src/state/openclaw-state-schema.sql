@@ -1158,7 +1158,8 @@ CREATE TABLE IF NOT EXISTS gateway_boot_lifecycle (
   completed_at_ms INTEGER,
   outcome TEXT,
   startup_reason TEXT,
-  reason TEXT
+  reason TEXT,
+  host_boot_id TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_gateway_boot_lifecycle_started

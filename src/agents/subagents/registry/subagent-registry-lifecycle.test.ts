@@ -838,6 +838,33 @@ describe("subagent registry lifecycle hardening", () => {
     expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(entry);
   });
 
+  it("preserves an attributed restart error after the explicit run deadline", async () => {
+    const entry = createRunEntry({ runTimeoutSeconds: 3 });
+    const controller = createLifecycleController({ entry });
+
+    await controller.completeSubagentRun(
+      makeInterruptedSubagentCompletion(entry, {
+        startedAt: 2_000,
+        endedAt: 6_000,
+        outcome: { status: "error", error: "gateway process exited without a clean stop" },
+      }),
+    );
+
+    expect(entry).toMatchObject({
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      terminalOwner: "interrupted-recovery",
+      execution: {
+        endedAt: 6_000,
+        outcome: {
+          status: "error",
+          error: "gateway process exited without a clean stop",
+          startedAt: 2_000,
+          endedAt: 6_000,
+        },
+      },
+    });
+  });
+
   it("does not publish recovered terminal events for an ordinary completion", async () => {
     const outcome = {
       status: "error" as const,

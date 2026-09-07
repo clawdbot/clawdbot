@@ -236,6 +236,34 @@ describe("OpenClaw database schema preflight", () => {
     }
   });
 
+  it("classifies a copied database without the host boot id as startup-repairable", async () => {
+    const sourcePath = createExplicitStateDatabase(
+      OPENCLAW_STATE_SCHEMA_SQL.replace(
+        "  startup_reason TEXT,\n  reason TEXT,\n  host_boot_id TEXT\n",
+        "  startup_reason TEXT,\n  reason TEXT\n",
+      ),
+    );
+    const databasePath = path.join(
+      tempDirs.make("openclaw-copied-host-boot-preflight-"),
+      "candidate.sqlite",
+    );
+    fs.copyFileSync(sourcePath, databasePath);
+    const before = snapshotSourceFamily(sourcePath);
+
+    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
+      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      status: "startup-repairable",
+      requiresWrite: true,
+      issues: [
+        {
+          code: "missing-column",
+          objectName: "gateway_boot_lifecycle.host_boot_id",
+        },
+      ],
+    });
+    expect(snapshotSourceFamily(sourcePath)).toEqual(before);
+  });
+
   it("accepts first-use session group columns without requiring a startup write", async () => {
     const databasePath = createExplicitStateDatabase(
       OPENCLAW_STATE_SCHEMA_SQL.replace(

@@ -323,6 +323,12 @@ export function reconcileOrphanedRestoredRuns(params: {
       // Their bounded reconciliation runs even when the session vanished.
       continue;
     }
+    if (entry.execution.status !== "queued" && entry.execution.endedAt === undefined) {
+      // Active restored rows belong to the sweeper, which can attribute a
+      // gateway death and deliver a requester-visible terminal outcome.
+      // Pruning them here would erase both that evidence and notification.
+      continue;
+    }
     const orphanReason = resolveSubagentRunOrphanReason({
       entry,
       includeStaleUnended: true,

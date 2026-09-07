@@ -622,6 +622,7 @@ export interface FlowRuns {
 export interface GatewayBootLifecycle {
   boot_id: string;
   completed_at_ms: number | null;
+  host_boot_id: string | null;
   outcome: string | null;
   pid: number;
   reason: string | null;
