@@ -597,7 +597,9 @@ export class CodexToolProgressProjection {
     ) {
       const next: ToolProgressRawSignature = {
         length: rawLength,
-        prefix: rawPrefix.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
+        // Cap with truncateUtf16Safe so emoji/CJK at the budget edge cannot
+        // leave a lone surrogate in the stored echo prefix.
+        prefix: truncateUtf16Safe(rawPrefix, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
       };
       if (signature.streamedDisplay) {
         existing.streamedRawSignature = next;

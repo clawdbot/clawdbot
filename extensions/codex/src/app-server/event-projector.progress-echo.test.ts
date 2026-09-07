@@ -357,6 +357,71 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("tail-should-not-appear");
   });
 
+  it("keeps aggregate echo prefixes UTF-16 safe at the transcript budget via projector write sites", async () => {
+    const projector = await createProjector();
+    // Surrogate pair straddles TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS (10_000): a raw
+    // .slice would leave a lone high surrogate in both echo-prefix writers.
+    const asciiPrefix = "a".repeat(9_999);
+    const aggregatedOutput = `${asciiPrefix}😀${"a".repeat(400)}`;
+    const brokenSlice = aggregatedOutput.slice(0, 10_000);
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-aggregate-utf16-echo",
+          command: "printf output",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    // Production path: turn/completed → rememberCommandAggregateOutputEcho →
+    // toolOutputRawEchoSignature (write site 1) → rememberEcho prefix cap (write site 2).
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<string, { rawSignatures: Array<{ length: number; prefix: string }> }>;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    const signatures = echoState.get("cmd-aggregate-utf16-echo")?.rawSignatures ?? [];
+    expect(signatures.length).toBeGreaterThan(0);
+    expect(brokenSlice.charCodeAt(brokenSlice.length - 1)).toBe(0xd83d);
+
+    for (const signature of signatures) {
+      expect(signature.prefix).not.toMatch(/[\uD800-\uDFFF]/);
+      expect(signature.prefix.endsWith("😀")).toBe(false);
+      expect(signature.prefix).toBe(asciiPrefix);
+      expect(signature.length).toBe(aggregatedOutput.length);
+      process.stdout.write(
+        `[utf16-echo-proof] write_sites=toolOutputRawEchoSignature+rememberEcho\n`,
+      );
+      process.stdout.write(
+        `[utf16-echo-proof] broken_slice_last_codeunit=${brokenSlice
+          .charCodeAt(brokenSlice.length - 1)
+          .toString(16)}\n`,
+      );
+      process.stdout.write(`[utf16-echo-proof] stored_prefix_len=${signature.prefix.length}\n`);
+      process.stdout.write(
+        `[utf16-echo-proof] stored_prefix_last_codeunit=${signature.prefix
+          .charCodeAt(signature.prefix.length - 1)
+          .toString(16)}\n`,
+      );
+      process.stdout.write(
+        `[utf16-echo-proof] stored_prefix_has_surrogate=${/[\uD800-\uDFFF]/.test(signature.prefix)}\n`,
+      );
+      process.stdout.write(`[utf16-echo-proof] stored_raw_length=${signature.length}\n`);
+    }
+  });
+
   it("keeps final answers that only start with a streamed tool-output prefix", async () => {
     const projector = await createProjector();
     const rawOutput = "s".repeat(12_345);

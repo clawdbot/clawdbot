@@ -97,7 +97,9 @@ export function toolOutputRawEchoSignature(
   }
   return {
     rawLength: trimmed.length,
-    rawPrefix: trimmed.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
+    // Same UTF-16 budget as transcript truncation: a raw .slice can land inside
+    // a surrogate pair and poison echo-prefix matching / suppression.
+    rawPrefix: truncateUtf16Safe(trimmed, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
   };
 }
 
