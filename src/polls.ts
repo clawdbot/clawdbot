@@ -31,7 +31,10 @@ export function resolvePollMaxSelections(
   optionCount: number,
   allowMultiselect: boolean | undefined,
 ): number {
-  return allowMultiselect ? Math.max(2, optionCount) : 1;
+  if (optionCount < 2) {
+    throw new Error("Poll requires at least 2 options");
+  }
+  return allowMultiselect ? optionCount : 1;
 }
 
 export function normalizePollInput(
