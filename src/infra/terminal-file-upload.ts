@@ -43,7 +43,7 @@ const uploadQueue = new BoundedSerialQueue({
 type CleanupState = {
   retentionMs: number;
   // One deadline per observed upload, including legacy inventories above the admission limit.
-  deadlines: Map<string, { dev: number; ino: number; expiresAt: number }>;
+  deadlines: Map<string, { dev: bigint; ino: bigint; expiresAt: number }>;
   timer?: ReturnType<typeof setTimeout>;
   nextAt?: number;
 };
@@ -261,7 +261,7 @@ async function scanUploads(
       const directory = path.join(root, entry.name);
       let stats;
       try {
-        stats = await lstat(directory);
+        stats = await lstat(directory, { bigint: true });
       } catch (error) {
         if (hasErrnoCode(error, "ENOENT")) {
           continue;
@@ -270,14 +270,17 @@ async function scanUploads(
       }
       if (
         !stats.isDirectory() ||
-        (typeof process.getuid === "function" && stats.uid !== process.getuid())
+        (typeof process.getuid === "function" && stats.uid !== BigInt(process.getuid()))
       ) {
         continue;
       }
       unseen.delete(directory);
       let deadline = state.deadlines.get(directory);
       if (!deadline || deadline.dev !== stats.dev || deadline.ino !== stats.ino) {
-        if (stats.mtimeMs > nowMs) {
+        // Keep fractional milliseconds so recovery cannot expire an upload early.
+        const mtimeMs =
+          Number(stats.mtimeNs / 1_000_000n) + Number(stats.mtimeNs % 1_000_000n) / 1_000_000;
+        if (mtimeMs > nowMs) {
           // Persist the clamp so another process cannot extend a future-dated upload.
           await assertHeld();
           await lutimes(directory, stats.atime, new Date(nowMs));
@@ -285,7 +288,7 @@ async function scanUploads(
         deadline = {
           dev: stats.dev,
           ino: stats.ino,
-          expiresAt: Math.min(stats.mtimeMs, nowMs) + state.retentionMs,
+          expiresAt: Math.min(mtimeMs, nowMs) + state.retentionMs,
         };
         state.deadlines.set(directory, deadline);
       }
@@ -418,9 +421,9 @@ export async function stageTerminalUpload(
         await assertHeld();
         const directory = await mkdtemp(path.join(root, TERMINAL_UPLOAD_PREFIX));
         const targetPath = path.join(directory, sanitizeTerminalUploadName(name));
-        let identity: { dev: number; ino: number } | undefined;
+        let identity: { dev: bigint; ino: bigint } | undefined;
         try {
-          const { dev, ino } = await lstat(directory);
+          const { dev, ino } = await lstat(directory, { bigint: true });
           identity = { dev, ino };
           await assertHeld();
           await writeFile(targetPath, Buffer.from(contentBase64, "base64"), {
