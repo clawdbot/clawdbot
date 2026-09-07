@@ -661,6 +661,9 @@ async function buildParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
+  // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
+  // stays on the last stable user turn; conversion-to-policy must not splice messages.
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const params: MessageCreateParamsStreaming = {
     model: model.id,
     // The SDK's stable message union omits compaction blocks accepted by its beta endpoint.
@@ -673,6 +676,7 @@ async function buildParams(
         allowEmptySignature: compat.allowEmptySignature,
         compaction: replayPlan.compaction,
         replayThinkingEnabled,
+        cacheBreakpointOptOutMessageIndexes,
       },
     )) as MessageParam[],
     max_tokens: options?.maxTokens ?? model.maxTokens,
@@ -680,12 +684,11 @@ async function buildParams(
   };
 
   if (cacheControl) {
-    // Anthropic-family carriers are append-only, so they are stable cache anchors too.
     applyAnthropicCacheControlToMessages(
       params.messages,
       cacheControl,
       messageCacheControlLimit,
-      new Set(),
+      cacheBreakpointOptOutMessageIndexes,
     );
   }
 

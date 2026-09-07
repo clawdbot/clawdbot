@@ -2415,7 +2415,7 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("anchors the message cache breakpoint on an append-only runtime-context carrier", async () => {
+  it("anchors the message cache breakpoint on the last stable user turn, skipping a trailing runtime-context carrier", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
       {},
       { stopBeforeNetwork: true },
@@ -2425,7 +2425,7 @@ describe("Anthropic provider", () => {
           { role: "user", content: "stable question", timestamp: 0 },
           {
             role: "user",
-            content: "retained current-turn metadata",
+            content: "volatile current-turn metadata",
             timestamp: 1,
             runtimeContextCarrier: true,
           },
@@ -2435,14 +2435,13 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    expect(messages[0]?.content).toBe("stable question");
-    expect(messages[1]?.content).toEqual([
-      {
-        type: "text",
-        text: "retained current-turn metadata",
-        cache_control: { type: "ephemeral" },
-      },
+    // Deepest breakpoint anchors on the stable user turn (converted to a block
+    // array with cache_control) so it stays a cacheable prefix next turn...
+    expect(messages[0]?.content).toEqual([
+      { type: "text", text: "stable question", cache_control: { type: "ephemeral" } },
     ]);
+    // ...and NOT on the trailing volatile carrier, which is left uncached.
+    expect(messages[1]?.content).toBe("volatile current-turn metadata");
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

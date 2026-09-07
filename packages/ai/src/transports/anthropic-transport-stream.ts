@@ -584,6 +584,9 @@ async function buildAnthropicParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
+  // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
+  // stays on the last stable user turn; conversion-to-policy must not splice messages.
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const messages = await convertAnthropicMessages(
     transformTransportMessages(replayPlan.messages, model, normalizeAnthropicToolCallId),
     model,
@@ -593,6 +596,7 @@ async function buildAnthropicParams(
       allowReasoningContentReplay: supportsReasoningContentReplay(model),
       compaction: replayPlan.compaction,
       replayThinkingEnabled,
+      cacheBreakpointOptOutMessageIndexes,
     },
   );
   const params: Record<string, unknown> = {
@@ -649,8 +653,7 @@ async function buildAnthropicParams(
       profile: "transport",
     }),
   );
-  // Anthropic-family carriers are append-only, so they are stable cache anchors too.
-  applyAnthropicPayloadPolicyToParams(params, payloadPolicy, new Set());
+  applyAnthropicPayloadPolicyToParams(params, payloadPolicy, cacheBreakpointOptOutMessageIndexes);
   return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
 }
 

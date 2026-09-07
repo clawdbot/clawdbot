@@ -137,9 +137,14 @@ export async function convertAnthropicMessages(
     replayThinkingEnabled?: boolean;
     allowEmptySignature?: boolean;
     profile: "provider" | "transport";
+    /** Param indexes for transient runtime-context carriers — excluded from
+     * cache_control breakpoint selection so the deepest breakpoint anchors on the
+     * last stable user turn, not the volatile carrier appended after it. */
+    cacheBreakpointOptOutMessageIndexes?: Set<number>;
   },
 ): Promise<AnthropicWireMessage[]> {
   const params: AnthropicWireMessage[] = [];
+  const cacheBreakpointOptOutMessageIndexes = options.cacheBreakpointOptOutMessageIndexes;
   const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
@@ -155,6 +160,10 @@ export async function convertAnthropicMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
+          const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
+          if (isRuntimeContextCarrier) {
+            cacheBreakpointOptOutMessageIndexes?.add(params.length);
+          }
           const userParam: AnthropicWireMessage = {
             role: "user",
             content: sanitizeTransportPayloadText(msg.content),
@@ -195,6 +204,10 @@ export async function convertAnthropicMessages(
       );
       if (filteredBlocks.length === 0) {
         continue;
+      }
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
+      if (isRuntimeContextCarrier) {
+        cacheBreakpointOptOutMessageIndexes?.add(params.length);
       }
       const userParam: AnthropicWireMessage = {
         role: "user",
