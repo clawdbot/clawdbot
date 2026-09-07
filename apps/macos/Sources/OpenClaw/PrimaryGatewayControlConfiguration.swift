@@ -45,6 +45,11 @@ enum PrimaryGatewayControlConfiguration: Sendable {
         let clearsTargetDefaults: Bool
     }
 
+    var isClear: Bool {
+        if case .clear = self { return true }
+        return false
+    }
+
     var requestedLocalPort: Int? {
         switch self {
         case let .ssh(_, _, localPort, _, _, _, _): localPort

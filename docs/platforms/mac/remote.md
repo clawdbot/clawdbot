@@ -168,6 +168,7 @@ For a Gateway using a shared token, replace `--browser` with
 `--token-file /path/to/gateway-token`; passwords use
 `--password-file /path/to/gateway-password`. The same URL validation as the
 Gateways tab applies, including secure `wss://` for public hosts.
+Token/password adds wait for a connection attempt within the request timeout; if it fails, the profile remains saved and the command exits with code `0`, reporting `disconnected` with a sanitized error.
 
 ```bash
 openclaw-mac gateway reconnect Research

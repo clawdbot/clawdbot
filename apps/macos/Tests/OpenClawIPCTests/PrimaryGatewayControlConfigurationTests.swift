@@ -120,7 +120,7 @@ struct PrimaryGatewayControlConfigurationTests {
     }
 
     @Test
-    func `clearing removes the remote URL that would reenable remote mode`() throws {
+    func `clearing removes the remote URL and permits a subsequent direct selection`() throws {
         let replacement = try PrimaryGatewayControlConfiguration.clear.replacingRoot(
             self.previous, effectiveLocalPort: 19000)
         let gateway = try #require(replacement.root["gateway"] as? [String: Any])
@@ -129,6 +129,12 @@ struct PrimaryGatewayControlConfigurationTests {
         #expect(gateway["remote"] == nil)
         #expect(gateway["auth"] as? [String: String] == ["token": "local-credential"])
         #expect(replacement.clearsTargetDefaults)
+
+        let direct = try PrimaryGatewayControlConfiguration.direct(
+            url: #require(URL(string: "wss://new.example/")), token: nil, password: nil, tlsFingerprint: nil)
+            .replacingRoot(replacement.root, effectiveLocalPort: 19000)
+        #expect((direct.root["gateway"] as? [String: Any])?["mode"] as? String == "remote")
+        #expect(GatewayRemoteConfig.resolveUrlString(root: direct.root) == "wss://new.example/")
     }
 
     @Test(arguments: ["ws://public.example", "wss://user:secret@public.example", "wss://public.example?token=secret"])

@@ -62,7 +62,7 @@ final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
 
     let isPreview: Bool
-    @ObservationIgnored private let gatewayConfigSaver: ([String: Any]) -> Bool
+    @ObservationIgnored private let gatewayConfigSaver: ([String: Any], Bool) -> Bool
     @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
     @ObservationIgnored private var isHydratingLaunchAtLogin = false
     private var isInitializing = true
@@ -453,7 +453,9 @@ final class AppState {
 
     init(
         preview: Bool = false,
-        gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) })
+        gatewayConfigSaver: @escaping ([String: Any], Bool) -> Bool = {
+            OpenClawConfigFile.saveDict($0, allowGatewayModeRemoval: $1)
+        })
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
@@ -1316,7 +1318,7 @@ extension AppState {
         let changed = Self.configFingerprint(currentRoot) != Self.configFingerprint(replacement.root)
         self.gatewayConfigSyncTask?.cancel()
         self.setGatewayConfigSyncState(.pending)
-        guard !changed || self.gatewayConfigSaver(replacement.root) else {
+        guard !changed || self.gatewayConfigSaver(replacement.root, configuration.isClear) else {
             self.setGatewayConfigSyncState(previousSyncState)
             throw PrimaryGatewayControlError.persistenceFailed
         }
@@ -1337,10 +1339,8 @@ extension AppState {
                 }
             }
         }
-        if case .clear = configuration {
-            self.onboardingSeen = false
-        } else {
-            self.onboardingSeen = true
+        self.onboardingSeen = !configuration.isClear
+        if self.onboardingSeen {
             self.ifNotPreview {
                 AppDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
             }
@@ -1381,7 +1381,7 @@ extension AppState {
             currentRoot: currentRoot,
             draft: draft,
             primaryGateway: primaryGateway)
-        guard !synced.changed || self.gatewayConfigSaver(synced.root) else {
+        guard !synced.changed || self.gatewayConfigSaver(synced.root, false) else {
             self.setGatewayConfigSyncState(primaryGateway == nil ? .failed : previousSyncState)
             Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
             return false

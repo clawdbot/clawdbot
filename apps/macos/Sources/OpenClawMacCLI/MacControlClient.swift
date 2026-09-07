@@ -14,6 +14,10 @@ struct MacControlClient {
         defer { close(fd) }
         let token = try MacControlCredentials
             .read(at: directory.appendingPathComponent(MacControlCredentials.tokenFilename))
+        var request = request
+        let remaining = ContinuousClock.now.duration(to: deadline).components
+        request.deadline = Date().addingTimeInterval(
+            Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18)
         var data = try JSONEncoder().encode(MacControlEnvelope(request: request, token: token))
         data.append(0x0A)
         guard data.count <= MacControlCredentials.maximumFrameBytes else {

@@ -16,6 +16,7 @@ public struct MacControlRequest: Codable, Sendable {
     public var name: String?
     public var browser: Bool?
     public var idOrName: String?
+    public var deadline: Date?
 
     public init(operation: String) {
         self.operation = operation
