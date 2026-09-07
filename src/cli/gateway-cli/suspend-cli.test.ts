@@ -67,6 +67,20 @@ describe("gateway suspend CLI", () => {
     },
   );
 
+  it.each(["0x10", "0b101", "0o17"])(
+    "rejects non-decimal wait literal %j before acquiring a lease",
+    async (waitSeconds) => {
+      const callGateway = vi.fn(async () => readyResult);
+
+      // Number("0x10") would coerce to 16 s; the strict parser must reject a
+      // radix-literal --wait so it cannot silently suspend for the wrong time.
+      await expect(
+        runGatewaySuspend({ rpcOpts: {}, waitSeconds }, { callGateway, runtime: createRuntime() }),
+      ).rejects.toThrow("--wait must be a non-negative number of seconds");
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       name: "default gateway",
