@@ -56,6 +56,7 @@ import {
   upstream,
   withParkedNativeTask,
   withNativePlugin,
+  withRegisteredNativeEmbeddedRun,
 } from "./talk-client-native-control.test-support.js";
 
 // Observe the real admission function before the consult loader captures it for later tests.
@@ -197,29 +198,38 @@ describe("native Talk action ownership through public plugin registration", () =
         }
       });
       let modelRun: Promise<void> | undefined;
-      upstream.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-        const { agentId, sessionId, sessionKey, storePath } = params.sessionTarget ?? {};
-        if (!agentId || !sessionId || !sessionKey || !storePath || !params.preparedRunAdmission) {
-          throw new Error("Missing native target/admission");
-        }
-        await params.preparedRunAdmission.admit("embedded", "native-history-backend");
-        const recorder = params.userTurnTranscriptRecorder;
-        const manager = guardSessionManager(
-          SessionManager.open({ agentId, sessionId, sessionKey, storePath }),
-          {
-            agentId: AGENT_ID,
-            sessionKey: SESSION_KEY,
-            runId: params.runId,
-            preparedUserTurnMessage: await recorder?.resolveMessage(),
-            preparedUserTurnTranscriptRecorder: recorder,
-          },
-        );
-        const { session } = await createTestSession({ sessionManager: manager });
-        modelRun = session.prompt(params.prompt);
-        await modelRun;
-        await recorder?.waitForRuntimePersistence();
-        return { payloads: [{ text: "Both labels are preserved." }], meta: { durationMs: 0 } };
-      });
+      upstream.runEmbeddedAgent.mockImplementationOnce(
+        async (params) =>
+          await withRegisteredNativeEmbeddedRun(params, async () => {
+            const { agentId, sessionId, sessionKey, storePath } = params.sessionTarget ?? {};
+            if (
+              !agentId ||
+              !sessionId ||
+              !sessionKey ||
+              !storePath ||
+              !params.preparedRunAdmission
+            ) {
+              throw new Error("Missing native target/admission");
+            }
+            await params.preparedRunAdmission.admit("embedded", "native-history-backend");
+            const recorder = params.userTurnTranscriptRecorder;
+            const manager = guardSessionManager(
+              SessionManager.open({ agentId, sessionId, sessionKey, storePath }),
+              {
+                agentId: AGENT_ID,
+                sessionKey: SESSION_KEY,
+                runId: params.runId,
+                preparedUserTurnMessage: await recorder?.resolveMessage(),
+                preparedUserTurnTranscriptRecorder: recorder,
+              },
+            );
+            const { session } = await createTestSession({ sessionManager: manager });
+            modelRun = session.prompt(params.prompt);
+            await modelRun;
+            await recorder?.waitForRuntimePersistence();
+            return { payloads: [{ text: "Both labels are preserved." }], meta: { durationMs: 0 } };
+          }),
+      );
       try {
         const { socket, result } = await connectNativeSession(fixture);
         socket.serverEvent(nativeTranscript(spoken));
@@ -552,7 +562,10 @@ describe("native Talk action ownership through public plugin registration", () =
     upstream.runEmbeddedAgent.mockImplementationOnce(async (params) => {
       signal = params.abortSignal;
       await release.promise;
-      return { payloads: [{ text: "Original task completed normally." }], meta: { durationMs: 0 } };
+      return await withRegisteredNativeEmbeddedRun(params, () => ({
+        payloads: [{ text: "Original task completed normally." }],
+        meta: { durationMs: 0 },
+      }));
     });
     await withNativePlugin(async (fixture) => {
       const { socket } = await connectNativeSession(fixture);

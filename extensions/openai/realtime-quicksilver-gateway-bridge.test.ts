@@ -894,7 +894,10 @@ describe("GPT-Live gateway relay bridge", () => {
       sendAudio: vi.fn(),
       close: closePeer,
     };
-    const runAgentConsult = vi.fn(async () => ({ text: "Delegated result" }));
+    const runAgentConsult = Object.assign(
+      vi.fn(async () => ({ text: "Delegated result" })),
+      { claimAppend: vi.fn(() => true) },
+    );
     const handleDelegationInput = vi.fn((text: string): "control" | "consult" =>
       text === "Status?" ? "control" : "consult",
     );

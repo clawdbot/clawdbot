@@ -31,6 +31,7 @@ import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-sup
 import { resolveRealtimeVoiceProviderCapabilities } from "../talk/provider-resolver.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  type RealtimeVoiceAgentConsultRunner,
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeCreateRequest,
   type RealtimeVoiceProviderCapabilities,
@@ -42,6 +43,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
+import { bindTalkRealtimeRelayAgentConsult } from "./talk-realtime-relay-agent-consult.js";
 import { projectTalkRealtimeRelayProviderError } from "./talk-realtime-relay-issues.js";
 import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-ledger.js";
@@ -199,6 +201,37 @@ describe("talk realtime relay provider error projection", () => {
 
 describe("talk realtime gateway relay", () => {
   let testState: OpenClawTestState | undefined;
+
+  it("rejects a late relay startup-failure claim while consuming the retained owner", () => {
+    const adoptCompletionClaims = vi.fn();
+    const claimFailureAppend = vi.fn(() => true);
+    const runPrompt = Object.assign(
+      vi.fn<RealtimeVoiceAgentConsultRunner>(async () => ({ text: "done" })),
+      {
+        adoptCompletionClaims,
+        claimAppend: vi.fn(() => true),
+        claimFailureAppend,
+      },
+    );
+    let current = true;
+    const runAgentConsult = bindTalkRealtimeRelayAgentConsult(runPrompt as never, () => current);
+    (
+      runAgentConsult as RealtimeVoiceAgentConsultRunner & {
+        adoptCompletionClaims?: () => void;
+      }
+    ).adoptCompletionClaims?.();
+    expect(adoptCompletionClaims).toHaveBeenCalledOnce();
+    current = false;
+
+    expect(
+      (
+        runAgentConsult as RealtimeVoiceAgentConsultRunner & {
+          claimFailureAppend?: () => boolean;
+        }
+      ).claimFailureAppend?.(),
+    ).toBe(false);
+    expect(claimFailureAppend).toHaveBeenCalledOnce();
+  });
 
   beforeEach(async () => {
     testState = await createOpenClawTestState({
@@ -711,6 +744,48 @@ describe("talk realtime gateway relay", () => {
       relaySessionId: session.relaySessionId,
       connId: "conn-runner",
     });
+  });
+
+  it("rejects a consult when its relay is replaced during startup", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      bridgeRequest = request;
+      return createIdleRelayProvider().createBridge(request);
+    };
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds: vi.fn(),
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn() },
+      } as never,
+      connId: "conn-replaced-runner",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey: "agent:main:main",
+    });
+    const original = relaySessions.get(session.relaySessionId);
+    const runAgentConsult = bridgeRequest?.runAgentConsult;
+    if (!original || !runAgentConsult) {
+      throw new Error("expected active relay agent runner");
+    }
+
+    const run = runAgentConsult({ prompt: "late consult", signal: AbortSignal.timeout(1_000) });
+    const replacement = { ...original, activeAgentRuns: new Map<string, string>() };
+    relaySessions.set(session.relaySessionId, replacement);
+    try {
+      await expect(run).rejects.toThrow("Realtime gateway-relay session is closed");
+      expect(replacement.activeAgentRuns.size).toBe(0);
+    } finally {
+      relaySessions.set(session.relaySessionId, original);
+      stopTalkRealtimeRelaySession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-replaced-runner",
+      });
+    }
   });
 
   it.each([

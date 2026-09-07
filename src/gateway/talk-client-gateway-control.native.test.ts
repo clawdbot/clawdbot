@@ -108,6 +108,7 @@ describe("native Talk control admission", () => {
             throw new Error("disconnected");
           }
         },
+        runToolAgentConsult: vi.fn(async () => ({ text: "unexpected task" })),
         runAgentConsult: vi.fn(async () => ({ text: "unexpected task" })),
         appendTranscript: vi.fn(async () => undefined),
         flushTranscript: vi.fn(async () => undefined),

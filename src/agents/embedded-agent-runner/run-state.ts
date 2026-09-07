@@ -24,6 +24,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { OperationalRunInstanceRef } from "../admitted-run-context.js";
 
 /**
  * Shared process state for embedded-agent runs, queues, and snapshots.
@@ -108,12 +109,25 @@ export type EmbeddedRunRegistration = {
   /** Registration-owned presentation fact; retained cleanup must not reappear after context release. */
   projectSessionActive?: boolean;
   toolAuthority?: ReturnType<EmbeddedRunToolAuthorityBinding>;
+  operationalRunInstance?: OperationalRunInstanceRef;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
   delegatedAuthority?: AgentRunDelegatedAuthority;
   humanInputWaits?: Set<() => boolean>;
   onHumanInputResolved?: () => void;
+};
+
+export type EmbeddedRunCompletionRegistration = {
+  toolAuthority: NonNullable<EmbeddedRunRegistration["toolAuthority"]>;
+};
+
+export type EmbeddedRunCompletionClaim = {
+  runId: string;
+  lifecycleGeneration: string;
+  operationalRunInstance?: OperationalRunInstanceRef;
+  promoted: boolean;
+  settleRegistration: (registration: EmbeddedRunCompletionRegistration | undefined) => void;
 };
 
 export type EmbeddedRunWaiter = {
@@ -138,6 +152,9 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunRegistrations: new WeakMap<EmbeddedAgentQueueHandle, EmbeddedRunRegistration>(),
+  // Talk prepares before registration; only the matching live run promotes this
+  // one-shot final-delivery claim. Replacement or lifecycle rotation revokes it.
+  completionClaims: new Map<string, EmbeddedRunCompletionClaim>(),
   activeRunLifecycleGenerations: new WeakMap<EmbeddedAgentQueueHandle, string>(),
   retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
@@ -163,6 +180,9 @@ export const ACTIVE_EMBEDDED_RUN_REGISTRATIONS =
     EmbeddedAgentQueueHandle,
     EmbeddedRunRegistration
   >());
+export const EMBEDDED_RUN_COMPLETION_CLAIMS =
+  embeddedRunState.completionClaims ??
+  (embeddedRunState.completionClaims = new Map<string, EmbeddedRunCompletionClaim>());
 
 /** Only an accepted question's exact admitted owner may suppress stale-work recovery. */
 export function registerActiveEmbeddedRunHumanInputWait(
@@ -307,6 +327,12 @@ function evictPriorLifecycleEmbeddedRuns(): void {
     if (ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) === handle) {
       ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.delete(runId);
       RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.delete(runId);
+    }
+  }
+  for (const [sessionId, claim] of EMBEDDED_RUN_COMPLETION_CLAIMS) {
+    if (!isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)) {
+      claim.settleRegistration(undefined);
+      EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
     }
   }
   for (const [sessionKey, sessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {

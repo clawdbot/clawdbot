@@ -9,12 +9,14 @@ import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.j
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
 import {
+  abortEmbeddedAgentRun,
   abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunHandleActive,
   markEmbeddedRunRecoveringTimeout,
   markActiveEmbeddedRunAbandoned,
+  prepareEmbeddedAgentRunCompletionClaim,
   resolveEmbeddedRunAbandonment,
   resolveActiveEmbeddedRunOwner,
   resolveActiveEmbeddedRunOwnerByRunId,
@@ -422,6 +424,74 @@ describe("embedded-agent runner run lifecycle", () => {
     expect(
       debugSpy.mock.calls.some(([message]) => message.includes("reason=handle_mismatch")),
     ).toBe(false);
+  });
+
+  it("revokes a completion claim when a replacement takes the session", () => {
+    const firstHandle = createRunHandle({ runId: "run-first" });
+    const replacementHandle = createRunHandle({ runId: "run-second" });
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-reused",
+      "run-first",
+    );
+
+    setActiveEmbeddedRun("session-reused", firstHandle);
+    setActiveEmbeddedRun("session-reused", replacementHandle);
+
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("consumes a completed claim exactly once after the run clears", () => {
+    const handle = createRunHandle({ runId: "run-completed" });
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-completed",
+      "run-completed",
+    );
+
+    setActiveEmbeddedRun("session-completed", handle);
+    clearActiveEmbeddedRun("session-completed", handle);
+
+    expect(claimCompletion()).toBe(true);
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("does not revive a completed claim after an intervening run", () => {
+    const firstHandle = createRunHandle({ runId: "run-first" });
+    const replacementHandle = createRunHandle({ runId: "run-second" });
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-intervening",
+      "run-first",
+    );
+
+    setActiveEmbeddedRun("session-intervening", firstHandle);
+    clearActiveEmbeddedRun("session-intervening", firstHandle);
+    setActiveEmbeddedRun("session-intervening", replacementHandle);
+    clearActiveEmbeddedRun("session-intervening", replacementHandle);
+
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("revokes prepared claims on abort and registry reset", () => {
+    const abort = vi.fn();
+    const handle = createRunHandle({ abort, runId: "run-aborted" });
+    const { claimCompletion: abortedClaim } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-aborted",
+      "run-aborted",
+    );
+    setActiveEmbeddedRun("session-aborted", handle);
+
+    expect(abortEmbeddedAgentRun("session-aborted")).toBe(true);
+    clearActiveEmbeddedRun("session-aborted", handle);
+    expect(abortedClaim()).toBe(false);
+
+    const resetHandle = createRunHandle({ runId: "run-reset" });
+    const { claimCompletion: resetClaim } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-reset",
+      "run-reset",
+    );
+    setActiveEmbeddedRun("session-reset", resetHandle);
+    clearActiveEmbeddedRun("session-reset", resetHandle);
+    testing.resetActiveEmbeddedRuns();
+    expect(resetClaim()).toBe(false);
   });
 
   it("still logs handle mismatches when another run owns the session", () => {

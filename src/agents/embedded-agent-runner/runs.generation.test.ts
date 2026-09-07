@@ -18,6 +18,7 @@ import {
   startDiagnosticRunActivityTracking,
   type DiagnosticEmbeddedRunOwner,
 } from "../../logging/diagnostic-run-activity.js";
+import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -29,6 +30,7 @@ import {
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunAbortableForRunId,
+  prepareEmbeddedAgentRunCompletionClaim,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
@@ -107,6 +109,78 @@ describe("embedded run registry lifecycle generations", () => {
     resetDiagnosticRunActivityForTest();
     resetDiagnosticEventsForTest();
     lifecycleMock.reset();
+  });
+
+  it("revokes a completed claim when the gateway lifecycle rotates", () => {
+    const handle = createRunHandle({
+      queueMessage: vi.fn(async () => {}),
+      runId: "claim-run",
+    });
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
+      "claim-session",
+      "claim-run",
+    );
+    setActiveEmbeddedRun("claim-session", handle);
+    clearActiveEmbeddedRun("claim-session", handle);
+
+    rotateAgentEventLifecycleGeneration();
+
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("settles completion registration only after the exact backend is published", async () => {
+    const handle = createRunHandle({
+      queueMessage: vi.fn(async () => {}),
+      runId: "claim-run",
+    });
+    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
+    let settled = false;
+    void prepared.registered.then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        embeddedRunToolAuthorityBinding: () => ({
+          source: "reply",
+          project: () => "authority",
+          assertActive: () => {},
+        }),
+      },
+      () => setActiveEmbeddedRun("claim-session", handle, "agent:main:main"),
+    );
+
+    await expect(prepared.registered).resolves.toEqual({
+      toolAuthority: expect.objectContaining({ source: "reply" }),
+    });
+    expect(prepared.claimCompletion()).toBe(true);
+  });
+
+  it("does not publish completion steering readiness without a tool authority binding", async () => {
+    const handle = createRunHandle({
+      queueMessage: vi.fn(async () => {}),
+      runId: "claim-run",
+    });
+    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
+
+    setActiveEmbeddedRun("claim-session", handle);
+
+    await expect(prepared.registered).resolves.toBeUndefined();
+    expect(prepared.claimCompletion()).toBe(true);
+  });
+
+  it("settles an unpublished completion registration as revoked on lifecycle rotation", async () => {
+    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
+
+    rotateAgentEventLifecycleGeneration();
+
+    await expect(prepared.registered).resolves.toBeUndefined();
+    expect(prepared.claimCompletion()).toBe(false);
   });
 
   it("aborts a rootless compacting run when its gateway lifecycle rotates", () => {
