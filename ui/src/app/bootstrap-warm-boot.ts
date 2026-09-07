@@ -1,5 +1,6 @@
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { markPrewarmedChatSnapshotReady } from "../pages/chat/session-snapshot-prewarm.ts";
+import { clearBootRecords } from "./boot-record.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
 export function subscribeWarmBootConnection(
@@ -21,6 +22,9 @@ export function subscribeWarmBootConnection(
     const profileMismatch = pendingBootProfileId !== (snapshot.selfUser?.id ?? null);
     pendingBootProfileId = undefined;
     if (profileMismatch) {
+      // The boot record gates the next warm boot, so it must be gone before any
+      // await: a reload during the lazy IndexedDB cleanup must fail closed.
+      clearBootRecords();
       // Invalidate visible history and its cursor before pane subscribers resume startup.
       void clearStoredChatSnapshots();
       void import("../lib/sessions/session-roster-cache.runtime.ts").then(

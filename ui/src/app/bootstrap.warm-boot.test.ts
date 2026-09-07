@@ -92,6 +92,12 @@ describe("warm boot profile validation", () => {
         publish("connected");
         // Clearing the in-memory projection must precede later hello subscribers.
         expect(clearSnapshots).toHaveBeenCalledTimes(clears);
+        // The persisted record gates the next boot, so it must be gone before any lazy cleanup.
+        if (clears > 0) {
+          expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).toBeNull();
+        } else {
+          expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).not.toBeNull();
+        }
         await vi.dynamicImportSettled();
         expect(clearRoster).toHaveBeenCalledTimes(clears);
 
