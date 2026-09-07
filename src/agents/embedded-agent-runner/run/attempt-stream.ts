@@ -12,6 +12,7 @@ import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
+import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
 import {
@@ -370,6 +371,7 @@ export function installEmbeddedAttemptStreamGuards(
     };
   }
   let diagnosticModelCallSeq = 0;
+  let modelResponseTerminal = false;
   session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
     runId: attempt.runId,
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
@@ -395,7 +397,11 @@ export function installEmbeddedAttemptStreamGuards(
     nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
     onSucceeded: contextGuards.recordCacheTouch,
+    onTerminal: () => {
+      modelResponseTerminal = true;
+    },
     onStarted: () => {
+      modelResponseTerminal = false;
       attempt.onExecutionPhase?.({
         phase: "model_call_started",
         provider: attempt.provider,
@@ -413,7 +419,16 @@ export function installEmbeddedAttemptStreamGuards(
   }
   return {
     onModelRequest: cacheObserver?.onModelRequest,
-    onModelUsage: cacheObserver?.onModelUsage,
+    onModelUsage: cacheObserver
+      ? (usage: NormalizedUsage | undefined) => {
+          // Async-tool fragments also end messages. result() marks the terminal
+          // response before core commits its final fragment with normalized usage.
+          if (modelResponseTerminal) {
+            modelResponseTerminal = false;
+            cacheObserver.onModelUsage(usage);
+          }
+        }
+      : undefined,
     getPromptCacheObservation: cacheObserver?.getObservation,
   };
 }

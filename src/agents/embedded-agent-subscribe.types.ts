@@ -72,7 +72,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onAssistantMessageStart?: () => void | Promise<void>;
-  /** Exact completed model request usage, before aggregation or queued delivery. */
+  /** Assistant fragment usage before queued delivery; fragments may be intermediate. */
   onModelUsage?: (usage: NormalizedUsage | undefined) => void;
   onExecutionPhase?: (info: {
     phase: "tool_execution_started";

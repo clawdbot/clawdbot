@@ -52,6 +52,7 @@ export type ModelCallDiagnosticContext = {
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
   onStarted?: () => void;
+  onTerminal?: () => void;
   onSucceeded?: (startedAt: number) => void;
   suppressPluginHooks?: boolean;
   requestTimeoutMs?: number;
@@ -414,13 +415,15 @@ export function createModelLifecycle(params: {
     propagatedOptions,
     startedAt,
     emitCompleted() {
-      // Iterator cleanup alone is not a successful request; require its terminal result.
+      // Iterator cleanup alone is not a completed response; require its terminal result.
       if (
         !observer.state.terminalEventEmitted &&
-        observer.state.terminalSucceeded &&
-        !observer.state.terminalError
+        (observer.state.terminalSucceeded || observer.state.terminalError)
       ) {
-        params.ctx.onSucceeded?.(startedAt);
+        params.ctx.onTerminal?.();
+        if (observer.state.terminalSucceeded && !observer.state.terminalError) {
+          params.ctx.onSucceeded?.(startedAt);
+        }
       }
       emitModelCallEnded(
         eventBase,
