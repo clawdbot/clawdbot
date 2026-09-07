@@ -18,7 +18,12 @@ describe("bounded Codex turn elapsed deadlines over WebSocket", () => {
       const turn = turnStartResult("clock-turn");
       server.on("connection", (socket) => {
         socket.on("message", (data) => {
-          const request = JSON.parse(data.toString()) as RpcRequest;
+          const buffer = Array.isArray(data)
+            ? Buffer.concat(data)
+            : Buffer.isBuffer(data)
+              ? data
+              : Buffer.from(data);
+          const request = JSON.parse(buffer.toString("utf8")) as RpcRequest;
           methods.push(request.method);
           const respond = (result: unknown) => {
             socket.send(JSON.stringify({ id: request.id, result }));
