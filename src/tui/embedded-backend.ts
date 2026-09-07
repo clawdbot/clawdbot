@@ -22,7 +22,12 @@ import {
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
+import {
+  ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
+  ACTIVE_EMBEDDED_RUNS,
+} from "../agents/embedded-agent-runner/run-state.js";
 import { queueEmbeddedAgentMessageWithOutcomeAsync } from "../agents/embedded-agent-runner/runs.js";
+import { resolveActiveReplyOperationForSessionId } from "../auto-reply/reply/reply-run-registry.registry.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import {
   buildAllowedModelSet,
@@ -94,7 +99,11 @@ import {
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
 import { logInfo, logWarn } from "../logger.js";
-import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -351,6 +360,24 @@ async function waitForQueuedLocalRun(previousRun: QueuedSessionRun, runId: strin
   }
 }
 
+
+/** Prefer registration.agentId, then reply-op agent, then sessionKey parse. */
+function resolveActiveSteerOwnerAgentId(sessionId: string): string | undefined {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const registration = handle ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) : undefined;
+  if (registration?.agentId) {
+    return registration.agentId;
+  }
+  const replyOperation = resolveActiveReplyOperationForSessionId(sessionId);
+  if (replyOperation?.agentId) {
+    return replyOperation.agentId;
+  }
+  return (
+    parseAgentSessionKey(registration?.sessionKey)?.agentId ??
+    parseAgentSessionKey(replyOperation?.key)?.agentId
+  );
+}
+
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
 
@@ -491,22 +518,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
       if (queueSettings.mode === "steer") {
         const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey);
         if (activeSessionId) {
-          const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-            activeSessionId,
-            opts.message,
-            {
-              steeringMode: "all",
-              debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
-              isInboundUserMessage: true,
-            },
-          ).catch((error: unknown) => {
-            if (error instanceof QuestionAnswerUnconfirmedError) {
-              throw error;
+          // Mirror abortChat's global agent filter: do not inject into another
+          // agent's active embedded/reply owner for the same canonical key.
+          const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+          const requestedAgentId = normalizeAgentId(agentId);
+          const recordedAgentId = resolveActiveSteerOwnerAgentId(activeSessionId);
+          const activeAgentId = recordedAgentId
+            ? normalizeAgentId(recordedAgentId)
+            : defaultAgentId;
+          if (activeAgentId === requestedAgentId) {
+            const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+              activeSessionId,
+              opts.message,
+              {
+                steeringMode: "all",
+                debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
+                isInboundUserMessage: true,
+              },
+            ).catch((error: unknown) => {
+              if (error instanceof QuestionAnswerUnconfirmedError) {
+                throw error;
+              }
+              return undefined;
+            });
+            if (outcome?.queued) {
+              return { runId: queuedAfter.runId };
             }
-            return undefined;
-          });
-          if (outcome?.queued) {
-            return { runId: queuedAfter.runId };
           }
         }
         queueSettings = { ...queueSettings, mode: "followup" };

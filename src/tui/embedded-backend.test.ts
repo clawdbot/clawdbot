@@ -1,6 +1,11 @@
 // Covers embedded backend behavior used by the TUI runtime.
 import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
+  ACTIVE_EMBEDDED_RUNS,
+  type EmbeddedAgentQueueHandle,
+} from "../agents/embedded-agent-runner/run-state.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -1985,6 +1990,140 @@ describe("EmbeddedTuiBackend", () => {
 
     first.resolve({ payloads: [{ text: "done" }], meta: {} });
     await flushMicrotasks();
+  });
+
+  it("does not steer selected-global sends into another agent's active embedded run", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    });
+    const first = deferred<EmbeddedAgentResult>();
+    const second = deferred<EmbeddedAgentResult>();
+    agentCommandFromIngressMock
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session-main");
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
+      cfg: {},
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
+      canonicalKey: sessionKey === "global" ? "global" : sessionKey,
+      storePath: `/tmp/openclaw-${opts?.agentId ?? "main"}-sessions.json`,
+      store: {},
+      entry: {},
+    }));
+    const foreignHandle = {
+      runId: "run-foreign-main",
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    } as EmbeddedAgentQueueHandle;
+    ACTIVE_EMBEDDED_RUNS.set("active-session-main", foreignHandle);
+    ACTIVE_EMBEDDED_RUN_REGISTRATIONS.set(foreignHandle, {
+      sessionId: "active-session-main",
+      sessionKey: "global",
+      agentId: "main",
+    });
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    try {
+      await backend.sendChat({
+        sessionKey: "global",
+        agentId: "work",
+        message: "first",
+        runId: "run-work-first",
+      });
+      const result = await backend.sendChat({
+        sessionKey: "global",
+        agentId: "work",
+        message: "steer across agents",
+        runId: "run-work-second",
+      });
+
+      // Mismatch falls through to followup: a local successor run is admitted,
+      // but it must not inject into the foreign active embedded owner.
+      expect(result).toEqual({ runId: "run-work-second" });
+      expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
+      first.resolve({ payloads: [{ text: "first done" }], meta: {} });
+      await vi.waitFor(() => {
+        expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+      });
+      expect(agentCommandFromIngressMock.mock.calls[1]?.[0]).toMatchObject({
+        runId: "run-work-second",
+        message: "steer across agents",
+      });
+      second.resolve({ payloads: [{ text: "second done" }], meta: {} });
+      await flushMicrotasks();
+    } finally {
+      ACTIVE_EMBEDDED_RUNS.delete("active-session-main");
+    }
+  });
+
+  it("still steers selected-global sends into the same agent's active embedded run", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    });
+    const first = deferred<EmbeddedAgentResult>();
+    agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
+    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session-work");
+    loadSessionEntryMock.mockImplementation((sessionKey: string, opts?: { agentId?: string }) => ({
+      cfg: {},
+      agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
+      canonicalKey: sessionKey === "global" ? "global" : sessionKey,
+      storePath: `/tmp/openclaw-${opts?.agentId ?? "main"}-sessions.json`,
+      store: {},
+      entry: {},
+    }));
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockResolvedValue({
+      queued: true,
+      sessionId: "active-session-work",
+      target: "embedded_run",
+      gatewayHealth: "live",
+    });
+    const ownedHandle = {
+      runId: "run-owned-work",
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    } as EmbeddedAgentQueueHandle;
+    ACTIVE_EMBEDDED_RUNS.set("active-session-work", ownedHandle);
+    ACTIVE_EMBEDDED_RUN_REGISTRATIONS.set(ownedHandle, {
+      sessionId: "active-session-work",
+      sessionKey: "global",
+      agentId: "work",
+    });
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    try {
+      await backend.sendChat({
+        sessionKey: "global",
+        agentId: "work",
+        message: "first",
+        runId: "run-work-owned-first",
+      });
+      const result = await backend.sendChat({
+        sessionKey: "global",
+        agentId: "work",
+        message: "steer same agent",
+        runId: "run-work-owned-second",
+      });
+
+      expect(result).toEqual({ runId: "run-work-owned-first" });
+      expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenCalledWith(
+        "active-session-work",
+        "steer same agent",
+        { steeringMode: "all", debounceMs: 500, isInboundUserMessage: true },
+      );
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+      first.resolve({ payloads: [{ text: "done" }], meta: {} });
+      await flushMicrotasks();
+    } finally {
+      ACTIVE_EMBEDDED_RUNS.delete("active-session-work");
+    }
   });
 
   it("surfaces uncertain question input without queuing it again", async () => {
