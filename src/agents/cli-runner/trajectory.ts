@@ -88,7 +88,7 @@ function prepareCliTrajectory(context: PreparedCliRunContext): CliTrajectoryReco
   return recorder;
 }
 
-export async function withCliRunTrajectory(
+async function withCliRunTrajectory(
   context: PreparedCliRunContext,
   run: (recorder: CliTrajectoryRecorder) => Promise<EmbeddedAgentRunResult>,
 ): Promise<EmbeddedAgentRunResult> {
