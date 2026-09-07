@@ -15,6 +15,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { parseSkillSelectionAuditRow } from "./audit-event-store.skill-selection.js";
 import {
   AUDIT_EVENT_SCHEMA_VERSION,
   AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
@@ -60,7 +61,6 @@ function getAuditKysely(db: DatabaseSync) {
 
 const RUN_ACTIONS = ["agent.run.started", "agent.run.finished"] as const;
 const TOOL_ACTIONS = ["tool.action.started", "tool.action.finished"] as const;
-const SKILL_SELECTION_ACTIONS = ["skill.selection.observed"] as const;
 const CONVERSATION_KINDS = ["direct", "group", "channel", "unknown"] as const;
 const DELIVERY_KINDS = ["text", "media", "other"] as const;
 const FAILURE_STAGES = ["platform_send", "queue", "unknown"] as const;
@@ -275,23 +275,6 @@ function parseToolActionRow(row: AuditEventRow): ToolActionAuditEventRecord {
   return { ...common, action, ...terminal };
 }
 
-function parseSkillSelectionRow(row: AuditEventRow): SkillSelectionAuditEventRecord {
-  requireNull(row, "tool_call_id");
-  requireNull(row, "error_code");
-  const toolName = optionalText(row, row.tool_name, "toolName");
-  if (!toolName) {
-    corruptAuditRow(row, "missing selected skill name");
-  }
-  const common = {
-    ...parseAgentRecordFields(row),
-    kind: "skill_selection" as const,
-    toolName,
-  };
-  const action = requiredEnum(row, row.action, "action", SKILL_SELECTION_ACTIONS);
-  const status = requiredEnum(row, row.status, "status", ["observed"]);
-  return { ...common, action, status };
-}
-
 function parseMessageRecordFields(row: AuditEventRow) {
   requireNullColumns(row, ["session_key", "session_id", "tool_call_id", "tool_name"]);
   const agentId = optionalText(row, row.agent_id, "agentId");
@@ -491,7 +474,7 @@ export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
     return parseToolActionRow(row);
   }
   if (row.kind === "skill_selection") {
-    return parseSkillSelectionRow(row);
+    return parseSkillSelectionAuditRow(row);
   }
   if (row.kind !== "message") {
     corruptAuditRow(row, "invalid kind");
