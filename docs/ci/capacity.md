@@ -137,4 +137,5 @@ not enable auto-merge. See
 
 ## Related
 
-- [CI pipeline](/ci)
+- [Install overview](/install)
+- [Release channels](/install/development-channels)

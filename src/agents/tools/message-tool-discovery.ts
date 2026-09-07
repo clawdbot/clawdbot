@@ -187,11 +187,11 @@ export function resolveMessageToolActionSchemaActions(
     agentId: params.agentId,
   });
   if (!allowedActions) {
-    return discoveredActions;
+    return sortUniqueStrings(discoveredActions);
   }
   const allow = new Set(allowedActions);
   const filtered = discoveredActions.filter((action) => allow.has(action));
-  return filtered.length > 0 ? filtered : allowedActions;
+  return sortUniqueStrings(filtered.length > 0 ? filtered : allowedActions);
 }
 
 function listAllMessageToolActions(params: MessageToolDiscoveryParams): ChannelMessageActionName[] {

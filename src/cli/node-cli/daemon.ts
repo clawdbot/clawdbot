@@ -36,8 +36,8 @@ import {
   createCliStatusTextStyles,
   createDaemonInstallActionContext,
   resolveDaemonInstallBlockMessage,
-  filterDaemonEnv,
   formatRuntimeStatus,
+  projectDaemonServiceForJson,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
@@ -298,20 +298,8 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   };
 
   if (json) {
-    const safeEnvironment = filterDaemonEnv(command?.environment);
-    const publicCommand = command && {
-      ...command,
-      environment: Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
-    };
-    if (publicCommand) {
-      delete publicCommand.managedDefinition;
-      delete publicCommand.managedOverrides;
-    }
     defaultRuntime.writeJson({
-      service: {
-        ...payload.service,
-        command: publicCommand,
-      },
+      service: projectDaemonServiceForJson(payload.service, { includeDefinitionPaths: true }),
     });
     return;
   }

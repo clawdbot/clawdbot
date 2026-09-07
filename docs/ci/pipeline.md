@@ -23,7 +23,7 @@ downstream automatic recovery. `preflight` classifies the
 diff and turns expensive lanes off when only unrelated areas changed. Ordinary
 manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out
 the full graph for release candidates and broad validation. Exact-head
-`release_gate` fallbacks retain the pull request's macOS, iOS, and native
+`release_gate` fallbacks retain the pull request's macOS, iOS smoke, and native
 generated-locale scope instead of forcing unrelated Apple lanes or locale
 parity. Native source verification still runs. Android lanes stay opt-in through
 `include_android` (or the `release_gate` input). Release-only
@@ -64,8 +64,8 @@ the job's uploaded artifacts.
 | `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions                                                                                                                                                                                                                     | Windows-relevant changes                               |
 | `macos-node`                     | Focused macOS TypeScript tests: launchd, Homebrew, runtime paths, packaging scripts, process-group wrapper                                                                                                                                                                                               | macOS-relevant changes                                 |
 | `macos-swift`                    | Swift lint and build for the macOS app, plus tests for the app, shared OpenClawKit, and standalone Swabble package                                                                                                                                                                                       | macOS-relevant changes                                 |
-| `ios-build`                      | Separate Release device build and Debug/simulator test phases; lifecycle and Watch operation tests remain in the test phase                                                                                                                                                                              | iOS/capture changes                                    |
-| `ios-screenshot-shard`           | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Screenshot-risk changes and manual CI                  |
+| `ios-build`                      | Debug build and Swift lint smoke; full manual CI adds separate Release device and native test phases                                                                                                                                                                                                     | iOS/capture changes and full manual CI                 |
+| `ios-screenshot-shard`           | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Full manual CI only                                    |
 | `ios-screenshot-evidence`        | Hosted reducer that verifies exact artifact/family topology, digests, every OpenClaw-managed capture-attempt outcome (including failed invocations without an xcresult), and run provenance before publishing the canonical release screenshot artifact                                                  | After both screenshot shards                           |
 | `android`                        | Phone and Wear unit tests, debug builds, Android lint, and Kotlin lint                                                                                                                                                                                                                                   | Android-relevant changes                               |
 | `openclaw/ci-gate`               | Final aggregate: requires preflight and security; rejects selected skips and every downstream failure or cancellation                                                                                                                                                                                    | Every non-draft CI run                                 |
@@ -181,4 +181,5 @@ artifacts remain errors in report-only mode.
 
 ## Related
 
-- [CI pipeline](/ci)
+- [Install overview](/install)
+- [Release channels](/install/development-channels)

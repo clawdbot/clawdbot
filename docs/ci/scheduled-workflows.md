@@ -264,4 +264,5 @@ Barnacle treats bug-labeled issues as verification candidates rather than inacti
 
 ## Related
 
-- [CI pipeline](/ci)
+- [Install overview](/install)
+- [Release channels](/install/development-channels)

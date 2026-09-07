@@ -12,7 +12,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. -->
 This section holds one reference page for each OpenClaw plugin. Each page states
 the package, the install route, and the surface the plugin adds.
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all 151
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all 152
 generated plugin reference pages by distribution, package, and description.
 
 ## How this page is built

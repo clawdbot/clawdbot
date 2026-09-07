@@ -9,21 +9,21 @@ import type { WorkerWorkspaceManifest } from "./worker-environments/workspace-ma
 
 const RESTORE_PUBLICATION_INDEX_JS = String.raw`
 const fs = require("node:fs");
-const os = require("node:os");
+const gitNullPath = process.platform === "win32" ? "NUL" : "/dev/null";
 const { spawnSync } = require("node:child_process");
 const paths = JSON.parse(fs.readFileSync(0, "utf8"));
 const cwd = process.cwd();
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^GIT_/i.test(key)) delete env[key];
-Object.assign(env, { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull,
+Object.assign(env, { GIT_CONFIG_GLOBAL: gitNullPath, GIT_CONFIG_SYSTEM: gitNullPath,
   GIT_CONFIG_COUNT: "0", GIT_ATTR_NOSYSTEM: "1", GIT_NO_REPLACE_OBJECTS: "1" });
 ${GITHUB_PUBLICATION_CONFIG_GUARD_JS}
 const action = process.argv[1];
 if (action !== "add" && action !== "remove") throw Error("Invalid publication restore operation");
 const operation = action === "remove" ? ["update-index", "--force-remove", "-z", "--stdin"] :
   ["add", "--intent-to-add", "--force", "--pathspec-from-file=-", "--pathspec-file-nul"];
-const result = spawnSync("git", ["--literal-pathspecs", "-c", "core.hooksPath=" + os.devNull,
-  "-c", "core.fsmonitor=false", "-c", "core.attributesFile=" + os.devNull,
+const result = spawnSync("git", ["--literal-pathspecs", "-c", "core.hooksPath=" + gitNullPath,
+  "-c", "core.fsmonitor=false", "-c", "core.attributesFile=" + gitNullPath,
   ...operation], {
   env,
   input: paths.join("\0") + "\0", timeout: 60000, maxBuffer: 128 * 1024,

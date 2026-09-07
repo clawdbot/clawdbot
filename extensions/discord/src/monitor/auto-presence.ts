@@ -30,12 +30,6 @@ type ResolvedDiscordAutoPresenceConfig = {
   minUpdateIntervalMs: number;
 };
 
-type DiscordAutoPresenceDecision = {
-  state: DiscordAutoPresenceState;
-  unavailableReason?: AuthProfileFailureReason | null;
-  presence: UpdatePresenceData;
-};
-
 type PresenceGateway = {
   isConnected: boolean;
   updatePresence: (payload: UpdatePresenceData) => void;
@@ -77,17 +71,6 @@ function buildCustomStatusActivity(text: string): Activity {
   };
 }
 
-function renderTemplate(
-  template: string,
-  vars: Record<string, string | undefined>,
-): string | undefined {
-  const rendered = template
-    .replace(/\{([a-zA-Z0-9_]+)\}/g, (_full, key: string) => vars[key] ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return rendered.length > 0 ? rendered : undefined;
-}
-
 function isExhaustedUnavailableReason(reason: AuthProfileFailureReason | null): boolean {
   if (!reason) {
     return false;
@@ -101,20 +84,13 @@ function isExhaustedUnavailableReason(reason: AuthProfileFailureReason | null): 
   );
 }
 
-function formatUnavailableReason(reason: AuthProfileFailureReason | null): string {
-  if (!reason) {
-    return "unknown";
-  }
-  return reason.replace(/_/g, " ");
-}
-
-function resolveAuthAvailability(params: { store: AuthProfileStore; now: number }): {
-  state: DiscordAutoPresenceState;
-  unavailableReason?: AuthProfileFailureReason | null;
-} {
+function resolveAuthAvailability(params: {
+  store: AuthProfileStore;
+  now: number;
+}): DiscordAutoPresenceState {
   const profileIds = Object.keys(params.store.profiles);
   if (profileIds.length === 0) {
-    return { state: "degraded", unavailableReason: null };
+    return "degraded";
   }
 
   clearExpiredCooldowns(params.store, params.now);
@@ -123,7 +99,7 @@ function resolveAuthAvailability(params: { store: AuthProfileStore; now: number 
     (profileId) => !isProfileInCooldown(params.store, profileId, params.now),
   );
   if (hasUsableProfile) {
-    return { state: "healthy", unavailableReason: null };
+    return "healthy";
   }
 
   const unavailableReason = resolveProfilesUnavailableReason({
@@ -132,43 +108,20 @@ function resolveAuthAvailability(params: { store: AuthProfileStore; now: number 
     now: params.now,
   });
 
-  if (isExhaustedUnavailableReason(unavailableReason)) {
-    return {
-      state: "exhausted",
-      unavailableReason,
-    };
-  }
-
-  return {
-    state: "degraded",
-    unavailableReason,
-  };
+  return isExhaustedUnavailableReason(unavailableReason) ? "exhausted" : "degraded";
 }
 
 function resolvePresenceActivities(params: {
   state: DiscordAutoPresenceState;
-  cfg: ResolvedDiscordAutoPresenceConfig;
   basePresence: UpdatePresenceData | null;
-  unavailableReason?: AuthProfileFailureReason | null;
 }): Activity[] {
-  const reasonLabel = formatUnavailableReason(params.unavailableReason ?? null);
-
   if (params.state === "healthy") {
     return params.basePresence?.activities ?? [];
   }
 
-  if (params.state === "degraded") {
-    const template = "runtime degraded";
-    const text = renderTemplate(template, { reason: reasonLabel });
-    return text ? [buildCustomStatusActivity(text)] : [];
-  }
-
-  const defaultTemplate = isExhaustedUnavailableReason(params.unavailableReason ?? null)
-    ? "token exhausted"
-    : "model unavailable ({reason})";
-  const template = defaultTemplate;
-  const text = renderTemplate(template, { reason: reasonLabel });
-  return text ? [buildCustomStatusActivity(text)] : [];
+  return [
+    buildCustomStatusActivity(params.state === "degraded" ? "runtime degraded" : "token exhausted"),
+  ];
 }
 
 function resolvePresenceStatus(state: DiscordAutoPresenceState): UpdatePresenceData["status"] {
@@ -181,7 +134,7 @@ function resolvePresenceStatus(state: DiscordAutoPresenceState): UpdatePresenceD
   return "idle";
 }
 
-function resolveDiscordAutoPresenceDecision(params: {
+function resolveDiscordAutoPresenceUpdate(params: {
   discordConfig: Pick<
     DiscordAccountConfig,
     "autoPresence" | "activity" | "status" | "activityType" | "activityUrl"
@@ -189,7 +142,7 @@ function resolveDiscordAutoPresenceDecision(params: {
   authStore: AuthProfileStore;
   gatewayConnected: boolean;
   now?: number;
-}): DiscordAutoPresenceDecision | null {
+}): UpdatePresenceData | null {
   const autoPresence = resolveAutoPresenceConfig(params.discordConfig.autoPresence);
   if (!autoPresence.enabled) {
     return null;
@@ -202,27 +155,18 @@ function resolveDiscordAutoPresenceDecision(params: {
     store: params.authStore,
     now,
   });
-  const state = params.gatewayConnected ? availability.state : "degraded";
-  const unavailableReason = params.gatewayConnected
-    ? availability.unavailableReason
-    : (availability.unavailableReason ?? "unknown");
+  const state = params.gatewayConnected ? availability : "degraded";
 
   const activities = resolvePresenceActivities({
     state,
-    cfg: autoPresence,
     basePresence,
-    unavailableReason,
   });
 
   return {
-    state,
-    unavailableReason,
-    presence: {
-      since: null,
-      activities,
-      status: resolvePresenceStatus(state),
-      afk: false,
-    },
+    since: null,
+    activities,
+    status: resolvePresenceStatus(state),
+    afk: false,
   };
 }
 
@@ -257,8 +201,6 @@ export function createDiscordAutoPresenceController(params: {
   gateway: PresenceGateway;
   loadAuthStore?: () => AuthProfileStore;
   now?: () => number;
-  setIntervalFn?: typeof setInterval;
-  clearIntervalFn?: typeof clearInterval;
   log?: (message: string) => void;
 }): DiscordAutoPresenceController {
   const autoCfg = resolveAutoPresenceConfig(params.discordConfig.autoPresence);
@@ -274,17 +216,15 @@ export function createDiscordAutoPresenceController(params: {
 
   const loadAuthStore = params.loadAuthStore ?? (() => ensureAuthProfileStore());
   const now = params.now ?? (() => Date.now());
-  const setIntervalFn = params.setIntervalFn ?? setInterval;
-  const clearIntervalFn = params.clearIntervalFn ?? clearInterval;
 
   let timer: ReturnType<typeof setInterval> | undefined;
   let lastAppliedSignature: string | null = null;
   let lastAppliedAt = 0;
 
   const runEvaluation = (options?: { force?: boolean }) => {
-    let decision: DiscordAutoPresenceDecision | null;
+    let presence: UpdatePresenceData | null;
     try {
-      decision = resolveDiscordAutoPresenceDecision({
+      presence = resolveDiscordAutoPresenceUpdate({
         discordConfig: params.discordConfig,
         authStore: loadAuthStore(),
         gatewayConnected: params.gateway.isConnected,
@@ -299,13 +239,13 @@ export function createDiscordAutoPresenceController(params: {
       return;
     }
 
-    if (!decision || !params.gateway.isConnected) {
+    if (!presence || !params.gateway.isConnected) {
       return;
     }
 
     const forceApply = options?.force === true;
     const ts = now();
-    const signature = stablePresenceSignature(decision.presence);
+    const signature = stablePresenceSignature(presence);
     if (!forceApply && signature === lastAppliedSignature) {
       return;
     }
@@ -313,7 +253,7 @@ export function createDiscordAutoPresenceController(params: {
       return;
     }
 
-    params.gateway.updatePresence(decision.presence);
+    params.gateway.updatePresence(presence);
     lastAppliedSignature = signature;
     lastAppliedAt = ts;
   };
@@ -327,13 +267,13 @@ export function createDiscordAutoPresenceController(params: {
         return;
       }
       runEvaluation({ force: true });
-      timer = setIntervalFn(() => runEvaluation(), autoCfg.intervalMs);
+      timer = setInterval(() => runEvaluation(), autoCfg.intervalMs);
     },
     stop: () => {
       if (!timer) {
         return;
       }
-      clearIntervalFn(timer);
+      clearInterval(timer);
       timer = undefined;
     },
   };

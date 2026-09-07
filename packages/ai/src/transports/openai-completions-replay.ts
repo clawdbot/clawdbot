@@ -1,11 +1,14 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+} from "../internal/google-model-family.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import { isGoogleGemini3FlashModel, isGoogleGemini3ProModel } from "./transport-utils.js";
 
 function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
   const endpointClass = detectOpenAICompletionsCompat(model as Model<"openai-completions">)

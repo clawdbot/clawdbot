@@ -724,6 +724,54 @@
     "target": "配置参考"
   },
   {
+    "source": "Configuration — agents",
+    "target": "配置 — 智能体"
+  },
+  {
+    "source": "Configuration — audit, logging, diagnostics, and telemetry",
+    "target": "配置 — 审计、日志、诊断和遥测"
+  },
+  {
+    "source": "Configuration — automations and media template variables",
+    "target": "配置 — 自动化和媒体模板变量"
+  },
+  {
+    "source": "Configuration — browser, UI, and desktop",
+    "target": "配置 — 浏览器、UI 和桌面"
+  },
+  {
+    "source": "Configuration — channels",
+    "target": "配置 — 渠道"
+  },
+  {
+    "source": "Configuration — cloud worker environments",
+    "target": "配置 — Cloud Worker 环境"
+  },
+  {
+    "source": "Configuration — environment, secrets, and includes",
+    "target": "配置 — 环境变量、密钥和包含文件"
+  },
+  {
+    "source": "Configuration — gateway",
+    "target": "配置 — Gateway 网关"
+  },
+  {
+    "source": "Configuration — hooks",
+    "target": "配置 — Hooks"
+  },
+  {
+    "source": "Configuration — MCP, skills, and plugins",
+    "target": "配置 — MCP、Skills 和插件"
+  },
+  {
+    "source": "Configuration — runtime basics",
+    "target": "配置 — 运行时基础"
+  },
+  {
+    "source": "Configuration — tools",
+    "target": "配置 — 工具"
+  },
+  {
     "source": "wiki",
     "target": "wiki"
   },
@@ -970,6 +1018,34 @@
   {
     "source": "Plugin manifest",
     "target": "插件清单"
+  },
+  {
+    "source": "Manifest model fields",
+    "target": "清单模型字段"
+  },
+  {
+    "source": "Manifest provider fields",
+    "target": "清单提供商字段"
+  },
+  {
+    "source": "Manifest setup and auth fields",
+    "target": "清单设置与认证字段"
+  },
+  {
+    "source": "Manifest capability fields",
+    "target": "清单能力字段"
+  },
+  {
+    "source": "Manifest host surface fields",
+    "target": "清单宿主界面字段"
+  },
+  {
+    "source": "Manifest config and secret fields",
+    "target": "清单配置与密钥字段"
+  },
+  {
+    "source": "Manifest versus package.json",
+    "target": "清单与 package.json 对比"
   },
   {
     "source": "Building plugins",
@@ -2154,5 +2230,9 @@
   {
     "source": "Local checks and Testbox",
     "target": "本地检查与 Testbox"
+  },
+  {
+    "source": "Release channels",
+    "target": "发布渠道"
   }
 ]

@@ -32,6 +32,7 @@ import { projectSessionPatchResult } from "../session-utils-model.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
 import { createCommitGuard } from "./sessions-patch-errors.js";
 import { sessionPatchTargetIdentity } from "./sessions-patch-expectations.js";
@@ -47,103 +48,120 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     client,
     sessionMutationAuthorization,
   }) => {
-    if (
-      !assertValidParams(params, validateSessionsPatchManyParams, "sessions.patchMany", respond)
-    ) {
-      return;
+    const diagnostics = startSessionPatchDiagnostics("sessions.patchMany");
+    try {
+      if (
+        !assertValidParams(params, validateSessionsPatchManyParams, "sessions.patchMany", respond)
+      ) {
+        return;
+      }
+      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      if (
+        params.patch.permissionMode === "full" &&
+        client !== null &&
+        !scopes.includes(ADMIN_SCOPE)
+      ) {
+        respond(
+          false,
+          undefined,
+          missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+        );
+        return;
+      }
+      const targets = params.targets;
+      const executed = await executeSessionPatchMutations({
+        client,
+        context,
+        diagnostics,
+        patch: params.patch,
+        targets: targets.map((target) => ({
+          ...target,
+          commitGuard: createCommitGuard(target.key.trim(), () =>
+            sessionMutationAuthorization?.assertTargetCurrent({
+              sessionKey: target.key.trim(),
+              ...(target.agentId ? { agentId: target.agentId } : {}),
+            }),
+          ),
+        })),
+      });
+      if (!executed.ok) {
+        respond(false, undefined, executed.error);
+        return;
+      }
+      const outcomes: SessionsPatchManyResult["outcomes"] = [];
+      diagnostics?.scope("response");
+      for (const [index, outcome] of executed.outcomes.entries()) {
+        const target = targets[index]!;
+        const identity = {
+          key: target.key,
+          ...(target.agentId ? { agentId: target.agentId } : {}),
+        };
+        outcomes.push(
+          outcome.ok ? { ok: true, ...identity } : { ok: false, ...identity, error: outcome.error },
+        );
+      }
+      respond(true, { outcomes }, undefined);
+    } finally {
+      diagnostics?.finish();
     }
-    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-    if (
-      params.patch.permissionMode === "full" &&
-      client !== null &&
-      !scopes.includes(ADMIN_SCOPE)
-    ) {
-      respond(
-        false,
-        undefined,
-        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
-      );
-      return;
-    }
-    const targets = params.targets;
-    const executed = await executeSessionPatchMutations({
-      client,
-      context,
-      patch: params.patch,
-      targets: targets.map((target) => ({
-        ...target,
-        commitGuard: createCommitGuard(target.key.trim(), () =>
-          sessionMutationAuthorization?.assertTargetCurrent({
-            sessionKey: target.key.trim(),
-            ...(target.agentId ? { agentId: target.agentId } : {}),
-          }),
-        ),
-      })),
-    });
-    if (!executed.ok) {
-      respond(false, undefined, executed.error);
-      return;
-    }
-    const outcomes: SessionsPatchManyResult["outcomes"] = [];
-    for (const [index, outcome] of executed.outcomes.entries()) {
-      const target = targets[index]!;
-      const identity = { key: target.key, ...(target.agentId ? { agentId: target.agentId } : {}) };
-      outcomes.push(
-        outcome.ok ? { ok: true, ...identity } : { ok: false, ...identity, error: outcome.error },
-      );
-    }
-    respond(true, { outcomes }, undefined);
   },
   "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
-    if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
-      return;
-    }
-    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-    if (params.permissionMode === "full" && client !== null && !scopes.includes(ADMIN_SCOPE)) {
+    const diagnostics = startSessionPatchDiagnostics("sessions.patch");
+    try {
+      if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
+        return;
+      }
+      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      if (params.permissionMode === "full" && client !== null && !scopes.includes(ADMIN_SCOPE)) {
+        respond(
+          false,
+          undefined,
+          missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+        );
+        return;
+      }
+      const key = requireSessionKey(params.key, respond);
+      if (!key) {
+        return;
+      }
+      const patch = { ...params, key };
+      const target = sessionPatchTargetIdentity(patch);
+      const executed = await executeSessionPatchMutations({
+        client,
+        context,
+        diagnostics,
+        patch,
+        targets: [
+          {
+            ...target,
+            commitGuard: createCommitGuard(target.key, sessionMutationAuthorization?.assertCurrent),
+          },
+        ],
+      });
+      if (!executed.ok) {
+        respond(false, undefined, executed.error);
+        return;
+      }
+      const outcome = executed.outcomes[0]!;
+      if (!outcome.ok) {
+        respond(false, undefined, outcome.error);
+        return;
+      }
+      const prepared = executed.preparedByIndex[0]!;
+      diagnostics?.scope("response");
       respond(
-        false,
+        true,
+        projectSessionPatchResult({
+          ...prepared,
+          cfg: executed.cfg,
+          entry: outcome.entry,
+          modelCatalog: await executed.catalogs.available(prepared.targetAgentId),
+        }),
         undefined,
-        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
       );
-      return;
+    } finally {
+      diagnostics?.finish();
     }
-    const key = requireSessionKey(params.key, respond);
-    if (!key) {
-      return;
-    }
-    const patch = { ...params, key };
-    const target = sessionPatchTargetIdentity(patch);
-    const executed = await executeSessionPatchMutations({
-      client,
-      context,
-      patch,
-      targets: [
-        {
-          ...target,
-          commitGuard: createCommitGuard(target.key, sessionMutationAuthorization?.assertCurrent),
-        },
-      ],
-    });
-    if (!executed.ok) {
-      respond(false, undefined, executed.error);
-      return;
-    }
-    const outcome = executed.outcomes[0]!;
-    if (!outcome.ok) {
-      respond(false, undefined, outcome.error);
-      return;
-    }
-    const prepared = executed.preparedByIndex[0]!;
-    respond(
-      true,
-      projectSessionPatchResult({
-        ...prepared,
-        cfg: executed.cfg,
-        entry: outcome.entry,
-        modelCatalog: await executed.catalogs.available(prepared.targetAgentId),
-      }),
-      undefined,
-    );
   },
   "sessions.assignOwner": async ({ params, respond, context, client }) => {
     if (

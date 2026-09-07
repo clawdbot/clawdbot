@@ -77,4 +77,4 @@ Every section heading from the previous single-page version keeps its anchor her
 ## Related
 
 - [Install overview](/install)
-- [Development channels](/install/development-channels)
+- [Release channels](/install/development-channels)

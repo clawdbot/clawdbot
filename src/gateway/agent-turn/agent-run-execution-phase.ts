@@ -414,6 +414,7 @@ export function startAgentRunExecution(params: {
               cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
               acpTurnSource: params.request.acpTurnSource,
               internalEvents: params.request.internalEvents,
+              runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
               inputProvenance: params.inputProvenance,
               senderIsOwner,
               sessionEffects: params.sessionEffects,

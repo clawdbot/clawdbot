@@ -161,4 +161,5 @@ When the check fails, update the PR body instead of pushing another code commit.
 
 ## Related
 
-- [CI pipeline](/ci)
+- [Install overview](/install)
+- [Release channels](/install/development-channels)

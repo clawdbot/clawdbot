@@ -81,6 +81,7 @@ type SessionsCleanupRunResult = {
     modelRunPrunedKeys: Set<string>;
     archivedKeys?: Set<string>;
     capArchivedKeys?: Set<string>;
+    ageArchivedKeys?: Set<string>;
     staleKeys: Set<string>;
     cappedKeys: Set<string>;
     dmScopeRetiredKeys: Set<string>;
@@ -306,6 +307,7 @@ async function previewStoreCleanup(params: {
   const modelRunPrunedKeys = new Set<string>();
   const archivedKeys = new Set<string>();
   const capArchivedKeys = new Set<string>();
+  const ageArchivedKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
   const missing =
     params.fixMissing === true
@@ -351,7 +353,7 @@ async function previewStoreCleanup(params: {
         },
       })
     : 0;
-  const archived = archiveStaleDashboardEntries(
+  let archived = archiveStaleDashboardEntries(
     previewStore,
     params.maintenance.archiveDashboardAfterMs,
     {
@@ -360,6 +362,7 @@ async function previewStoreCleanup(params: {
         archivedKeys.add(key);
       },
       preserveKeys: preserveSessionKeys,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
     },
   );
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
@@ -368,6 +371,10 @@ async function previewStoreCleanup(params: {
     preserveRecentMs: params.maintenance.preserveRecentMs,
     onPruned: ({ key }) => {
       staleKeys.add(key);
+    },
+    onArchived: ({ key }) => {
+      archived += 1;
+      ageArchivedKeys.add(key);
     },
   });
   let capArchived = 0;
@@ -465,6 +472,7 @@ async function previewStoreCleanup(params: {
     modelRunPrunedKeys,
     archivedKeys,
     capArchivedKeys,
+    ageArchivedKeys,
     staleKeys,
     cappedKeys,
     dmScopeRetiredKeys,

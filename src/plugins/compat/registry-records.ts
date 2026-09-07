@@ -534,7 +534,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     owner: "setup",
     introduced: "2026-04-24",
     replacement: "`setup.requiresRuntime: false` with complete setup descriptors",
-    docsPath: "/plugins/manifest#setup-reference",
+    docsPath: "/plugins/manifest/setup-and-auth#setup-reference",
     surfaces: ["setup-api runtime fallback", "setup.requiresRuntime omitted"],
     diagnostics: ["setup registry runtime diagnostic"],
     tests: ["src/plugins/setup-registry.test.ts", "src/plugins/setup-registry.runtime.test.ts"],

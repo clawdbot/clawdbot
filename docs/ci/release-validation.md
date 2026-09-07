@@ -390,4 +390,5 @@ The scheduled live/E2E workflow runs the full release-path Docker suite daily an
 
 ## Related
 
-- [CI pipeline](/ci)
+- [Install overview](/install)
+- [Release channels](/install/development-channels)

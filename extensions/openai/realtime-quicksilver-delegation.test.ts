@@ -19,6 +19,7 @@ function createDelegationHarness(params?: {
   runAgentConsult?: ConsultRunner;
   handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
   getSocket?: () => FakeSocket;
+  onWireEventType?: (eventType: string) => void;
 }) {
   const socket = new FakeSocket("manual");
   socket.readyState = 1;
@@ -31,7 +32,9 @@ function createDelegationHarness(params?: {
       getSocket: params?.getSocket ?? (() => socket),
       handleDelegationInput: params?.handleDelegationInput,
       logger,
+      model: "gpt-live-test-canary",
       onFatalError,
+      onWireEventType: params?.onWireEventType,
       runAgentConsult,
       signal: sessionController.signal,
     },
@@ -259,6 +262,23 @@ describe("GPT-Live sideband protocol", () => {
         JSON.stringify({ type: "turn.done", turn: { role: "user", transcript: "hello" } }),
       ),
     ).toEqual({ kind: "transcript-done", role: "user", text: "hello" });
+  });
+
+  it("forwards only classified sideband event types", () => {
+    const onWireEventType = vi.fn();
+    const { controller } = createDelegationHarness({ onWireEventType });
+
+    controller.handleFrame(Buffer.from(JSON.stringify({ type: "sensitive-private-event" })), false);
+    controller.handleFrame(Buffer.from(JSON.stringify({ type: "session.updated" })), false);
+    controller.handleFrame(
+      Buffer.from(JSON.stringify({ type: "output_audio_buffer.cleared" })),
+      false,
+    );
+
+    expect(onWireEventType.mock.calls).toEqual([
+      ["session.updated"],
+      ["output_audio_buffer.cleared"],
+    ]);
   });
 
   it("parses client delegations and ignores non-client targets", () => {
@@ -542,9 +562,27 @@ describe("GPT-Live sideband protocol", () => {
   });
 
   it.each([
-    { kind: "failure", error: new Error("workspace unavailable") },
-    { kind: "timeout", error: new DOMException("agent timed out", "TimeoutError") },
-  ])("returns a speakable failure for a delegated $kind", async ({ error }) => {
+    {
+      kind: "failure",
+      error: new Error("workspace unavailable"),
+      expectedReason: "workspace unavailable",
+    },
+    {
+      kind: "timeout",
+      error: new DOMException("agent timed out", "TimeoutError"),
+      expectedReason: "agent timed out",
+    },
+    {
+      kind: "Unicode failure",
+      error: new Error(`${"x".repeat(179)}🤖`),
+      expectedReason: "x".repeat(179),
+    },
+    {
+      kind: "Unicode at the limit",
+      error: new Error(`${"x".repeat(178)}🤖`),
+      expectedReason: `${"x".repeat(178)}🤖`,
+    },
+  ])("returns a speakable failure for a delegated $kind", async ({ error, expectedReason }) => {
     const runAgentConsult = vi.fn<ConsultRunner>(async () => {
       throw error;
     });
@@ -566,7 +604,9 @@ describe("GPT-Live sideband protocol", () => {
       }),
     );
     expect(socket.sent.join("\n")).not.toContain(error.message);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(error.message));
+    expect(logger.warn).toHaveBeenCalledWith(
+      `OpenAI GPT-Live delegation consult failed: ${expectedReason}`,
+    );
   });
 
   it("handles structured delegated failures with a non-string message", async () => {
@@ -598,10 +638,36 @@ describe("GPT-Live sideband protocol", () => {
     const { controller, logger, onFatalError } = createDelegationHarness();
     controller.handleEvent({ kind: "error", message: "token expired", fatalAuth: true });
 
-    expect(logger.warn).toHaveBeenCalledWith("OpenAI GPT-Live sideband error: token expired");
+    expect(logger.warn).toHaveBeenCalledWith("OpenAI GPT-Live provider error");
     expect(onFatalError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "OpenAI GPT-Live sideband error: token expired" }),
+      expect.objectContaining({ message: "OpenAI GPT-Live provider error" }),
     );
+  });
+
+  it("redacts the opaque model from sideband errors before logging or callbacks", () => {
+    const model = "gpt-live-test-private";
+    const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
+    const { controller, logger, onFatalError } = createDelegationHarness();
+
+    controller.handleEvent({
+      kind: "error",
+      message: `provider rejected ${model} ${sensitiveDetails.join(" ")}`,
+      fatalAuth: true,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith("OpenAI GPT-Live provider error");
+    expect(onFatalError).toHaveBeenCalledOnce();
+    const projectedError = onFatalError.mock.calls[0]?.[0];
+    expect(projectedError).toBeInstanceOf(Error);
+    expect(projectedError?.name).toBe("Error");
+    expect(projectedError?.message).toBe("OpenAI GPT-Live provider error");
+    expect(projectedError?.cause).toBeUndefined();
+    const projected = JSON.stringify({
+      logs: logger.warn.mock.calls,
+    });
+    for (const privateValue of [model, ...sensitiveDetails]) {
+      expect(projected).not.toContain(privateValue);
+    }
   });
 
   it("suppresses host cancellation and stops accepting work after teardown", async () => {

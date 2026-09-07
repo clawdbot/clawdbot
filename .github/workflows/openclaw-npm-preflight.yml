@@ -728,7 +728,8 @@ jobs:
             node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/release-check.ts" --tarball "$PREPARED_TARBALL_PATH"
           # Older packages without the separate AI dependency use the global-install contract.
           if ! node -e 'process.exit(require("./package.json").dependencies?.["@openclaw/ai"] ? 0 : 1)'; then
-            node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/openclaw-npm-prepublish-verify.ts" \
+            TSX_TSCONFIG_PATH="$tooling_dir/tsconfig.json" \
+              node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/openclaw-npm-prepublish-verify.ts" \
               "$PREPARED_TARBALL_PATH" "$(node -p 'require("./package.json").version')"
           fi
 
@@ -758,7 +759,9 @@ jobs:
           for package_dir in "${package_dirs[@]}"; do
             runtime_args+=(--package "$package_dir")
           done
-          node --import tsx scripts/check-plugin-npm-runtime-builds.mts "${runtime_args[@]}"
+          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
+          TSX_TSCONFIG_PATH="$tooling_dir/tsconfig.json" \
+            node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/check-plugin-npm-runtime-builds.mts" "${runtime_args[@]}"
 
           for package_dir in "${package_dirs[@]}"; do
             OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0 \

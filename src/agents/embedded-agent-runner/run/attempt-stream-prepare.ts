@@ -103,6 +103,7 @@ export function prepareEmbeddedAttemptStream(input: {
     revokeApprovals: () => void,
   ) => void;
   activeSession: AgentSession;
+  onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
   runtimeChannel?: string;
   hookRunner: HookRunner;
   hookAgentId: string;
@@ -288,6 +289,7 @@ export function prepareEmbeddedAttemptStream(input: {
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
   const subscription = subscribeEmbeddedAgentSession({
     session: input.activeSession,
+    onModelUsage: input.onModelUsage,
     runId: attempt.runId,
     lifecycleGeneration: attempt.lifecycleGeneration,
     messageChannel: input.runtimeChannel,

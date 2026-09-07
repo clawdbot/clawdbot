@@ -3370,6 +3370,8 @@ describe("createOpenClawCodingTools read behavior", () => {
 
     expect(extractToolText(yamlResult)).toBe(`api_key: ${credential}`);
     expect(extractToolText(envResult)).not.toContain(credential);
+    expect(JSON.stringify(envResult.details)).not.toContain(credential);
+    expect(envResult.details).toEqual({ kind: "text", content: extractToolText(envResult) });
     expect(extractToolText(sourceResult)).toBe(source);
     expect(extractToolText(envrcResult)).toBe(source);
   });

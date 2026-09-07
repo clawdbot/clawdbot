@@ -5,7 +5,7 @@ import {
   type AiProviderRequestCapabilities,
   type AiProviderRequestPolicyInput,
 } from "../host.js";
-import type { AssistantMessage, Context, Model, OpenAICompletionsCompat } from "../types.js";
+import type { AssistantMessage, Context, Model } from "../types.js";
 
 const mockOpenAI = vi.hoisted(() => ({
   chunks: [] as unknown[],
@@ -72,11 +72,7 @@ const userMessage = { role: "user", content: "hello", timestamp: 1 } as const;
 const context: Context = { messages: [userMessage] };
 let previousAiTransportHost: ReturnType<typeof getAiTransportHost>;
 
-function createModel(
-  overrides: Partial<Model<"openai-completions">> & {
-    compat?: OpenAICompletionsCompat;
-  } = {},
-): Model<"openai-completions"> {
+function createModel(overrides: Partial<Model<"openai-completions">> = {}) {
   return { ...baseModel, ...overrides };
 }
 
@@ -539,6 +535,25 @@ describe("OpenAI-compatible completions compatibility", () => {
     ).toMatchObject(compat);
   });
 
+  it.each([undefined, false, true])(
+    "sends custom-endpoint long TTL only with explicit support: %s",
+    async (supportsLongCacheRetention) => {
+      await streamOpenAICompletions(
+        createModel({ compat: { cacheControlFormat: "anthropic", supportsLongCacheRetention } }),
+        context,
+        { apiKey: "test", cacheRetention: "long" },
+      ).result();
+      expect(mockOpenAI.payloads).toHaveLength(1);
+      const cacheControl =
+        supportsLongCacheRetention === true
+          ? { type: "ephemeral", ttl: "1h" }
+          : { type: "ephemeral" };
+      expect(JSON.stringify(mockOpenAI.payloads[0])).toContain(
+        `"cache_control":${JSON.stringify(cacheControl)}`,
+      );
+    },
+  );
+
   it.each([undefined, "anthropic"] as const)(
     "requires explicit cache format %s for Qwen behind a custom endpoint",
     async (cacheControlFormat) => {
@@ -606,7 +621,6 @@ describe("OpenAI-compatible completions compatibility", () => {
         tools: ["alpha", "zeta"].map((name) => ({
           type: "function",
           function: { name, description: name, parameters: { type: "object", properties: {} } },
-          cache_control: name === "zeta" ? cacheControl : undefined,
         })),
       };
       // Compare wire JSON, where undefined cache fields must be omitted.
@@ -735,7 +749,11 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: { ...defaultResolvedCompat, supportsJsonSchemaResponseFormat: true },
+      expected: {
+        ...defaultResolvedCompat,
+        supportsJsonSchemaResponseFormat: true,
+        supportsPromptCacheKey: true,
+      },
     },
     {
       name: "Azure OpenAI",
@@ -758,7 +776,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: defaultResolvedCompat,
+      expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
     },
     {
       name: "custom proxy",

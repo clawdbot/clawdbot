@@ -308,6 +308,7 @@ Now create channels and start chatting. The agent sees the channel name, and eac
 
 - Gateway owns the Discord connection.
 - Reply routing is deterministic: Discord inbound replies back to Discord.
+- Bot replies and thread-bound persona replies share Markdown formatting, including CommonMark bold and configured table conversion.
 - Forwarded message snapshots reach the agent together with any accompanying caption. Forwarded text is not treated as a typed command; command classification uses only the sender’s own message text.
 - Discord guild/channel metadata is added to the model prompt as untrusted context, not as a user-visible reply prefix. If a model copies that envelope back, OpenClaw strips the copied metadata from outbound replies and from future replay context.
 - By default (`session.dmScope=main`), direct chats share the agent main session (`agent:main:main`).
@@ -631,6 +632,29 @@ This surprises people who add one channel to give it special settings and find t
 ```
 
 Channel entries override guild-level values, so a channel entry with `users: ["*"]` opens that one room to any sender even when the guild `users` list is narrow. Entries match by channel ID, name, or slug, and a thread falls back to its parent channel's entry.
+
+### Applying access-policy changes
+
+For running Discord accounts, policy-only changes saved in the Control UI apply
+through the Gateway's validated runtime config publication without restarting the
+Discord connection or waiting for active Control UI turns to finish. This covers
+`groupPolicy`, `dmPolicy`, `allowFrom`, `dm`, `guilds`, `allowBots`, and
+`dangerouslyAllowNameMatching`, both at `channels.discord` and under
+`channels.discord.accounts.<accountId>`.
+
+New messages and interactions use the published policy, including guild/channel
+membership, user and role allowlists, and mention requirements. Name-based entries
+are resolved and cached for the policy revision before admission; already admitted
+work retains its existing context. If a name-policy lookup cannot finish within
+an interaction's response budget, components show an ephemeral policy-updating
+message and autocomplete returns no choices. A later interaction uses the resolved
+policy; the expired interaction is never resumed.
+
+Token, application ID, proxy, intents, command registration, voice configuration,
+and account enablement still use the channel's restart path and drain deferral.
+A write that mixes policy and restart-required settings stays one deferred
+transaction. Manual channel stop/start reads the committed config; it does not
+publish a pending transport change from disk.
 
 ### Role-based agent routing
 
@@ -1459,7 +1483,9 @@ at startup. After the last human leaves, it waits 30 seconds before leaving and
 generating notes; a return during that grace keeps capture running. Episodes use
 generated session IDs, ignoring a configured `sessionId`. A session stopped less
 than 10 minutes ago can reopen for the same source after a Gateway restart or a
-short gap, preserving its ID, start time, and accumulated utterances.
+short gap when its stored origin confirms a generated ID. It preserves its ID,
+start time, and accumulated utterances. Supplied IDs and legacy records with an
+unknown origin stay archived; capture starts fresh without changing those notes.
 
 Notes include participants, an overview, decisions, action items, and risks.
 They use the agent's utility model, falling back to its primary model and then
@@ -1746,6 +1772,18 @@ message(action="send", channel="discord", target="channel:123", path="/path/to/a
     - verify guild allowlist under `channels.discord.guilds`
     - if a guild `channels` map exists, only listed channels are allowed
     - verify `requireMention` behavior and mention patterns
+
+    The Control UI channel details and `openclaw channels status` warn when the
+    effective policy is `allowlist` but no guilds are configured. Add your server
+    under `channels.discord.guilds`, or the account's `guilds` map when overridden.
+    An explicit `channels.discord.accounts.default.guilds` map also overrides the
+    top-level map, even when the account map is empty.
+
+    If status reports a deferred configuration reload, wait for active work to
+    finish and refresh. A successful channel stop/start does not apply unpublished
+    configuration. The warning distinguishes waiting to publish configuration
+    from channel work deferred after publication; connection health alone does
+    not confirm that a policy change has applied.
 
     Useful checks:
 

@@ -29,9 +29,40 @@ struct ChatInlineMathTests {
         ])
     }
 
-    @Test func `escaped delimiters stay markdown`() {
-        let source = #"escaped \\(x\\)"#
-        #expect(ChatInlineMathScanner.pieces(in: source) == [.markdown(source)])
+    @Test func `escape parity preserves math and code span boundaries`() {
+        let cases: [(String, [ChatInlineMathScanner.Piece])] = [
+            (#"\(x\)"#, [.math(latex: "x", source: #"\(x\)"#)]),
+            (#"escaped \\(x\\)"#, [.markdown(#"escaped \\(x\\)"#)]),
+            (#"\\\(x\)"#, [.markdown(#"\\"#), .math(latex: "x", source: #"\(x\)"#)]),
+            (#"\\\\(x\)"#, [.markdown(#"\\\\(x\)"#)]),
+            (#"\(x\\)y\)"#, [.math(latex: #"x\\)y"#, source: #"\(x\\)y\)"#)]),
+            (#"\(x\\\) tail"#, [
+                .math(latex: #"x\\"#, source: #"\(x\\\)"#),
+                .markdown(" tail"),
+            ]),
+            (#"\(x\\\\)y\)"#, [.math(latex: #"x\\\\)y"#, source: #"\(x\\\\)y\)"#)]),
+            (#"`\(x\)`"#, [.markdown(#"`\(x\)`"#)]),
+            (#"\`\(x\)`"#, [
+                .markdown(#"\`"#), .math(latex: "x", source: #"\(x\)"#), .markdown("`"),
+            ]),
+            (#"\\`\(x\)`"#, [.markdown(#"\\`\(x\)`"#)]),
+            (#"\\\`\(x\)`"#, [
+                .markdown(#"\\\`"#), .math(latex: "x", source: #"\(x\)"#), .markdown("`"),
+            ]),
+        ]
+        for prefix in ["", "\u{1F680}e\u{301} "] {
+            for (source, pieces) in cases {
+                var expected = pieces
+                if !prefix.isEmpty {
+                    if case let .markdown(first) = expected[0] {
+                        expected[0] = .markdown(prefix + first)
+                    } else {
+                        expected.insert(.markdown(prefix), at: 0)
+                    }
+                }
+                #expect(ChatInlineMathScanner.pieces(in: prefix + source) == expected)
+            }
+        }
     }
 
     @Test func `unclosed opener stays literal`() {

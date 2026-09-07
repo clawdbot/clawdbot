@@ -50,4 +50,5 @@ To use the standalone action from another workflow, pin `openclaw/openclaw/.gith
 
 ## Related
 
-- [CI pipeline](/ci)
+- [Install overview](/install)
+- [Release channels](/install/development-channels)

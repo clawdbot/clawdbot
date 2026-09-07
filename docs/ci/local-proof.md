@@ -354,4 +354,5 @@ Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-cl
 
 ## Related
 
-- [CI pipeline](/ci)
+- [Install overview](/install)
+- [Release channels](/install/development-channels)
