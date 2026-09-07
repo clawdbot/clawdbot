@@ -76,6 +76,79 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     await server?.close();
   });
 
+  it("preserves indented code from history through streaming and copying", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        { role: "user", content: "    *user literal*", timestamp: 1000 },
+        { role: "assistant", content: "    *assistant literal*", timestamp: 2000 },
+      ],
+    });
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (text: string) => {
+            document.documentElement.dataset.copiedCode = text;
+          },
+        },
+      });
+    });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.locator(".chat-group.assistant .chat-text").waitFor();
+      if (captureProof) {
+        await page.screenshot({
+          path: path.join(artifactDir, `${proofStage}-indented-history.png`),
+        });
+      }
+      expect(await page.locator(".chat-group.user pre code").textContent()).toBe(
+        "*user literal*\n",
+      );
+      expect(await page.locator(".chat-group.assistant pre code").textContent()).toBe(
+        "*assistant literal*\n",
+      );
+      await page
+        .locator(".agent-chat__composer-combobox textarea")
+        .fill("Show an indented example");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const request = await gateway.waitForRequest("chat.send");
+      const runId = requireString(requireRecord(request.params).idempotencyKey, "run id");
+      const first = "    *first";
+      const second = `${first}\n\n    second`;
+      for (const text of [first, second]) {
+        await gateway.emitGatewayEvent("chat", {
+          message: { role: "assistant", content: [{ type: "text", text }] },
+          runId,
+          sessionKey: "main",
+          state: "delta",
+        });
+        const code = page.locator(".chat-bubble.streaming pre code");
+        await expect
+          .poll(() => code.allTextContents())
+          .toEqual([text.replace(/^ {4}/gm, "") + "\n"]);
+      }
+      await page.locator(".chat-bubble.streaming .code-block-copy").click();
+      expect(await page.locator("html").getAttribute("data-copied-code")).toBe("*first\n\nsecond");
+      if (captureProof) {
+        await page.screenshot({
+          path: path.join(artifactDir, `${proofStage}-indented-stream.png`),
+        });
+      }
+      await gateway.emitChatFinal({ runId, text: second });
+      await expect
+        .poll(() => page.locator(".chat-group.assistant pre code").allTextContents())
+        .toContain("*first\n\nsecond\n");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("highlights a streamed code fence only after its closing marker arrives", async () => {
     const context = await browser.newContext({
       locale: "en-US",

@@ -542,15 +542,13 @@ export function toSanitizedMarkdownHtml(
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const rawInput = normalizeMarkdownLineBreaks(
+  const renderInput = normalizeMarkdownLineBreaks(
     stripUnsupportedCitationControlMarkers(markdownLocal),
   );
-  const input = rawInput.trim();
-  if (!input) {
+  if (!renderInput.trim()) {
     return "";
   }
-  const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
-  if (input.length > MARKDOWN_CACHE_MAX_CHARS) {
+  if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
   const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
@@ -585,11 +583,10 @@ export function toStreamingMarkdownParts(
     return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
   }
 
-  const trimmedInput = rawInput.trim();
-  if (!trimmedInput) {
+  if (!rawInput.trim()) {
     return ["", ""];
   }
-  const truncated = truncateText(trimmedInput, MARKDOWN_CHAR_LIMIT);
+  const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
   const input = appendMarkdownTruncationNotice(truncated);
 
   const { boundary, tailRepairStart } = splitStableStreamingMarkdown(
