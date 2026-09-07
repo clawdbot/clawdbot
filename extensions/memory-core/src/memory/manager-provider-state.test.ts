@@ -155,7 +155,6 @@ describe("memory manager mistral provider wiring", () => {
     "keeps the primary endpoint and credentials out of the $provider runtime fallback",
     ({ provider, model }) => {
       const sharedRemote = {
-        nonBatchConcurrency: 3,
         batch: {
           enabled: true,
           wait: false,

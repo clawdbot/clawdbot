@@ -15,8 +15,8 @@ function createIndexConcurrencyHarness(params: {
 }): IndexConcurrencyHarness {
   return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
     batch: params.batch ?? { enabled: false, concurrency: 8 },
-    // `remote.nonBatchConcurrency` is a retired config key that resolution never
-    // populates, so the resolved settings reaching this policy carry no override.
+    // Resolved settings carry no non-batch override; kept so the harness also loads
+    // against pre-fix code, which read this field.
     settings: { remote: undefined },
     provider: params.providerId
       ? { id: params.providerId, model: `${params.providerId}-model` }

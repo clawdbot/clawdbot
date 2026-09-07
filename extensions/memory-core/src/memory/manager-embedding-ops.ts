@@ -257,15 +257,10 @@ function resolveEmbeddingTimeoutMs(params: {
 
 function resolveMemoryIndexConcurrency(params: {
   batch: { enabled: boolean; concurrency: number };
-  configuredNonBatchConcurrency?: number;
   providerId?: string;
 }): number {
   if (params.batch.enabled) {
     return params.batch.concurrency;
-  }
-  const configured = params.configuredNonBatchConcurrency;
-  if (typeof configured === "number" && Number.isFinite(configured)) {
-    return Math.max(1, Math.floor(configured));
   }
   // Providers embedding on the operator's own host index one job at a time; fan-out
   // saturates the CPU the Gateway needs to stay responsive during a full rebuild.
@@ -878,7 +873,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected getIndexConcurrency(): number {
     return resolveMemoryIndexConcurrency({
       batch: this.batch,
-      configuredNonBatchConcurrency: this.settings.remote?.nonBatchConcurrency,
       providerId: this.syncProviderGeneration
         ? this.syncProviderGeneration.provider?.id
         : this.provider?.id,

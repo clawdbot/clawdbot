@@ -218,7 +218,6 @@ describe("createEmbeddingProvider", () => {
       registerTestMemoryAdapter({ id: fallback, create: fallbackCreate });
 
       const sharedRemote = {
-        nonBatchConcurrency: 3,
         batch: {
           enabled: true,
           wait: false,
