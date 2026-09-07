@@ -5752,6 +5752,26 @@ Update and merge these partial structured summaries.`,
     expect(String(toolPlanOutput.arguments)).toContain("OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT");
   });
 
+  it("plans sessions_spawn failure calls with an explicit empty task", async () => {
+    const server = await startMockServer();
+
+    const response = await expectNonStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(
+          'QA routing marker: tool search qa failure target=sessions_spawn. Call sessions_spawn directly exactly once with task="". Do not repair, omit, replace, or retry the empty task.',
+        ),
+      ],
+    });
+
+    const payload = await response.json();
+    expect(outputItem(payload)).toMatchObject({
+      type: "function_call",
+      name: "sessions_spawn",
+    });
+    expect(outputToolArgs(payload)).toEqual({ task: "" });
+  });
+
   it.each([
     {
       label: "workspace-local happy",

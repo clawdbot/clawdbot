@@ -552,6 +552,20 @@ describe("qa scenario catalog", () => {
       },
     });
     expect(readQaScenarioExecutionConfig(sessionsSpawn.id)).not.toHaveProperty("knownHarnessGap");
+    const sessionsSpawnConfig = readQaScenarioExecutionConfig(sessionsSpawn.id);
+    expect(sessionsSpawnConfig?.happyPrompt).toContain("sessions_spawn directly exactly once");
+    expect(sessionsSpawnConfig?.happyPrompt).toContain(
+      'task="Runtime tool fixture subagent: reply exactly RUNTIME-TOOL-FIXTURE."',
+    );
+    expect(sessionsSpawnConfig?.happyPrompt).toContain('label="runtime-tool-fixture"');
+    expect(sessionsSpawnConfig?.happyPrompt).toContain('mode="run"');
+    expect(sessionsSpawnConfig?.happyPrompt).toContain("thread=false");
+    expect(sessionsSpawnConfig?.failurePrompt).toContain(
+      'sessions_spawn directly exactly once with task=""',
+    );
+    expect(sessionsSpawnConfig?.failurePrompt).toContain(
+      "Do not repair, omit, replace, or retry the empty task",
+    );
     const webFetchConfig = readQaScenarioExecutionConfig(webFetch.id);
     expect(webFetchConfig?.happyPrompt).toContain("Call web_fetch exactly once");
     expect(webFetchConfig?.happyPrompt).toContain("call it directly without tool_search");

@@ -23,6 +23,18 @@ scenario:
     summary: Exercise the sessions_spawn runtime tool family.
     config:
       toolName: sessions_spawn
+      happyPrompt: >-
+        QA routing marker: tool search qa check target=sessions_spawn. Call
+        sessions_spawn directly exactly once with task="Runtime tool fixture
+        subagent: reply exactly RUNTIME-TOOL-FIXTURE.",
+        label="runtime-tool-fixture", mode="run", and thread=false. Do not call
+        tool_search. Wait for sessions_spawn to return, then summarize the
+        actual result.
+      failurePrompt: >-
+        QA routing marker: tool search qa failure target=sessions_spawn. Call
+        sessions_spawn directly exactly once with task="". Do not repair,
+        omit, replace, or retry the empty task. Do not call tool_search.
+        Summarize the actual rejection.
       toolCoverage:
         family: sessions_spawn
         actualTool: sessions_spawn

@@ -728,8 +728,8 @@ describe("runtime tool fixture", () => {
     });
 
     expect(promptEvidence).toEqual([
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
+      { transcriptToolName: "apply_patch", requireSuccessfulTranscriptToolResult: true },
+      { transcriptToolName: "apply_patch", requireSuccessfulTranscriptToolResult: undefined },
     ]);
     expect(details).toContain("apply_patch live provider happy planned args");
     expect(details).toContain("runtime-tool-fixture-patch.txt");
@@ -768,8 +768,8 @@ describe("runtime tool fixture", () => {
     ).resolves.toContain("apply_patch live provider happy planned args");
 
     expect(promptEvidence).toEqual([
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
-      { transcriptToolName: undefined, requireSuccessfulTranscriptToolResult: undefined },
+      { transcriptToolName: "apply_patch", requireSuccessfulTranscriptToolResult: true },
+      { transcriptToolName: "apply_patch", requireSuccessfulTranscriptToolResult: undefined },
     ]);
   });
 
