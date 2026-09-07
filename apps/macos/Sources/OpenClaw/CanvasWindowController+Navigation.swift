@@ -42,16 +42,17 @@ extension CanvasWindowController {
             return
         }
 
-        // Only open external URLs when there is a registered handler, otherwise macOS will show a confusing
-        // "There is no application set to open the URL ..." alert (e.g. for about:blank).
-        if let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) {
+        // Same NSWorkspace allowlist as Control UI. Do not launch file://, smb://, or app handlers.
+        if WebContentWorkspaceURL.isAllowed(url),
+           let appURL = NSWorkspace.shared.urlForApplication(toOpen: url)
+        {
             NSWorkspace.shared.open(
                 [url],
                 withApplicationAt: appURL,
                 configuration: NSWorkspace.OpenConfiguration(),
                 completionHandler: nil)
         } else {
-            canvasWindowLogger.debug("no application to open scheme=\(scheme ?? "-", privacy: .public)")
+            canvasWindowLogger.debug("blocked external scheme=\(scheme ?? "-", privacy: .public)")
         }
         decisionHandler(.cancel)
     }

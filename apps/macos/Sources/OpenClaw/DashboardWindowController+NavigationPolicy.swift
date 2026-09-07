@@ -27,11 +27,7 @@ extension DashboardWindowController {
     }
 
     static func isExternalURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased() else { return false }
-        if scheme == "http" || scheme == "https" {
-            return self.isHTTPURL(url)
-        }
-        return scheme == "mailto" || scheme == "tel"
+        WebContentWorkspaceURL.isAllowed(url)
     }
 
     static func isEditorURL(_ url: URL) -> Bool {
