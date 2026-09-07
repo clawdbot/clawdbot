@@ -61,6 +61,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs!",
   "scripts/e2e/lib/doctor-install-switch/assert-exec-start.mjs!",
   "scripts/e2e/lib/doctor-install-switch/write-wrapper.mjs!",
+  // Historical upgrade shells and the cross-OS adapter execute this assertion CLI.
+  "scripts/e2e/lib/external-package-transition.mjs!",
   "scripts/e2e/lib/fixture.mjs!",
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",

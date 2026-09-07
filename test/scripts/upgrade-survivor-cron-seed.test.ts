@@ -109,6 +109,7 @@ if (args[0] === "config") {
 } else {
   assert.equal(args[0], "fixture-update");
   if (args[1] === "1") {
+    assert.deepEqual(args.slice(1), ["1", "file:" + path.join(process.env.FIXTURE_ROOT, "future.tgz"), "2100.1.0"]);
     assert.equal(fs.existsSync(live), true, "candidate restart proof needs a live managed service");
     assert.equal(fs.existsSync(authenticated), true, "candidate restart must follow authenticated readiness");
     fs.writeFileSync(path.join(process.env.FIXTURE_ROOT, "restarted"), "complete");
@@ -147,7 +148,7 @@ if (args[0] === "config") {
   const phaseStart = source.indexOf("phase storage-preflight");
   const updatePhase = "phase update-candidate update_candidate";
   const phaseEnd = source.indexOf(updatePhase, phaseStart) + updatePhase.length;
-  // Run the actual phase sequence; replace external package/service operations only.
+  // Run the actual phase sequence; substitute external model, package, and service operations.
   writeFileSync(
     runnerPath,
     `${source.slice(0, phaseStart)}
@@ -162,10 +163,15 @@ apply_baseline_config_recipe() {
 resolve_candidate_version() { candidate_version=2026.8.2; }
 configure_clawhub_fixture() { :; }
 configure_plugin_registry() { :; }
+prepare_restart_inference() { :; }
+prepare_restart_fixture() {
+  restart_fixture_package="$FIXTURE_ROOT/future.tgz"
+  restart_fixture_version=2100.1.0
+}
 install_update_restart_systemctl_shim() { :; }
 openclaw_e2e_wait_gateway_ready() { node "$FIXTURE_PROBE" fixture-ready "\${5:-strict}"; }
 openclaw_e2e_probe_tcp() { [ -f "$FIXTURE_ROOT/live" ]; }
-update_candidate() { node "$FIXTURE_PROBE" fixture-update "\${1:-0}"; }
+update_candidate() { node "$FIXTURE_PROBE" fixture-update "\${1:-0}" "\${2:-}" "\${3:-}"; }
 assert_survival() { printf 'passed' > "$FIXTURE_ROOT/survival"; }
 ${source.slice(phaseStart, phaseEnd)}
 assert_survival
