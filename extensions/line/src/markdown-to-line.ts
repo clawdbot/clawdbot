@@ -334,7 +334,8 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
     headerCells.some((cell) => cell.hasMarkup) ||
     rowCells.some((row) => row.some((cell) => cell.hasMarkup));
 
-  if (table.headers.length === 2 && !hasInlineMarkup) {
+  // Receipt cards clip after 12 rows; larger tables need the complete generic layout.
+  if (table.headers.length === 2 && !hasInlineMarkup && rowCells.length <= 12) {
     return createReceiptCard({
       title: headerCells.map((cell) => cell.text).join(" / "),
       items: rowCells.map((row) => ({
@@ -360,7 +361,7 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
     paddingBottom: "sm",
   } as FlexBox;
 
-  const dataRows: FlexComponent[] = rowCells.slice(0, 10).map((row, rowIndex) => ({
+  const dataRows: FlexComponent[] = rowCells.map((row, rowIndex) => ({
     type: "box",
     layout: "horizontal",
     contents: table.headers.map((_, colIndex) => {

@@ -268,6 +268,79 @@ print("done")
     expect(result.text).not.toContain("[here]");
   });
 
+  it.each([
+    { name: "plain two-column at the receipt limit", columns: 2, rowCount: 12, styled: false },
+    { name: "plain two-column beyond the receipt limit", columns: 2, rowCount: 13, styled: false },
+    {
+      name: "styled two-column at the former generic limit",
+      columns: 2,
+      rowCount: 10,
+      styled: true,
+    },
+    {
+      name: "styled two-column beyond the former generic limit",
+      columns: 2,
+      rowCount: 11,
+      styled: true,
+    },
+    { name: "three-column at the former generic limit", columns: 3, rowCount: 10, styled: false },
+    {
+      name: "three-column beyond the former generic limit",
+      columns: 3,
+      rowCount: 11,
+      styled: false,
+    },
+  ])("keeps every row visible for $name", ({ columns, rowCount, styled }) => {
+    const headers = Array.from({ length: columns }, (_, column) => `Header ${column + 1}`);
+    const rows = Array.from({ length: rowCount }, (_, row) => {
+      const cells = Array.from({ length: columns }, (_unused, column) => {
+        const value = `row-${row + 1}-column-${column + 1}`;
+        if (styled && column === 0) {
+          return `**${value}**`;
+        }
+        return styled && column === 1 ? `[${value}](https://example.test/rows/${row + 1})` : value;
+      });
+      return `| ${cells.join(" | ")} |`;
+    });
+    const table = [
+      `| ${headers.join(" | ")} |`,
+      `| ${headers.map(() => "---").join(" | ")} |`,
+      ...rows,
+    ].join("\n");
+
+    const result = processLineMessage(table);
+    const delivered = JSON.stringify(result.flexMessages);
+
+    expect(result.flexMessages).toHaveLength(1);
+    for (let row = 1; row <= rowCount; row += 1) {
+      for (let column = 1; column <= columns; column += 1) {
+        expect(delivered).toContain(`row-${row}-column-${column}`);
+      }
+      if (styled) {
+        expect(delivered).toContain(`https://example.test/rows/${row}`);
+      }
+    }
+    expect(
+      Buffer.byteLength(JSON.stringify(result.flexMessages[0]?.contents), "utf8"),
+    ).toBeLessThanOrEqual(30_000);
+    expect(result.segments).toBeUndefined();
+  });
+
+  it("falls back with every row when a complete table exceeds the provider size limit", () => {
+    const rows = Array.from(
+      { length: 13 },
+      (_, row) => `| row-${row + 1} | ${row === 12 ? "x".repeat(30_000) : `value-${row + 1}`} |`,
+    );
+    const result = processLineMessage(["| Name | Value |", "|---|---|", ...rows].join("\n"));
+
+    expect(result.flexMessages).toHaveLength(0);
+    for (let row = 1; row <= rows.length; row += 1) {
+      expect(result.text).toContain(`row-${row}`);
+    }
+    expect(result.text).toContain("x".repeat(30_000));
+    expect(result.segments).toEqual([{ type: "text", text: result.text }]);
+  });
+
   it("keeps an oversized table visible as canonical bullet text instead of an invalid Flex bubble", () => {
     const value = "x".repeat(30_000);
     const result = processLineMessage(
