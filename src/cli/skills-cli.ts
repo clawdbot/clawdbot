@@ -14,7 +14,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, readBestEffortConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
@@ -110,10 +110,9 @@ function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: stri
 type ResolveSkillsWorkspaceOptions = {
   agentId?: string;
   cwd?: string;
-  skipPluginValidation?: boolean;
 };
 
-type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
+type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspaceFromConfig>;
 type SkillProposalDraftCliOptions = {
   agent?: string;
   json?: boolean;
@@ -154,15 +153,15 @@ function normalizeExplicitAgentId(agentId?: string): string | undefined {
   return normalizedAgentId;
 }
 
-function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
+function resolveSkillsWorkspaceFromConfig(
+  config: ReturnType<typeof getRuntimeConfig>,
+  options?: ResolveSkillsWorkspaceOptions,
+): {
   config: ReturnType<typeof getRuntimeConfig>;
   workspaceDir: string;
   agentId: string;
 } {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
-  const config = getRuntimeConfig(
-    options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
-  );
   const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
@@ -178,6 +177,22 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   };
 }
 
+function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): ResolvedSkillsWorkspace {
+  return resolveSkillsWorkspaceFromConfig(getRuntimeConfig(), options);
+}
+
+async function resolveSkillsWorkspaceBestEffort(
+  options?: ResolveSkillsWorkspaceOptions,
+): Promise<ResolvedSkillsWorkspace> {
+  // Browse commands must render local skill metadata even when config validation fails,
+  // so read best-effort and keep the no-plugin-validation status contract. They are
+  // read-only: observe:false keeps them from persisting config-health/audit state.
+  return resolveSkillsWorkspaceFromConfig(
+    await readBestEffortConfig({ observe: false, skipPluginValidation: true }),
+    options,
+  );
+}
+
 function resolveAgentOption(
   command: Command | undefined,
   opts?: { agent?: string },
@@ -186,9 +201,8 @@ function resolveAgentOption(
 }
 
 async function loadSkillsStatusReport(
-  options?: ResolveSkillsWorkspaceOptions,
+  resolved: ResolvedSkillsWorkspace,
 ): Promise<SkillStatusReport> {
-  const resolved = resolveSkillsWorkspace({ ...options, skipPluginValidation: true });
   try {
     return await callSkillsGateway<SkillStatusReport>({
       config: resolved.config,
@@ -219,7 +233,8 @@ async function runSkillsAction(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<void> {
   await runCommandWithRuntime(defaultRuntime, async () => {
-    const report = await loadSkillsStatusReport(options);
+    const resolved = await resolveSkillsWorkspaceBestEffort(options);
+    const report = await loadSkillsStatusReport(resolved);
     defaultRuntime.writeStdout(render(report));
   });
 }

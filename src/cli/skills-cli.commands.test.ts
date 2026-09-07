@@ -102,6 +102,7 @@ const mocks = vi.hoisted(() => {
   return {
     callGatewayMock: vi.fn(),
     loadConfigMock: vi.fn((_options?: unknown) => ({})),
+    readBestEffortConfigMock: vi.fn(async (_options?: unknown) => ({})),
     resolveDefaultAgentIdMock: vi.fn(
       (_configForTest: unknown, _context?: AgentSelectionContext) => "main",
     ),
@@ -138,6 +139,7 @@ const mocks = vi.hoisted(() => {
 const {
   callGatewayMock,
   loadConfigMock,
+  readBestEffortConfigMock,
   resolveDefaultAgentIdMock,
   resolveAgentIdByWorkspacePathMock,
   resolveConfiguredAgentIdMock,
@@ -268,7 +270,10 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayClientRequestError: (error: unknown) =>
     error instanceof Error && error.name === "GatewayClientRequestError",
   isGatewayCredentialsRequiredError: (error: unknown) =>
-    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
+    error instanceof Error &&
+    error.name === "GatewayCredentialsRequiredError" &&
+    typeof (error as { method?: unknown }).method === "string" &&
+    typeof (error as { configPath?: unknown }).configPath === "string",
   isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
     !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
@@ -281,6 +286,7 @@ vi.mock("../utils.js", async (importOriginal) => ({
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: (...args: unknown[]) => mocks.loadConfigMock(...args),
   loadConfig: () => mocks.loadConfigMock(),
+  readBestEffortConfig: async (...args: unknown[]) => mocks.readBestEffortConfigMock(...args),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -361,6 +367,7 @@ describe("skills cli commands", () => {
     runtimeErrors.length = 0;
     callGatewayMock.mockReset();
     loadConfigMock.mockReset();
+    readBestEffortConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentIdByWorkspacePathMock.mockReset();
     resolveConfiguredAgentIdMock.mockReset();
@@ -393,6 +400,7 @@ describe("skills cli commands", () => {
       }),
     );
     loadConfigMock.mockReturnValue({});
+    readBestEffortConfigMock.mockResolvedValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
     resolveConfiguredAgentIdMock.mockImplementation((_config, agentId: string) => agentId);
@@ -1595,29 +1603,71 @@ describe("skills cli commands", () => {
   const explicitGatewaySkillFailures = [
     {
       label: "configured remote missing URL",
+      outcome: "command" as const,
       config: { gateway: { mode: "remote" as const } },
       message: "gateway remote mode misconfigured: gateway.remote.url missing",
     },
     {
       label: "configured remote transport failure",
+      outcome: "root" as const,
       config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
-      message: "Gateway not reachable: ws://127.0.0.1:9",
+      // Fallback-eligible by error type: only the remote configuration itself
+      // may block the implicit-local substitution.
+      error: new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "abnormal closure",
+        message: "gateway closed (1006): abnormal closure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:9",
+          urlSource: "remote url",
+          message: "",
+        },
+      }),
+      message: "gateway closed (1006): abnormal closure",
     },
     {
       label: "configured remote auth failure",
+      outcome: "root" as const,
       config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
+      // Credentials errors are fallback-eligible too; remote stays fail-closed.
+      // Production credentials errors carry method/configPath and bypass
+      // command-level formatting through the root renderer.
+      error: Object.assign(new Error("gateway authentication failed"), {
+        name: "GatewayCredentialsRequiredError",
+        method: "skills.status",
+        configPath: "/tmp/openclaw.json",
+      }),
       message: "gateway authentication failed",
     },
     {
       label: "environment-selected transport failure",
+      outcome: "root" as const,
       config: {},
       url: "ws://127.0.0.1:9",
-      message: "Gateway not reachable: ws://127.0.0.1:9",
+      error: new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "abnormal closure",
+        message: "gateway closed (1006): abnormal closure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:9",
+          urlSource: "remote url",
+          message: "",
+        },
+      }),
+      message: "gateway closed (1006): abnormal closure",
     },
     {
       label: "environment-selected auth failure",
+      outcome: "root" as const,
       config: {},
       url: "ws://127.0.0.1:9",
+      error: Object.assign(new Error("gateway authentication failed"), {
+        name: "GatewayCredentialsRequiredError",
+        method: "skills.status",
+        configPath: "/tmp/openclaw.json",
+      }),
       message: "gateway authentication failed",
     },
   ];
@@ -1641,16 +1691,24 @@ describe("skills cli commands", () => {
     ),
   )("does not substitute local skills after $label", async ({ target, command, json }) => {
     loadConfigMock.mockReturnValue(target.config);
+    // Browse commands resolve through the best-effort reader; the fixtures
+    // must reach that mock too or the remote configuration never exists.
+    readBestEffortConfigMock.mockResolvedValue(target.config);
     if (target.url) {
       vi.stubEnv("OPENCLAW_GATEWAY_URL", target.url);
     }
-    callGatewayMock.mockRejectedValue(new Error(target.message));
+    const failure = target.error ?? new Error(target.message);
+    callGatewayMock.mockRejectedValue(failure);
 
-    await expect(runCommand([...command.argv, ...(json ? ["--json"] : [])])).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(runtimeErrors).toEqual([target.message]);
+    // Root-owned credential/transport errors propagate; ordinary command errors log and exit.
+    const run = runCommand([...command.argv, ...(json ? ["--json"] : [])]);
+    if (target.outcome === "root") {
+      await expect(run).rejects.toBe(failure);
+      expect(runtimeErrors).toEqual([]);
+    } else {
+      await expect(run).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors).toEqual([target.message]);
+    }
     expect(runtimeStdout).toEqual([]);
     expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
   });
@@ -1877,12 +1935,31 @@ describe("skills cli commands", () => {
   it("keeps non-JSON skills list output on stdout with human-readable formatting", async () => {
     await runCommand(["skills", "list"]);
 
-    expect(loadConfigMock).toHaveBeenCalledWith({ skipPluginValidation: true });
+    expect(readBestEffortConfigMock).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
     expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
     expect(runtimeErrors).toStrictEqual([]);
     expect(runtimeStdout.at(-1)).toContain("calendar");
     expect(runtimeStdout.at(-1)).toContain("openclaw skills search");
+  });
+
+  it("renders skills browse output when the strict config load fails", async () => {
+    loadConfigMock.mockImplementation(() => {
+      throw new Error("Invalid config: unrecognized key");
+    });
+
+    await runCommand(["skills", "list"]);
+
+    expect(readBestEffortConfigMock).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(runtimeErrors).toStrictEqual([]);
+    expect(runtimeStdout.at(-1)).toContain("calendar");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
