@@ -103,14 +103,14 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   }
   if (params.sessionManager.appendCustomEntry) {
     const snapshot = serializeCacheTtlToolResultProjections(params.toolResultPromptProjectionState);
+    const hash = hashToolResultProjectionSnapshot(snapshot);
     params.sessionManager.appendCustomEntry(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
       timestamp: params.now ?? Date.now(),
       provider: params.provider,
       modelId: params.modelId,
-      ...snapshot,
+      ...(hash !== params.toolResultPromptProjectionState.lastWrittenSnapshotHash ? snapshot : {}),
     });
-    params.toolResultPromptProjectionState.lastWrittenSnapshotHash =
-      hashToolResultProjectionSnapshot(snapshot);
+    params.toolResultPromptProjectionState.lastWrittenSnapshotHash = hash;
   }
   return true;
 }
