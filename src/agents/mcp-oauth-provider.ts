@@ -56,15 +56,11 @@ export function bindMcpOAuthLeaseAssertion(
 }
 
 /** Bind OAuth network work to the lease that fences its persisted side effects. */
-export function withMcpOAuthLeaseSignal(
-  fetchFn: FetchLike | undefined,
-  leaseSignal: AbortSignal,
-): FetchLike {
-  const baseFetch: FetchLike = fetchFn ?? ((url, init) => fetch(url, init));
+export function withMcpOAuthLeaseSignal(fetchFn: FetchLike, leaseSignal: AbortSignal): FetchLike {
   return async (url, init) => {
     const requestSignal = init?.signal;
     const signal = requestSignal ? AbortSignal.any([requestSignal, leaseSignal]) : leaseSignal;
-    return await baseFetch(url, { ...init, signal });
+    return await fetchFn(url, { ...init, signal });
   };
 }
 

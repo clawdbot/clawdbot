@@ -10,6 +10,12 @@ type StreamableTransportOptions = {
   authProvider?: unknown;
 };
 
+type OAuthBearerParams = {
+  fetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  authFetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  identity: McpOAuthIdentity;
+};
+
 const {
   lookupMock,
   runtimeFetchMock,
@@ -19,9 +25,7 @@ const {
 } = vi.hoisted(() => ({
   lookupMock: vi.fn(),
   runtimeFetchMock: vi.fn(),
-  oauthBearerMock: vi.fn(
-    (params: { fetchFn: unknown; identity: McpOAuthIdentity }) => params.fetchFn,
-  ),
+  oauthBearerMock: vi.fn((params: OAuthBearerParams) => params.fetchFn),
   streamableTransportConstructorMock: vi.fn(),
   sseTransportConstructorMock: vi.fn(),
 }));
@@ -119,6 +123,14 @@ function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | unde
     throw new Error(`Expected runtime fetch call ${index}`);
   }
   return call;
+}
+
+function latestOAuthBearerParams(): OAuthBearerParams {
+  const params = oauthBearerMock.mock.calls.at(-1)?.[0];
+  if (!params) {
+    throw new Error("Expected native OAuth bearer wrapper parameters");
+  }
+  return params;
 }
 
 describe("resolveMcpTransport", () => {
@@ -396,18 +408,71 @@ describe("resolveMcpTransport", () => {
     await options.fetch?.("https://mcp.example.com/mcp");
     await options.fetch?.("https://auth.example.com/token");
 
-    const oauthParams = oauthBearerMock.mock.calls.at(-1)?.[0] as
-      | { authFetchFn?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }
-      | undefined;
-    await oauthParams?.authFetchFn?.(
-      "https://mcp.example.com/.well-known/oauth-protected-resource",
-    );
-    await oauthParams?.authFetchFn?.("https://auth.example.com/token");
+    const oauthParams = latestOAuthBearerParams();
+    await oauthParams.authFetchFn("https://mcp.example.com/.well-known/oauth-protected-resource");
+    await oauthParams.authFetchFn("https://auth.example.com/token");
 
     expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("x-tenant")).toBe("docs");
     expect(new Headers(runtimeFetchCall(1)?.[1]?.headers).get("x-tenant")).toBeNull();
     expect(new Headers(runtimeFetchCall(2)?.[1]?.headers).get("x-tenant")).toBe("docs");
     expect(new Headers(runtimeFetchCall(3)?.[1]?.headers).get("x-tenant")).toBeNull();
+  });
+
+  it.each([307, 308])(
+    "rejects cross-origin OAuth %s redirects that would replay a POST body",
+    async (status) => {
+      runtimeFetchMock
+        .mockResolvedValueOnce(redirectResponse("https://redirect.example/token", status))
+        .mockResolvedValueOnce(new Response("ok"));
+
+      resolveMcpTransport("probe", {
+        url: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
+        auth: "oauth",
+      });
+
+      const oauthParams = latestOAuthBearerParams();
+      const tokenBody = new URLSearchParams({
+        code: "synthetic-code",
+        code_verifier: "synthetic-verifier",
+      }).toString();
+
+      await expect(
+        oauthParams.authFetchFn("https://auth.example.com/token", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: tokenBody,
+        }),
+      ).rejects.toThrow("Refusing to follow cross-origin redirect for POST request body");
+
+      expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("preserves OAuth POST bodies across same-origin 307 redirects", async () => {
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://auth.example.com/regional-token", 307))
+      .mockResolvedValueOnce(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+    });
+
+    const oauthParams = latestOAuthBearerParams();
+    const tokenBody = "code=synthetic-code&code_verifier=synthetic-verifier";
+
+    await oauthParams.authFetchFn("https://auth.example.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: tokenBody,
+    });
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    expect(runtimeFetchCall(1)?.[0]).toBe("https://auth.example.com/regional-token");
+    expect(runtimeFetchCall(1)?.[1]?.method).toBe("POST");
+    expect(runtimeFetchCall(1)?.[1]?.body).toBe(tokenBody);
   });
 
   it("merges SSE event-source headers case-insensitively so auth is not duplicated", async () => {
