@@ -20,6 +20,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { installA2uiFailureDiagnostics } from "./board-a2ui.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -112,7 +113,9 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
   });
 
   for (const colorScheme of ["dark", "light"] as const) {
-    it(`renders a v0.9 widget with the ${colorScheme} scrollbar theme`, async () => {
+    it(`renders a v0.9 widget with the ${colorScheme} scrollbar theme`, async ({
+      onTestFailed,
+    }) => {
       const context = await browser.newContext({
         colorScheme,
         permissions: ["local-network-access"],
@@ -121,7 +124,27 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       contexts.add(context);
       const page = await context.newPage();
       const pageErrors: string[] = [];
-      page.on("pageerror", (error) => pageErrors.push(error.message));
+      let pageErrorCount = 0;
+      page.on("pageerror", (error) => {
+        pageErrorCount += 1;
+        if (pageErrors.length < 8) {
+          pageErrors.push(error.message.slice(0, 512));
+        }
+      });
+      const diagnostics = await installA2uiFailureDiagnostics(page);
+      let actionStage = "opening dashboard";
+      onTestFailed(async () => {
+        console.error(
+          "[board-a2ui] action diagnostics",
+          JSON.stringify({
+            colorScheme,
+            actionStage,
+            pageErrorCount,
+            pageErrors,
+            ...(await diagnostics.snapshot()),
+          }),
+        );
+      });
       const origin = new URL(controlUi.baseUrl).origin;
       const rendererUrl = `${rendererOrigin}/__openclaw__/cap/canvas-proof/__openclaw__/a2ui/a2ui-v0.9.bundle.js`;
       const messages = [
@@ -223,13 +246,17 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
         )
         .toBe(true);
       const widgetFrame = outerFrame!.childFrames()[0]!;
+      diagnostics.target(widgetFrame);
       await widgetFrame.getByText("A2UI board widget").waitFor();
       await expect
         .poll(() => outer.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
       expect(await outer.getAttribute("inert")).toBeNull();
+      actionStage = "waiting for native pointer entry and clicking refresh";
       await clickBoardWidgetControl(page, widgetFrame.getByText("Refresh data"));
+      actionStage = "waiting for board.event";
       await expect.poll(async () => (await gateway.getRequests("board.event")).length).toBe(1);
+      actionStage = "validating delivered action and scrollbar";
       expect((await gateway.getRequests("board.event"))[0]?.params).toMatchObject({
         ticket: "ticket",
         payload: {
