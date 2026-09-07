@@ -5712,6 +5712,8 @@ export const en: TranslationMap & {
       expand: "Open {filename} in the side panel",
       open: "Open",
       previewUnavailable: "Preview unavailable",
+      textPreviewUnavailable:
+        "Could not preview this file. Text previews require UTF-8 files up to 256 KiB. Download it to read the full file.",
       readFailed: "Could not attach: {names}{more}",
       tooLarge: "Too large to send: {names}{more}",
       showInTextField: "Show in text field",
