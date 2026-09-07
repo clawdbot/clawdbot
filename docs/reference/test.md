@@ -473,13 +473,29 @@ package manifests. Local pnpm links remain supported when their targets stay
 inside the checkout. The tsgo wrapper does not create or reuse a shared external
 install; invocations from subdirectories still use the containing checkout as
 the ownership boundary. Declared checkout junctions and platform path aliases map
-to the same native root for validation and actual snapshot reads. Native resolution
-itself is not sandboxed: an ancestor install can still enter a successful compiler
-receipt. The owner then fails with `Declaration input escapes checkout`, without
-publishing a success record or pruning obsolete declarations. Warm records use
-the same input check. Use a standalone checkout outside ancestor installs with
-its own `pnpm install` when this occurs; do not remove the ancestor installation
-or weaken input checks.
+to the same native root for validation and actual snapshot reads. Local declaration
+preparation also aligns the compiler's `PWD` with its working directory so shell
+aliases do not change emitted inventory paths. Native resolution itself is not
+sandboxed: an ancestor install can still enter a successful compiler
+receipt. Resolution can read an ancestor's candidate `package.json` while searching
+for declarations, then resolve the import to checkout-local JavaScript. This can
+happen with a complete local frozen install and no external source files in the
+compiler Program; it does not by itself prove an undeclared dependency. Those
+manifests still affect resolution and must remain in the receipt. The owner fails
+with `Declaration input escapes checkout`, without publishing a success record or
+pruning obsolete declarations. Warm records use the same input check.
+
+Repair this at checkout provisioning: use a separate physical checkout whose
+ancestor directories do not contain `node_modules`, with the same candidate source
+(including any uncommitted changes) and its own `pnpm install --frozen-lockfile`.
+Run declaration preparation and dependent lint or package-boundary checks in that
+checkout, so the checks consume its freshly sealed receipts. A symlink to the
+nested checkout, a repeated install there, or `nodeLinker: isolated` does not bound
+native ancestor lookup. Do not alter the ancestor installation, add incidental
+dependencies, filter compiler receipts, or transplant declarations to bypass the
+checks. The pinned native compiler's filesystem callback API supports analysis,
+not declaration and build-info emission; native validation does not automatically
+create an isolated checkout.
 
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss

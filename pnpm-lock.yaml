@@ -2660,6 +2660,9 @@ importers:
       '@tanstack/virtual-core':
         specifier: 3.17.8
         version: 3.17.8
+      diff:
+        specifier: 9.0.0
+        version: 9.0.0
       dompurify:
         specifier: 3.4.14
         version: 3.4.14

@@ -143,6 +143,19 @@ export class SessionManager extends SessionManagerBranching {
     });
   }
 
+  /** Consumes a fresh bounded read as a detached branch, without copying its owned payloads. */
+  static openDetachedBounded(
+    target: SessionTranscriptRuntimeTarget,
+    options: Parameters<typeof SessionManager.openBounded>[1],
+  ): SessionManager {
+    const source = SessionManager.openBounded(target, options);
+    // Normalize opaque parents and retained cuts before discarding persistence and bounded state.
+    return SessionManager.fromOwnedEntries(
+      [source.getHeader(), ...source.getBranch()],
+      source.getCwd(),
+    );
+  }
+
   /** Detached model view: selected payloads plus lightweight ancestry, never raw replay evidence. */
   static openModelContext(
     target: SessionTranscriptRuntimeTarget,
@@ -238,7 +251,14 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   static fromEntries(entries: readonly unknown[], cwdOverride?: string): SessionManager {
-    const fileEntries = structuredClone(entries) as FileEntry[];
+    return SessionManager.fromOwnedEntries(structuredClone(entries), cwdOverride);
+  }
+
+  private static fromOwnedEntries(
+    entries: readonly unknown[],
+    cwdOverride?: string,
+  ): SessionManager {
+    const fileEntries = entries as FileEntry[];
     const header = fileEntries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );

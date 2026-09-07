@@ -430,11 +430,12 @@ aligned:
 ### Validation and activation
 
 If the resolved package version equals the installed version without changing
-the selected channel, or the Git target SHA equals `HEAD`, the run finishes
-`skipped` with reason `already-current`. A same-version explicit `--channel`
-change persists the new channel and finishes successfully. Neither path stops,
-replaces, or restarts the Gateway. Read-only plugin convergence checks can still
-report repair needs; use `openclaw update repair` to apply them.
+the selected channel or installation method, or the Git target SHA equals
+`HEAD`, the run finishes `skipped` with reason `already-current`. A same-version
+explicit `--channel` or installation-method change finishes successfully.
+Neither path stops or restarts the Gateway unless the installation method
+changes. Read-only plugin convergence checks can still report repair needs; use
+`openclaw update repair` to apply them.
 
 For targets that support candidate validation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the candidate entrypoint for Doctor lint

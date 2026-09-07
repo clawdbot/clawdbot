@@ -9,6 +9,7 @@ import {
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { applyGatewayWebSocketTlsPin } from "../../packages/gateway-client/src/websocket-transport.js";
+import { createLoopbackConnectOptions } from "../infra/loopback-connect.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const require = createRequire(import.meta.url);
@@ -269,7 +270,7 @@ export async function runNodeStreamTransport(params: {
     }
     if ("port" in params.target && socket instanceof net.Socket) {
       // Portals attach first so a refused target closes the claimed ticket.
-      socket.connect({ port: params.target.port, host: "localhost", autoSelectFamily: true });
+      socket.connect(createLoopbackConnectOptions(params.target.port));
       await Promise.race([waitForSocketConnect(socket), abort]);
     }
     if (aborted) {

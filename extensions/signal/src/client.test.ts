@@ -264,10 +264,7 @@ describe("signalRpcRequest", () => {
   });
 
   it("caps oversized RPC request timeouts before scheduling", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const baseUrl = await withSignalServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ jsonrpc: "2.0", result: { version: "0.13.22" }, id: "test-id" }));

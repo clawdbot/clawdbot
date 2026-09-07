@@ -22,6 +22,7 @@ import type {
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
   SessionLifecycleArchivedTranscript,
+  SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import {
@@ -389,11 +390,15 @@ function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan
 }
 
 export async function runSqliteSessionReclamation(params: {
+  diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
+  if (params.diagnostics) {
+    params.diagnostics.kind = params.plan.kind;
+  }
   if (
     params.forceInProcess ||
     isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
@@ -413,6 +418,7 @@ export async function runSqliteSessionReclamation(params: {
   const recoveredCommitErrors: unknown[] = [];
   const runWorker = (authorize: () => unknown[]) =>
     runSqliteTranscriptArchiveWorkerOperation<SqliteSessionReclamationWorkerResult>({
+      diagnostics: params.diagnostics,
       expectedMessageType: "reclaimed",
       onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
       transferList: prepareReclamationWorkerTransferList(params.plan),

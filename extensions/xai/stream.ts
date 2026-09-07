@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
+import { resolveXaiOAuthAutoModelId } from "./model-id.js";
 import { XAI_GROK_OAUTH_BASE_URL } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
 
@@ -35,13 +36,15 @@ function createXaiGrokOAuthHeadersWrapper(
     if (!normalizedClientVersion || !isXaiEndpoint(model, XAI_GROK_OAUTH_BASE_URL)) {
       return underlying(model, context, options);
     }
+    // Keep the selected alias stable through auth materialization; resolve only on the wire.
+    const modelId = resolveXaiOAuthAutoModelId(model.id, model.params);
     const headers = new Headers(options?.headers);
     // The Grok OAuth proxy requires its CLI identity and a concrete catalog model.
     // Keep these proxy-only so ordinary xAI API-key traffic retains its public contract.
     headers.set("X-XAI-Token-Auth", "xai-grok-cli");
     headers.set("x-grok-client-version", normalizedClientVersion);
-    headers.set("x-grok-model-override", model.id);
-    return underlying(model, context, {
+    headers.set("x-grok-model-override", modelId);
+    return underlying({ ...model, id: modelId }, context, {
       ...options,
       headers: Object.fromEntries(headers.entries()),
     });
