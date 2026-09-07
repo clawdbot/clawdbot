@@ -1,4 +1,6 @@
 // Documents provider/model id normalization from built-ins and plugin manifests.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -39,6 +41,28 @@ describe("normalizeStaticProviderModelId", () => {
     expect(normalizeStaticProviderModelId("huggingface", "huggingface/vendor/model")).toBe(
       "vendor/model",
     );
+  });
+
+  it("keeps the built-in Anthropic alias table aligned with the bundled manifest", () => {
+    const manifest: {
+      modelIdNormalization?: {
+        providers?: Record<string, { aliases?: Record<string, string> }>;
+      };
+    } = JSON.parse(
+      readFileSync(
+        resolve(import.meta.dirname, "../../extensions/anthropic/openclaw.plugin.json"),
+        "utf8",
+      ),
+    );
+    const aliases = manifest.modelIdNormalization?.providers?.anthropic?.aliases ?? {};
+    expect(Object.keys(aliases).length).toBeGreaterThan(0);
+    // Static callers skip manifest lookup, so every manifest alias must also resolve here.
+    for (const [alias, target] of Object.entries(aliases)) {
+      expect(
+        normalizeStaticProviderModelId("anthropic", alias, { allowManifestNormalization: false }),
+        alias,
+      ).toBe(target);
+    }
   });
 
   it("strips native Anthropic provider prefixes from static catalog ids", () => {

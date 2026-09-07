@@ -125,11 +125,19 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
     return trimmed && !trimmed.includes("/") ? `openrouter/${trimmed}` : model;
   }
   if (normalizedProvider === "anthropic") {
+    // Mirror the Anthropic manifest aliases for callers that skip manifest normalization.
     const anthropicAliases: Record<string, string> = {
+      fable: "claude-fable-5-1",
+      "fable-5": "claude-fable-5",
+      "fable-5.1": "claude-fable-5-1",
+      "fable-5-1": "claude-fable-5-1",
+      haiku: "claude-haiku-4-5",
       "opus-5": "claude-opus-5",
       opus: "claude-opus-5",
       "opus-4.8": "claude-opus-4-8",
+      "opus-4.7": "claude-opus-4-7",
       "opus-4.6": "claude-opus-4-6",
+      "mythos-5": "claude-mythos-5",
       "sonnet-5": "claude-sonnet-5",
       sonnet: "claude-sonnet-5",
       "sonnet-4.6": "claude-sonnet-4-6",

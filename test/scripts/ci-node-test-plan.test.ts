@@ -440,6 +440,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "ui/src/styles/cursor-policy.node.test.ts",
     ]);
     expect(resolvePolicyTestTargets(["docs/web/control-ui.md"])).toEqual([]);
+    expect(resolvePolicyTestTargets(["extensions/anthropic/openclaw.plugin.json"])).toEqual([
+      "src/agents/model-ref-shared.test.ts",
+    ]);
   });
 
   it("matches policy owners only for exact changed paths", () => {

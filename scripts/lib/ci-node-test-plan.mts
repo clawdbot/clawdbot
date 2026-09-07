@@ -122,6 +122,11 @@ const policyTestWatches = [
     ownerGlobs: ["src/cron/failure-notification-text.ts"],
     watchGlobs: ["src/cron/failure-notification-text.ts"],
   })),
+  {
+    // Reads the bundled Anthropic manifest to pin the manifest-free alias table.
+    testFile: "src/agents/model-ref-shared.test.ts",
+    watchGlobs: ["extensions/anthropic/openclaw.plugin.json"],
+  },
 ] satisfies readonly PolicyTestWatch[];
 
 /** Resolve policy tests whose scanned source surface intersects this diff. */
