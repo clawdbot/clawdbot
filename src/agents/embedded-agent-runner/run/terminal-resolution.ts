@@ -475,12 +475,8 @@ export async function resolveEmbeddedRunTerminal(input: {
     input.activateInternalPrompt(
       `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${beforeFinalizeRevisionReason}`,
     );
-    // The settle phase already repointed the transcript leaf past the rejected
-    // draft. The index appender cannot classify a leaf control, so the SQLite
-    // projection is dirty and rebuilds on the maintenance worker after commit;
-    // flag the hidden pass as an owned transcript retry so dispatch preparation
-    // waits for that rebuild before the durable reopen instead of failing the
-    // turn with "Session transcript projection is rebuilding".
+    // Settlement excluded the rejected draft with a leaf control. Wait for its
+    // transcript projection to rebuild before reopening for the hidden pass.
     input.markOwnedTranscriptRetry();
     log.warn(
       `before_agent_finalize requested one more pass: ` +

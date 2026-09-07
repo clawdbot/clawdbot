@@ -182,14 +182,17 @@ describe("terminal resolution", () => {
     expect(markEmbeddedRunAuthProfileSuccess).toHaveBeenCalledOnce();
   });
 
-  it("flags a before_agent_finalize revision retry as an owned transcript retry", async () => {
+  it.each([
+    { reason: "Review the numbers with sql-worker.", action: "retry", ownedRetries: 1 },
+    { reason: undefined, action: "complete", ownedRetries: 0 },
+  ])("marks $ownedRetries owned retries for $action", async ({ reason, action, ownedRetries }) => {
     const text = "Draft answer.";
     const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: [text],
       lastAssistant: assistant,
       currentAttemptAssistant: assistant,
-      beforeAgentFinalizeRevisionReason: "Review the numbers with sql-worker.",
+      beforeAgentFinalizeRevisionReason: reason,
     });
     const input = makeTerminalInput({
       attempt,
@@ -199,34 +202,14 @@ describe("terminal resolution", () => {
 
     const resolved = await resolveEmbeddedRunTerminal(input);
 
-    expect(resolved.action).toBe("retry");
-    expect(input.activateInternalPrompt).toHaveBeenCalledWith(
-      expect.stringContaining("Review the numbers with sql-worker."),
-    );
-    // The settle phase repointed the transcript leaf past the rejected draft,
-    // which dirties the SQLite projection; the hidden pass must be an owned
-    // transcript retry so dispatch preparation settles it before the reopen.
-    expect(input.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
-  });
-
-  it("does not flag an ordinary completion as an owned transcript retry", async () => {
-    const text = "The turn completed.";
-    const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [text],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-    });
-    const input = makeTerminalInput({
-      attempt,
-      attemptAssistant: assistant,
-      payloadsWithToolMedia: [{ text }],
-    });
-
-    const resolved = await resolveEmbeddedRunTerminal(input);
-
-    expect(resolved.action).toBe("complete");
-    expect(input.markOwnedTranscriptRetry).not.toHaveBeenCalled();
+    expect(resolved.action).toBe(action);
+    expect(input.markOwnedTranscriptRetry).toHaveBeenCalledTimes(ownedRetries);
+    if (reason) {
+      expect(input.activateInternalPrompt).toHaveBeenCalledWith(expect.stringContaining(reason));
+    } else {
+      expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(resolved).toMatchObject({ result: { payloads: [{ text }] } });
+    }
   });
 
   it.each(["openai:selected", undefined])(
