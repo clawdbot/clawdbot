@@ -82,7 +82,7 @@ function preparePairedComputerUse(
 }
 
 /** Loads current approved node facts before a model-facing tool catalog is serialized. */
-export async function loadPairedComputerUseAvailability(
+async function loadPairedComputerUseAvailability(
   signal?: AbortSignal,
 ): Promise<PairedComputerUseAvailability> {
   const nodes = await listNodes({}, signal).catch(() => {
