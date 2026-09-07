@@ -22,9 +22,9 @@ target server during config edits.
 {
   mcp: {
     servers: {
-      docs: {
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-fetch"],
+      fetch: {
+        command: "uvx",
+        args: ["mcp-server-fetch"],
       },
       remote: {
         url: "https://example.com/mcp",
@@ -57,6 +57,27 @@ target server during config edits.
   },
 }
 ```
+
+The optional Fetch example requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/)
+and follows the upstream
+[`mcp-server-fetch` configuration](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch).
+That server can reach local and internal addresses, so enable it only where its
+network access matches your trust policy. If you previously copied the unavailable
+`@modelcontextprotocol/server-fetch` npm command, first find the saved server name:
+
+```bash
+openclaw mcp list
+```
+
+Then update that same name (`docs` in the previous example, or possibly `fetch`
+in an existing config). For the previous `docs` example, run:
+
+```bash
+openclaw mcp set docs '{"command":"uvx","args":["mcp-server-fetch"]}'
+```
+
+Use `openclaw mcp unset docs` instead if you no longer want that entry. Replace
+`docs` with the name shown by `mcp list` in both commands when yours differs.
 
 - `mcp.servers`: named stdio or remote MCP server definitions for runtimes that
   expose configured MCP tools.
