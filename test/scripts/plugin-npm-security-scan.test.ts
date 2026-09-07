@@ -354,6 +354,57 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
+  it.each([3, 4])(
+    "reviews exactly three current Codex cleanup fixture spawns, preserving frozen policy: %s",
+    async (count) => {
+      const packageName = "@openclaw/codex";
+      const fixtureKey = `${packageName}:dangerous-exec:src/app-server/run-attempt-one-shot-cleanup.test.ts`;
+      const fixture = [
+        'import { spawn } from "node:child_process";',
+        ...Array.from({ length: count }, () => 'spawn(process.execPath, ["fixture.mjs"]);'),
+      ].join("\n");
+      const artifact = writePluginArtifact({
+        extensionId: "codex",
+        files: { "src/app-server/run-attempt-one-shot-cleanup.test.ts": fixture },
+        packageName,
+      });
+      const current = await scanPublishablePluginPackages([artifact.artifact]);
+      expect(current.scanErrors).toEqual([]);
+      expect(current.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
+      expect(current.packageResults[0]?.reviewedCriticalFindings).toEqual(
+        Array.from({ length: count }, () => fixtureKey),
+      );
+      const currentReport = buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: [
+          {
+            ...current.packageResults[0]!,
+            reviewedCriticalFindings: [
+              ...current.packageResults[0]!.reviewedCriticalFindings,
+              `${packageName}:dangerous-exec:src/app-server/transport-stdio.ts`,
+              `${packageName}:dangerous-exec:src/doctor.ts`,
+              ...currentLayoutFindings(),
+            ],
+          },
+        ],
+        toolingSha: TOOLING_SHA,
+      });
+      const packageErrors = currentReport.errors.filter((error) =>
+        error.startsWith(`${packageName}:`),
+      );
+      expect(packageErrors).toEqual(
+        count === 3 ? [] : [expect.stringContaining("reviewed critical inventory mismatch")],
+      );
+
+      const frozen = await scanPublishablePluginPackages(
+        [artifact.artifact],
+        "extended-stable/2026.6.33",
+      );
+      expect(frozen.scanErrors).toEqual([]);
+      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toHaveLength(count);
+    },
+  );
+
   it("scans checked-in malicious code without running candidate hooks or helpers", async () => {
     const candidateRoot = tempDirs.make("openclaw-plugin-security-inert-pack-");
     const artifactRoot = tempDirs.make("openclaw-plugin-security-inert-artifacts-");
