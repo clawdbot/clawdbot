@@ -419,6 +419,30 @@ describe("Browser panel stream ownership", () => {
     expect(createdUrls.filter((url) => !revokedUrls.includes(url))).toEqual(["blob:frame-2"]);
   });
 
+  it("does not let continuous mismatched frames postpone the debounced viewport sync", async () => {
+    const { controller, calls } = setup();
+    controller.handleViewportResize(500, 300);
+    const schedule = vi.spyOn(controller, "scheduleViewportSync");
+    const socket = await start(controller);
+    expect(schedule).toHaveBeenCalledTimes(1);
+    for (let elapsed = 100; elapsed <= 600; elapsed += 100) {
+      socket.receive(screencastFrame(PAGE_URL, 100, 100));
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    const resizes = () =>
+      calls("/act").filter(
+        ([, params]) => (params as BrowserRequestEnvelope).body?.kind === "resize",
+      );
+    // The sync fired at 300 ms and 600 ms despite a frame every 100 ms; frames
+    // arriving while a sync was pending joined it instead of postponing it.
+    expect(resizes()).toHaveLength(1);
+    expect(resizes()[0]?.[1]).toMatchObject({ body: { width: 500, height: 300 } });
+    expect(schedule).toHaveBeenCalledTimes(2);
+    socket.receive(screencastFrame(PAGE_URL, 100, 100));
+    await flush();
+    expect(schedule).toHaveBeenCalledTimes(3);
+  });
+
   it("negotiates pixel density and restarts only after a large debounced width change", async () => {
     const { controller, host, calls } = setup();
     vi.stubGlobal("devicePixelRatio", 2);
