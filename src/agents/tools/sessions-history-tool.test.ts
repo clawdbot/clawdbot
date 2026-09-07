@@ -319,12 +319,48 @@ describe("sessions_history redaction", () => {
     expect(requests).toEqual([]);
   });
 
-  it("rejects offset and messageId together", async () => {
-    const tool = createHistoryToolWithMessage("hello");
+  it("ignores offset when an anchored read is requested", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [{ role: "assistant", content: "latest" }] } as T;
+      },
+    });
 
-    await expect(
-      tool.execute("call-1", { sessionKey: "main", offset: 0, messageId: "message-1" }),
-    ).rejects.toThrow("offset and messageId cannot be used together");
+    const result = await tool.execute("call-1", {
+      sessionKey: "main",
+      offset: 0,
+      messageId: "message-1",
+    });
+    const request = requireGatewayRequest(requests, "chat.history");
+
+    expect(request.params).toMatchObject({ sessionKey: "main", messageId: "message-1" });
+    expect((request.params as Record<string, unknown>).offset).toBeUndefined();
+    expect((result.details as Record<string, unknown>).offset).toBeUndefined();
+  });
+
+  it("ignores a non-zero offset when an anchored read is requested", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [{ role: "assistant", content: "latest" }] } as T;
+      },
+    });
+
+    const result = await tool.execute("call-1", {
+      sessionKey: "main",
+      offset: 4,
+      messageId: "message-1",
+    });
+    const request = requireGatewayRequest(requests, "chat.history");
+
+    expect(request.params).toMatchObject({ sessionKey: "main", messageId: "message-1" });
+    expect((request.params as Record<string, unknown>).offset).toBeUndefined();
+    expect((result.details as Record<string, unknown>).offset).toBeUndefined();
   });
 
   it("rejects sessionId without messageId", async () => {
