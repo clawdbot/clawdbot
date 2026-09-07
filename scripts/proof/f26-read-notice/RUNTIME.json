@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "baselineMain": "c78e6aea330f58982252c15348341d34645a0ed5",
+  "purpose": "Unexecuted baseline proof harness; no product repair",
+  "files": [
+    {
+      "path": "artifact-recipient.pem",
+      "bytes": 625,
+      "sha256": "21b9a6b9c2b5ba1a6cf0f823571707cb5f2adbcd8fdfabc1409812e0d429e7ca"
+    },
+    {
+      "path": "export-evidence.mjs",
+      "bytes": 3672,
+      "sha256": "99f359cc5f31a0584dc1d4e85848ef102c8a7569d88425f9b2ce1d5be5455e3c"
+    },
+    {
+      "path": "fixture.mjs",
+      "bytes": 14616,
+      "sha256": "e38c4650712594312215c26543f4336f4c49d661a5f56462447283d2b858ae15"
+    },
+    {
+      "path": "relay-core.mjs",
+      "bytes": 2643,
+      "sha256": "11e22e880a3a703c9cefab4edc5d20bb1a3971ef44a4161ad63f61aa4ed8468e"
+    },
+    {
+      "path": "relay-core.test.mjs",
+      "bytes": 3151,
+      "sha256": "4bac1bb0a2d3505f92e880b621ad4a7033ffe669051da500c389b08dc1ab6edd"
+    },
+    {
+      "path": "run-hosted.mjs",
+      "bytes": 16631,
+      "sha256": "6c01cff29b54d79eda536957cba74c05b1d7a0e88201ef3c0097b278baa0012f"
+    },
+    {
+      "path": "ui-case.swift",
+      "bytes": 7192,
+      "sha256": "9eaf8a0e9ef7550e27bc54f12ab39c6a62f67af39e08f7724c9a26e9f4d3488b"
+    },
+    {
+      "path": "unit-cases.swift",
+      "bytes": 5262,
+      "sha256": "4bbab482ac1eb4468c222dc00c602b2f734abe17ae60b021fc2db4b6ee9e7254"
+    }
+  ]
+}

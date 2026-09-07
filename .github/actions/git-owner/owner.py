@@ -391,6 +391,18 @@ def checkout_selected_ref():
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
     evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+    if kind == "platform":
+        evidence_scripts += (
+            "scripts/proof/f26-read-notice/RUNTIME.json",
+            "scripts/proof/f26-read-notice/artifact-recipient.pem",
+            "scripts/proof/f26-read-notice/export-evidence.mjs",
+            "scripts/proof/f26-read-notice/fixture.mjs",
+            "scripts/proof/f26-read-notice/relay-core.mjs",
+            "scripts/proof/f26-read-notice/relay-core.test.mjs",
+            "scripts/proof/f26-read-notice/run-hosted.mjs",
+            "scripts/proof/f26-read-notice/ui-case.swift",
+            "scripts/proof/f26-read-notice/unit-cases.swift",
+        )
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")

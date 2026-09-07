@@ -610,6 +610,18 @@ jobs:
           def checkout_harness(sha):
               action = ".github/actions/setup-node-env/action.yml"
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+              if kind == "platform":
+                  evidence_scripts += (
+                      "scripts/proof/f26-read-notice/RUNTIME.json",
+                      "scripts/proof/f26-read-notice/artifact-recipient.pem",
+                      "scripts/proof/f26-read-notice/export-evidence.mjs",
+                      "scripts/proof/f26-read-notice/fixture.mjs",
+                      "scripts/proof/f26-read-notice/relay-core.mjs",
+                      "scripts/proof/f26-read-notice/relay-core.test.mjs",
+                      "scripts/proof/f26-read-notice/run-hosted.mjs",
+                      "scripts/proof/f26-read-notice/ui-case.swift",
+                      "scripts/proof/f26-read-notice/unit-cases.swift",
+                  )
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
               harness = os.path.join(workspace, ".ci-harness")
@@ -5032,6 +5044,30 @@ jobs:
             -destination "generic/platform=iOS" \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+      - name: F26 exact-target native baseline proof (temporary harness)
+        id: f26_native
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id == 'f26-read-notice-baseline-v1' && needs.preflight.outputs.checkout_revision == 'c78e6aea330f58982252c15348341d34645a0ed5' && matrix.phase == 'tests' }}
+        env:
+          F26_DISPATCH_ID: ${{ inputs.dispatch_id }}
+          F26_TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+        run: node .ci-harness/scripts/proof/f26-read-notice/run-hosted.mjs
+
+      - name: Encrypt F26 complete native evidence
+        id: f26_export
+        if: ${{ always() && steps.f26_native.outcome != '' && steps.f26_native.outcome != 'skipped' }}
+        env:
+          F26_TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+        run: node .ci-harness/scripts/proof/f26-read-notice/export-evidence.mjs
+
+      - name: Retain F26 encrypted evidence
+        if: ${{ always() && steps.f26_export.outcome != '' && steps.f26_export.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: f26-native-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/ios/build/F26Evidence/encrypted/
+          if-no-files-found: error
+          retention-days: 14
 
       # App compilation and screenshots do not execute approval or notification
       # lifecycles. Exercise both owners on the already provisioned simulator.
