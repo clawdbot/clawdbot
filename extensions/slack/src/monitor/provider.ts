@@ -1,5 +1,5 @@
 // Slack provider module implements model/runtime integration.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import {
   addAllowlistUserEntriesFromConfigEntry,
@@ -28,7 +28,6 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
@@ -70,6 +69,7 @@ import {
   type SlackInstallationIdentity,
 } from "./enterprise-install.js";
 import { registerSlackCommonEvents, registerSlackWorkspaceEvents } from "./events.js";
+import { createSlackHttpRequestHandler } from "./http-handler.js";
 import { createSlackDurableIngress } from "./ingress.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
@@ -126,9 +126,6 @@ async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
 }
 
 const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-source.js"));
-
-const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
-const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
 type SlackRuntimeIdentity = {
   botUserId: string;
@@ -480,28 +477,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const slackHttpHandler =
     slackMode === "http" && receiver
-      ? async (req: IncomingMessage, res: ServerResponse) => {
-          const httpReceiver = receiver as {
-            requestListener: (req: IncomingMessage, res: ServerResponse) => unknown;
-          };
-          const guard = installRequestBodyLimitGuard(req, res, {
-            maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
-            timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
-            responseFormat: "text",
-          });
-          if (guard.isTripped()) {
-            return;
-          }
-          try {
-            await Promise.resolve(httpReceiver.requestListener(req, res));
-          } catch (err) {
-            if (!guard.isTripped()) {
-              throw err;
-            }
-          } finally {
-            guard.dispose();
-          }
-        }
+      ? createSlackHttpRequestHandler({
+          receiver: receiver as { requestListener: RequestListener },
+          accountId: account.accountId,
+        })
       : null;
   let unregisterHttpHandler: (() => void) | null = null;
   const unregisterSocketModeConnectionDiagnostics =

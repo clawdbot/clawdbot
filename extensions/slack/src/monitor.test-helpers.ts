@@ -63,6 +63,7 @@ type SlackTestState = {
   appConstructorArgs?: Record<string, unknown>;
   appStartMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  httpRequestListenerMock: Mock<(...args: unknown[]) => unknown>;
   interactionRegistrations: string[];
   sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
@@ -91,6 +92,7 @@ const slackTestState: SlackTestState = vi.hoisted(() => {
     appConstructorArgs: undefined,
     appStartMock: vi.fn(),
     appStopMock: vi.fn(),
+    httpRequestListenerMock: vi.fn(),
     interactionRegistrations: [],
     sendMock: vi.fn(),
     replyMock: vi.fn(),
@@ -344,6 +346,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   slackTestState.socketModeLogger = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.httpRequestListenerMock.mockReset();
   slackTestState.interactionRegistrations.length = 0;
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
@@ -500,7 +503,7 @@ vi.mock("@slack/bolt", () => {
     stop = (...args: unknown[]) => slackTestState.appStopMock(...args);
   }
   class HTTPReceiver {
-    requestListener = vi.fn();
+    requestListener = (...args: unknown[]) => slackTestState.httpRequestListenerMock(...args);
   }
   class SocketModeReceiver {
     client = {
