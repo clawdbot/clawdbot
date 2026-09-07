@@ -30,7 +30,9 @@ export function createSessionRosterCacheLifecycle(
       ? gatewayCredentialScope(gateway.connection.gatewayUrl)
       : options.bootRecord?.scope;
   const startupScope = currentScope();
+  const startupConnectionRevision = gateway.connectionRevision;
   let cachedScope = startupScope;
+  let cachedConnectionRevision = startupConnectionRevision;
   const expected = { agentId: startupAgentId, profileId: options.bootRecord?.profileId, query: {} };
   let retired = gateway.snapshot.phase === "connected";
   let cachedProfileId = options.bootRecord?.profileId;
@@ -48,6 +50,7 @@ export function createSessionRosterCacheLifecycle(
               gateway.snapshot.phase === "connected" ||
               agentSelection.state.selectedId !== startupAgentId ||
               currentScope() !== startupScope ||
+              gateway.connectionRevision !== startupConnectionRevision ||
               !rosterRecordMatches(record, expected)
             ) {
               return;
@@ -74,12 +77,14 @@ export function createSessionRosterCacheLifecycle(
       }
       if (
         currentScope() !== cachedScope ||
+        gateway.connectionRevision !== cachedConnectionRevision ||
         (snapshot.phase === "connected" &&
           cachedProfileId !== undefined &&
           cachedProfileId !== (snapshot.selfUser?.id ?? null))
       ) {
         cachedProfileId = undefined;
         cachedScope = currentScope();
+        cachedConnectionRevision = gateway.connectionRevision;
         retired = true;
         host.publish({
           ...host.readState(),

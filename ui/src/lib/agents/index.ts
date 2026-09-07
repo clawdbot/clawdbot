@@ -68,6 +68,7 @@ type AgentGatewaySnapshot = GatewayConnectionSnapshot &
 
 type AgentGateway = {
   readonly connection?: { gatewayUrl: string };
+  readonly connectionRevision?: number;
   readonly snapshot: AgentGatewaySnapshot;
   subscribe: (listener: (snapshot: AgentGatewaySnapshot) => void) => () => void;
 };
@@ -248,6 +249,7 @@ export function createAgentCapability(
 ): AgentCapability {
   let cachedList = options.cachedList ?? null;
   const cachedProfileId = options.cachedProfileId ?? null;
+  const cachedConnectionRevision = gateway.connectionRevision;
   const cachedScope = gateway.connection
     ? gatewayCredentialScope(gateway.connection.gatewayUrl)
     : null;
@@ -400,9 +402,10 @@ export function createAgentCapability(
     const connected = snapshot.phase === "connected";
     const connectionChanged = lifecycle.transition(snapshot);
     const scopeMismatch =
-      cachedScope !== null &&
-      gateway.connection !== undefined &&
-      gatewayCredentialScope(gateway.connection.gatewayUrl) !== cachedScope;
+      gateway.connectionRevision !== cachedConnectionRevision ||
+      (cachedScope !== null &&
+        gateway.connection !== undefined &&
+        gatewayCredentialScope(gateway.connection.gatewayUrl) !== cachedScope);
     if (scopeMismatch) {
       cachedList = null;
     }

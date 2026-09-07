@@ -61,6 +61,7 @@ afterEach(() => {
 });
 
 function harness(options: { cached?: Promise<SessionRosterRecord | null> } = {}) {
+  let connectionRevision = 0;
   let snapshot: SessionGateway["snapshot"] = {
     client: null,
     phase: "connecting",
@@ -82,6 +83,9 @@ function harness(options: { cached?: Promise<SessionRosterRecord | null> } = {})
   const client = createTestGatewayClient(request);
   const gateway: SessionGateway = {
     connection: { gatewayUrl: url },
+    get connectionRevision() {
+      return connectionRevision;
+    },
     get snapshot() {
       return snapshot;
     },
@@ -111,6 +115,9 @@ function harness(options: { cached?: Promise<SessionRosterRecord | null> } = {})
     live,
     gateway,
     publish,
+    changeCredentials() {
+      connectionRevision += 1;
+    },
     connect(profileId = "profile-one") {
       publish({ phase: "connected", client, selfUser: { id: profileId } });
     },
@@ -178,15 +185,21 @@ describe("session capability warm roster", () => {
     );
   });
 
-  it.each(["connect", "dispose"] as const)(
+  it.each(["connect", "dispose", "credentials", "credentials-before-notification"] as const)(
     "does not publish a late cache read after %s",
     async (transition) => {
       const cached = createDeferred<SessionRosterRecord | null>();
       const h = harness({ cached: cached.promise });
       if (transition === "connect") {
         h.connect();
-      } else {
+      } else if (transition === "dispose") {
         h.sessions.dispose();
+      } else {
+        h.changeCredentials();
+        if (transition === "credentials") {
+          h.publish({ phase: "connecting" });
+          expect(h.sessions.state.groups).toEqual([]);
+        }
       }
       cached.resolve(roster());
       await h.sessions.whenCachedRosterSettled();
@@ -195,23 +208,41 @@ describe("session capability warm roster", () => {
     },
   );
 
-  it("retains live rows after a Gateway scope switch retires the startup cache", async () => {
-    const h = harness();
-    await h.sessions.whenCachedRosterSettled();
-    const nextUrl = "ws://other.example.test";
-    Object.defineProperty(h.gateway, "connection", { value: { gatewayUrl: nextUrl } });
-    h.publish({ phase: "connecting" });
-    expect(h.sessions.state.result).toBeNull();
-    h.connect();
-    const live = sessionsResult([{ key: "agent:main:other", kind: "direct" }], 2);
-    h.live.resolve(live);
-    await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
-    h.publish({ sessionKey: "agent:main:other" });
-    expect(h.sessions.state.result).toEqual(live);
-    expect(h.write).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: gatewayCredentialScope(nextUrl) }),
-    );
-  });
+  it.each(["gateway", "credentials"])(
+    "retires the warm roster on a %s change and retains replacement live rows",
+    async (change) => {
+      const h = harness();
+      await h.sessions.whenCachedRosterSettled();
+      expect(h.sessions.state.resultCached).toBe(true);
+      expect(h.sessions.state.result?.sessions).toHaveLength(2);
+      const nextUrl = change === "gateway" ? "ws://other.example.test" : url;
+      if (change === "gateway") {
+        Object.defineProperty(h.gateway, "connection", { value: { gatewayUrl: nextUrl } });
+      } else {
+        h.changeCredentials();
+      }
+      h.publish({ phase: "connecting" });
+      expect(h.sessions.state).toMatchObject({
+        result: null,
+        resultCached: false,
+        agentId: null,
+        groups: [],
+        groupSettings: [],
+        sectionOrder: [],
+      });
+      h.publish({ phase: "offline" });
+      expect(h.sessions.state.result).toBeNull();
+      h.connect();
+      const live = sessionsResult([{ key: "agent:main:other", kind: "direct" }], 2);
+      h.live.resolve(live);
+      await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
+      h.publish({ sessionKey: "agent:main:other" });
+      expect(h.sessions.state.result).toEqual(live);
+      expect(h.write).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: gatewayCredentialScope(nextUrl) }),
+      );
+    },
+  );
 
   it.each(["agent", "profile", "query", "query-agent"] as const)(
     "rejects an incompatible %s from an injected roster reader",

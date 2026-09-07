@@ -25,6 +25,7 @@ function gatewayHarness() {
     client,
     gateway: {
       connection: { gatewayUrl: "ws://gateway-a.example" },
+      connectionRevision: 0,
       get snapshot() {
         return snapshot;
       },
@@ -104,20 +105,37 @@ describe("agent roster warm boot", () => {
     }
   });
 
-  it("discards the cached roster when switching gateways even if their profile IDs match", () => {
-    const harness = gatewayHarness();
-    const agents = createAgentCapability(harness.gateway, { cachedList, cachedProfileId: null });
-    try {
-      harness.gateway.connection.gatewayUrl = "ws://gateway-b.example";
-      harness.publish({ client: harness.client, phase: "connecting", selfUser: null });
-      expect(agents.state.agentsList).toBeNull();
-      expect(agents.state.agentsListCached).toBe(false);
-      harness.publish({ client: harness.client, phase: "connected", selfUser: null });
-      expect(agents.state.agentsList).toBeNull();
-    } finally {
-      agents.dispose();
-    }
-  });
+  it.each(["gateway", "credentials"])(
+    "discards cached agents on a %s change before hello",
+    (change) => {
+      const harness = gatewayHarness();
+      const agents = createAgentCapability(harness.gateway, { cachedList, cachedProfileId: null });
+      const listener = vi.fn();
+      const stop = agents.subscribe(listener);
+      try {
+        expect(agents.state.agentsList).toEqual(cachedList);
+        expect(agents.state.agentsListCached).toBe(true);
+        if (change === "gateway") {
+          harness.gateway.connection.gatewayUrl = "ws://gateway-b.example";
+        } else {
+          harness.gateway.connectionRevision += 1;
+        }
+        harness.publish({ client: null, phase: "connecting", selfUser: null });
+        expect(agents.state.agentsList).toBeNull();
+        expect(agents.state.agentsListCached).toBe(false);
+        expect(listener).toHaveBeenLastCalledWith(
+          expect.objectContaining({ agentsList: null, agentsListCached: false }),
+        );
+        harness.publish({ client: null, phase: "offline", selfUser: null });
+        expect(agents.state.agentsList).toBeNull();
+        harness.publish({ client: harness.client, phase: "connected", selfUser: null });
+        expect(agents.state.agentsList).toBeNull();
+      } finally {
+        stop();
+        agents.dispose();
+      }
+    },
+  );
 
   it("keeps matching cached profile data until the live list arrives", () => {
     const harness = gatewayHarness();

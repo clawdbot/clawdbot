@@ -27,6 +27,7 @@ describe("warm boot profile validation", () => {
       { cachedProfileId: null, profileId: "profile-b", clears: 1 },
       { cachedProfileId: "profile-a", profileId: "profile-a", clears: 0 },
       { cachedProfileId: null, profileId: null, clears: 0 },
+      { cachedProfileId: "profile-a", profileId: "profile-b", clears: 0, credentialsChanged: true },
     ].map((entry) => ({ ...entry, pathname: "/chat", warmBoot: true })),
     ...["/focus/terminal", "/approve/exec%3A1"].map((pathname) => ({
       cachedProfileId: "profile-a",
@@ -34,10 +35,11 @@ describe("warm boot profile validation", () => {
       clears: 0,
       pathname,
       warmBoot: false,
+      credentialsChanged: false,
     })),
   ])(
-    "clears $clears times for cached $cachedProfileId and connected $profileId on $pathname",
-    async ({ cachedProfileId, profileId, clears, pathname, warmBoot }) => {
+    "clears $clears times for cached $cachedProfileId and connected $profileId on $pathname (credential change: $credentialsChanged)",
+    async ({ cachedProfileId, profileId, clears, pathname, warmBoot, credentialsChanged }) => {
       const previousUrl = window.location.href;
       window.history.replaceState({}, "", pathname);
       const scope = gatewayCredentialScope(loadSettings().gatewayUrl);
@@ -59,9 +61,11 @@ describe("warm boot profile validation", () => {
       const clearSnapshots = vi.spyOn(snapshots, "clearStoredChatSnapshots").mockResolvedValue();
       const clearRoster = vi.mocked(clearCachedBootState);
       const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+      let connectionRevision = 0;
       const createGateway = gatewayStore.createApplicationGateway;
       vi.spyOn(gatewayStore, "createApplicationGateway").mockImplementation((...args) => {
         const gateway = createGateway(...args);
+        vi.spyOn(gateway, "connectionRevision", "get").mockImplementation(() => connectionRevision);
         vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
           listeners.add(listener);
           return () => listeners.delete(listener);
@@ -78,6 +82,9 @@ describe("warm boot profile validation", () => {
       };
       try {
         expect(runtime.warmBoot).toBe(warmBoot);
+        if (credentialsChanged) {
+          connectionRevision += 1;
+        }
         publish("connecting");
         expect(clearSnapshots).not.toHaveBeenCalled();
         expect(clearRoster).not.toHaveBeenCalled();
