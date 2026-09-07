@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
@@ -27,6 +28,22 @@ function prepareTestWorkerSsh() {
 }
 
 describe("worker SSH preparation", () => {
+  it("retries disposal after a filesystem cleanup failure", async () => {
+    const prepared = await prepareTestWorkerSsh();
+    const directory = path.dirname(prepared.knownHostsPath);
+    const failure = new Error("synthetic cleanup failure");
+    const remove = vi.spyOn(fs, "rm").mockRejectedValueOnce(failure);
+    try {
+      await expect(prepared.dispose()).rejects.toBe(failure);
+      await fs.access(directory);
+      await prepared.dispose();
+      await expect(fs.access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      remove.mockRestore();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("adapts pinned endpoint identity and every advertised port for sandbox SSH", () => {
     expect(
       resolveWorkerSshSandboxSettings({
