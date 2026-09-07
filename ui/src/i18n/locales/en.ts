@@ -5,6 +5,7 @@ import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
   configPage: TranslationMap;
+  connection: TranslationMap;
   configView: TranslationMap;
   debug: TranslationMap & { overlay: TranslationMap };
   // Lazy en-devices.ts assigns into this namespace.
@@ -3914,39 +3915,8 @@ export const en: TranslationMap & {
       expired: "The administrator access request expired.",
       error: "Administrator access request failed: {error}",
     },
-    access: {
-      title: "Connection",
-      descriptionOffline: "Not connected.",
-      connectedTo: "Connected to {host}",
-      tick: "{tick} tick",
-      auth: {
-        none: "no auth",
-        token: "token auth",
-        password: "password auth",
-        trustedProxy: "proxy auth",
-      },
-      status: {
-        connected: "Connected",
-        offline: "Offline",
-      },
-      gatewayUrl: "Gateway URL",
-      gatewayUrlHint: "Use wss:// when the Gateway sits behind HTTPS or Tailscale Serve.",
-      credential: "Credential",
-      tokenHint: "Paste the token from openclaw gateway auth-token --show on the Gateway host.",
-      passwordHint: "Passwords are never stored in this browser.",
-      trustedProxy: "Authenticated via trusted proxy.",
-      trustedProxyStatus: "Trusted proxy",
-      sessionKey: "Default session",
-      sessionKeyHint: "Session opened after connecting.",
-      unsavedHint: "Unsaved changes apply when you connect.",
-      lastError: "Last error",
-      showToken: "Show token",
-      hideToken: "Hide token",
-      toggleTokenVisibility: "Toggle token visibility",
-      showPassword: "Show password",
-      hidePassword: "Hide password",
-      togglePasswordVisibility: "Toggle password visibility",
-    },
+    // Settings → Gateway copy lives in the lazy en-settings catalog; the anchor keeps its merge target.
+    access: {},
     switchGateway: {
       title: "Switch to a different Gateway?",
       summary: "This link asks the browser to connect somewhere else.",

@@ -8,6 +8,7 @@ import {
   resolvePairingHint,
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
+import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { isPasswordModeErrorCode } from "./credential-mode.ts";
 
 type LoginFailureKind =
@@ -68,19 +69,6 @@ export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[
   gatewayUrl?: string;
   reconnectPending?: boolean;
 };
-
-export function formatGatewayHost(gatewayUrl: string | undefined): string {
-  const raw = gatewayUrl?.trim() ?? "";
-  if (!raw) {
-    return t("common.unknown");
-  }
-  try {
-    const url = new URL(raw);
-    return url.host || raw;
-  } catch {
-    return raw;
-  }
-}
 
 function buildFeedback(params: {
   kind: LoginFailureKind;

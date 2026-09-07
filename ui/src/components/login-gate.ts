@@ -8,6 +8,7 @@ import { t } from "../i18n/index.ts";
 import "../lib/toast.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import {
@@ -17,7 +18,6 @@ import {
 } from "./credential-mode.ts";
 import { icons } from "./icons.ts";
 import {
-  formatGatewayHost,
   type LoginFailureFeedback,
   type LoginFailureFeedbackParams,
   type LoginFailureStep,

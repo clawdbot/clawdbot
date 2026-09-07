@@ -7,7 +7,6 @@ import {
   type CredentialMode,
   renderCredentialModeSwitch,
 } from "../../components/credential-mode.ts";
-import { formatGatewayHost } from "../../components/login-gate-feedback.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -16,7 +15,11 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { renderSystemSection } from "./system-section.ts";
+
+registerSettingsEnglish();
 
 type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 

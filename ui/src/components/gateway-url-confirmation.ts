@@ -3,9 +3,9 @@ import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
+import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
-import { formatGatewayHost } from "./login-gate-feedback.ts";
 import "./modal-dialog.ts";
 
 type GatewayUrlConfirmationProps = {
