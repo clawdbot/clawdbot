@@ -38,8 +38,8 @@ afterEach(() => {
   }
 });
 const completionMocks = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
-  completeWithPreparedSimpleCompletionModel: vi.fn(),
+  acquireSimpleCompletionModelForAgent: vi.fn(),
+  completeWithPreparedSimpleCompletionModelCore: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
 const compactRuntimeMocks = vi.hoisted(() => ({
@@ -172,10 +172,11 @@ function makeRecoveryInput(
 describe("compactEmbeddedRunForRecovery", () => {
   beforeEach(() => {
     compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockReset();
-    completionMocks.prepareSimpleCompletionModelForAgent.mockReset();
-    completionMocks.completeWithPreparedSimpleCompletionModel.mockReset();
+    completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
+    completionMocks.completeWithPreparedSimpleCompletionModelCore.mockReset();
     completionMocks.resolveSimpleCompletionSelectionForAgent.mockReset();
-    completionMocks.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+    completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
+      release: vi.fn(),
       selection: { provider: "openai", modelId: "gpt-5.5", agentDir: "/tmp/main" },
       model: {
         provider: "openai",
@@ -190,7 +191,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       },
       auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
     });
-    completionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+    completionMocks.completeWithPreparedSimpleCompletionModelCore.mockResolvedValue({
       content: [{ type: "text", text: "done" }],
       usage: { input: 1, output: 1, total: 2 },
     });
@@ -350,7 +351,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         reason: expect.stringContaining("not bound to an active session agent"),
       },
     });
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
   it.each(["returned", "failed", "cancelled", "failed-result"] as const)(

@@ -14,7 +14,7 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   prepareModelForSimpleCompletion: mocks.prepareModel,
 }));
 
-import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
+import { completeWithPreparedSimpleCompletionModelCore } from "./simple-completion-execution.js";
 
 const context = { messages: [{ role: "user" as const, content: "pong", timestamp: 1 }] };
 
@@ -57,7 +57,7 @@ describe("prepared completion import boundary", () => {
   });
 });
 
-describe("completeWithPreparedSimpleCompletionModel", () => {
+describe("completeWithPreparedSimpleCompletionModelCore", () => {
   it("prepares provider-owned stream APIs before running a completion", async () => {
     const model = {
       ...baseModel,
@@ -76,7 +76,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     };
     mocks.prepareModel.mockReturnValueOnce(preparedModel);
 
-    await completeWithPreparedSimpleCompletionModel({
+    await completeWithPreparedSimpleCompletionModelCore({
       model,
       auth: { apiKey: "ollama-local", source: "models.json (local marker)", mode: "api-key" },
       cfg,
@@ -111,7 +111,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
             maxTokens: 128_000,
             thinkingLevelMap: { xhigh: "xhigh", max: "max" },
           };
-    await completeWithPreparedSimpleCompletionModel({
+    await completeWithPreparedSimpleCompletionModelCore({
       model,
       auth: { apiKey: "sk-test", source: "env:OPENAI_API_KEY", mode: "api-key" },
       context,
@@ -127,7 +127,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
   });
 
   it("carries strict visibility internally without adding a wire option", async () => {
-    await completeWithPreparedSimpleCompletionModel({
+    await completeWithPreparedSimpleCompletionModelCore({
       model: baseModel,
       auth: { apiKey: "test", source: "models.json", mode: "api-key" },
       context,
@@ -158,7 +158,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     } satisfies Model;
     mocks.prepareModel.mockReturnValueOnce(preparedModel);
 
-    await completeWithPreparedSimpleCompletionModel({
+    await completeWithPreparedSimpleCompletionModelCore({
       model,
       auth: { apiKey: "sk-test", source: "env:ANTHROPIC_API_KEY", mode: "api-key" },
       context,

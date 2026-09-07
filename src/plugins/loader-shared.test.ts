@@ -8,11 +8,14 @@ import { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
 import { createPluginActivationSource } from "./config-state.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
+  loadOpenClawPluginCliRegistryForTest as loadOpenClawPluginCliRegistry,
+  loadOpenClawPluginsForTest as loadOpenClawPlugins,
+} from "./loader-handles.test-support.js";
+import {
   createPluginCandidatesFromManifestRegistry,
   preparePluginLoadRecord,
   validatePluginConfig as validatePluginConfigByOrigin,
 } from "./loader-shared.js";
-import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,

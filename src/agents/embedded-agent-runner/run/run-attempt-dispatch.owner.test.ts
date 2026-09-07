@@ -16,7 +16,7 @@ import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 
 vi.mock("../../runtime-plan/build.js", () => ({
-  buildAgentRuntimePlan: ({
+  buildAgentRuntimePlanCore: ({
     provider,
     modelId,
     preparedAuthPlan,

@@ -59,8 +59,8 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../tts/provider-registry.js", () => ({
   canonicalizeSpeechProviderId: vi.fn(),
-  getSpeechProvider: mocks.getSpeechProvider,
-  listSpeechProviders: mocks.listSpeechProviders,
+  getSpeechProviderCore: mocks.getSpeechProvider,
+  listSpeechProvidersCore: mocks.listSpeechProviders,
 }));
 
 vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({

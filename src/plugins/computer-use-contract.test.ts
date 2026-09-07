@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   COMPUTER_STALE_OBSERVATION,
   COMPUTER_USE_V2_ACTION_NAMES,
@@ -335,10 +336,80 @@ describe("Computer Use provider registration", () => {
     expect(act).toHaveBeenCalledWith(paramsJSON, signal);
 
     const stop = commands[0]!.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
-    stop?.();
+    await stop?.();
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith("node-host-stop"));
     expect(stopWatching).toHaveBeenCalledOnce();
   });
+
+  it.each(["closed", "failed"] as const)(
+    "settles independent execution cleanup before reporting watcher-stop failure: %s",
+    async (outcome) => {
+      const executionId = "123e4567-e89b-42d3-a456-426614174000";
+      const commands: OpenClawPluginNodeHostCommand[] = [];
+      const retirement = createDeferredCore();
+      const close = vi.fn(async () => {}).mockImplementationOnce(() => retirement.promise);
+      const watcherFailure = new Error("availability driver disposal failed");
+      const executionFailure = new Error("execution close failed");
+      registerComputerUseProvider(
+        { registerNodeHostCommand: (command) => commands.push(command) },
+        {
+          id: "fixture",
+          label: "Fixture",
+          capabilities: () => ({
+            contractVersion: 2,
+            provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+            actions: ["screenshot"],
+            targets: ["screen"],
+            deliveryModes: ["foreground"],
+            observations: ["image"],
+            features: { recording: false, agentCursor: false, multiDisplay: false },
+          }),
+          isAvailable: () => true,
+          watchAvailability: () => async () => {
+            throw watcherFailure;
+          },
+          openExecution: async () => ({
+            snapshot: async () => "snapshot",
+            act: async () => "act",
+            close,
+          }),
+        },
+      );
+      const snapshot = commands[0]!;
+      const computer = commands[1]!;
+      await snapshot.handle(JSON.stringify({ executionId }));
+      const stop = snapshot.watchAvailability?.({ config: {}, env: {} }, vi.fn());
+      if (!stop) {
+        throw new Error("expected registered watcher cleanup");
+      }
+      const settled = vi.fn();
+      const stopping = Promise.resolve(stop());
+      const observed = stopping.then(settled, settled);
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(close).toHaveBeenCalledOnce();
+        expect(settled).not.toHaveBeenCalled();
+        if (outcome === "failed") {
+          retirement.reject(executionFailure);
+          const failure = await stopping.catch((error: unknown) => error);
+          expect(failure).toBeInstanceOf(AggregateError);
+          expect((failure as AggregateError).errors).toEqual([watcherFailure, executionFailure]);
+          await computer.handle(JSON.stringify({ executionId, action: "__close_execution" }));
+          expect(close).toHaveBeenCalledTimes(2);
+        } else {
+          retirement.resolve();
+          await expect(stopping).rejects.toBe(watcherFailure);
+          expect(close).toHaveBeenCalledOnce();
+        }
+      } finally {
+        retirement.resolve();
+        await observed;
+        await snapshot.onDisconnect?.();
+      }
+    },
+  );
 
   it("refuses a second mutating execution and closes only the exact host execution", async () => {
     const firstId = "123e4567-e89b-42d3-a456-426614174000";

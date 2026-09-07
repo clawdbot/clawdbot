@@ -31,8 +31,6 @@ export type {
 export { parseTtsDirectives } from "../tts/directives.js";
 export {
   canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  listSpeechProviders,
   normalizeSpeechProviderId,
 } from "../tts/provider-registry.js";
 export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
@@ -65,3 +63,10 @@ export {
   type OpenAiCompatibleSpeechProviderExtraJsonBodyField,
   type OpenAiCompatibleSpeechProviderOptions,
 } from "../tts/openai-compatible-speech-provider.js";
+
+export {
+  getSpeechProvider,
+  listSpeechProviders,
+  acquireSpeechProvider,
+  acquireSpeechProviders,
+} from "./speech-registry-runtime.js";

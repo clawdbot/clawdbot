@@ -1,5 +1,7 @@
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
+import { PluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { resolveAgentRuntimePluginLoadPlan } from "./harness/runtime-plugin-load-plan.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
@@ -8,6 +10,48 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
+
+const generationResources = resolveGlobalSingleton(
+  Symbol.for("openclaw.preparedPluginGenerationResources"),
+  () => new WeakMap<PreparedModelRuntimePluginGeneration, PluginRegistryResourceScope>(),
+);
+
+/** Records source facts without making the generation object itself an unreleasable claim. */
+export function associatePreparedPluginGenerationResources(
+  generation: PreparedModelRuntimePluginGeneration,
+  resources: PluginRegistryResourceScope,
+): void {
+  const previous = generationResources.get(generation);
+  if (previous) {
+    if (previous !== resources) {
+      resources.retainFrom(previous);
+    }
+    return;
+  }
+  generationResources.set(generation, resources);
+}
+
+export function retainPreparedPluginGenerationResources(
+  generation: PreparedModelRuntimePluginGeneration,
+): PluginRegistryResourceScope {
+  const existing = generationResources.get(generation);
+  if (existing) {
+    return existing.fork();
+  }
+  const resources = new PluginRegistryResourceScope();
+  try {
+    if (generation.pluginRegistry) {
+      resources.retain(generation.pluginRegistry);
+    }
+    if (generation.inboundPluginRegistry) {
+      resources.retain(generation.inboundPluginRegistry);
+    }
+    return resources;
+  } catch (error) {
+    resources.release();
+    throw error;
+  }
+}
 
 // Lineage is cache identity only. Derived generations still require the exact open
 // parent lease at admission; they never become configured publication authority.

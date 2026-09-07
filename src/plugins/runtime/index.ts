@@ -3,7 +3,7 @@ import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   generateImage as generateRuntimeImage,
-  listRuntimeImageGenerationProviders,
+  listRuntimeImageGenerationProvidersCore,
 } from "../../image-generation/runtime.js";
 import {
   generateMusic as generateRuntimeMusic,
@@ -19,13 +19,15 @@ import {
 import { VERSION } from "../../version.js";
 import {
   generateVideo as generateRuntimeVideo,
-  listRuntimeVideoGenerationProviders,
+  listRuntimeVideoGenerationProvidersCore,
 } from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
+import { withLegacyPluginSdkResourceScope } from "../legacy-sdk-resource-scope.js";
 import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
 } from "../loader-runtime-load.js";
+import { getPluginRegistryResourceScope } from "../registry-resources.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeBase } from "./runtime-base.js";
 import { defineCachedValue } from "./runtime-cache.js";
@@ -95,21 +97,30 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
 function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
   return {
     generate: (params) => generateRuntimeImage(params),
-    listProviders: (params) => listRuntimeImageGenerationProviders(params),
+    listProviders: (params) =>
+      getPluginRegistryResourceScope()
+        ? listRuntimeImageGenerationProvidersCore(params)
+        : withLegacyPluginSdkResourceScope(() => listRuntimeImageGenerationProvidersCore(params)),
   };
 }
 
 function createRuntimeVideoGeneration(): PluginRuntime["videoGeneration"] {
   return {
     generate: (params) => generateRuntimeVideo(params),
-    listProviders: (params) => listRuntimeVideoGenerationProviders(params),
+    listProviders: (params) =>
+      getPluginRegistryResourceScope()
+        ? listRuntimeVideoGenerationProvidersCore(params)
+        : withLegacyPluginSdkResourceScope(() => listRuntimeVideoGenerationProvidersCore(params)),
   };
 }
 
 function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
   return {
     generate: (params) => generateRuntimeMusic(params),
-    listProviders: (params) => listRuntimeMusicGenerationProviders(params),
+    listProviders: (params) =>
+      getPluginRegistryResourceScope()
+        ? listRuntimeMusicGenerationProviders(params)
+        : withLegacyPluginSdkResourceScope(() => listRuntimeMusicGenerationProviders(params)),
   };
 }
 
@@ -253,7 +264,10 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     system: base.system,
     media: createRuntimeMedia(),
     webSearch: {
-      listProviders: listWebSearchProviders,
+      listProviders: (params) =>
+        getPluginRegistryResourceScope()
+          ? listWebSearchProviders(params)
+          : withLegacyPluginSdkResourceScope(() => listWebSearchProviders(params)),
       search: runWebSearch,
     },
     channel: createRuntimeChannel(

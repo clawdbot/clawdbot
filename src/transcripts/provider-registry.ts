@@ -3,6 +3,6 @@ export { normalizeCapabilityProviderId as normalizeTranscriptSourceProviderId } 
 
 /** Transcript providers use targeted lookup to avoid broad capability discovery. */
 export const {
-  listProviders: listTranscriptSourceProviders,
-  getProvider: getTranscriptSourceProvider,
+  listProviders: listTranscriptSourceProvidersCore,
+  getProvider: getTranscriptSourceProviderCore,
 } = createMediaProviderRegistry("transcriptSourceProviders", { directLookup: true });

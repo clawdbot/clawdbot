@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
+import { getPluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 // Cleanup failures follow the originating run across nested async cleanup.
@@ -167,6 +168,7 @@ async function settleAgentCleanupStep(
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const cleanupPromise = Promise.resolve().then(params.cleanup);
+  getPluginRegistryResourceScope()?.hold(cleanupPromise);
   const observedCleanupPromise = cleanupPromise
     .then(() => "done" as const)
     .catch((error: unknown) => {

@@ -5,8 +5,11 @@ import { resolvePreferredProviderForAuthChoice } from "../../plugins/provider-au
 import { buildProviderPluginMethodChoice } from "../provider-wizard.js";
 import type { ProviderPlugin } from "../types.js";
 
-type ResolvePluginProviders =
-  typeof import("../../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
+type ResolvePluginProviders = (
+  ...args: Parameters<
+    typeof import("../../plugins/provider-auth-choice.runtime.js").acquireProviderAuthChoiceProviders
+  >
+) => ProviderPlugin[];
 type ResolveProviderPluginChoice =
   typeof import("../../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type RunProviderModelSelectedHook =
@@ -20,7 +23,10 @@ const runProviderModelSelectedHookMock = vi.hoisted(() =>
 const runAuthMethodMock = vi.hoisted(() => vi.fn(async () => ({ profiles: [] })));
 
 vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({
-  resolvePluginProviders: resolvePluginProvidersMock,
+  acquireProviderAuthChoiceProviders: (...args: Parameters<typeof resolvePluginProvidersMock>) => ({
+    providers: resolvePluginProvidersMock(...args),
+    release() {},
+  }),
   resolvePluginSetupProvider: resolvePluginSetupProviderMock,
   resolveProviderPluginChoice: resolveProviderPluginChoiceMock,
   runProviderModelSelectedHook: runProviderModelSelectedHookMock,

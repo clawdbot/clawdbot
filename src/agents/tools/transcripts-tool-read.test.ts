@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { PluginRegistryResourceScope } from "../../plugins/registry-resources.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -20,8 +21,8 @@ import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const { getProvider } = vi.hoisted(() => ({ getProvider: vi.fn() }));
 vi.mock("../../transcripts/provider-registry.js", () => ({
-  getTranscriptSourceProvider: getProvider,
-  listTranscriptSourceProviders: () => [],
+  getTranscriptSourceProviderCore: getProvider,
+  listTranscriptSourceProvidersCore: () => [],
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
@@ -63,6 +64,9 @@ beforeEach(async () => {
   await store.writeSession(session);
 });
 afterEach(() => {
+  for (const entry of activeSessions.values()) {
+    entry.resources.release();
+  }
   activeSessions.clear();
   closeOpenClawStateDatabaseForTest();
 });
@@ -83,6 +87,7 @@ describe("transcripts read actions", () => {
       if (state === "active") {
         activeSessions.set(session.sessionId, {
           session: descriptor,
+          resources: new PluginRegistryResourceScope(),
           providerId: "voice",
           provider: {},
           phase: "active",
@@ -204,6 +209,7 @@ describe("transcripts read actions", () => {
       session,
       providerId: "voice",
       provider: {},
+      resources: new PluginRegistryResourceScope(),
       phase: "active",
     });
     await store.writeSession({ ...session, source: { providerId: "voice", guildId: "other" } });
@@ -263,6 +269,7 @@ describe("transcripts read actions", () => {
       session,
       providerId: "voice",
       provider: {},
+      resources: new PluginRegistryResourceScope(),
       phase: "active",
     });
     await expect(

@@ -3,12 +3,14 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { drainPluginRegistryResourceDisposals } from "../plugins/registry-resources.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-transcription/provider-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createTalkProviderResourceFixture } from "./talk-provider-resources.test-support.js";
 import {
   cleanupTalkConnection,
   getUnifiedTalkSession,
@@ -664,6 +666,68 @@ describe("talk transcription gateway relay", () => {
     }
   });
 
+  it.each([false, true])(
+    "retains the provider database through failed public close and its retry (audio=%s)",
+    async (receivedAudio) => {
+      const fixture = createTalkProviderResourceFixture();
+      const sttSession = createSttSessionMock();
+      let failing = true;
+      sttSession.close.mockImplementation(() => {
+        fixture.db.prepare("INSERT INTO calls VALUES (?)").run("close");
+        if (failing) {
+          throw new Error("provider close failed");
+        }
+      });
+      const { context } = createBroadcastContext();
+      const session = fixture.resources.run(() =>
+        createTalkTranscriptionRelaySession({
+          context,
+          connId: "conn-native-close-retry",
+          provider: createTranscriptionProvider(sttSession),
+          providerConfig: {},
+        }),
+      );
+      const closeParams = {
+        transcriptionSessionId: session.transcriptionSessionId,
+        connId: "conn-native-close-retry",
+      };
+      rememberUnifiedTalkSession(session.transcriptionSessionId, {
+        kind: "transcription-relay",
+        ...closeParams,
+      });
+      fixture.releaseConstruction();
+      fixture.resources.release();
+      await Promise.resolve();
+      if (receivedAudio) {
+        sendTalkTranscriptionRelayAudio({ ...closeParams, audioBase64: "AQI=" });
+      }
+      try {
+        expect(() => stopTalkTranscriptionRelaySession(closeParams)).toThrow(
+          "provider close failed",
+        );
+        await drainPluginRegistryResourceDisposals();
+        expect(fixture.db.isOpen).toBe(true);
+        expect(getUnifiedTalkSession(session.transcriptionSessionId)).toMatchObject(closeParams);
+        expect(() =>
+          sendTalkTranscriptionRelayAudio({ ...closeParams, audioBase64: "AQI=" }),
+        ).toThrow("Unknown transcription Talk session");
+        failing = false;
+        stopTalkTranscriptionRelaySession(closeParams);
+        expect(sttSession.close).toHaveBeenCalledTimes(2);
+        await drainPluginRegistryResourceDisposals();
+        expect(fixture.db.isOpen).toBe(false);
+      } finally {
+        failing = false;
+        try {
+          stopTalkTranscriptionRelaySession(closeParams);
+        } catch {
+          // A successful close has already removed the session.
+        }
+        await fixture.dispose();
+      }
+    },
+  );
+
   it("closes only transcription relays owned by the disconnected connection", async () => {
     const firstOwned = createSttSessionMock();
     const secondOwned = createSttSessionMock(async () => {
@@ -725,7 +789,11 @@ describe("talk transcription gateway relay", () => {
           audioBase64: "AQI=",
         }),
       ).toThrow("Unknown transcription Talk session");
-      expect(() => getUnifiedTalkSession(transcriptionSessionId)).toThrow("Unknown Talk session");
+      if (transcriptionSessionId === firstSession.transcriptionSessionId) {
+        expect(getUnifiedTalkSession(transcriptionSessionId)).toMatchObject({ closing: true });
+      } else {
+        expect(() => getUnifiedTalkSession(transcriptionSessionId)).toThrow("Unknown Talk session");
+      }
     }
     expect(
       events.some(
@@ -756,6 +824,11 @@ describe("talk transcription gateway relay", () => {
     });
     cleanupTalkConnection("conn-other", logGateway);
     expect(unrelated.close).toHaveBeenCalledOnce();
+    stopTalkTranscriptionRelaySession({
+      transcriptionSessionId: firstSession.transcriptionSessionId,
+      connId: "conn-owner",
+    });
+    expect(firstOwned.close).toHaveBeenCalledTimes(2);
   });
 
   it("rejects provider configs that do not match relay audio input", () => {

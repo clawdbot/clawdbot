@@ -1,4 +1,14 @@
+import {
+  getImageGenerationProviderCore as getProviderCore,
+  listImageGenerationProvidersCore as listProvidersCore,
+} from "../media-generation/registry.js";
+import {
+  acquirePluginCapabilityProvider,
+  acquirePluginCapabilityProviders,
+} from "../plugins/capability-provider-runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { withLegacyPluginSdkResourceScope } from "./legacy-registry-resource-scope.js";
+
 // Shared image-generation implementation helpers for bundled and third-party plugins.
 
 export type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -26,10 +36,6 @@ export {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
-export {
-  getImageGenerationProvider,
-  listImageGenerationProviders,
-} from "../media-generation/registry.js";
 export { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { normalizeGooglePreviewModelId as normalizeGoogleModelId } from "./provider-model-shared.js";
@@ -50,4 +56,32 @@ export async function resolveApiKeyForProvider(
 ): Promise<Awaited<ReturnType<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>>> {
   const runtime = await loadImageGenerationCoreAuthRuntime();
   return runtime.resolveApiKeyForProvider(...args);
+}
+
+/** @deprecated Use acquireImageGenerationProvider and release after all callbacks finish. */
+export function getImageGenerationProvider(...args: Parameters<typeof getProviderCore>) {
+  return withLegacyPluginSdkResourceScope(() => getProviderCore(...args));
+}
+
+/** @deprecated Use acquireImageGenerationProviders and release after all callbacks finish. */
+export function listImageGenerationProviders(...args: Parameters<typeof listProvidersCore>) {
+  return withLegacyPluginSdkResourceScope(() => listProvidersCore(...args));
+}
+
+export function acquireImageGenerationProvider(
+  providerId: string,
+  cfg?: Parameters<typeof listProvidersCore>[0],
+) {
+  return acquirePluginCapabilityProvider({ key: "imageGenerationProviders", providerId, cfg });
+}
+
+export function acquireImageGenerationProviders(
+  cfg?: Parameters<typeof listProvidersCore>[0],
+  additionalProviderIds?: readonly string[],
+) {
+  return acquirePluginCapabilityProviders({
+    key: "imageGenerationProviders",
+    cfg,
+    additionalProviderIds,
+  });
 }

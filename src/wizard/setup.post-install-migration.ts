@@ -6,6 +6,7 @@ import {
   readMigrationConfigPatchDetails,
   writeMigrationConfigPath,
 } from "../plugin-sdk/migration.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -159,74 +160,76 @@ function applyMigrationConfigPatches(
 export async function offerPostInstallMigrations(
   params: PostInstallMigrationOptions,
 ): Promise<PostInstallMigrationResult> {
-  const candidates = await resolveCandidates({
-    config: params.config,
-    runtime: params.runtime,
-    installedPluginIds: params.installedPluginIds,
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const candidates = await resolveCandidates({
+      config: params.config,
+      runtime: params.runtime,
+      installedPluginIds: params.installedPluginIds,
+    });
+    if (candidates.length === 0) {
+      return { config: params.config };
+    }
+    let nextConfig = params.config;
+    const prompter = params.prompter;
+    const interactive =
+      params.nonInteractive !== true && process.stdin.isTTY && prompter !== undefined;
+    for (const candidate of candidates) {
+      if (!interactive || !prompter) {
+        logMigrationHint(params.runtime, candidate);
+        continue;
+      }
+      const description = describeCandidate(candidate);
+      let accepted;
+      try {
+        accepted = await prompter.confirm({
+          message: `Migrate ${description} into this agent now?`,
+          initialValue: false,
+        });
+      } catch (error) {
+        // Prompt cancellations / non-TTY refusals fall back to the hint path so
+        // onboarding never aborts on an optional offer.
+        params.runtime.log(
+          `Skipping ${candidate.provider.label} migration prompt: ${formatErrorMessage(error)}`,
+        );
+        logMigrationHint(params.runtime, candidate);
+        continue;
+      }
+      if (!accepted) {
+        logMigrationHint(params.runtime, candidate);
+        continue;
+      }
+      let preparation: Awaited<ReturnType<NonNullable<MigrationProviderPlugin["prepareApply"]>>> =
+        undefined;
+      try {
+        const [{ migrateDefaultCommand }, { createMigrationLogger }, { resolveStateDir }] =
+          await Promise.all([
+            import("../commands/migrate.js"),
+            loadMigrationContextModule(),
+            loadConfigPathsModule(),
+          ]);
+        preparation = await candidate.provider.prepareApply?.({
+          config: nextConfig,
+          stateDir: resolveStateDir(),
+          logger: createMigrationLogger(params.runtime),
+          ...(candidate.source ? { source: candidate.source } : {}),
+          providerOptions: { configPatchMode: "return" },
+        });
+        const result = await migrateDefaultCommand(params.runtime, {
+          provider: candidate.provider.id,
+          configOverride: nextConfig,
+          configPatchMode: "return",
+          suppressPlanLog: true,
+        });
+        nextConfig = applyMigrationConfigPatches(nextConfig, result);
+      } catch (error) {
+        params.runtime.log(
+          `${candidate.provider.label} migration failed: ${formatErrorMessage(error)}. ` +
+            `Re-run with ${formatCliCommand(`openclaw migrate ${candidate.provider.id} --dry-run`)} to inspect.`,
+        );
+      } finally {
+        await preparation?.dispose?.();
+      }
+    }
+    return { config: nextConfig };
   });
-  if (candidates.length === 0) {
-    return { config: params.config };
-  }
-  let nextConfig = params.config;
-  const prompter = params.prompter;
-  const interactive =
-    params.nonInteractive !== true && process.stdin.isTTY && prompter !== undefined;
-  for (const candidate of candidates) {
-    if (!interactive || !prompter) {
-      logMigrationHint(params.runtime, candidate);
-      continue;
-    }
-    const description = describeCandidate(candidate);
-    let accepted;
-    try {
-      accepted = await prompter.confirm({
-        message: `Migrate ${description} into this agent now?`,
-        initialValue: false,
-      });
-    } catch (error) {
-      // Prompt cancellations / non-TTY refusals fall back to the hint path so
-      // onboarding never aborts on an optional offer.
-      params.runtime.log(
-        `Skipping ${candidate.provider.label} migration prompt: ${formatErrorMessage(error)}`,
-      );
-      logMigrationHint(params.runtime, candidate);
-      continue;
-    }
-    if (!accepted) {
-      logMigrationHint(params.runtime, candidate);
-      continue;
-    }
-    let preparation: Awaited<ReturnType<NonNullable<MigrationProviderPlugin["prepareApply"]>>> =
-      undefined;
-    try {
-      const [{ migrateDefaultCommand }, { createMigrationLogger }, { resolveStateDir }] =
-        await Promise.all([
-          import("../commands/migrate.js"),
-          loadMigrationContextModule(),
-          loadConfigPathsModule(),
-        ]);
-      preparation = await candidate.provider.prepareApply?.({
-        config: nextConfig,
-        stateDir: resolveStateDir(),
-        logger: createMigrationLogger(params.runtime),
-        ...(candidate.source ? { source: candidate.source } : {}),
-        providerOptions: { configPatchMode: "return" },
-      });
-      const result = await migrateDefaultCommand(params.runtime, {
-        provider: candidate.provider.id,
-        configOverride: nextConfig,
-        configPatchMode: "return",
-        suppressPlanLog: true,
-      });
-      nextConfig = applyMigrationConfigPatches(nextConfig, result);
-    } catch (error) {
-      params.runtime.log(
-        `${candidate.provider.label} migration failed: ${formatErrorMessage(error)}. ` +
-          `Re-run with ${formatCliCommand(`openclaw migrate ${candidate.provider.id} --dry-run`)} to inspect.`,
-      );
-    } finally {
-      await preparation?.dispose?.();
-    }
-  }
-  return { config: nextConfig };
 }

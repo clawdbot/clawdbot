@@ -21,6 +21,7 @@ import type {
 } from "../../music-generation/types.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -534,181 +535,183 @@ export function createMusicGenerateTool(options?: {
       "Create song/jingle/beat/loop/soundtrack/anthem/instrumental. Make/generate music => call; lyrics-only request => text only. prompt: style/genre/mood/tempo/instruments/purpose; lyrics: exact sung words; image/images condition on reference image(s). action=list discovers providers/models. Session chat background: call once/request, await, then visible reply + structured media. status checks active task.",
     parameters: MusicGenerateToolSchema,
     execute: async (_toolCallId, rawArgs, signal) => {
-      const args = rawArgs as Record<string, unknown>;
-      const action = resolveGenerateAction(args);
+      return withPluginRegistryResourceOperationAsync(async () => {
+        const args = rawArgs as Record<string, unknown>;
+        const action = resolveGenerateAction(args);
 
-      if (action === "list") {
-        return createMusicGenerateListActionResult(cfg, {
+        if (action === "list") {
+          return createMusicGenerateListActionResult(cfg, {
+            workspaceDir: options?.workspaceDir,
+            agentDir: options?.agentDir,
+            authStore: options?.authProfileStore,
+          });
+        }
+
+        if (action === "status") {
+          return createMusicGenerateStatusActionResult(
+            options?.agentSessionKey,
+            options?.requesterAgentId,
+          );
+        }
+
+        const model = readToolStringParam(args, "model");
+        const musicGenerationModelConfig = resolveCapabilityModelConfigForTool({
+          cfg,
           workspaceDir: options?.workspaceDir,
           agentDir: options?.agentDir,
           authStore: options?.authProfileStore,
+          modelConfig: cfg.agents?.defaults?.mediaModels?.music,
+          modelOverride: model,
+          providers: () => listRuntimeMusicGenerationProviders({ config: cfg }),
         });
-      }
+        if (!musicGenerationModelConfig) {
+          throw new ToolInputError("No music-generation model configured.");
+        }
+        const explicitModelConfig = hasExplicitMediaModel(cfg.agents?.defaults?.mediaModels?.music);
+        const effectiveCfg =
+          applyAgentDefaultModelConfig(cfg, "music", musicGenerationModelConfig) ?? cfg;
+        const prompt = readToolStringParam(args, "prompt", { required: true });
 
-      if (action === "status") {
-        return createMusicGenerateStatusActionResult(
+        const activeDuplicateGuardResult = createMusicGenerateDuplicateGuardResult(
           options?.agentSessionKey,
-          options?.requesterAgentId,
+          { prompt, agentId: options?.requesterAgentId },
         );
-      }
+        if (activeDuplicateGuardResult) {
+          return activeDuplicateGuardResult;
+        }
 
-      const model = readToolStringParam(args, "model");
-      const musicGenerationModelConfig = resolveCapabilityModelConfigForTool({
-        cfg,
-        workspaceDir: options?.workspaceDir,
-        agentDir: options?.agentDir,
-        authStore: options?.authProfileStore,
-        modelConfig: cfg.agents?.defaults?.mediaModels?.music,
-        modelOverride: model,
-        providers: () => listRuntimeMusicGenerationProviders({ config: cfg }),
-      });
-      if (!musicGenerationModelConfig) {
-        throw new ToolInputError("No music-generation model configured.");
-      }
-      const explicitModelConfig = hasExplicitMediaModel(cfg.agents?.defaults?.mediaModels?.music);
-      const effectiveCfg =
-        applyAgentDefaultModelConfig(cfg, "music", musicGenerationModelConfig) ?? cfg;
-      const prompt = readToolStringParam(args, "prompt", { required: true });
-
-      const activeDuplicateGuardResult = createMusicGenerateDuplicateGuardResult(
-        options?.agentSessionKey,
-        { prompt, agentId: options?.requesterAgentId },
-      );
-      if (activeDuplicateGuardResult) {
-        return activeDuplicateGuardResult;
-      }
-
-      const lyrics = readToolStringParam(args, "lyrics");
-      const instrumental = readBooleanParam(args, "instrumental");
-      const durationSeconds = readNumberParam(args, "durationSeconds", {
-        positiveInteger: true,
-        strict: true,
-      });
-      if (
-        durationSeconds === undefined &&
-        readSnakeCaseParamRaw(args, "durationSeconds") !== undefined
-      ) {
-        throw new ToolInputError("durationSeconds must be a positive integer");
-      }
-      const format = normalizeOutputFormat(readToolStringParam(args, "format"));
-      const filename = readToolStringParam(args, "filename");
-      const timeout = normalizeMusicGenerationTimeoutMs(musicGenerationModelConfig.timeoutMs);
-      const timeoutMs = timeout.timeoutMs;
-      const imageInputs = normalizeReferenceImageInputs(args);
-      const explicitModelRef = parseMusicGenerationModelRef(model);
-      const primaryModelRef = parseMusicGenerationModelRef(musicGenerationModelConfig.primary);
-      const selectedModelRef = explicitModelRef ?? primaryModelRef;
-      const shouldResolveSelectedProvider =
-        imageInputs.length > 0 ||
-        (model !== undefined && !explicitModelRef) ||
-        (model === undefined && !primaryModelRef);
-      const selectedProvider = shouldResolveSelectedProvider
-        ? resolveSelectedMusicGenerationProvider({
-            config: effectiveCfg,
-            providers: preparedProviders,
-            musicGenerationModelConfig,
-            modelOverride: model,
-          })
-        : undefined;
-      const selectedProviderId = selectedProvider?.id ?? selectedModelRef?.provider;
-      const requestKey = buildMediaGenerationRequestKey({
-        tool: "music_generate",
-        prompt,
-        provider: selectedProviderId,
-        model:
-          model !== undefined
-            ? (explicitModelRef?.model ?? model)
-            : (primaryModelRef?.model ??
-              musicGenerationModelConfig.primary ??
-              selectedProvider?.defaultModel),
-        lyrics,
-        instrumental,
-        durationSeconds,
-        format,
-        filename,
-        imageInputs,
-      });
-      const duplicateGuardResult = createMusicGenerateDuplicateGuardResult(
-        options?.agentSessionKey,
-        { prompt, requestKey, agentId: options?.requesterAgentId },
-      );
-      if (duplicateGuardResult) {
-        return duplicateGuardResult;
-      }
-      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
-      const loadedReferenceImages = await loadReferenceImages({
-        inputs: imageInputs,
-        maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "image"),
-        workspaceDir: options?.workspaceDir,
-        sandboxConfig,
-        ssrfPolicy: remoteMediaSsrfPolicy,
-        signal,
-      });
-      validateMusicGenerationCapabilities({
-        provider: selectedProvider,
-        model: selectedModelRef?.model ?? model ?? selectedProvider?.defaultModel,
-        inputImageCount: loadedReferenceImages.length,
-        lyrics,
-        instrumental,
-        durationSeconds,
-        format,
-      });
-      // Accepted tasks own their paid work independently; cancellation applies only before admission.
-      signal?.throwIfAborted();
-      return runMediaGenerationTask({
-        lifecycle: musicGenerationTaskLifecycle,
-        generationLabel: "music",
-        sessionKey: options?.agentSessionKey,
-        requesterAgentId: options?.requesterAgentId,
-        requesterOrigin: options?.requesterOrigin,
-        prompt,
-        requestKey,
-        providerId: selectedProviderId,
-        config: effectiveCfg,
-        scheduleBackgroundWork,
-        onAsyncTaskStarted: options?.onAsyncTaskStarted,
-        onFailure: (message, meta) => log.warn(message, meta),
-        messages: [timeout.message],
-        detailExtras: {
-          ...buildMediaReferenceDetails({
-            entries: loadedReferenceImages,
-            singleKey: "image",
-            pluralKey: "images",
-            getResolvedInput: (entry) => entry.resolvedInput,
-          }),
-          ...(model ? { model } : {}),
-          ...(lyrics ? { requestedLyrics: lyrics } : {}),
-          ...(typeof instrumental === "boolean" ? { instrumental } : {}),
-          ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
-          ...(format ? { format } : {}),
-          ...(filename ? { filename } : {}),
-          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-          ...(timeout.normalization
-            ? {
-                requestedTimeoutMs: timeout.normalization.requested,
-                timeoutNormalization: timeout.normalization,
-                warning: timeout.message,
-              }
-            : {}),
-        },
-        run: (taskHandle) =>
-          executeMusicGenerationJob({
-            effectiveCfg,
-            prompt,
-            agentDir: options?.agentDir,
-            lyrics,
-            instrumental,
-            durationSeconds,
-            model,
-            format,
-            filename,
-            loadedReferenceImages,
-            taskHandle,
-            autoProviderFallback: explicitModelConfig ? false : undefined,
-            timeoutMs,
-            timeoutNormalization: timeout.normalization,
-            providers: preparedProviders,
-          }),
+        const lyrics = readToolStringParam(args, "lyrics");
+        const instrumental = readBooleanParam(args, "instrumental");
+        const durationSeconds = readNumberParam(args, "durationSeconds", {
+          positiveInteger: true,
+          strict: true,
+        });
+        if (
+          durationSeconds === undefined &&
+          readSnakeCaseParamRaw(args, "durationSeconds") !== undefined
+        ) {
+          throw new ToolInputError("durationSeconds must be a positive integer");
+        }
+        const format = normalizeOutputFormat(readToolStringParam(args, "format"));
+        const filename = readToolStringParam(args, "filename");
+        const timeout = normalizeMusicGenerationTimeoutMs(musicGenerationModelConfig.timeoutMs);
+        const timeoutMs = timeout.timeoutMs;
+        const imageInputs = normalizeReferenceImageInputs(args);
+        const explicitModelRef = parseMusicGenerationModelRef(model);
+        const primaryModelRef = parseMusicGenerationModelRef(musicGenerationModelConfig.primary);
+        const selectedModelRef = explicitModelRef ?? primaryModelRef;
+        const shouldResolveSelectedProvider =
+          imageInputs.length > 0 ||
+          (model !== undefined && !explicitModelRef) ||
+          (model === undefined && !primaryModelRef);
+        const selectedProvider = shouldResolveSelectedProvider
+          ? resolveSelectedMusicGenerationProvider({
+              config: effectiveCfg,
+              providers: preparedProviders,
+              musicGenerationModelConfig,
+              modelOverride: model,
+            })
+          : undefined;
+        const selectedProviderId = selectedProvider?.id ?? selectedModelRef?.provider;
+        const requestKey = buildMediaGenerationRequestKey({
+          tool: "music_generate",
+          prompt,
+          provider: selectedProviderId,
+          model:
+            model !== undefined
+              ? (explicitModelRef?.model ?? model)
+              : (primaryModelRef?.model ??
+                musicGenerationModelConfig.primary ??
+                selectedProvider?.defaultModel),
+          lyrics,
+          instrumental,
+          durationSeconds,
+          format,
+          filename,
+          imageInputs,
+        });
+        const duplicateGuardResult = createMusicGenerateDuplicateGuardResult(
+          options?.agentSessionKey,
+          { prompt, requestKey, agentId: options?.requesterAgentId },
+        );
+        if (duplicateGuardResult) {
+          return duplicateGuardResult;
+        }
+        const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+        const loadedReferenceImages = await loadReferenceImages({
+          inputs: imageInputs,
+          maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "image"),
+          workspaceDir: options?.workspaceDir,
+          sandboxConfig,
+          ssrfPolicy: remoteMediaSsrfPolicy,
+          signal,
+        });
+        validateMusicGenerationCapabilities({
+          provider: selectedProvider,
+          model: selectedModelRef?.model ?? model ?? selectedProvider?.defaultModel,
+          inputImageCount: loadedReferenceImages.length,
+          lyrics,
+          instrumental,
+          durationSeconds,
+          format,
+        });
+        // Accepted tasks own their paid work independently; cancellation applies only before admission.
+        signal?.throwIfAborted();
+        return runMediaGenerationTask({
+          lifecycle: musicGenerationTaskLifecycle,
+          generationLabel: "music",
+          sessionKey: options?.agentSessionKey,
+          requesterAgentId: options?.requesterAgentId,
+          requesterOrigin: options?.requesterOrigin,
+          prompt,
+          requestKey,
+          providerId: selectedProviderId,
+          config: effectiveCfg,
+          scheduleBackgroundWork,
+          onAsyncTaskStarted: options?.onAsyncTaskStarted,
+          onFailure: (message, meta) => log.warn(message, meta),
+          messages: [timeout.message],
+          detailExtras: {
+            ...buildMediaReferenceDetails({
+              entries: loadedReferenceImages,
+              singleKey: "image",
+              pluralKey: "images",
+              getResolvedInput: (entry) => entry.resolvedInput,
+            }),
+            ...(model ? { model } : {}),
+            ...(lyrics ? { requestedLyrics: lyrics } : {}),
+            ...(typeof instrumental === "boolean" ? { instrumental } : {}),
+            ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
+            ...(format ? { format } : {}),
+            ...(filename ? { filename } : {}),
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+            ...(timeout.normalization
+              ? {
+                  requestedTimeoutMs: timeout.normalization.requested,
+                  timeoutNormalization: timeout.normalization,
+                  warning: timeout.message,
+                }
+              : {}),
+          },
+          run: (taskHandle) =>
+            executeMusicGenerationJob({
+              effectiveCfg,
+              prompt,
+              agentDir: options?.agentDir,
+              lyrics,
+              instrumental,
+              durationSeconds,
+              model,
+              format,
+              filename,
+              loadedReferenceImages,
+              taskHandle,
+              autoProviderFallback: explicitModelConfig ? false : undefined,
+              timeoutMs,
+              timeoutNormalization: timeout.normalization,
+              providers: preparedProviders,
+            }),
+        });
       });
     },
   };

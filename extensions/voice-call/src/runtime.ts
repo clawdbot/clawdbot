@@ -131,13 +131,28 @@ function createRuntimeResourceLifecycle(params: {
   let tunnelResult: TunnelResult | null = null;
   let stopPromise: Promise<void> | null = null;
 
-  const runStep = async (step: () => Promise<void>, suppressErrors: boolean) => {
-    if (suppressErrors) {
-      await step().catch(() => {});
-      return;
-    }
-    await step();
-  };
+  const cleanupSteps = [
+    {
+      complete: false,
+      stop: async () => {
+        if (tunnelResult) {
+          await tunnelResult.stop();
+        }
+      },
+    },
+    {
+      complete: false,
+      stop: async () => {
+        await cleanupTailscaleExposure(params.config);
+      },
+    },
+    {
+      complete: false,
+      stop: async () => {
+        await params.webhookServer.stop();
+      },
+    },
+  ];
 
   return {
     setTunnelResult: (result) => {
@@ -148,19 +163,30 @@ function createRuntimeResourceLifecycle(params: {
         return stopPromise;
       }
       const suppressErrors = opts?.suppressErrors ?? false;
-      stopPromise = (async () => {
-        await runStep(async () => {
-          if (tunnelResult) {
-            await tunnelResult.stop();
+      // Publish the shared attempt before cleanup callbacks can re-enter stop.
+      stopPromise = Promise.resolve()
+        .then(async () => {
+          const errors: unknown[] = [];
+          for (const step of cleanupSteps) {
+            if (step.complete) {
+              continue;
+            }
+            try {
+              await step.stop();
+              step.complete = true;
+            } catch (error) {
+              errors.push(error);
+            }
           }
-        }, suppressErrors);
-        await runStep(async () => {
-          await cleanupTailscaleExposure(params.config);
-        }, suppressErrors);
-        await runStep(async () => {
-          await params.webhookServer.stop();
-        }, suppressErrors);
-      })();
+          if (!suppressErrors && errors.length > 0) {
+            throw errors[0];
+          }
+        })
+        .finally(() => {
+          if (cleanupSteps.some((step) => !step.complete)) {
+            stopPromise = null;
+          }
+        });
       return stopPromise;
     },
   };
@@ -355,7 +381,8 @@ export async function createVoiceCallRuntime(params: {
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
       const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
       const agentId = resolveCallAgentId(call, effectiveConfig);
-      const resolved = realtimeVoiceRuntime.resolveConfiguredRealtimeVoiceProvider({
+      const instructions = resolveRealtimeInstructions(call);
+      const resolved = realtimeVoiceRuntime.acquireConfiguredRealtimeVoiceProvider({
         configuredProviderId: effectiveConfig.realtime.provider,
         providerConfigs: effectiveConfig.realtime.providers,
         cfg,
@@ -365,7 +392,9 @@ export async function createVoiceCallRuntime(params: {
         agentId,
         provider: resolved.provider,
         providerConfig: resolved.providerConfig,
-        instructions: resolveRealtimeInstructions(call),
+        releaseProviderResources: resolved.release,
+        runWithProviderResources: resolved.run,
+        instructions,
       };
     };
     const realtimeHandler = new RealtimeCallHandler(

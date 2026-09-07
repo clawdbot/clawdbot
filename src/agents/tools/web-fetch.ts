@@ -1,8 +1,3 @@
-/**
- * web_fetch built-in tool.
- *
- * Fetches HTTP(S) content through SSRF guards, provider config, caching, and bounded extraction.
- */
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -15,6 +10,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug, logWarn } from "../../logger.js";
+/**
+ * web_fetch built-in tool.
+ *
+ * Fetches HTTP(S) content through SSRF guards, provider config, caching, and bounded extraction.
+ */
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -967,106 +968,110 @@ export function createWebFetchTool(options?: {
     description: "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
     parameters: WebFetchSchema,
     outputSchema: WebFetchOutputSchema,
-    execute: async (_toolCallId, args, signal, onUpdate) => {
-      const { config, preferRuntimeProviders, providerSelectionId, runtimeWebFetch } =
-        resolveWebFetchToolRuntimeContext({
-          config: options?.config,
-          lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
-          runtimeWebFetch: options?.runtimeWebFetch,
-        });
-      const executionFetch = resolveFetchConfig(config);
-      if (executionFetch?.enabled === false) {
-        throw new Error("web_fetch is disabled.");
-      }
-      if (providerSelectionId) {
-        assertSecretOwnerAvailable(
-          "capability",
-          runtimeWebSecretOwnerId("fetch", providerSelectionId),
-        );
-      }
-      const providerCacheKey =
-        normalizeOptionalLowercaseString(runtimeWebFetch?.selectedProvider) ??
-        normalizeOptionalLowercaseString(runtimeWebFetch?.providerConfigured) ??
-        (executionFetch && "provider" in executionFetch
-          ? normalizeOptionalLowercaseString(executionFetch.provider)
-          : undefined);
-      const readabilityEnabled = resolveFetchReadabilityEnabled(executionFetch);
-      const userAgent =
-        (executionFetch &&
-          "userAgent" in executionFetch &&
-          typeof executionFetch.userAgent === "string" &&
-          executionFetch.userAgent) ||
-        DEFAULT_FETCH_USER_AGENT;
-      const maxResponseBytes = resolveFetchMaxResponseBytes(executionFetch);
-      let providerFallbackResolved = false;
-      let providerFallbackCache: WebFetchProviderFallback;
-      const resolveProviderFallback = async () => {
-        if (!providerFallbackResolved) {
-          const { resolveWebFetchDefinition } = await loadWebFetchRuntime();
-          providerFallbackCache = resolveWebFetchDefinition({
-            config,
-            sandboxed: options?.sandboxed,
-            runtimeWebFetch,
-            preferRuntimeProviders,
+    execute: async (_toolCallId, args, signal, onUpdate) =>
+      withPluginRegistryResourceOperationAsync(async () => {
+        const { config, preferRuntimeProviders, providerSelectionId, runtimeWebFetch } =
+          resolveWebFetchToolRuntimeContext({
+            config: options?.config,
+            lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+            runtimeWebFetch: options?.runtimeWebFetch,
           });
-          providerFallbackResolved = true;
+        const executionFetch = resolveFetchConfig(config);
+        if (executionFetch?.enabled === false) {
+          throw new Error("web_fetch is disabled.");
         }
-        return providerFallbackCache;
-      };
-      const params = args as Record<string, unknown>;
-      const url = sanitizeWebFetchUrl(
-        readToolStringParam(params, "url", { required: true, trim: false }),
-      );
-      const extractMode =
-        readToolStringParam(params, "extractMode") === "text" ? "text" : "markdown";
-      const maxChars = readPositiveIntegerParam(params, "maxChars");
-      const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
-      const hostnameAllowlist = options?.hostnameAllowlistRef?.value;
-      // The progress line is emitted only if the fetch is still pending after
-      // the threshold; fast cache/network hits clear the timer before it fires.
-      const clearProgressTimer = scheduleToolProgress(
-        onUpdate,
-        { text: WEB_FETCH_PROGRESS_TEXT, id: "web_fetch:fetching" },
-        WEB_FETCH_PROGRESS_THRESHOLD_MS,
-        { signal },
-      );
-      try {
-        const result = await runWebFetch({
-          url,
-          extractMode,
-          maxChars: resolveMaxChars(
-            maxChars ?? executionFetch?.maxChars,
-            DEFAULT_FETCH_MAX_CHARS,
-            maxCharsCap,
-          ),
-          maxResponseBytes,
-          maxRedirects: resolveMaxRedirects(
-            executionFetch?.maxRedirects,
-            DEFAULT_FETCH_MAX_REDIRECTS,
-          ),
-          timeoutSeconds: resolveTimeoutSeconds(
-            executionFetch?.timeoutSeconds,
-            DEFAULT_TIMEOUT_SECONDS,
-          ),
-          cacheTtlMs: resolveCacheTtlMs(executionFetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-          userAgent,
-          headers: resolveFetchHeaders(executionFetch),
-          readabilityEnabled,
-          config,
-          useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
-          ssrfPolicy: hostnameAllowlist
-            ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
-            : executionFetch?.ssrfPolicy,
-          ...(providerCacheKey ? { providerCacheKey } : {}),
-          lookupFn: options?.lookupFn,
-          signal,
-          resolveProviderFallback,
-        });
-        return jsonResult(result);
-      } finally {
-        clearProgressTimer();
-      }
-    },
+        if (providerSelectionId) {
+          assertSecretOwnerAvailable(
+            "capability",
+            runtimeWebSecretOwnerId("fetch", providerSelectionId),
+          );
+        }
+        const providerCacheKey =
+          normalizeOptionalLowercaseString(runtimeWebFetch?.selectedProvider) ??
+          normalizeOptionalLowercaseString(runtimeWebFetch?.providerConfigured) ??
+          (executionFetch && "provider" in executionFetch
+            ? normalizeOptionalLowercaseString(executionFetch.provider)
+            : undefined);
+        const readabilityEnabled = resolveFetchReadabilityEnabled(executionFetch);
+        const userAgent =
+          (executionFetch &&
+            "userAgent" in executionFetch &&
+            typeof executionFetch.userAgent === "string" &&
+            executionFetch.userAgent) ||
+          DEFAULT_FETCH_USER_AGENT;
+        const maxResponseBytes = resolveFetchMaxResponseBytes(executionFetch);
+        let providerFallbackResolved = false;
+        let providerFallbackCache: WebFetchProviderFallback;
+        const resolveProviderFallback = async () => {
+          if (!providerFallbackResolved) {
+            const { resolveWebFetchDefinition } = await loadWebFetchRuntime();
+            providerFallbackCache = resolveWebFetchDefinition({
+              config,
+              sandboxed: options?.sandboxed,
+              runtimeWebFetch,
+              preferRuntimeProviders,
+            });
+            providerFallbackResolved = true;
+          }
+          return providerFallbackCache;
+        };
+        const params = args as Record<string, unknown>;
+        const url = sanitizeWebFetchUrl(
+          readToolStringParam(params, "url", { required: true, trim: false }),
+        );
+        const extractMode =
+          readToolStringParam(params, "extractMode") === "text" ? "text" : "markdown";
+        const maxChars = readPositiveIntegerParam(params, "maxChars");
+        const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
+        const hostnameAllowlist = options?.hostnameAllowlistRef?.value;
+        // The progress line is emitted only if the fetch is still pending after
+        // the threshold; fast cache/network hits clear the timer before it fires.
+        const clearProgressTimer = scheduleToolProgress(
+          onUpdate,
+          { text: WEB_FETCH_PROGRESS_TEXT, id: "web_fetch:fetching" },
+          WEB_FETCH_PROGRESS_THRESHOLD_MS,
+          { signal },
+        );
+        try {
+          const result = await runWebFetch({
+            url,
+            extractMode,
+            maxChars: resolveMaxChars(
+              maxChars ?? executionFetch?.maxChars,
+              DEFAULT_FETCH_MAX_CHARS,
+              maxCharsCap,
+            ),
+            maxResponseBytes,
+            maxRedirects: resolveMaxRedirects(
+              executionFetch?.maxRedirects,
+              DEFAULT_FETCH_MAX_REDIRECTS,
+            ),
+            timeoutSeconds: resolveTimeoutSeconds(
+              executionFetch?.timeoutSeconds,
+              DEFAULT_TIMEOUT_SECONDS,
+            ),
+            cacheTtlMs: resolveCacheTtlMs(
+              executionFetch?.cacheTtlMinutes,
+              DEFAULT_CACHE_TTL_MINUTES,
+            ),
+            userAgent,
+            headers: resolveFetchHeaders(executionFetch),
+            readabilityEnabled,
+            config,
+            useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
+            ssrfPolicy: hostnameAllowlist
+              ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
+              : executionFetch?.ssrfPolicy,
+            ...(providerCacheKey ? { providerCacheKey } : {}),
+            lookupFn: options?.lookupFn,
+            signal,
+            resolveProviderFallback,
+          });
+          return jsonResult(result);
+        } finally {
+          clearProgressTimer();
+        }
+      }),
   };
   return setToolTerminalPresentation(tool, (_params, result) =>
     formatWebFetchTerminalPresentation(result),

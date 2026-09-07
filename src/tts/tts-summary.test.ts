@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { processCompletionsStream } from "../../packages/ai/src/transports/openai-completions-stream.js";
 import type { AssistantMessage, Model } from "../llm/types.js";
-import { summarizeText } from "./tts-core.js";
+import { summarizeTextCore } from "./tts-core.js";
 import {
   clearRuntimeConfigSnapshot,
   createMockSpeechProvider,
@@ -18,15 +18,15 @@ import {
 } from "./tts-runtime.test-support.js";
 
 type Completion =
-  typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
+  typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore;
 const completion = vi.hoisted(() => ({
   complete: vi.fn<Completion>(),
   prepare: vi.fn(),
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  completeWithPreparedSimpleCompletionModel: completion.complete,
-  prepareSimpleCompletionModel: completion.prepare,
+  completeWithPreparedSimpleCompletionModelCore: completion.complete,
+  acquireSimpleCompletionModel: completion.prepare,
 }));
 
 const model = {
@@ -75,6 +75,7 @@ beforeEach(() => {
   installSpeechProviders([createMockSpeechProvider()]);
   completion.complete.mockReset();
   completion.prepare.mockReturnValue({
+    release: vi.fn(),
     model,
     auth: { apiKey: "synthetic-test-key", source: "test", mode: "api-key" },
   });
@@ -89,7 +90,7 @@ afterEach(() => {
 });
 
 function summarize() {
-  return summarizeText({
+  return summarizeTextCore({
     text: originalText,
     targetLength: 120,
     cfg,

@@ -1,6 +1,11 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  PluginRegistryResourceScope,
+  createPluginRegistryResourceLease,
+  runOutsidePluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { createTranscriptsStore, stopTranscriptCapture } from "./capture-operations.js";
 import {
@@ -88,7 +93,7 @@ export function createTranscriptsAutoStartService(
   const schedule = (run: () => void, delay: number) => {
     const timer = setTimeout(() => {
       timers.delete(timer);
-      run();
+      runOutsidePluginRegistryResourceScope(run);
     }, delay);
     timer.unref();
     timers.add(timer);
@@ -103,7 +108,7 @@ export function createTranscriptsAutoStartService(
   const runPending = (run: (controller: AbortController) => Promise<void>) => {
     const controller = new AbortController();
     controllers.add(controller);
-    const task = run(controller).finally(() => {
+    const task = runOutsidePluginRegistryResourceScope(() => run(controller)).finally(() => {
       controllers.delete(controller);
       pendingStarts.delete(task);
     });
@@ -432,87 +437,122 @@ export function createTranscriptsAutoStartService(
       if (stopped) {
         return;
       }
-      void runPending(async (controller) => {
-        try {
-          const provider = resolveSourceProvider(entry.providerId, ctx);
-          if (!provider) {
-            throw new Error("provider is not available");
-          }
-          if (!provider.watchOccupancy) {
-            diagnostics?.record(index, diagnosticToken, "start-failed");
-            ctx.logger.warn(
-              `${label} cannot report occupancy; remove whenOccupied or select a provider that supports occupancy watching.`,
-            );
-            return;
-          }
-          clearRetry(index);
-          source = resolveTranscriptSourceOwnership({
-            ctx,
-            operation: "start",
-            provider,
-            source: { ...sourceFromParams(entry), providerId: provider.id },
-            configuredLifecycle: true,
-          }).source;
-          // Guild voice transports own one connection per account. Claim before
-          // awaiting readiness so later entries cannot displace the first room.
-          if (source.guildId) {
-            const key = JSON.stringify([provider.id, source.accountId, source.guildId]);
-            const owner = guildOwners.get(key);
-            if (owner !== undefined && owner !== index) {
+      const resources = new PluginRegistryResourceScope();
+      const lease = createPluginRegistryResourceLease(resources);
+      let transferred = false;
+      void runPending((controller) =>
+        lease.run(async () => {
+          try {
+            const provider = resolveSourceProvider(entry.providerId, ctx);
+            if (!provider) {
+              throw new Error("provider is not available");
+            }
+            if (!provider.watchOccupancy) {
               diagnostics?.record(index, diagnosticToken, "start-failed");
               ctx.logger.warn(
-                `${label} skipped: autoStart[${owner}] already owns this provider account and guild; configure only one whenOccupied entry per account and guild.`,
+                `${label} cannot report occupancy; remove whenOccupied or select a provider that supports occupancy watching.`,
               );
               return;
             }
-            guildOwners.set(key, index);
-          }
-          const result = await provider.watchOccupancy({
-            cfg: ctx.config,
-            source,
-            abortSignal: controller.signal,
-            startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
-            onOccupied: () => {
-              if (stopped || controller.signal.aborted || occupied) {
+            clearRetry(index);
+            source = resolveTranscriptSourceOwnership({
+              ctx,
+              operation: "start",
+              provider,
+              source: { ...sourceFromParams(entry), providerId: provider.id },
+              configuredLifecycle: true,
+            }).source;
+            // Guild voice transports own one connection per account. Claim before
+            // awaiting readiness so later entries cannot displace the first room.
+            if (source.guildId) {
+              const key = JSON.stringify([provider.id, source.accountId, source.guildId]);
+              const owner = guildOwners.get(key);
+              if (owner !== undefined && owner !== index) {
+                diagnostics?.record(index, diagnosticToken, "start-failed");
+                ctx.logger.warn(
+                  `${label} skipped: autoStart[${owner}] already owns this provider account and guild; configure only one whenOccupied entry per account and guild.`,
+                );
                 return;
               }
-              occupied = true;
-              cancel(emptyTimer);
-              cancel(retryTimer);
-              clearRetry(index);
-              begin(1);
-            },
-            onEmpty: () => {
-              if (stopped || controller.signal.aborted || !occupied) {
-                return;
-              }
-              occupied = false;
-              cancel(retryTimer);
-              cancel(emptyTimer);
-              emptyTimer = schedule(end, AUTO_START_OCCUPANCY_EMPTY_GRACE_MS);
-            },
-          });
-          if (!result.ok) {
-            throw new Error(result.error);
+              guildOwners.set(key, index);
+            }
+            const result = await provider.watchOccupancy({
+              cfg: ctx.config,
+              source,
+              abortSignal: controller.signal,
+              startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
+              onOccupied: () => {
+                if (stopped || controller.signal.aborted || occupied) {
+                  return;
+                }
+                occupied = true;
+                cancel(emptyTimer);
+                cancel(retryTimer);
+                clearRetry(index);
+                begin(1);
+              },
+              onEmpty: () => {
+                if (stopped || controller.signal.aborted || !occupied) {
+                  return;
+                }
+                occupied = false;
+                cancel(retryTimer);
+                cancel(emptyTimer);
+                emptyTimer = schedule(end, AUTO_START_OCCUPANCY_EMPTY_GRACE_MS);
+              },
+            });
+            if (!result.ok) {
+              throw new Error(result.error);
+            }
+            const watcher = result.value;
+            let watcherStopped = false;
+            const ownedWatcher = {
+              stop() {
+                if (watcherStopped) {
+                  return;
+                }
+                watcherStopped = true;
+                try {
+                  lease.run(() => watcher.stop());
+                  lease.release();
+                } catch (error) {
+                  watcherStopped = false;
+                  throw error;
+                }
+              },
+            };
+            watchers.add(ownedWatcher);
+            transferred = true;
+            if (stopped) {
+              // A late subscription still has an exact cleanup owner if stop fails.
+              ownedWatcher.stop();
+              watchers.delete(ownedWatcher);
+              return;
+            }
+            ready = true;
+            // An empty room still settles the watch retry before its next capture attempt.
+            diagnostics?.record(index, diagnosticToken);
+            // Initial occupancy can be reported inline by watchOccupancy. Admit
+            // capture only after subscription succeeds, not after a failed watch.
+            begin(1);
+          } catch (error) {
+            controller.abort();
+            occupied = false;
+            cancel(emptyTimer);
+            if (stopped && transferred) {
+              ctx.logger.warn(
+                `${label} occupancy cleanup failed: ${formatAutoStopDiagnostic(error)}`,
+              );
+            } else {
+              retry(() => arm(attempt + 1), attempt, error, "watch");
+            }
+          } finally {
+            if (!transferred) {
+              lease.release();
+            }
           }
-          if (stopped) {
-            result.value.stop();
-            return;
-          }
-          watchers.add(result.value);
-          ready = true;
-          // An empty room still settles the watch retry before its next capture attempt.
-          diagnostics?.record(index, diagnosticToken);
-          // Initial occupancy can be reported inline by watchOccupancy. Admit
-          // capture only after subscription succeeds, not after a failed watch.
-          begin(1);
-        } catch (error) {
-          controller.abort();
-          occupied = false;
-          cancel(emptyTimer);
-          retry(() => arm(attempt + 1), attempt, error, "watch");
-        }
-      });
+        }),
+      );
     };
     arm(1);
   };

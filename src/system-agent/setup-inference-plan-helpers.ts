@@ -447,27 +447,36 @@ export function canonicalizeSetupModelRef(params: {
   return resolved ? `${resolved.ref.provider}/${resolved.ref.model}` : params.raw;
 }
 
+export function normalizePreparedProviderModelRef(
+  modelRef: string,
+  provider: ProviderPlugin,
+): string {
+  const ref = parseRef(modelRef);
+  // Auth starters are raw provider input; guided discovery already chose its canonical model.
+  ref.model =
+    normalizeOptionalString(
+      provider.normalizeModelId?.({
+        provider: ref.provider,
+        modelId: ref.model,
+      }),
+    ) ?? ref.model;
+  return `${ref.provider}/${ref.model}`;
+}
+
 export function buildPreparedProviderTestPlan(params: {
   cfg: OpenClawConfig;
   sourceCfg: OpenClawConfig;
   preparedConfig: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
-  providerPlugin?: ProviderPlugin;
+  providerLabel?: string;
   modelRef: string;
+  targetModelRef?: string;
   pluginId?: string;
   routeAgentId: string;
   agentDir: string;
   pendingPluginInstalls?: Record<string, PluginInstallRecord>;
 }): SetupInferenceTestPlan | { error: string } {
-  const ref = parseRef(params.modelRef);
-  // Auth starters are raw provider input; guided discovery already chose its canonical model.
-  ref.model =
-    normalizeOptionalString(
-      params.providerPlugin?.normalizeModelId?.({
-        provider: ref.provider,
-        modelId: ref.model,
-      }),
-    ) ?? ref.model;
+  const ref = parseRef(params.targetModelRef ?? params.modelRef);
   const modelRef = `${ref.provider}/${ref.model}`;
   // Auth can return several providers; only the selected model's credential enters its plan.
   const providerId = normalizeProviderId(ref.provider);
@@ -476,7 +485,7 @@ export function buildPreparedProviderTestPlan(params: {
   );
   if (params.profiles.length > 0 && !matchingProfile) {
     return {
-      error: `${params.providerPlugin?.label ?? ref.provider} did not return credentials for "${modelRef}".`,
+      error: `${params.providerLabel ?? ref.provider} did not return credentials for "${modelRef}".`,
     };
   }
   const projection = {

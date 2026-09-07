@@ -1,6 +1,7 @@
 import { DiscordError } from "../internal/discord.js";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
+import { createRealtimeVoiceProviderFixture } from "./voice-test-mocks.test-support.js";
 
 defineDiscordVoiceTests(
   ({
@@ -296,7 +297,10 @@ defineDiscordVoiceTests(
           throw new Error("AGENT_SELECTION_REQUIRED: expected routed agent molty");
         }
         return {
-          provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
+          provider: createRealtimeVoiceProviderFixture({
+            id: "openai",
+            capabilities: { supportsActivationNameGating: true },
+          }),
           providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
         };
       });

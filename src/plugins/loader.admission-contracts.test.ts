@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
+import {
+  loadOpenClawPluginCliRegistryForTest as loadOpenClawPluginCliRegistry,
+  loadOpenClawPluginsForTest as loadOpenClawPlugins,
+} from "./loader-handles.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,

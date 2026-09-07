@@ -53,7 +53,10 @@ vi.mock("./model-picker.js", async () => {
 });
 
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
+  acquirePluginProvidersCore: (...args: Parameters<typeof mocks.resolvePluginProvidersCore>) => ({
+    providers: mocks.resolvePluginProvidersCore(...args),
+    release() {},
+  }),
 }));
 
 vi.mock("../plugins/provider-wizard.js", () => ({

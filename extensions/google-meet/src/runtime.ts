@@ -183,7 +183,8 @@ export class GoogleMeetRuntime {
           await this.#refreshTwilioVoiceCallStatus(session);
         }
       },
-      ensureRealtimeBridge: async (session) => await this.#ensureChromeRealtimeBridge(session),
+      ensureRealtimeBridge: async (session, onCleanupReady) =>
+        await this.#ensureChromeRealtimeBridge(session, onCleanupReady),
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),
       speakViaTransport: async (session, instructions) =>
@@ -315,6 +316,7 @@ export class GoogleMeetRuntime {
         mode: session.mode,
         url: session.url,
         logger: this.params.logger,
+        onCleanupReady: (stop) => context.attachRuntimeHandles(session, { stop }),
       });
       const nodeId = "nodeId" in result ? result.nodeId : undefined;
       let tab = result.tab;
@@ -452,6 +454,7 @@ export class GoogleMeetRuntime {
 
   async #ensureChromeRealtimeBridge(
     session: GoogleMeetSession,
+    onCleanupReady: (stop: () => Promise<void>) => void | Promise<void>,
   ): Promise<MeetingSessionRuntimeHandles<GoogleMeetChromeHealth> | undefined> {
     if (
       !MeetingPlatformAdapter.isTalkBackMode(session.mode) ||
@@ -482,6 +485,7 @@ export class GoogleMeetRuntime {
       mode: session.mode,
       url: session.url,
       logger: this.params.logger,
+      onCleanupReady,
     });
     session.updatedAt = nowIso();
     return this.#attachChromeAudioBridge(session, result.audioBridge);

@@ -5,6 +5,7 @@ import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -137,6 +138,14 @@ function hasStructuredImageInput(input: ExtractStructuredWithModelParams["input"
 
 /** Runs media understanding for one local file or remote URL and returns the first matching output. */
 export async function runMediaUnderstandingFile(
+  params: RunMediaUnderstandingFileParams,
+): Promise<RunMediaUnderstandingFileResult> {
+  return withPluginRegistryResourceOperationAsync(() =>
+    runMediaUnderstandingFileWithResources(params),
+  );
+}
+
+async function runMediaUnderstandingFileWithResources(
   params: RunMediaUnderstandingFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
   const requestPrompt = params.prompt?.trim();
@@ -292,6 +301,14 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
 
 /** Describes a prepared image with an explicit provider/model. */
 export async function describePreparedImageWithModel(params: DescribePreparedImageWithModelParams) {
+  return withPluginRegistryResourceOperationAsync(() =>
+    describePreparedImageWithModelWithResources(params),
+  );
+}
+
+async function describePreparedImageWithModelWithResources(
+  params: DescribePreparedImageWithModelParams,
+) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
@@ -360,6 +377,12 @@ async function readImageDescriptionInput(params: {
 
 /** Runs provider-backed structured extraction for multimodal text/image input. */
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
+  return withPluginRegistryResourceOperationAsync(() =>
+    extractStructuredWithModelWithResources(params),
+  );
+}
+
+async function extractStructuredWithModelWithResources(params: ExtractStructuredWithModelParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   if (!hasStructuredImageInput(params.input)) {
     throw new Error("Structured extraction requires at least one image input.");
@@ -397,6 +420,14 @@ export async function describeVideoFile(
 
 /** Prepares the largest input that any configured transcription fallback can accept. */
 export async function resolveAudioInputBudget(params: {
+  cfg: OpenClawConfig;
+}): Promise<{ enabled: false } | { enabled: true; maxBytes: number }> {
+  return withPluginRegistryResourceOperationAsync(() =>
+    resolveAudioInputBudgetWithResources(params),
+  );
+}
+
+async function resolveAudioInputBudgetWithResources(params: {
   cfg: OpenClawConfig;
 }): Promise<{ enabled: false } | { enabled: true; maxBytes: number }> {
   const { cfg } = params;

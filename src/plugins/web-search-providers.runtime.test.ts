@@ -2,6 +2,10 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
+import {
+  PluginRegistryResourceScope,
+  drainPluginRegistryResourceDisposals,
+} from "./registry-resources.js";
 import * as publicArtifacts from "./web-provider-public-artifacts.explicit.js";
 
 type RegistryModule = typeof import("./registry.js");
@@ -37,6 +41,7 @@ let loadInstalledPluginManifestRegistryMock: ReturnType<
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
 let resolveRuntimeWebSearchProviders: WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"];
+let resources: PluginRegistryResourceScope;
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let loaderModule: typeof import("./loader.js");
 let pluginAutoEnableModule: PluginAutoEnableModule;
@@ -323,11 +328,15 @@ describe("resolvePluginWebSearchProviders", () => {
     loaderModule = await import("./loader.js");
     pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
-    ({ resolvePluginWebSearchProviders, resolveRuntimeWebSearchProviders } =
-      await import("./web-search-providers.runtime.js"));
+    const runtime = await import("./web-search-providers.runtime.js");
+    resolvePluginWebSearchProviders = (params) =>
+      resources.run(() => runtime.resolvePluginWebSearchProviders(params));
+    resolveRuntimeWebSearchProviders = (params) =>
+      resources.run(() => runtime.resolveRuntimeWebSearchProviders(params));
   });
 
   beforeEach(() => {
+    resources = new PluginRegistryResourceScope();
     applyPluginAutoEnableSpy?.mockRestore();
     applyPluginAutoEnableSpy = vi
       .spyOn(pluginAutoEnableModule, "applyPluginAutoEnable")
@@ -348,14 +357,16 @@ describe("resolvePluginWebSearchProviders", () => {
       .mockImplementation((params) => {
         const registry = createEmptyPluginRegistry();
         registry.webSearchProviders = buildMockedWebSearchProviders(params);
-        return registry;
+        return { registry, release() {} };
       });
     resetPluginRuntimeStateForTest();
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    resources.release();
     resetPluginRuntimeStateForTest();
+    await drainPluginRegistryResourceDisposals();
     vi.restoreAllMocks();
   });
 

@@ -24,7 +24,13 @@ vi.mock("../../../globals.js", () => ({
 }));
 
 const pluginRegistry = createMockPluginRegistry([]);
-const loadPluginRegistryHandleMock = vi.fn(() => pluginRegistry);
+const releasePluginRegistryMock = vi.fn();
+const loadPluginRegistryHandleMock = vi.fn<
+  typeof import("../../../plugins/loader.js").loadPluginRegistryHandle
+>(() => ({
+  registry: pluginRegistry,
+  release: releasePluginRegistryMock,
+}));
 vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../../plugins/channel-plugin-ids.js", () => ({
   resolveConfiguredChannelPluginIds: () => ["configured-channel"],
@@ -164,6 +170,7 @@ describe("runMessageAction", () => {
     expectRegistryLoad(["discord"]);
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(0);
+    expect(releasePluginRegistryMock).toHaveBeenCalledOnce();
   });
 
   it.each([

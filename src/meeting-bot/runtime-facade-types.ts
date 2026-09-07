@@ -67,6 +67,7 @@ type MeetingRuntimeLaunchParams<Config extends MeetingPluginConfig, Mode extends
   trackedTargetId?: string;
   url: string;
   logger: RuntimeLogger;
+  onCleanupReady?: (stop: () => Promise<void>) => void | Promise<void>;
 };
 
 type MeetingRuntimeTransport<

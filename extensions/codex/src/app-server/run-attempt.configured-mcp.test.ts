@@ -1,5 +1,6 @@
 import { getEventListeners } from "node:events";
 import path from "node:path";
+import * as middlewareRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
@@ -248,11 +249,62 @@ function createCronAuthorityCapabilityFixture(
   };
 }
 
-function admitLocalOperatorCronAuthority(params: ReturnType<typeof createParams>): void {
+function createConfiguredMcpParams(suffix: string) {
+  const params = createParams(
+    path.join(tempDir, `session-${suffix}.jsonl`),
+    path.join(tempDir, `workspace-${suffix}`),
+  );
+  configureFakeMcp(params);
+  return params;
+}
+
+function createLocalOperatorMcpParams(suffix: string, senderIsOwner = true) {
+  const params = createConfiguredMcpParams(`local-operator-${suffix}`);
+  params.trigger = "user";
+  params.senderIsOwner = senderIsOwner;
   params.cronCreatorAuthorityCapability = createCronAuthorityCapabilityFixture(params.runId);
+  return params;
 }
 
 describe("runCodexAppServerAttempt configured MCP ownership", () => {
+  it("disposes both MCP materializations when middleware resource disposal rejects", async () => {
+    const failure = new AggregateError(
+      [new Error("synthetic middleware disposal failure")],
+      "Plugin resource scope disposal failed",
+    );
+    const release = vi.fn(async () => {
+      throw failure;
+    });
+    const runner = middlewareRuntime.acquireAgentToolResultMiddlewareRunner(
+      { runtime: "codex" },
+      [],
+    );
+    const acquire = vi
+      .spyOn(middlewareRuntime, "acquireAgentToolResultMiddlewareRunner")
+      .mockReturnValueOnce({ ...runner, release });
+    const params = createParams(
+      path.join(tempDir, "middleware-disposal-session.jsonl"),
+      path.join(tempDir, "middleware-disposal-workspace"),
+    );
+    configureFakeMcp(params);
+    params.toolsAllow = ["cron", "fake__show"];
+    mcpMocks.requesterCollisionTool = true;
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    const rejected = expect(run).rejects.toBe(failure);
+    try {
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await rejected;
+      expect(release).toHaveBeenCalledOnce();
+      expect(mcpMocks.requesterDispose).toHaveBeenCalledOnce();
+      expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+    } finally {
+      acquire.mockRestore();
+      await runner.release();
+    }
+  });
+
   it.each(
     ["cancellation", "authority closure"].flatMap((reason) =>
       [false, true].map((rejectCleanup) => ({ reason, rejectCleanup })),
@@ -382,12 +434,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   });
 
   it("disposes both acquired MCP handles once when native startup fails", async () => {
-    const sessionFile = path.join(tempDir, "session-native-startup-failure.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-native-startup-failure"),
-    );
-    configureFakeMcp(params);
+    const params = createConfiguredMcpParams("native-startup-failure");
     params.toolsAllow = ["cron", "fake__show"];
     mcpMocks.requesterCollisionTool = true;
     const controller = new AbortController();
@@ -807,9 +854,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   });
 
   it("withholds final provenance when a sender-attributed turn cannot snapshot native MCP", async () => {
-    const sessionFile = path.join(tempDir, "session-sender-attributed-mcp.jsonl");
-    const params = createParams(sessionFile, path.join(tempDir, "workspace-sender-attributed-mcp"));
-    configureFakeMcp(params);
+    const params = createConfiguredMcpParams("sender-attributed-mcp");
     params.trigger = "user";
     params.senderIsOwner = true;
     params.senderId = "external-sender";
@@ -862,15 +907,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   );
 
   it("lazily snapshots configured MCP through the local-operator resolver without replacing native MCP", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-mutation.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-local-operator-mutation"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = false;
-    admitLocalOperatorCronAuthority(params);
+    const params = createLocalOperatorMcpParams("mutation", false);
 
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
@@ -906,15 +943,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   });
 
   it("offers explicit finite tools when inherited configured MCP discovery is incomplete", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-incomplete-mcp.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-local-operator-incomplete-mcp"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = true;
-    admitLocalOperatorCronAuthority(params);
+    const params = createLocalOperatorMcpParams("incomplete-mcp");
     mcpMocks.staticDiagnosticNotice =
       "Configured MCP is incomplete for this scheduled run: fake: authentication required.";
 
@@ -932,15 +961,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   });
 
   it("rematerializes after one cron operation aborts pending materialization", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-aborted-mutation.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-local-operator-aborted-mutation"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = true;
-    admitLocalOperatorCronAuthority(params);
+    const params = createLocalOperatorMcpParams("aborted-mutation");
 
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
@@ -964,15 +985,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   });
 
   it("shares one configured-MCP materialization across concurrent active cron operations", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-concurrent-mutation.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-local-operator-concurrent-mutation"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = true;
-    admitLocalOperatorCronAuthority(params);
+    const params = createLocalOperatorMcpParams("concurrent-mutation");
 
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
@@ -992,15 +1005,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   });
 
   it("retains an unrelated cached timeout when its operation signal aborts concurrently", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-unrelated-timeout.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-local-operator-unrelated-timeout"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = true;
-    admitLocalOperatorCronAuthority(params);
+    const params = createLocalOperatorMcpParams("unrelated-timeout");
     const failureGate = createDeferred<void>();
     mcpMocks.staticFailureGate = failureGate.promise;
     mcpMocks.staticFailure = Object.assign(new Error("configured MCP materialization timed out"), {
@@ -1036,12 +1041,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
           { hookName: "before_prompt_build", handler: async () => ({ systemPrompt }) },
         ]),
       );
-      const sessionFile = path.join(tempDir, "session-static-mcp-discovery-failure.jsonl");
-      const params = createParams(
-        sessionFile,
-        path.join(tempDir, "workspace-static-mcp-discovery-failure"),
-      );
-      configureFakeMcp(params);
+      const params = createConfiguredMcpParams("static-mcp-discovery-failure");
       params.trigger = "cron";
       params.toolsAllow = ["*"];
       params.scheduledToolPolicy = { version: 1, mode: "trusted" };

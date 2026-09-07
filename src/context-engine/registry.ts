@@ -7,6 +7,7 @@ import type {
   ContextEngineRegistration,
   ContextEngineRegistrationLifecycle,
 } from "../plugins/registry-contribution-types.js";
+import { associatePluginRegistryResourceAlias } from "../plugins/registry-resources.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
@@ -423,7 +424,11 @@ export function adoptRuntimeContextEngineRegistrations(
     return targetRegistry;
   }
   // Copy-on-write so cached discovery snapshots are not mutated into runtime handles.
-  return { ...targetRegistry, contextEngines: adopted };
+  return associatePluginRegistryResourceAlias(
+    { ...targetRegistry, contextEngines: adopted },
+    targetRegistry,
+    runtimeRegistry,
+  );
 }
 
 /** Clear runtime quarantine only after a complete builder-local registry becomes active. */

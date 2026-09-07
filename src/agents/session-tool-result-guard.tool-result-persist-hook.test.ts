@@ -9,7 +9,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadOpenClawPluginsForTest as loadOpenClawPlugins } from "../plugins/loader-handles.test-support.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 

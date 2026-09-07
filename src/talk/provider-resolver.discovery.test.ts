@@ -5,17 +5,18 @@ import {
   loadOpenClawPlugins,
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import { withEnv } from "../test-utils/env.js";
 import { createVoiceProviderFixture } from "./provider-discovery.test-fixtures.js";
-import { listRealtimeVoiceProviders } from "./provider-registry.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "./provider-resolver.js";
+import { listRealtimeVoiceProvidersCore } from "./provider-registry.js";
+import { resolveConfiguredRealtimeVoiceProviderCore } from "./provider-resolver.js";
 
 function withVoiceProviders(
   run: (cfg: OpenClawConfig) => void,
   policy: OpenClawConfig["plugins"] = {},
 ) {
   const { cfg, env } = createVoiceProviderFixture(policy);
-  return withEnv(env, () => run(cfg));
+  return withEnv(env, () => withPluginRegistryResourceOperation(() => run(cfg)));
 }
 
 afterEach(resetPluginLoaderTestStateForTest);
@@ -38,7 +39,7 @@ describe("realtime voice provider discovery", () => {
           "active-voice",
         ]);
 
-        const result = resolveConfiguredRealtimeVoiceProvider({
+        const result = resolveConfiguredRealtimeVoiceProviderCore({
           cfg,
           providerConfigs: {
             "active-voice": { ready: activeReady },
@@ -49,7 +50,7 @@ describe("realtime voice provider discovery", () => {
         expect(result.provider.id).toBe("configured-voice");
         expect(result.providerConfig).toEqual({ ready: true, resolved: true });
         // Per-call discovery must not broaden catalogs or replace active objects.
-        expect(listRealtimeVoiceProviders(cfg)).toEqual(
+        expect(listRealtimeVoiceProvidersCore(cfg)).toEqual(
           registry.realtimeVoiceProviders.map((entry) => entry.provider),
         );
       });
@@ -67,7 +68,7 @@ describe("realtime voice provider discovery", () => {
     "selects cold $configKey config with explicit selection $configuredProviderId",
     ({ configuredProviderId, configKey }) => {
       withVoiceProviders((cfg) => {
-        const result = resolveConfiguredRealtimeVoiceProvider({
+        const result = resolveConfiguredRealtimeVoiceProviderCore({
           cfg,
           configuredProviderId,
           providerConfigs: { [configKey]: { ready: true } },
@@ -80,7 +81,7 @@ describe("realtime voice provider discovery", () => {
   it("keeps environment-configured providers eligible with an unconfigured default map", () => {
     withEnv({ VOICE_DISCOVERY_TEST_CONFIGURED_PROVIDER: "active-voice" }, () => {
       withVoiceProviders((cfg) => {
-        const result = resolveConfiguredRealtimeVoiceProvider({
+        const result = resolveConfiguredRealtimeVoiceProviderCore({
           cfg,
           providerConfigs: { "configured-voice": { ready: false } },
         });
@@ -92,7 +93,7 @@ describe("realtime voice provider discovery", () => {
   it("extends a cold config-derived discovery scope with per-call candidates", () => {
     withVoiceProviders((cfg) => {
       cfg.talk = { realtime: { provider: "active-voice" } };
-      const result = resolveConfiguredRealtimeVoiceProvider({
+      const result = resolveConfiguredRealtimeVoiceProviderCore({
         cfg,
         providerConfigs: { "configured-voice": { ready: true } },
       });
@@ -107,7 +108,7 @@ describe("realtime voice provider discovery", () => {
     withEnv({ VOICE_DISCOVERY_TEST_CONFIGURED_PROVIDER: "configured-voice" }, () => {
       withVoiceProviders((cfg) => {
         cfg.talk = { realtime: { provider: scopeId } };
-        const result = resolveConfiguredRealtimeVoiceProvider({
+        const result = resolveConfiguredRealtimeVoiceProviderCore({
           cfg,
           providerConfigs: { [candidateId]: {} },
         });
@@ -123,7 +124,7 @@ describe("realtime voice provider discovery", () => {
   ])("does not auto-select a $label configured owner", ({ policy }) => {
     withVoiceProviders((cfg) => {
       loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
-      const result = resolveConfiguredRealtimeVoiceProvider({
+      const result = resolveConfiguredRealtimeVoiceProviderCore({
         cfg,
         providerConfigs: {
           "active-voice": { ready: true },
@@ -138,7 +139,7 @@ describe("realtime voice provider discovery", () => {
     withVoiceProviders(
       (cfg) => {
         expect(() =>
-          resolveConfiguredRealtimeVoiceProvider({
+          resolveConfiguredRealtimeVoiceProviderCore({
             cfg,
             providerConfigs: { "configured-voice": { ready: true } },
           }),
@@ -151,7 +152,7 @@ describe("realtime voice provider discovery", () => {
   it("keeps a caller-supplied provider list authoritative", () => {
     withVoiceProviders((cfg) => {
       const registry = loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
-      const result = resolveConfiguredRealtimeVoiceProvider({
+      const result = resolveConfiguredRealtimeVoiceProviderCore({
         cfg,
         providers: registry.realtimeVoiceProviders.map((entry) => entry.provider),
         providerConfigs: {

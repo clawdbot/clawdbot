@@ -22,6 +22,7 @@ type SpeakerSession = {
   senderIsOwner: boolean;
   transcripts: VoiceSessionEntry["transcripts"];
   session: DiscordRealtimeSpeakerSession;
+  retiring?: boolean;
 };
 
 /** The room shares its agent and player; each provider connection has one immutable speaker. */
@@ -32,6 +33,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private warmSession: DiscordRealtimeSpeakerSession | undefined;
   private nextSessionId = 0;
   private closed = false;
+  private closing = false;
   private idleTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly params: DiscordRealtimeSessionParams) {
@@ -54,21 +56,44 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   close(): void {
-    if (this.closed) {
+    if (this.closing) {
       return;
     }
     this.closed = true;
+    this.closing = true;
     clearInterval(this.idleTimer);
     this.idleTimer = undefined;
-    // Retire the physical player first: lane teardown must not start the next queued response.
-    this.player.close();
-    this.warmSession?.close();
-    this.warmSession = undefined;
-    for (const { session } of this.sessions) {
-      session.close();
+    const errors: unknown[] = [];
+    try {
+      // Retire the physical player first: lane teardown must not start the next queued response.
+      try {
+        this.player.close();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (this.warmSession) {
+        try {
+          this.warmSession.close();
+          this.warmSession = undefined;
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      this.speakers.clear();
+      for (const speaker of this.sessions) {
+        try {
+          speaker.session.close();
+          this.sessions.delete(speaker);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length > 0) {
+        throw errors[0];
+      }
+    } finally {
+      this.closing = false;
     }
-    this.speakers.clear();
-    this.sessions.clear();
   }
 
   beginSpeakerTurn(
@@ -80,7 +105,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       throw new Error("Discord realtime voice session is closed");
     }
     for (const previous of this.sessions) {
-      if (previous.userId === userId && previous.senderIsOwner !== context.senderIsOwner) {
+      if (
+        !previous.retiring &&
+        previous.userId === userId &&
+        previous.senderIsOwner !== context.senderIsOwner
+      ) {
         this.retireSpeaker(previous, "admission-changed");
       }
     }
@@ -127,7 +156,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   isBargeInEnabled(): boolean {
-    const session = this.warmSession ?? this.sessions.values().next().value?.session;
+    const session =
+      this.warmSession ?? [...this.sessions].find((speaker) => !speaker.retiring)?.session;
     return session?.isBargeInEnabled() ?? false;
   }
 
@@ -153,26 +183,42 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       if (speaker.session !== session) {
         continue;
       }
+      if (speaker.retiring) {
+        return;
+      }
       logger.warn(
         `discord voice: realtime speaker failed user=${speaker.userId}: ${formatErrorMessage(error)}`,
       );
-      this.retireSpeaker(speaker, "provider-failed");
+      try {
+        this.retireSpeaker(speaker, "provider-failed");
+      } catch (cleanupError) {
+        logger.warn(`discord voice: realtime cleanup pending: ${formatErrorMessage(cleanupError)}`);
+        return;
+      }
       this.notify("I lost a speaker's voice connection. Please try speaking again.");
       return;
     }
   }
 
   private notify(text: string): void {
-    const session = this.warmSession ?? this.sessions.values().next().value?.session;
+    const session =
+      this.warmSession ?? [...this.sessions].find((speaker) => !speaker.retiring)?.session;
     session?.notify(text);
   }
 
   private releaseIdleSpeakers(): void {
     const cutoff = Date.now() - REALTIME_SPEAKER_IDLE_MS;
     for (const speaker of this.sessions) {
+      if (speaker.retiring) {
+        continue;
+      }
       const reason = speaker.session.releaseReasonBefore(cutoff);
       if (reason) {
-        this.retireSpeaker(speaker, reason);
+        try {
+          this.retireSpeaker(speaker, reason);
+        } catch (error) {
+          logger.warn(`discord voice: realtime cleanup pending: ${formatErrorMessage(error)}`);
+        }
       }
     }
   }
@@ -182,8 +228,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (this.speakers.get(speaker.userId) === speaker) {
       this.speakers.delete(speaker.userId);
     }
-    this.sessions.delete(speaker);
+    speaker.retiring = true;
     speaker.session.close();
+    this.sessions.delete(speaker);
     logger.info(
       `discord voice: realtime speaker retired user=${speaker.userId} reason=${reason}${reason === "input-timeout" ? "; idle speaker input expired; speak again to reconnect" : ""}`,
     );

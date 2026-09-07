@@ -20,8 +20,8 @@ export {
 } from "./tts-provider-helpers.js";
 
 type SummarizeTextDeps = {
-  completeWithPreparedSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
-  prepareSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel;
+  completeWithPreparedSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore;
+  acquireSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").acquireSimpleCompletionModel;
   requireApiKey: typeof import("../agents/model-auth.js").requireApiKey;
 };
 
@@ -35,8 +35,8 @@ function loadDefaultSummarizeTextDeps(): Promise<SummarizeTextDeps> {
     import("../agents/model-auth.js"),
   ]).then(([completionRuntime, { requireApiKey }]) => ({
     completeWithPreparedSimpleCompletionModel:
-      completionRuntime.completeWithPreparedSimpleCompletionModel,
-    prepareSimpleCompletionModel: completionRuntime.prepareSimpleCompletionModel,
+      completionRuntime.completeWithPreparedSimpleCompletionModelCore,
+    acquireSimpleCompletionModel: completionRuntime.acquireSimpleCompletionModel,
     requireApiKey,
   })));
 }
@@ -76,7 +76,7 @@ function resolveSummaryModelRef(
 }
 
 /** Summarize long text before synthesis using the configured summary model. */
-export async function summarizeText(
+export async function summarizeTextCore(
   params: {
     text: string;
     targetLength: number;
@@ -96,7 +96,7 @@ export async function summarizeText(
   const { ref } = resolveSummaryModelRef(cfg, config);
   // Dynamic model discovery precedes the request timeout, matching the established
   // summarization contract. The timeout below bounds only the completion request.
-  const prepared = await resolvedDeps.prepareSimpleCompletionModel({
+  const prepared = await resolvedDeps.acquireSimpleCompletionModel({
     cfg,
     provider: ref.provider,
     modelId: ref.model,
@@ -104,10 +104,9 @@ export async function summarizeText(
   if ("error" in prepared) {
     throw new Error(prepared.error);
   }
-  const completionModel = prepared.model;
-  const providerKey = resolvedDeps.requireApiKey(prepared.auth, ref.provider);
-
   try {
+    const completionModel = prepared.model;
+    const providerKey = resolvedDeps.requireApiKey(prepared.auth, ref.provider);
     const controller = new AbortController();
     const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
     const timeout = setTimeout(() => controller.abort(), resolvedTimeoutMs);
@@ -167,5 +166,7 @@ export async function summarizeText(
       throw new Error("Summarization timed out", { cause: err });
     }
     throw err;
+  } finally {
+    prepared.release();
   }
 }

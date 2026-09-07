@@ -21,6 +21,11 @@ import {
   resolvePluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import {
+  getPluginRegistryResourceScope,
+  requirePluginRegistryResourceScope,
+} from "./registry-resources.js";
 import type { PluginRegistry } from "./registry.js";
 import {
   buildPluginRuntimeLoadOptions,
@@ -56,11 +61,21 @@ export type PluginCliCommandGroupEntry = {
 
 const log = createSubsystemLogger("plugins/cli-registry-loader");
 
+type PluginCliMetadataRegistry = {
+  sourceRegistry?: WeakRef<PluginRegistry>;
+  cliRegistrars: Array<
+    Pick<
+      PluginRegistry["cliRegistrars"][number],
+      "pluginId" | "parentPath" | "commands" | "descriptors"
+    >
+  >;
+};
+
 type PreparedPluginCliLoad = {
   context: PluginRuntimeLoadContext;
   assertCurrent: () => void;
   withCache: <T>(run: () => T) => T;
-  metadataRegistry?: Promise<PluginRegistry>;
+  metadataRegistry?: Promise<PluginCliMetadataRegistry>;
   entries?: Promise<PluginCliCommandGroupEntry[]>;
 };
 
@@ -218,7 +233,10 @@ function resolvePrimaryCommandManifestPluginIds(
   });
 }
 
-function listPluginCliRootOwnerIds(registry: PluginRegistry, primaryCommand: string): string[] {
+function listPluginCliRootOwnerIds(
+  registry: PluginCliMetadataRegistry,
+  primaryCommand: string,
+): string[] {
   const normalizedPrimary = normalizeLowercaseStringOrEmpty(primaryCommand);
   if (!normalizedPrimary) {
     return [];
@@ -263,15 +281,15 @@ async function resolvePrimaryCommandPluginIds(
 
 async function loadPluginCliMetadataRegistryWithContext(
   prepared: PreparedPluginCliLoad,
-  params?: { primaryCommand?: string },
+  params?: { primaryCommand?: string; retainExecutableDescriptors?: boolean },
   loaderOptions?: PluginCliLoaderOptions,
-): Promise<PluginRegistry> {
+): Promise<PluginCliMetadataRegistry> {
   const onlyPluginIds = resolvePrimaryCommandManifestPluginIds(
     prepared.context,
     params?.primaryCommand,
   );
   prepared.assertCurrent();
-  const registry = await (prepared.metadataRegistry ??= prepared.withCache(() =>
+  const pending = (prepared.metadataRegistry ??= prepared.withCache(() =>
     loadOpenClawPluginCliRegistry(
       buildPluginRuntimeLoadOptions(prepared.context, {
         ...loaderOptions,
@@ -279,9 +297,46 @@ async function loadPluginCliMetadataRegistryWithContext(
         cache: false,
         ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
       }),
-    ),
+    ).then((handle) => {
+      try {
+        const hasExecutableDescriptors = handle.registry.cliRegistrars.some((entry) =>
+          entry.descriptors.some((descriptor) => typeof descriptor.machineOutput === "function"),
+        );
+        if (hasExecutableDescriptors) {
+          const resources = params?.retainExecutableDescriptors
+            ? requirePluginRegistryResourceScope()
+            : getPluginRegistryResourceScope();
+          resources?.retain(handle.registry);
+        }
+        return {
+          ...(hasExecutableDescriptors ? { sourceRegistry: new WeakRef(handle.registry) } : {}),
+          cliRegistrars: handle.registry.cliRegistrars.map(
+            ({ pluginId, parentPath, commands, descriptors }) => ({
+              pluginId,
+              parentPath,
+              commands,
+              descriptors,
+            }),
+          ),
+        };
+      } finally {
+        handle.release();
+      }
+    }),
   ));
+  const registry = await pending;
   prepared.assertCurrent();
+  if (params?.retainExecutableDescriptors && registry.sourceRegistry) {
+    const source = registry.sourceRegistry.deref();
+    if (!source || isPluginRegistryRetired(source)) {
+      if (prepared.metadataRegistry === pending) {
+        prepared.metadataRegistry = undefined;
+      }
+      return loadPluginCliMetadataRegistryWithContext(prepared, params, loaderOptions);
+    }
+    // Cached package facts do not own callbacks; each invocation retains their exact source.
+    requirePluginRegistryResourceScope().retain(source);
+  }
   return registry;
 }
 
@@ -305,15 +360,18 @@ async function loadPluginCliCommandRegistryWithContext(params: {
   if (onlyPluginIds && onlyPluginIds.length === 0) {
     return createEmptyPluginRegistry();
   }
+  const resources = requirePluginRegistryResourceScope();
   return params.prepared.withCache(() =>
-    loadPluginRegistryHandle(
-      buildPluginRuntimeLoadOptions(context, {
-        ...params.loaderOptions,
-        ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
-        cache: false,
-        channelPluginLoadIntent: "full",
-        runtimeOptions: { nodes: createPluginCliGatewayNodesRuntime() },
-      }),
+    resources.adopt(
+      loadPluginRegistryHandle(
+        buildPluginRuntimeLoadOptions(context, {
+          ...params.loaderOptions,
+          ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+          cache: false,
+          channelPluginLoadIntent: "full",
+          runtimeOptions: { nodes: createPluginCliGatewayNodesRuntime() },
+        }),
+      ),
     ),
   );
 }
@@ -354,7 +412,7 @@ export async function loadPluginCliDescriptors(
     const prepared = resolvePreparedPluginCliLoad(params);
     const registry = await loadPluginCliMetadataRegistryWithContext(
       prepared,
-      { primaryCommand: params.primaryCommand },
+      { primaryCommand: params.primaryCommand, retainExecutableDescriptors: true },
       params.loaderOptions,
     );
     return collectUniqueCommandDescriptors(

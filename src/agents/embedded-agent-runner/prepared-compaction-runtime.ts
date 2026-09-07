@@ -48,7 +48,7 @@ import { supportsModelTools } from "../model-tool-support.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import {
-  buildAgentRuntimePlan,
+  buildAgentRuntimePlanCore,
   resolvePreparedProviderRuntimeHandle,
 } from "../runtime-plan/build.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -217,7 +217,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const reuseFullRuntimePlan = params.runtimePlan?.auth === resolvedRuntimeAuthPlan;
     const preparedRuntimePlan =
       (reuseFullRuntimePlan ? params.runtimePlan : undefined) ??
-      buildAgentRuntimePlan({
+      buildAgentRuntimePlanCore({
         provider,
         modelId,
         model: effectiveModel,

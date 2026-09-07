@@ -96,6 +96,10 @@ import { PLUGIN_INSTALL_ERROR_CODE } from "../../plugins/install-types.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import {
+  createPluginRegistryResourceOwner,
+  withPluginRegistryResourceOperation,
+} from "../../plugins/registry-resources.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -193,17 +197,26 @@ function createManifestRecord(
   };
 }
 
+function loadExternalChatSnapshot(
+  params: Pick<
+    Parameters<typeof loadChannelSetupPluginRegistrySnapshotForChannel>[0],
+    "cfg" | "runtime" | "pluginId"
+  >,
+) {
+  withPluginRegistryResourceOperation(() => {
+    loadChannelSetupPluginRegistrySnapshotForChannel({
+      ...params,
+      channel: "external-chat",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+  });
+}
+
 function expectSetupSnapshotDoesNotScopeToPlugin(params: {
   cfg: OpenClawConfig;
   runtime: ReturnType<typeof makeRuntime>;
-  pluginId: string;
 }) {
-  loadChannelSetupPluginRegistrySnapshotForChannel({
-    cfg: params.cfg,
-    runtime: params.runtime,
-    channel: "external-chat",
-    workspaceDir: "/tmp/openclaw-workspace",
-  });
+  loadExternalChatSnapshot({ cfg: params.cfg, runtime: params.runtime });
 
   expect(loadOpenClawPlugins).toHaveBeenCalledTimes(1);
   expect(requireMockCallArg(vi.mocked(loadOpenClawPlugins), 0).onlyPluginIds).toStrictEqual([]);
@@ -223,6 +236,10 @@ beforeEach(() => {
   getChannelPluginCatalogEntry.mockReturnValue(undefined);
   listChannelPluginCatalogEntries.mockReturnValue([]);
   loadPluginManifestRegistryCore.mockReturnValue({ plugins: [], diagnostics: [] });
+  vi.mocked(loadOpenClawPlugins).mockImplementation(() => {
+    const registry = createEmptyPluginRegistry();
+    return { registry, ...createPluginRegistryResourceOwner(registry, "scoped") };
+  });
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -748,12 +765,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       autoEnabledReasons: {},
     });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
-      cfg,
-      runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    loadExternalChatSnapshot({ cfg, runtime });
 
     expect(applyPluginAutoEnable).toHaveBeenCalledWith({
       config: cfg,
@@ -771,12 +783,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const cfg: OpenClawConfig = {};
     getChannelPluginCatalogEntry.mockReturnValue({ pluginId: "@vendor/external-chat-plugin" });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
-      cfg,
-      runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    loadExternalChatSnapshot({ cfg, runtime });
 
     expectLoadOpenClawPluginFields({
       config: cfg,
@@ -800,12 +807,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       .mockReturnValueOnce({ pluginId: "evil-external-chat-shadow", origin: "workspace" })
       .mockReturnValueOnce({ pluginId: "@vendor/external-chat-plugin", origin: "bundled" });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
-      cfg,
-      runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    loadExternalChatSnapshot({ cfg, runtime });
 
     expectLoadOpenClawPluginFields({
       onlyPluginIds: ["@vendor/external-chat-plugin"],
@@ -833,12 +835,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       origin: "workspace",
     });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
-      cfg,
-      runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    loadExternalChatSnapshot({ cfg, runtime });
 
     expectLoadOpenClawPluginFields({
       onlyPluginIds: ["trusted-external-chat-shadow"],
@@ -850,12 +847,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
-      cfg,
-      runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    loadExternalChatSnapshot({ cfg, runtime });
 
     expectLoadOpenClawPluginFields({
       onlyPluginIds: [],
@@ -875,12 +867,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       diagnostics: [],
     });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
-      cfg,
-      runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    loadExternalChatSnapshot({ cfg, runtime });
 
     expectLoadOpenClawPluginFields({
       config: cfg,
@@ -934,12 +921,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       };
     });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
-      cfg,
-      runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    loadExternalChatSnapshot({ cfg, runtime });
 
     expectLoadOpenClawPluginFields({
       onlyPluginIds: ["custom-external-chat-plugin"],
@@ -952,12 +934,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const cfg: OpenClawConfig = {};
     mockActivationOnlyPlugin({ id: "custom-external-chat-plugin" });
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
-      cfg,
-      runtime,
-      channel: "external-chat",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    loadExternalChatSnapshot({ cfg, runtime });
 
     expect(loadPluginManifestRegistryCore).toHaveBeenCalled();
     expect(
@@ -978,7 +955,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      pluginId: "evil-external-chat-shadow",
     });
   });
 
@@ -997,7 +973,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      pluginId: "custom-external-chat-plugin",
     });
   });
 
@@ -1016,7 +991,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      pluginId: "custom-external-chat-plugin",
     });
   });
 
@@ -1039,7 +1013,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      pluginId: "evil-external-chat-shadow",
     });
   });
 
@@ -1060,7 +1033,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      pluginId: "custom-external-chat-plugin",
     });
   });
 
@@ -1075,7 +1047,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expectSetupSnapshotDoesNotScopeToPlugin({
       cfg,
       runtime,
-      pluginId: "custom-external-chat-global",
     });
   });
 
@@ -1083,13 +1054,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
 
-    loadChannelSetupPluginRegistrySnapshotForChannel({
-      cfg,
-      runtime,
-      channel: "external-chat",
-      pluginId: "@vendor/external-chat-plugin",
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    loadExternalChatSnapshot({ cfg, runtime, pluginId: "@vendor/external-chat-plugin" });
 
     expectLoadOpenClawPluginFields({
       config: cfg,

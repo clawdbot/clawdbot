@@ -24,6 +24,7 @@ import {
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { requirePluginRegistryResourceScope } from "../../plugins/registry-resources.js";
 import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
@@ -447,12 +448,15 @@ export async function gatherDispatchRequest(
         "reply.load_runtime_plugins",
         loadRuntimePlugins,
       );
-      return loadAgentRuntimePluginRegistryHandle({
-        config: cfg,
-        workspaceDir,
-        allowGatewaySubagentBinding: true,
-      });
+      return requirePluginRegistryResourceScope().adopt(
+        loadAgentRuntimePluginRegistryHandle({
+          config: cfg,
+          workspaceDir,
+          allowGatewaySubagentBinding: true,
+        }),
+      );
     }));
+  requirePluginRegistryResourceScope().retain(pluginRegistry);
   const hookRunner = getGlobalHookRunner();
   // Extract message context for hooks (plugin and internal)
   const timestamp =

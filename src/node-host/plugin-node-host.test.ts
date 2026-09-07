@@ -200,7 +200,7 @@ describe("plugin node-host registry", () => {
     });
   });
 
-  it("owns plugin availability watcher cleanup", () => {
+  it("owns plugin availability watcher cleanup", async () => {
     let notify: (() => void) | undefined;
     const cleanup = vi.fn();
     const onChange = vi.fn();
@@ -234,7 +234,7 @@ describe("plugin node-host registry", () => {
     });
     notify?.();
     expect(onChange).toHaveBeenCalledOnce();
-    stop();
+    await stop();
     expect(cleanup).toHaveBeenCalledOnce();
     expect(scopedRegistry).toHaveBeenCalledTimes(3);
     expect(scopedRegistry).toHaveBeenNthCalledWith(1, registry);
@@ -321,7 +321,14 @@ describe("plugin node-host registry", () => {
     await expect(
       invokeRegisteredNodeHostCommand("terminal.resume.v1", '{"threadId":"id"}', io),
     ).resolves.toBe('{"threadId":"id"}');
-    expect(handle).toHaveBeenCalledWith('{"threadId":"id"}', io);
+    expect(handle).toHaveBeenCalledWith(
+      '{"threadId":"id"}',
+      expect.objectContaining({
+        signal: io.signal,
+        emitChunk: expect.any(Function),
+        onInput: expect.any(Function),
+      }),
+    );
     await expect(invokeRegisteredNodeHostCommand("terminal.resume.v1", null)).rejects.toThrow(
       "requires duplex transport",
     );

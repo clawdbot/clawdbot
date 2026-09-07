@@ -9,7 +9,7 @@ import {
 } from "./dashscope-compatible.js";
 import {
   generateVideo,
-  listRuntimeVideoGenerationProviders,
+  listRuntimeVideoGenerationProvidersCore,
   type GenerateVideoParams,
 } from "./runtime.js";
 import type { VideoGenerationProvider, VideoGenerationProviderOptionType } from "./types.js";
@@ -1150,7 +1150,7 @@ describe("video-generation runtime", () => {
     providers = registryProviders;
 
     expect(
-      listRuntimeVideoGenerationProviders({ config: {} as OpenClawConfig }, runtimeDeps),
+      listRuntimeVideoGenerationProvidersCore({ config: {} as OpenClawConfig }, runtimeDeps),
     ).toEqual(registryProviders);
     expect(listedConfigs).toEqual([{} as OpenClawConfig]);
   });

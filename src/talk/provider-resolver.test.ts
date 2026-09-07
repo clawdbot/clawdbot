@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
-  resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderCore,
   resolveRealtimeVoiceProviderCapabilities,
 } from "./provider-resolver.js";
 
@@ -60,7 +60,7 @@ describe("realtime voice provider resolver", () => {
   ];
 
   it("auto-selects the first configured realtime voice provider", () => {
-    const resolution = resolveConfiguredRealtimeVoiceProvider({
+    const resolution = resolveConfiguredRealtimeVoiceProviderCore({
       cfg: {},
       providers,
       providerConfigs: {
@@ -87,7 +87,7 @@ describe("realtime voice provider resolver", () => {
       isConfigured: () => true,
     };
 
-    const resolution = resolveConfiguredRealtimeVoiceProvider({
+    const resolution = resolveConfiguredRealtimeVoiceProviderCore({
       cfg: {},
       providers: [unavailable, providers[1]!],
       providerConfigs: {
@@ -108,7 +108,7 @@ describe("realtime voice provider resolver", () => {
     });
 
     expect(() =>
-      resolveConfiguredRealtimeVoiceProvider({
+      resolveConfiguredRealtimeVoiceProviderCore({
         cfg: {},
         providers,
         isProviderAvailable: () => false,
@@ -131,7 +131,7 @@ describe("realtime voice provider resolver", () => {
     };
 
     expect(
-      resolveConfiguredRealtimeVoiceProvider({
+      resolveConfiguredRealtimeVoiceProviderCore({
         cfg: {},
         agentId: "molty",
         providers: [provider],
@@ -155,7 +155,7 @@ describe("realtime voice provider resolver", () => {
       },
     };
 
-    resolveConfiguredRealtimeVoiceProvider({
+    resolveConfiguredRealtimeVoiceProviderCore({
       agentId: "voice-agent",
       cfg: {},
       configuredProviderId: provider.id,
@@ -196,13 +196,13 @@ describe("realtime voice provider resolver", () => {
     };
 
     expect(
-      resolveConfiguredRealtimeVoiceProvider({
+      resolveConfiguredRealtimeVoiceProviderCore({
         cfg: {},
         providers: [browserOnly, bridge],
       }).provider.id,
     ).toBe("bridge");
     expect(
-      resolveConfiguredRealtimeVoiceProvider({
+      resolveConfiguredRealtimeVoiceProviderCore({
         cfg: {},
         agentId: "voice-agent",
         providers: [browserOnly, bridge],
@@ -229,14 +229,14 @@ describe("realtime voice provider resolver", () => {
     });
 
     expect(() =>
-      resolveConfiguredRealtimeVoiceProvider({
+      resolveConfiguredRealtimeVoiceProviderCore({
         configuredProviderId: "relay-only",
         providers: [relayOnly],
         surface: "bridge",
       }),
     ).toThrow('Realtime voice provider "relay-only" is not configured');
     expect(
-      resolveConfiguredRealtimeVoiceProvider({
+      resolveConfiguredRealtimeVoiceProviderCore({
         configuredProviderId: "relay-only",
         providers: [relayOnly],
         surface: "gateway-relay",
@@ -259,14 +259,14 @@ describe("realtime voice provider resolver", () => {
     });
 
     expect(() =>
-      resolveConfiguredRealtimeVoiceProvider({
+      resolveConfiguredRealtimeVoiceProviderCore({
         configuredProviderId: provider.id,
         providers: [provider],
         surface: "browser-session",
       }),
     ).toThrow('Realtime voice provider "surface-aware" is not configured');
     expect(() =>
-      resolveConfiguredRealtimeVoiceProvider({
+      resolveConfiguredRealtimeVoiceProviderCore({
         configuredProviderId: provider.id,
         providers: [provider],
         surface: "gateway-relay",
@@ -289,7 +289,7 @@ describe("realtime voice provider resolver", () => {
     });
 
     expect(
-      resolveConfiguredRealtimeVoiceProvider({
+      resolveConfiguredRealtimeVoiceProviderCore({
         configuredProviderId: provider.id,
         providers: [provider],
         surface: "gateway-relay",
@@ -298,7 +298,7 @@ describe("realtime voice provider resolver", () => {
   });
 
   it("applies a default model before provider config resolution", () => {
-    const resolution = resolveConfiguredRealtimeVoiceProvider({
+    const resolution = resolveConfiguredRealtimeVoiceProviderCore({
       cfg: {},
       configuredProviderId: "second",
       defaultModel: "gpt-realtime",
@@ -316,7 +316,7 @@ describe("realtime voice provider resolver", () => {
   });
 
   it("keeps explicit provider model over the default model", () => {
-    const resolution = resolveConfiguredRealtimeVoiceProvider({
+    const resolution = resolveConfiguredRealtimeVoiceProviderCore({
       cfg: {},
       configuredProviderId: "second",
       defaultModel: "gpt-realtime",
@@ -334,7 +334,7 @@ describe("realtime voice provider resolver", () => {
   });
 
   it("applies caller overrides to the auto-selected realtime voice provider", () => {
-    const resolution = resolveConfiguredRealtimeVoiceProvider({
+    const resolution = resolveConfiguredRealtimeVoiceProviderCore({
       cfg: {},
       defaultModel: "gpt-realtime",
       providerConfigOverrides: {
@@ -357,7 +357,7 @@ describe("realtime voice provider resolver", () => {
 
   it("throws a caller-specified message when no providers exist", () => {
     expect(() =>
-      resolveConfiguredRealtimeVoiceProvider({
+      resolveConfiguredRealtimeVoiceProviderCore({
         cfg: {},
         providers: [],
         noRegisteredProviderMessage: "No configured realtime voice provider registered",

@@ -99,7 +99,12 @@ vi.mock("./audit.js", () => ({
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
+  loadAgentRuntimePluginRegistryHandle: (
+    ...args: Parameters<typeof mocks.loadAgentRuntimePluginRegistryHandle>
+  ) => {
+    const registry = mocks.loadAgentRuntimePluginRegistryHandle(...args);
+    return registry ? { registry, release() {} } : undefined;
+  },
 }));
 
 vi.mock("../plugins/registry-refresh.js", () => ({
@@ -798,7 +803,7 @@ describe("detectSetupInference", () => {
         enabled: false,
         reason: "Plugin requires capability consent.",
       }));
-    const resolvePluginProviders = vi.fn(() => []);
+    const resolvePluginProviders = vi.fn((_params?: unknown) => []);
     try {
       const detection = await detectSetupInference({
         detectInferenceBackends: async () => [],
@@ -814,7 +819,10 @@ describe("detectSetupInference", () => {
             appGuidedSecret: true,
           },
         ],
-        resolvePluginProviders,
+        acquirePluginProviders: (params) => ({
+          providers: resolvePluginProviders(params),
+          release() {},
+        }),
       });
 
       expect(resolvePluginProviders).not.toHaveBeenCalled();
@@ -939,7 +947,7 @@ describe("detectSetupInference", () => {
         },
       ],
       enablePluginInConfig: ((config: OpenClawConfig) => ({ enabled: true, config })) as never,
-      resolvePluginProviders: () => [provider],
+      acquirePluginProviders: () => ({ providers: [provider], release() {} }),
     });
 
     expect(detection.candidates).toEqual([
@@ -1708,7 +1716,7 @@ describe("activateSetupInference", () => {
       authChoice: "groq-api-key",
       ...params,
       deps: {
-        resolvePluginProviders: () => [createGroqSetupProvider()],
+        acquirePluginProviders: () => ({ providers: [createGroqSetupProvider()], release() {} }),
         resolveManifestProviderAuthChoice: groqSetupChoice,
         runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
         ...params.deps,
@@ -2334,7 +2342,7 @@ describe("activateSetupInference", () => {
           choiceLabel: "LM Studio",
           appGuidedDiscovery: true,
         }),
-        resolvePluginProviders: () => [provider],
+        acquirePluginProviders: () => ({ providers: [provider], release() {} }),
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         updateAuthProfileStoreWithLock: updateAuthStore as never,
@@ -3134,7 +3142,7 @@ describe("activateSetupInference", () => {
       apiKey: "sk-test",
       deps: {
         resolveManifestProviderAuthChoice: () => undefined,
-        resolvePluginProviders: () => [],
+        acquirePluginProviders: () => ({ providers: [], release() {} }),
       },
     });
     expect(result).toMatchObject({ ok: false, status: "unavailable" });
@@ -3191,7 +3199,7 @@ describe("activateSetupInference", () => {
             includeMetadata: true,
             runtimeConfig,
           }),
-          resolvePluginProviders: () => [provider],
+          acquirePluginProviders: () => ({ providers: [provider], release() {} }),
           resolveManifestProviderAuthChoice: () => ({
             pluginId: "openai",
             providerId: "openai",
@@ -3294,7 +3302,7 @@ describe("activateSetupInference", () => {
           readConfigFileSnapshot: mockConfigSnapshot(initialConfig, {
             includeMetadata: true,
           }),
-          resolvePluginProviders: () => [provider],
+          acquirePluginProviders: () => ({ providers: [provider], release() {} }),
           resolveManifestProviderAuthChoice: () => ({
             pluginId: "local-test",
             providerId: "local-test",
@@ -3337,7 +3345,7 @@ describe("activateSetupInference", () => {
       prompter: {} as never,
       isCancelled: () => true,
       deps: {
-        resolvePluginProviders: () => [provider],
+        acquirePluginProviders: () => ({ providers: [provider], release() {} }),
         resolveManifestProviderAuthChoice: () => ({
           pluginId: "openai",
           providerId: "openai",
@@ -3461,7 +3469,7 @@ describe("activateSetupInference", () => {
           },
         ],
       };
-      const resolvePluginProviders = vi.fn(() => [provider]);
+      const resolvePluginProviders = vi.fn((_params?: unknown) => [provider]);
       const enablePluginInConfig = vi.fn((config: OpenClawConfig, pluginId: string) => ({
         config: {
           ...config,
@@ -3481,7 +3489,10 @@ describe("activateSetupInference", () => {
           workspace: "/tmp/openclaw-workspace",
           deps: {
             readConfigFileSnapshot: mockConfigSnapshot(initialConfig, { includeMetadata: true }),
-            resolvePluginProviders,
+            acquirePluginProviders: (params) => ({
+              providers: resolvePluginProviders(params),
+              release() {},
+            }),
             enablePluginInConfig: enablePluginInConfig as never,
             runEmbeddedAgent: runEmbeddedAgent as never,
             transformConfigWithPendingPluginInstalls: configHarness.transform as never,
@@ -3729,7 +3740,7 @@ describe("activateSetupInference", () => {
         apiKey: "selected-key",
         deps: {
           readConfigFileSnapshot: mockConfigSnapshot(initialConfig),
-          resolvePluginProviders: () => [provider],
+          acquirePluginProviders: () => ({ providers: [provider], release() {} }),
           enablePluginInConfig: enablePluginInConfig as never,
           runEmbeddedAgent: runEmbeddedAgent as never,
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
@@ -4276,7 +4287,7 @@ describe("activateSetupInference", () => {
           apiKey: "candidate-key",
           deps: {
             readConfigFileSnapshot: mockConfigSnapshot(initialConfig),
-            resolvePluginProviders: () => [provider],
+            acquirePluginProviders: () => ({ providers: [provider], release() {} }),
             transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           },
         }),
@@ -4308,7 +4319,7 @@ describe("activateSetupInference", () => {
         config: initialConfig,
         runtimeConfig: initialConfig,
       })) as never,
-      resolvePluginProviders: () => [createGroqSetupProvider()],
+      acquirePluginProviders: () => ({ providers: [createGroqSetupProvider()], release() {} }),
       resolveManifestProviderAuthChoice: groqSetupChoice,
       runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
       updateAuthProfileStoreWithLock: vi.fn(async (params) => {
@@ -4427,7 +4438,7 @@ describe("activateSetupInference", () => {
         workspace: "/tmp/openclaw-workspace",
         deps: {
           readConfigFileSnapshot: mockConfigSnapshot(initialConfig, { includeMetadata: true }),
-          resolvePluginProviders: () => [provider],
+          acquirePluginProviders: () => ({ providers: [provider], release() {} }),
           resolveManifestProviderAuthChoice: () => ({
             pluginId: "github-copilot",
             providerId: "github-copilot",

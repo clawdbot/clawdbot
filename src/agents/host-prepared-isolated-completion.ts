@@ -2,7 +2,7 @@ import type {
   AgentHarnessIsolatedCompletionParamsV2,
   AgentHarnessIsolatedCompletionResult,
 } from "./harness/types.js";
-import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
+import { completeWithPreparedSimpleCompletionModelCore } from "./simple-completion-execution.js";
 
 /** Executes one zero-tool completion using the exact host-prepared model and credential. */
 export async function runHostPreparedIsolatedCompletion(
@@ -16,7 +16,7 @@ export async function runHostPreparedIsolatedCompletion(
   const signal = params.abortSignal
     ? AbortSignal.any([params.abortSignal, timeoutSignal])
     : timeoutSignal;
-  const assistant = await completeWithPreparedSimpleCompletionModel({
+  const assistant = await completeWithPreparedSimpleCompletionModelCore({
     assertCurrent: params.assertCurrent,
     model: params.authorization.model,
     auth: params.authorization.auth,

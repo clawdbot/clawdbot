@@ -9,6 +9,7 @@ import {
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import { loadPluginRegistryHandle } from "../../plugins/loader.js";
+import { requirePluginRegistryResourceScope } from "../../plugins/registry-resources.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -93,18 +94,20 @@ function loadChannelSetupPluginRegistry(params: {
       env: process.env,
     });
   const log = createSubsystemLogger("plugins");
-  return loadPluginRegistryHandle({
-    config: resolvedConfig,
-    activationSourceConfig: params.cfg,
-    autoEnabledReasons: autoEnabled.autoEnabledReasons,
-    workspaceDir,
-    cache: false,
-    logger: log,
-    onlyPluginIds,
-    includeSetupOnlyChannelPlugins: true,
-    forceSetupOnlyChannelPlugins: params.forceSetupOnlyChannelPlugins,
-    channelPluginLoadIntent: "setup",
-  });
+  return requirePluginRegistryResourceScope().adopt(
+    loadPluginRegistryHandle({
+      config: resolvedConfig,
+      activationSourceConfig: params.cfg,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      workspaceDir,
+      cache: false,
+      logger: log,
+      onlyPluginIds,
+      includeSetupOnlyChannelPlugins: true,
+      forceSetupOnlyChannelPlugins: params.forceSetupOnlyChannelPlugins,
+      channelPluginLoadIntent: "setup",
+    }),
+  );
 }
 
 function resolveScopedChannelPluginId(params: {

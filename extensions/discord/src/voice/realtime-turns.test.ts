@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
+import { createRealtimeVoiceProviderFixture } from "./voice-test-mocks.test-support.js";
 
 defineDiscordVoiceTests(
   ({
@@ -829,7 +830,7 @@ defineDiscordVoiceTests(
 
     it("leaves non-OpenAI agent-proxy realtime auto-response enabled when wake names are requested", async () => {
       resolveConfiguredRealtimeVoiceProviderMock.mockReturnValueOnce({
-        provider: { id: "google" },
+        provider: createRealtimeVoiceProviderFixture({ id: "google" }),
         providerConfig: { model: "gemini-live", voice: "default" },
       });
       const { bridgeParams } = await createJoinedAgentProxyFixture({

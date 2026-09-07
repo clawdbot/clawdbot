@@ -108,22 +108,24 @@ describe.runIf(process.platform === "win32")("host-local media tool file URLs", 
         expect(pdfResult.content).toEqual([{ type: "text", text: "native summary" }]);
         expect(pdfResult.details).toMatchObject({ pdf: pdfPath, native: true });
 
-        vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-          {
-            id: "fixture",
-            defaultModel: "edit",
-            models: ["edit"],
-            isConfigured: () => true,
-            capabilities: {
-              generate: { maxCount: 1 },
-              edit: { enabled: true, maxInputImages: 1 },
-              geometry: {},
+        vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProvidersCore").mockReturnValue(
+          [
+            {
+              id: "fixture",
+              defaultModel: "edit",
+              models: ["edit"],
+              isConfigured: () => true,
+              capabilities: {
+                generate: { maxCount: 1 },
+                edit: { enabled: true, maxInputImages: 1 },
+                geometry: {},
+              },
+              generateImage: vi.fn(async () => {
+                throw new Error("runtime generateImage spy should own the call");
+              }),
             },
-            generateImage: vi.fn(async () => {
-              throw new Error("runtime generateImage spy should own the call");
-            }),
-          },
-        ]);
+          ],
+        );
         const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
           provider: "fixture",
           model: "edit",

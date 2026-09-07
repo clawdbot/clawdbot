@@ -179,6 +179,9 @@ describe("memory-core generic embedding provider contract", () => {
       ],
     });
 
-    expect(result.provider).toBe(createdProvider);
+    await expect(result.provider?.embed("query")).resolves.toEqual([1, 2, 3]);
+    await expect(result.provider?.embedBatch(["document"])).resolves.toEqual([[0, 7]]);
+    expect(result.provider?.dimensions).toBe(createdProvider?.dimensions);
+    await result.provider?.close?.();
   });
 });

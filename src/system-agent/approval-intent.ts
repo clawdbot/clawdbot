@@ -1,8 +1,8 @@
 // Classifies whether a user's chat message approves a pending OpenClaw proposal.
 import { extractEmbeddedAssistantText } from "../agents/embedded-agent-utils.js";
 import {
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModelCore,
+  acquireSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
 import {
   classifySystemAgentApprovalText,
@@ -45,8 +45,8 @@ const APPROVAL_INTENT_SYSTEM_PROMPT = [
 
 export type SystemAgentApprovalIntentDeps = {
   resolveVerifiedInferenceRoute?: typeof resolveSystemAgentVerifiedInferenceRoute;
-  prepareSimpleCompletionModelForAgent?: typeof prepareSimpleCompletionModelForAgent;
-  completeWithPreparedSimpleCompletionModel?: typeof completeWithPreparedSimpleCompletionModel;
+  acquireSimpleCompletionModelForAgent?: typeof acquireSimpleCompletionModelForAgent;
+  completeWithPreparedSimpleCompletionModelCore?: typeof completeWithPreparedSimpleCompletionModelCore;
 };
 
 /**
@@ -81,7 +81,7 @@ export async function classifySystemAgentApprovalIntent(
       ? `${route.modelLabel}@${route.authProfileId}`
       : route.modelLabel;
     const prepared = await (
-      deps.prepareSimpleCompletionModelForAgent ?? prepareSimpleCompletionModelForAgent
+      deps.acquireSimpleCompletionModelForAgent ?? acquireSimpleCompletionModelForAgent
     )({
       cfg: route.runConfig,
       agentId: route.agentId,
@@ -94,55 +94,63 @@ export async function classifySystemAgentApprovalIntent(
     if ("error" in prepared) {
       return "other";
     }
-    const preparedProvider = prepared.selection.runtimeProvider ?? prepared.selection.provider;
-    if (
-      preparedProvider !== route.provider ||
-      prepared.selection.modelId !== route.model ||
-      prepared.selection.agentDir !== route.agentDir ||
-      prepared.selection.profileId !== route.authProfileId ||
-      prepared.auth.profileId !== route.authProfileId ||
-      !params.verifiedInference.auth.authFingerprint ||
-      prepared.sourceAuthFingerprint !== params.verifiedInference.auth.authFingerprint
-    ) {
-      return "other";
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), APPROVAL_INTENT_TIMEOUT_MS);
     try {
-      const response = await (
-        deps.completeWithPreparedSimpleCompletionModel ?? completeWithPreparedSimpleCompletionModel
-      )({
-        model: prepared.model,
-        auth: prepared.auth,
-        cfg: route.runConfig,
-        context: {
-          systemPrompt: APPROVAL_INTENT_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: [
-                `Pending change: ${params.proposal ?? "a configuration change proposed in this conversation"}`,
-                `User message: ${params.message}`,
-              ].join("\n"),
-              timestamp: Date.now(),
-            },
-          ],
-        },
-        options: {
-          maxTokens: APPROVAL_INTENT_MAX_TOKENS,
-          signal: controller.signal,
-        },
-      });
-      if (!(await resolveVerifiedRoute(params.verifiedInference))) {
+      const preparedProvider = prepared.selection.runtimeProvider ?? prepared.selection.provider;
+      if (
+        preparedProvider !== route.provider ||
+        prepared.selection.modelId !== route.model ||
+        prepared.selection.agentDir !== route.agentDir ||
+        prepared.selection.profileId !== route.authProfileId ||
+        prepared.auth.profileId !== route.authProfileId ||
+        !params.verifiedInference.auth.authFingerprint ||
+        prepared.sourceAuthFingerprint !== params.verifiedInference.auth.authFingerprint
+      ) {
         return "other";
       }
-      const verdict = extractEmbeddedAssistantText(response)?.trim().toLowerCase().split(/\s+/)[0];
-      if (verdict === "approve" || verdict === "decline") {
-        return verdict;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), APPROVAL_INTENT_TIMEOUT_MS);
+      try {
+        const response = await (
+          deps.completeWithPreparedSimpleCompletionModelCore ??
+          completeWithPreparedSimpleCompletionModelCore
+        )({
+          model: prepared.model,
+          auth: prepared.auth,
+          cfg: route.runConfig,
+          context: {
+            systemPrompt: APPROVAL_INTENT_SYSTEM_PROMPT,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  `Pending change: ${params.proposal ?? "a configuration change proposed in this conversation"}`,
+                  `User message: ${params.message}`,
+                ].join("\n"),
+                timestamp: Date.now(),
+              },
+            ],
+          },
+          options: {
+            maxTokens: APPROVAL_INTENT_MAX_TOKENS,
+            signal: controller.signal,
+          },
+        });
+        if (!(await resolveVerifiedRoute(params.verifiedInference))) {
+          return "other";
+        }
+        const verdict = extractEmbeddedAssistantText(response)
+          ?.trim()
+          .toLowerCase()
+          .split(/\s+/)[0];
+        if (verdict === "approve" || verdict === "decline") {
+          return verdict;
+        }
+        return "other";
+      } finally {
+        clearTimeout(timer);
       }
-      return "other";
     } finally {
-      clearTimeout(timer);
+      prepared.release();
     }
   } catch {
     // Approval must fail closed: an unreachable model means no arming.

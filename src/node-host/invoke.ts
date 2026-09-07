@@ -50,6 +50,7 @@ import {
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
 import { invokeNodeWorkerComputerCommand, type NodeWorkerComputer } from "./computer-command.js";
@@ -828,6 +829,7 @@ async function dispatchInvoke(
     });
     return;
   }
+  const pluginResourceCompletion = createDeferredCore();
   try {
     const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
     const acquireManagedWorkspace = context?.acquireManagedWorkspace;
@@ -865,9 +867,21 @@ async function dispatchInvoke(
               paramsJSON: frame.paramsJSON,
               computer: runtime.workerComputer!,
               invoke: (innerCommand, paramsJSON) =>
-                invokePlugin(innerCommand, paramsJSON, undefined, invokeContext),
+                invokePlugin(
+                  innerCommand,
+                  paramsJSON,
+                  undefined,
+                  invokeContext,
+                  pluginResourceCompletion.promise,
+                ),
             })
-          : await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+          : await invokePlugin(
+              command,
+              frame.paramsJSON,
+              io,
+              invokeContext,
+              pluginResourceCompletion.promise,
+            );
     } finally {
       pluginInvocationActive = false;
     }
@@ -881,6 +895,8 @@ async function dispatchInvoke(
     const failureClient = runtime.canReportAbortedFailure?.(err) ? abortedFailureClient : client;
     await sendInvalidRequestResult(failureClient, frame, err);
     return;
+  } finally {
+    pluginResourceCompletion.resolve();
   }
 
   if (command === "system.run.prepare") {

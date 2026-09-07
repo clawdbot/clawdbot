@@ -31,8 +31,11 @@ import {
 
 type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
-type ResolvePluginProvidersRuntime =
-  typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
+type ResolvePluginProvidersRuntime = (
+  ...args: Parameters<
+    typeof import("../plugins/provider-auth-choice.runtime.js").acquireProviderAuthChoiceProviders
+  >
+) => ProviderPlugin[];
 type ResolvePluginSetupProvider =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
 type ResolveManifestProviderAuthChoice =
@@ -374,7 +377,12 @@ vi.mock("../plugins/setup-registry.js", () => ({
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolveProviderPluginChoice,
-  resolvePluginProviders: resolvePluginProvidersRuntime,
+  acquireProviderAuthChoiceProviders: (
+    ...args: Parameters<typeof resolvePluginProvidersRuntime>
+  ) => ({
+    providers: resolvePluginProvidersRuntime(...args),
+    release() {},
+  }),
 }));
 
 vi.mock("../commands/model-picker.js", () => ({

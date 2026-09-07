@@ -7,14 +7,14 @@ import {
   resolveProviderPluginChoiceCore as resolveProviderPluginChoiceImpl,
   runProviderModelSelectedHookCore as runProviderModelSelectedHookImpl,
 } from "./provider-wizard.js";
-import { resolvePluginProvidersCore as resolvePluginProvidersImpl } from "./providers.runtime.js";
+import { acquirePluginProvidersCore as acquirePluginProvidersImpl } from "./providers.runtime.js";
 import { resolvePluginSetupProviderCore as resolvePluginSetupProviderImpl } from "./setup-registry.js";
 
 type ResolveProviderPluginChoice =
   typeof import("./provider-wizard.js").resolveProviderPluginChoiceCore;
 type RunProviderModelSelectedHook =
   typeof import("./provider-wizard.js").runProviderModelSelectedHookCore;
-type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProvidersCore;
+type AcquirePluginProviders = typeof import("./providers.runtime.js").acquirePluginProvidersCore;
 type ResolvePluginSetupProvider =
   typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
 
@@ -33,12 +33,12 @@ export function runProviderModelSelectedHook(
 }
 
 /** Runtime wrapper for registered model provider discovery. */
-export function resolvePluginProviders(
-  params: Parameters<ResolvePluginProviders>[0],
+export function acquireProviderAuthChoiceProviders(
+  params: Parameters<AcquirePluginProviders>[0],
   preparedInstallRecords?: Record<string, PluginInstallRecord>,
-): ReturnType<ResolvePluginProviders> {
+): ReturnType<AcquirePluginProviders> {
   if (!preparedInstallRecords) {
-    return resolvePluginProvidersImpl(params);
+    return acquirePluginProvidersImpl(params);
   }
   // Installation changes package facts within the lease. Build a separate view
   // with the installer's accepted records without replacing Gateway inventory.
@@ -52,7 +52,7 @@ export function resolvePluginProviders(
         ...preparedInstallRecords,
       },
     });
-    return resolvePluginProvidersImpl({ ...params, pluginMetadataSnapshot });
+    return acquirePluginProvidersImpl({ ...params, pluginMetadataSnapshot });
   });
 }
 

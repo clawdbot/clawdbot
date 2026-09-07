@@ -2,6 +2,7 @@
 import { afterAll, afterEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createHookRunner } from "../plugins/hooks.js";
+import { retainPluginRegistryHandleForTest } from "../plugins/loader-handles.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -63,7 +64,11 @@ it.each([
     expect(result?.prependContext).toBe(scope === "configured" ? "hook-injected" : undefined);
   };
   if (scope === "empty base") {
-    await run(loadAgentRuntimePluginRegistryHandle({ config, workspaceDir, basePluginIds: [] }));
+    await run(
+      retainPluginRegistryHandleForTest(
+        loadAgentRuntimePluginRegistryHandle({ config, workspaceDir, basePluginIds: [] }),
+      ),
+    );
   } else if (scope === "empty request") {
     await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
       withAgentPluginRegistry({ config, workspaceDir, run }),

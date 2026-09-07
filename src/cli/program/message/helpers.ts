@@ -22,7 +22,7 @@ import {
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../../plugins/channel-plugin-ids.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
-import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
+import { loadPluginRegistryHandle, type PluginRegistryHandle } from "../../../plugins/loader.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -165,6 +165,7 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
       let failed = false;
       let result: Awaited<ReturnType<typeof messageCommand>> | undefined;
       let pluginRegistry: PluginRegistry | undefined;
+      let pluginRegistryHandle: PluginRegistryHandle | undefined;
       try {
         await runCommandWithRuntime(
           defaultRuntime,
@@ -189,12 +190,13 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
                     env: process.env,
                   });
               const activatedConfig = withActivatedPluginIds({ config, pluginIds }) ?? config;
-              pluginRegistry = loadPluginRegistryHandle({
+              pluginRegistryHandle = loadPluginRegistryHandle({
                 config: activatedConfig,
                 activationSourceConfig: activatedConfig,
                 onlyPluginIds: pluginIds,
                 throwOnLoadError: true,
               });
+              pluginRegistry = pluginRegistryHandle.registry;
             }
             const deps = createDefaultDeps();
             const run = () =>
@@ -215,8 +217,12 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
         );
       } finally {
         // Finalize only this command's registry, including JSON/expected errors that rethrow.
-        if (pluginRegistry && action !== "read") {
-          await runPluginStopHooks(pluginRegistry);
+        try {
+          if (pluginRegistry && action !== "read") {
+            await runPluginStopHooks(pluginRegistry);
+          }
+        } finally {
+          pluginRegistryHandle?.release();
         }
       }
       failed ||= result !== undefined && !resolveMessageActionOutcome(result).ok;

@@ -267,7 +267,7 @@ function buildPluginReport(
         ? undefined
         : [...params.onlyPluginIds];
 
-  const registry = loadModules
+  const handle = loadModules
     ? tracePluginLifecyclePhase(
         "runtime plugin registry load",
         () =>
@@ -301,52 +301,57 @@ function buildPluginReport(
           }),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },
       );
-  const importedPluginIds = new Set([
-    ...(loadModules
-      ? registry.plugins
-          .filter((plugin) => plugin.status === "loaded" && plugin.format !== "bundle")
-          .map((plugin) => plugin.id)
-      : []),
-    ...listImportedRuntimePluginIds(),
-    ...listImportedBundledPluginFacadeIds(),
-  ]);
+  const { registry } = handle;
+  try {
+    const importedPluginIds = new Set([
+      ...(loadModules
+        ? registry.plugins
+            .filter((plugin) => plugin.status === "loaded" && plugin.format !== "bundle")
+            .map((plugin) => plugin.id)
+        : []),
+      ...listImportedRuntimePluginIds(),
+      ...listImportedBundledPluginFacadeIds(),
+    ]);
 
-  return projectPluginDependencyHealth({
-    workspaceDir,
-    workspaceScope: workspace.workspaceScope,
-    ...registry,
-    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
-      [
-        ...registry.diagnostics,
-        ...collectPluginCapabilityConsentDiagnostics({
-          index: metadataSnapshot.index,
-          manifests: manifestByPluginId,
+    return projectPluginDependencyHealth({
+      workspaceDir,
+      workspaceScope: workspace.workspaceScope,
+      ...registry,
+      diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
+        [
+          ...registry.diagnostics,
+          ...collectPluginCapabilityConsentDiagnostics({
+            index: metadataSnapshot.index,
+            manifests: manifestByPluginId,
+          }),
+        ],
+        workspace,
+      ),
+      plugins: registry.plugins.map((plugin) =>
+        Object.assign({}, plugin, {
+          imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
+          version: resolveReportedPluginVersion(plugin, params?.env),
+          dependencyStatus:
+            plugin.dependencyStatus ??
+            (tracksPluginDependencyStatus({
+              origin: plugin.origin,
+              pluginId: plugin.id,
+              packageName: plugin.packageName ?? manifestByPluginId.get(plugin.id)?.packageName,
+              packageBuild: packageBuildByPluginId.get(plugin.id),
+            })
+              ? buildPluginDependencyStatus({
+                  rootDir: plugin.rootDir,
+                  dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
+                  optionalDependencies: manifestByPluginId.get(plugin.id)
+                    ?.packageOptionalDependencies,
+                })
+              : undefined),
         }),
-      ],
-      workspace,
-    ),
-    plugins: registry.plugins.map((plugin) =>
-      Object.assign({}, plugin, {
-        imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
-        version: resolveReportedPluginVersion(plugin, params?.env),
-        dependencyStatus:
-          plugin.dependencyStatus ??
-          (tracksPluginDependencyStatus({
-            origin: plugin.origin,
-            pluginId: plugin.id,
-            packageName: plugin.packageName ?? manifestByPluginId.get(plugin.id)?.packageName,
-            packageBuild: packageBuildByPluginId.get(plugin.id),
-          })
-            ? buildPluginDependencyStatus({
-                rootDir: plugin.rootDir,
-                dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
-                optionalDependencies: manifestByPluginId.get(plugin.id)
-                  ?.packageOptionalDependencies,
-              })
-            : undefined),
-      }),
-    ),
-  });
+      ),
+    });
+  } finally {
+    handle.release();
+  }
 }
 
 export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {

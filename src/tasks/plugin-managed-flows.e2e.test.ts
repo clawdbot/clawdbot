@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { retainPluginRegistryHandleForTest } from "../plugins/loader-handles.test-support.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "../plugins/loader-runtime-load.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -113,23 +114,25 @@ describe("plugin-managed TaskFlows", () => {
         if (!metadataSnapshot) {
           throw new Error("production load context did not resolve plugin metadata");
         }
-        const registry = loadOpenClawPluginsWithInternalOverrides(
-          {
-            ...buildPluginRuntimeLoadOptions(loadContext),
-            activate: false,
-            cache: false,
-            onlyPluginIds: [PLUGIN_ID],
-          },
-          {
-            // The production host-owned path supplies the real runtime directly instead of
-            // recompiling its lazy source graph when the fixture first reads api.runtime.
-            runtime: createPluginRuntime(),
-            moduleLoader: {
-              installNativeSdkResolver: false,
-              loaderFilename: import.meta.url,
-              tryNative: false,
+        const registry = retainPluginRegistryHandleForTest(
+          loadOpenClawPluginsWithInternalOverrides(
+            {
+              ...buildPluginRuntimeLoadOptions(loadContext),
+              activate: false,
+              cache: false,
+              onlyPluginIds: [PLUGIN_ID],
             },
-          },
+            {
+              // The production host-owned path supplies the real runtime directly instead of
+              // recompiling its lazy source graph when the fixture first reads api.runtime.
+              runtime: createPluginRuntime(),
+              moduleLoader: {
+                installNativeSdkResolver: false,
+                loaderFilename: import.meta.url,
+                tryNative: false,
+              },
+            },
+          ),
         );
 
         expect(registry.plugins).toEqual(

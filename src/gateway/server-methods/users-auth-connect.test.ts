@@ -5,7 +5,7 @@ import type {
   UsersAuthConnectStartResult,
   UsersAuthConnectStatusResult,
 } from "../../../packages/gateway-protocol/src/schema/users.js";
-import type { AuthProfileCredential, OAuthCredential } from "../../agents/auth-profiles/types.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -19,6 +19,7 @@ import type { UserProfileAuthLink } from "../../state/user-model-accounts.js";
 import { createModelAccountConnectService } from "../model-account-connect.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import { authorized, credential } from "./users-auth-connect.test-support.js";
 import { usersHandlers } from "./users.js";
 
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
@@ -35,6 +36,7 @@ const registerSecretValueForRedaction = vi.hoisted(() => vi.fn());
 const listPersonalAccountAuthChoices = vi.hoisted(() => vi.fn());
 const resolvePersonalAccountAuthMethod = vi.hoisted(() => vi.fn());
 const exchange = vi.hoisted(() => vi.fn());
+const releaseAuthMethod = vi.hoisted(() => vi.fn());
 
 vi.mock("../../state/user-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/user-profiles.js")>();
@@ -64,7 +66,12 @@ vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) =>
 vi.mock("../../logging/secret-redaction-registry.js", () => ({ registerSecretValueForRedaction }));
 vi.mock("../../plugins/personal-account-auth.js", () => ({
   listPersonalAccountAuthChoices,
-  resolvePersonalAccountAuthMethod,
+  acquirePersonalAccountAuthMethod: async (
+    ...args: Parameters<typeof resolvePersonalAccountAuthMethod>
+  ) => {
+    const method = await resolvePersonalAccountAuthMethod(...args);
+    return method ? { method, release: releaseAuthMethod } : undefined;
+  },
 }));
 
 type TestClient = GatewayClient & { connId: string; invalidated: boolean };
@@ -76,17 +83,6 @@ type ConnectTestContext = Pick<
   | "getRuntimeConfig"
   | "getClientConnIds"
 >;
-const credential: OAuthCredential = {
-  type: "oauth",
-  provider: "openai",
-  access: "synthetic-access",
-  refresh: "synthetic-refresh",
-  accountId: "workspace-1",
-  expires: 123,
-};
-const authorized: ProviderAuthResult = {
-  profiles: [{ profileId: "openai:ignored-shared-id", credential }],
-};
 const runAuth = vi.fn(async (ctx: ProviderAuthContext) => {
   const value = await ctx.prompter.text({
     message: "Provider credential",
@@ -896,8 +892,10 @@ describe("users model-account connection lifecycle", () => {
       if (change === "stop") {
         await service.stop();
       }
+      expect(releaseAuthMethod).not.toHaveBeenCalled();
       deferred.resolve(authorized);
       await vi.waitFor(() => expect(exchange).toHaveResolved());
+      await vi.waitFor(() => expect(releaseAuthMethod).toHaveBeenCalledOnce());
       if (change === "stop") {
         service = createModelAccountConnectService({ getConfig: () => config });
         context.modelAccountConnectService = service;

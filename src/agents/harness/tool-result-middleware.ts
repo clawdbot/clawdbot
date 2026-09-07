@@ -10,6 +10,12 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
+import {
+  getPluginRegistryResourceScope,
+  PluginRegistryResourceScope,
+  requirePluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "../../plugins/registry-resources.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
@@ -412,17 +418,19 @@ function reconcileDeliveredMessagingFailure(
     : result;
 }
 
-export function createAgentToolResultMiddlewareRunner(
+export function createAgentToolResultMiddlewareRunnerCore(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
 ) {
+  const creationScope = getPluginRegistryResourceScope();
   let resolvedHandlers = handlers;
   const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
     const { loadAgentToolResultMiddlewaresForRuntime } =
       await import("../../plugins/agent-tool-result-middleware-loader.js");
-    return loadAgentToolResultMiddlewaresForRuntime({
-      runtime: ctx.runtime,
-    });
+    return withPluginRegistryResourceScope(
+      creationScope ?? requirePluginRegistryResourceScope(),
+      () => loadAgentToolResultMiddlewaresForRuntime({ runtime: ctx.runtime }),
+    );
   });
   const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
     if (resolvedHandlers) {
@@ -435,6 +443,7 @@ export function createAgentToolResultMiddlewareRunner(
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
+      creationScope?.assertOpen();
       const handlersForRun = await resolveHandlers();
       // Fast path: with no middleware registered the result is delivered
       // unchanged; skip validation entirely so tool emitters that produce
@@ -486,6 +495,44 @@ export function createAgentToolResultMiddlewareRunner(
         }
       }
       return reconcileDeliveredMessagingFailure(current, deliveredMessagingFallback);
+    },
+  };
+}
+
+/** Owns standalone middleware callbacks until release and all admitted work settle. */
+export function acquireAgentToolResultMiddlewareRunner(
+  ctx: AgentToolResultMiddlewareContext,
+  handlers?: AgentToolResultMiddleware[],
+) {
+  const resources = new PluginRegistryResourceScope();
+  const runner = withPluginRegistryResourceScope(resources, () =>
+    createAgentToolResultMiddlewareRunnerCore(ctx, handlers),
+  );
+  const pending = new Set<Promise<OpenClawAgentToolResult>>();
+  let closed = false;
+  let released: Promise<void> | undefined;
+  return {
+    async applyToolResultMiddleware(event: AgentToolResultMiddlewareEvent) {
+      if (closed) {
+        throw new Error("Tool result middleware runner has been released");
+      }
+      const operation = withPluginRegistryResourceScope(resources, () =>
+        runner.applyToolResultMiddleware(event),
+      );
+      pending.add(operation);
+      try {
+        return await operation;
+      } finally {
+        pending.delete(operation);
+      }
+    },
+    release(): Promise<void> {
+      closed = true;
+      return (released ??= (async () => {
+        await Promise.allSettled(pending);
+        resources.release();
+        await resources.waitForDisposals();
+      })());
     },
   };
 }

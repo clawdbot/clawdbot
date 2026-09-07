@@ -12,7 +12,7 @@ import { computeCacheHitRate } from "../agents/live-cache-test-support.js";
 import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { sleep } from "../utils/sleep.js";
 import type { GatewayClient } from "./client.js";
@@ -223,7 +223,7 @@ export function prepareClaudeCacheProbeBackend(params: {
 
   // This Vitest gateway uses the minimal startup path, so load the owning bundled plugin
   // explicitly. The production Gateway loads the same runtime registration at startup.
-  const registry = loadOpenClawPlugins({
+  const registry = loadAndActivateRootPluginRegistry({
     cache: false,
     config: params.config,
     onlyPluginIds: ["anthropic"],

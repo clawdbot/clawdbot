@@ -119,6 +119,100 @@ offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not
 need to provide it.
 
+### Release acquired providers and completion models
+
+Use `acquirePluginProviders` from `openclaw/plugin-sdk/provider-catalog-runtime`
+when you keep provider callbacks, and `acquireSimpleCompletionModelForAgent`
+from `openclaw/plugin-sdk/simple-completion-runtime` when you prepare a model.
+Each successful acquisition returns an idempotent `release()` method. Model
+preparation errors return `{ error }` and already release their resources.
+
+For executable runtime plans, use `acquireAgentRuntimePlan` from
+`openclaw/plugin-sdk/agent-harness-runtime`. It returns `{ plan, run, release }`.
+Caller-supplied model and runtime handles remain caller-owned.
+
+Invoke acquired provider or plan callbacks inside `handle.run(() => callback(...))`.
+These handles' `release()` methods close admission immediately and retain resources
+until promises returned by admitted callbacks settle. Streams and other work that
+escape a callback still need an explicit caller lifetime: release after they finish,
+or pass their completion promise to `handle.release(pending)`.
+
+Keep the acquisition open until every callback, stream, and completion using it
+has finished. A cache owns its acquisition until eviction and the completion of
+any work still using that entry. A local timeout or abort request does not prove
+that underlying provider work has settled.
+
+```ts
+import {
+  acquireSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModel,
+} from "openclaw/plugin-sdk/simple-completion-runtime";
+
+const prepared = await acquireSimpleCompletionModelForAgent({ cfg, agentId });
+if ("error" in prepared) {
+  throw new Error(prepared.error);
+}
+try {
+  const response = await completeWithPreparedSimpleCompletionModel({
+    model: prepared.model,
+    auth: prepared.auth,
+    cfg,
+    context: {
+      messages: [{ role: "user", content: "Summarize this text.", timestamp: Date.now() }],
+    },
+  });
+  // Consume the response here.
+} finally {
+  prepared.release();
+}
+```
+
+The older `buildAgentRuntimePlan`, `resolvePluginProviders`, and
+`prepareSimpleCompletionModelForAgent` exports remain source-compatible and are
+deprecated. Their bare plans, callbacks, and models retain resources until the SDK
+host closes or restarts. Standalone callers without a host lifecycle retain the
+shipped process-lifetime behavior. Hosts using legacy provider arrays or runtime
+plans must join externally invoked callback work before closing; resolving these
+bare values does not track their later invocations. New code should use acquisition
+handles; removal of these legacy exports needs an announced SDK-breaking migration
+window.
+
+Memory embedding adapter lists follow the same legacy host lifetime because their
+entries contain executable callbacks. Prefer `acquireMemoryEmbeddingProvider` for
+new callback consumers. Bundled Memory diagnostics use a separate IDs-only lookup
+that does not retain registration resources; its host-only SDK subpath is not a
+public plugin contract.
+
+`speech-core.summarizeText` also retains its optional caller-supplied completion
+dependencies. A supplied model preparer continues to own the resources it returns.
+
+### Keep meeting cleanup available during startup
+
+`startMeetingRealtimeEngine` and `startMeetingAgentRealtimeEngine` from
+`openclaw/plugin-sdk/meeting-runtime` accept an optional `onCleanupReady(stop)`
+callback. Register `stop` with your session owner there, before provider session construction
+and connection begin. The callback may return a promise; startup waits for it, then
+checks that the engine has not stopped. Keep the callback's cleanup handle until
+`stop()` succeeds, including when startup rejects.
+
+Successful startup still returns the existing engine handle. A startup failure
+whose rollback succeeds still throws the original error. If rollback also fails,
+the start function throws `MeetingRealtimeStartupCleanupError`, with the original
+error in `cause`, the rollback failure in `cleanupError`, and an idempotent
+`cleanup.stop()` method for an explicit retry. This error also gives callers that
+omit `onCleanupReady` a cleanup owner. Retain it until cleanup succeeds; discarding
+it does not close the provider. Cleanup never reopens input or speech admission.
+
+The shared meeting runtime registers cleanup before startup. An unsuccessfully
+cleaned failed join appears as an ended session in meeting status; use the plugin's
+existing leave command for that session to retry cleanup. A new join to the same
+normalized URL on the same transport must settle unfinished engine cleanup or setup
+before starting a replacement. This cleanup fence does not apply when only browser
+leave remains unfinished.
+Leaving does not wait for an outstanding provider connection or browser setup to
+finish. Its ended session remains marked for pending cleanup until that setup and
+any rollback settle, preventing a late rollback from affecting a replacement.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from

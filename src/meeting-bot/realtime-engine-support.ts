@@ -6,11 +6,11 @@ import type {
   RealtimeVoiceProviderPlugin,
 } from "../plugins/types.js";
 import {
-  getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders,
+  getRealtimeTranscriptionProviderCore,
+  listRealtimeTranscriptionProvidersCore,
 } from "../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../talk/provider-resolver.js";
+import { resolveConfiguredRealtimeVoiceProviderCore } from "../talk/provider-resolver.js";
 import type {
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceProviderConfig,
@@ -70,7 +70,7 @@ export function resolveMeetingRealtimeProvider(params: {
   providers?: RealtimeVoiceProviderPlugin[];
 }): ResolvedRealtimeProvider {
   const providerId = params.config.realtime.voiceProvider ?? params.config.realtime.provider;
-  return resolveConfiguredRealtimeVoiceProvider({
+  return resolveConfiguredRealtimeVoiceProviderCore({
     configuredProviderId: providerId,
     providerConfigs: params.config.realtime.providers,
     cfg: params.fullConfig,
@@ -86,7 +86,7 @@ export function resolveMeetingRealtimeTranscriptionProvider(params: {
   fullConfig: OpenClawConfig;
   providers?: RealtimeTranscriptionProviderPlugin[];
 }): ResolvedRealtimeTranscriptionProvider {
-  const providers = params.providers ?? listRealtimeTranscriptionProviders(params.fullConfig);
+  const providers = params.providers ?? listRealtimeTranscriptionProvidersCore(params.fullConfig);
   if (providers.length === 0) {
     throw new Error("No configured realtime transcription provider registered");
   }
@@ -95,7 +95,7 @@ export function resolveMeetingRealtimeTranscriptionProvider(params: {
   const configuredProvider = providerId
     ? (params.providers?.find(
         (entry) => entry.id === providerId || entry.aliases?.includes(providerId),
-      ) ?? getRealtimeTranscriptionProvider(providerId, params.fullConfig))
+      ) ?? getRealtimeTranscriptionProviderCore(providerId, params.fullConfig))
     : undefined;
   const provider = configuredProvider ?? providers[0];
   if (!provider) {

@@ -6,6 +6,7 @@ import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   PreparedModelRuntimeAuthPublicationOwner,
+  invalidatePreparedModelRuntimeOwnersForAuthMutation,
   type PreparedModelRuntimeAuthMutation,
 } from "./prepared-model-runtime-auth-publication.js";
 import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
@@ -22,7 +23,6 @@ import {
 } from "./prepared-model-runtime.lifecycle.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
-  PreparedModelRuntimeOwnerRetention,
   PreparedModelRuntimePublicationSupersededError,
   advancePreparedModelRuntimeOwnerConfig,
   prepareModelRuntimeOwner,
@@ -58,6 +58,10 @@ import {
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
+import {
+  PreparedModelRuntimeOwnerRetention,
+  releasePreparedModelRuntimeOwnerResources,
+} from "./prepared-model-runtime.retention.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeLeaseOptions,
@@ -120,7 +124,12 @@ async function closeModelRuntime(error: Error): Promise<void> {
   authPublication.reset(error);
   pendingModelRuntimeReplacement?.reject(error);
   pendingModelRuntimeReplacement = undefined;
+  const closingOwners = [...owners.values()];
   owners.clear();
+  for (const owner of closingOwners) {
+    owner.generation += 1;
+    releasePreparedModelRuntimeOwnerResources(owner);
+  }
   retainedDirectRunOwners.clear(owners);
   retainedGatewayRunOwners.clear(owners);
   gatewayLifecycleActive = false;
@@ -518,6 +527,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     }
     if (!knownKeys.has(key) && (gatewayLifecycleActive || owner.provenance === "configured")) {
       owners.delete(key);
+      releasePreparedModelRuntimeOwnerResources(owner);
     }
   }
   const candidates = entries.map(({ owner: existing, input }) => {
@@ -669,28 +679,8 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
     ...event,
     agentDir: normalizeOptionalDir(event.agentDir),
   };
-  const staleError = new Error("prepared model runtime owner is stale after auth mutation");
-  const invalidatedOwners: PreparedModelRuntimeOwner[] = [];
-  const invalidatedConfiguredAgentIds = new Set<string>();
-  for (const owner of owners.values()) {
-    if (
-      !normalizedEvent.affectsInheritedStores &&
-      owner.input.agentDir !== normalizedEvent.agentDir &&
-      owner.input.inheritedAuthDir !== normalizedEvent.agentDir
-    ) {
-      continue;
-    }
-    invalidatedOwners.push(owner);
-    owner.generation += 1;
-    owner.needsRefresh = true;
-    owner.refreshError = staleError;
-    if (normalizedEvent.profileSetChanged) {
-      owner.catalogStale = true;
-    }
-    if (owner.provenance === "configured" && owner.input.agentId) {
-      invalidatedConfiguredAgentIds.add(owner.input.agentId);
-    }
-  }
+  const { invalidatedOwners, invalidatedConfiguredAgentIds } =
+    invalidatePreparedModelRuntimeOwnersForAuthMutation(owners.values(), normalizedEvent);
   if (invalidatedOwners.length === 0) {
     // A first owner reads the already-published auth snapshot while it builds. Replaying an earlier
     // mutation would immediately stale that initial generation even though no prior owner existed.

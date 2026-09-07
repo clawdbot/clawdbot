@@ -2,6 +2,7 @@ import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabili
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { transcodeAudioBuffer } from "../media/media-services.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
@@ -231,6 +232,14 @@ export async function synthesizeTalkSpeech(
 }
 
 async function synthesizeSpeechInternal(
+  params: SpeechSynthesisParams,
+): Promise<TtsSynthesisResult> {
+  return withPluginRegistryResourceOperationAsync(() =>
+    synthesizeSpeechInternalWithResources(params),
+  );
+}
+
+async function synthesizeSpeechInternalWithResources(
   params: SpeechSynthesisParams,
 ): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({

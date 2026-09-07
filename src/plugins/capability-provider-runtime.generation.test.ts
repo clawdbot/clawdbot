@@ -1,24 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
+import { loadAgentRuntimePluginRegistryHandle as loadAgentRuntimeCore } from "../agents/runtime-plugins.js";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadGatewayPlugins } from "../gateway/server-plugins.js";
 import { prepareGatewayPluginBootstrap } from "../gateway/server-startup-plugins.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
-import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
+import { loadBundledCapabilityRuntimeRegistry as loadBundledCore } from "./bundled-capability-runtime.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import {
-  resolvePluginCapabilityProvider,
-  resolvePluginCapabilityProviders,
+  resolvePluginCapabilityProvider as resolveProviderCore,
+  resolvePluginCapabilityProviders as resolveProvidersCore,
 } from "./capability-provider-runtime.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import * as discovery from "./discovery.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import * as installRecords from "./installed-plugin-index-record-reader.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadAndActivateRootPluginRegistry as loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
@@ -30,6 +30,10 @@ import {
 import * as manifests from "./manifest-registry.js";
 import { resetPluginCache } from "./plugin-cache.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  PluginRegistryResourceScope,
+  drainPluginRegistryResourceDisposals,
+} from "./registry-resources.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import {
@@ -37,6 +41,23 @@ import {
   getPluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import * as sdkAlias from "./sdk-alias.js";
+
+let resources: PluginRegistryResourceScope;
+beforeEach(() => {
+  resources = new PluginRegistryResourceScope();
+});
+afterEach(async () => {
+  resources.release();
+  await drainPluginRegistryResourceDisposals();
+});
+const resolvePluginCapabilityProvider: typeof resolveProviderCore = (params) =>
+  resources.run(() => resolveProviderCore(params));
+const resolvePluginCapabilityProviders: typeof resolveProvidersCore = (params) =>
+  resources.run(() => resolveProvidersCore(params));
+const loadAgentRuntimePluginRegistryHandle = (...args: Parameters<typeof loadAgentRuntimeCore>) =>
+  resources.adopt(loadAgentRuntimeCore(...args));
+const loadBundledCapabilityRuntimeRegistry = (...args: Parameters<typeof loadBundledCore>) =>
+  resources.adopt(loadBundledCore(...args));
 
 const id = "fixture-speech";
 const log = { info() {}, warn() {}, error() {}, debug() {} };

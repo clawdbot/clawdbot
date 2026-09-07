@@ -9,6 +9,7 @@ import { getConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -900,6 +901,17 @@ export function getCapabilityWebFetchCommandSecretTargets(
     providerId?: string | null;
   },
 ): CommandSecretTargetScope {
+  return withPluginRegistryResourceOperation(() =>
+    getCapabilityWebFetchCommandSecretTargetsWithResources(config, options),
+  );
+}
+
+function getCapabilityWebFetchCommandSecretTargetsWithResources(
+  config: OpenClawConfig,
+  options?: {
+    providerId?: string | null;
+  },
+): CommandSecretTargetScope {
   return getCapabilityWebCommandSecretTargets({
     config,
     providerId: options?.providerId,
@@ -918,6 +930,17 @@ export function getCapabilityWebSearchCommandSecretTargetIds(): Set<string> {
 
 /** Web-search target scope for selected/auto-detected providers and configured fallback paths. */
 export function getCapabilityWebSearchCommandSecretTargets(
+  config: OpenClawConfig,
+  options?: {
+    providerId?: string | null;
+  },
+): CommandSecretTargetScope {
+  return withPluginRegistryResourceOperation(() =>
+    getCapabilityWebSearchCommandSecretTargetsWithResources(config, options),
+  );
+}
+
+function getCapabilityWebSearchCommandSecretTargetsWithResources(
   config: OpenClawConfig,
   options?: {
     providerId?: string | null;

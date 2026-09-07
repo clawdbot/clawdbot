@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/transcripts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { PluginRegistryResourceScope } from "../../plugins/registry-resources.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -99,7 +100,7 @@ async function seed(stateDir: string) {
 describe("transcript Gateway read authorization and errors", () => {
   beforeEach(() => {
     logGateway.warn.mockClear();
-    vi.spyOn(transcriptProviders, "getTranscriptSourceProvider").mockReturnValue(undefined);
+    vi.spyOn(transcriptProviders, "getTranscriptSourceProviderCore").mockReturnValue(undefined);
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -137,7 +138,7 @@ describe("transcript Gateway read authorization and errors", () => {
       const source = { providerId: "fixture-voice", channelId: "room" };
       const cfg = { transcripts: { autoStart: [source] } };
       const provider = vi
-        .spyOn(transcriptProviders, "getTranscriptSourceProvider")
+        .spyOn(transcriptProviders, "getTranscriptSourceProviderCore")
         .mockReturnValue({
           id: source.providerId,
           name: "Fixture voice",
@@ -169,6 +170,9 @@ describe("transcript Gateway read authorization and errors", () => {
         );
       } finally {
         provider.mockRestore();
+        for (const entry of activeSessions.values()) {
+          entry.resources.release();
+        }
         activeSessions.clear();
       }
     });
@@ -457,13 +461,16 @@ describe("meeting transcript RPC", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ scenario: "minimal" });
     const stateDir = state.stateDir;
-    vi.spyOn(transcriptProviders, "getTranscriptSourceProvider").mockReturnValue(undefined);
+    vi.spyOn(transcriptProviders, "getTranscriptSourceProviderCore").mockReturnValue(undefined);
     store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
     await store.writeSession(session);
   });
   afterEach(async () => {
+    for (const entry of activeSessions.values()) {
+      entry.resources.release();
+    }
     activeSessions.clear();
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
@@ -493,6 +500,7 @@ describe("meeting transcript RPC", () => {
       session,
       providerId: "manual-transcript",
       provider: {},
+      resources: new PluginRegistryResourceScope(),
       phase: "active",
     });
     const [ok, payload] = await invoke("transcripts.list", {});

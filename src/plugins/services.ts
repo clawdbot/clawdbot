@@ -24,6 +24,7 @@ import {
 import { subscribePluginSessionsChanged } from "./gateway-events.js";
 import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
+import { getPluginRegistryResourceScope } from "./registry-resources.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
@@ -228,6 +229,8 @@ export async function startPluginServices(params: {
     owner?: string,
   ): Promise<void> => {
     const operation = Promise.resolve(run());
+    // A deadline ends this wait; the original resource owner retains the actual work.
+    getPluginRegistryResourceScope()?.hold(operation);
     if (deadline === undefined) {
       return operation;
     }

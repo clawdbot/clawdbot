@@ -21,7 +21,7 @@ import type { prepareNodeHostRuntime, NodeHostInventory } from "./runtime.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareNodeHostRuntime>>;
 export type NodeHostGatewayConnection = NonNullable<
-  Parameters<ReturnType<PreparedRuntime["start"]>["updateGatewayConnection"]>[0]
+  Parameters<Awaited<ReturnType<PreparedRuntime["start"]>>["updateGatewayConnection"]>[0]
 > & {
   protocol: number;
   capabilities: string[];
@@ -94,7 +94,7 @@ type NodeOptionalPublicationState = {
   inFlight?: Promise<void>;
 };
 
-export function startNodeHostConnection({
+export async function startNodeHostConnection({
   prepared,
   client,
   onManifestChanged,
@@ -393,7 +393,7 @@ export function startNodeHostConnection({
     runtime.updateGatewayConnection();
     runtime.cancelAll();
   };
-  const runtime = prepared.start({
+  const runtime = await prepared.start({
     client,
     onInventoryChanged: (nextInventory) => {
       inventory = nextInventory;

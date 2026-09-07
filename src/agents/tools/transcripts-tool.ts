@@ -8,19 +8,22 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { Type } from "typebox";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import {
   createTranscriptsStore,
   exportTranscriptSummary,
   stopTranscriptCapture,
 } from "../../transcripts/capture-operations.js";
 import {
+  persistTranscriptSummary,
+  readTranscriptSummary,
+} from "../../transcripts/capture-summary.js";
+import {
   activeSessions,
   authorizeTranscriptSource,
   createTranscriptSessionId,
   isTranscriptSelectionCurrent,
-  persistTranscriptSummary,
   readTranscriptStringParam,
-  readTranscriptSummary,
   resolveTranscriptSourceOwnership,
   resolveSourceProvider,
   sourceFromParams,
@@ -30,7 +33,7 @@ import {
 } from "../../transcripts/capture.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
-import { listTranscriptSourceProviders } from "../../transcripts/provider-registry.js";
+import { listTranscriptSourceProvidersCore } from "../../transcripts/provider-registry.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptToolCaller,
@@ -226,7 +229,7 @@ async function summarizeExisting(params: {
 async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   const providers = [
     manualTranscriptSourceProvider.id,
-    ...listTranscriptSourceProviders(ctx.config).map((provider) => provider.id),
+    ...listTranscriptSourceProvidersCore(ctx.config).map((provider) => provider.id),
   ];
   const uniqueProviders = uniqueStrings(providers);
   const visibleEntries = (
@@ -352,49 +355,51 @@ export function createTranscriptsTool(options?: {
       "Start, stop, import, summarize, or inspect meeting transcript captures; list past meetings and read their notes.",
     parameters: TranscriptsSchema,
     async execute(_toolCallId, rawParams, signal) {
-      const config = resolveTranscriptsConfig(ctx.config?.transcripts);
-      if (!config.enabled) {
-        throw new Error("transcripts are disabled");
-      }
-      const params = asOptionalRecord(rawParams) ?? {};
-      const action = readTranscriptStringParam(params, "action", { required: true, trim: true });
-      if (
-        params.selector !== undefined &&
-        action !== "stop" &&
-        action !== "summarize" &&
-        action !== "show"
-      ) {
-        throw new Error("selector is only supported for stop, summarize, or show.");
-      }
-      const store = createTranscriptsStore(ctx);
-      switch (action) {
-        case "list":
-          return await listPastTranscripts({ ctx, store, rawParams: params });
-        case "show":
-          return await showPastTranscript({ ctx, store, rawParams: params });
-        case "start":
-          return transcriptStartToolResult(
-            await startTranscripts({ ctx, store, rawParams: params, abortSignal: signal }),
-          );
-        case "stop": {
-          const selection = await resolveTranscriptToolSession({
-            ctx,
-            store,
-            rawParams: params,
-            action: "stop",
-          });
-          ctx.assertCallerActive?.();
-          return transcriptStopToolResult(await stopTranscriptCapture({ ctx, store, selection }));
+      return withPluginRegistryResourceOperationAsync(async () => {
+        const config = resolveTranscriptsConfig(ctx.config?.transcripts);
+        if (!config.enabled) {
+          throw new Error("transcripts are disabled");
         }
-        case "import":
-          return await importTranscripts({ ctx, store, rawParams: params });
-        case "summarize":
-          return await summarizeExisting({ config, ctx, store, rawParams: params });
-        case "status":
-          return await statusTranscripts(ctx);
-        default:
-          throw new Error(`unsupported transcripts action: ${action}`);
-      }
+        const params = asOptionalRecord(rawParams) ?? {};
+        const action = readTranscriptStringParam(params, "action", { required: true, trim: true });
+        if (
+          params.selector !== undefined &&
+          action !== "stop" &&
+          action !== "summarize" &&
+          action !== "show"
+        ) {
+          throw new Error("selector is only supported for stop, summarize, or show.");
+        }
+        const store = createTranscriptsStore(ctx);
+        switch (action) {
+          case "list":
+            return await listPastTranscripts({ ctx, store, rawParams: params });
+          case "show":
+            return await showPastTranscript({ ctx, store, rawParams: params });
+          case "start":
+            return transcriptStartToolResult(
+              await startTranscripts({ ctx, store, rawParams: params, abortSignal: signal }),
+            );
+          case "stop": {
+            const selection = await resolveTranscriptToolSession({
+              ctx,
+              store,
+              rawParams: params,
+              action: "stop",
+            });
+            ctx.assertCallerActive?.();
+            return transcriptStopToolResult(await stopTranscriptCapture({ ctx, store, selection }));
+          }
+          case "import":
+            return await importTranscripts({ ctx, store, rawParams: params });
+          case "summarize":
+            return await summarizeExisting({ config, ctx, store, rawParams: params });
+          case "status":
+            return await statusTranscripts(ctx);
+          default:
+            throw new Error(`unsupported transcripts action: ${action}`);
+        }
+      });
     },
   };
 }

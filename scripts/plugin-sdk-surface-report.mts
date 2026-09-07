@@ -64,6 +64,13 @@ const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoin
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
 
+// Resource acquisitions add four callable exports across the shipped harness/provider
+// routes, plus the meeting startup cleanup error. Explicit caps still win unchanged.
+const resourceOwnershipBudgetAllowance: Readonly<Partial<Record<string, number>>> = {
+  OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: 5,
+  OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: 4,
+};
+
 function readPluginSdkSurfaceBudgetEnv(
   name: string,
   fallback: number,
@@ -71,7 +78,7 @@ function readPluginSdkSurfaceBudgetEnv(
 ) {
   const raw = env[name];
   if (raw === undefined) {
-    return fallback;
+    return fallback + (resourceOwnershipBudgetAllowance[name] ?? 0);
   }
   const value = raw.trim();
   if (!/^\d+$/u.test(value)) {
@@ -149,8 +156,11 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
   // +1: bounded structured-input compiler/executor for native harness protocol adapters.
-  "agent-harness": 2,
-  "agent-harness-runtime": 10,
+  // +1/+2: shipped middleware runner routes and runtime-plan builder retain legacy ownership.
+  "agent-harness": 3,
+  "agent-harness-runtime": 12,
+  // +1: shipped provider resolver remains available beside explicit acquisition.
+  "provider-catalog-runtime": 1,
   "command-auth": 78,
   discord: 47,
   // +4: deprecated media projection type, builder, and turn aliases.
@@ -513,7 +523,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
       // +4: rendering helpers forwarded by the shipped channel-message wildcard.
-      1138,
+      // +4: v2026.9.2 plan builder, provider resolver, and both middleware runner routes
+      // retain their shipped signatures while callers migrate to explicit acquisitions.
+      1142,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

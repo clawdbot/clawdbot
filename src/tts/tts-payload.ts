@@ -8,14 +8,15 @@ import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose, logVerbose } from "../globals.js";
 import { resolveSendableOutboundReplyParts } from "../infra/outbound/reply-payload-parts.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { parseTtsDirectives, resolveTtsDirectiveFacts } from "./directives.js";
-import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
+import { canonicalizeSpeechProviderId, getSpeechProviderCore } from "./provider-registry.js";
 import type { SpeechVoiceOption } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
-import { summarizeText } from "./tts-core.js";
+import { summarizeTextCore } from "./tts-core.js";
 import {
   getResolvedSpeechProviderConfig,
   resolveSpeechProviderTimeoutMs,
@@ -49,6 +50,16 @@ export async function listSpeechVoices(params: {
   apiKey?: string;
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
+  return withPluginRegistryResourceOperationAsync(() => listSpeechVoicesWithResources(params));
+}
+
+async function listSpeechVoicesWithResources(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  config?: ResolvedTtsConfig;
+  apiKey?: string;
+  baseUrl?: string;
+}): Promise<SpeechVoiceOption[]> {
   assertSpeechRuntimeAvailable();
   const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
   const provider = canonicalizeSpeechProviderId(params.provider, cfg);
@@ -59,7 +70,7 @@ export async function listSpeechVoices(params: {
   if (!config) {
     throw new Error(`speech provider ${provider} requires cfg or resolved config`);
   }
-  const resolvedProvider = getSpeechProvider(provider, cfg);
+  const resolvedProvider = getSpeechProviderCore(provider, cfg);
   if (!resolvedProvider) {
     throw new Error(`speech provider ${provider} is not registered`);
   }
@@ -100,6 +111,24 @@ function applyExplicitSpeechVisibleFallback(
 }
 
 export async function maybeApplyTtsToPayloadCore(
+  params: {
+    payload: ReplyPayload;
+    cfg: OpenClawConfig;
+    channel?: string;
+    kind?: "tool" | "block" | "final";
+    inboundAudio?: boolean;
+    ttsAuto?: string;
+    agentId?: string;
+    accountId?: string;
+  },
+  persistTtsAudio: TtsAudioPersistence,
+): Promise<ReplyPayload> {
+  return withPluginRegistryResourceOperationAsync(() =>
+    maybeApplyTtsToPayloadCoreWithResources(params, persistTtsAudio),
+  );
+}
+
+async function maybeApplyTtsToPayloadCoreWithResources(
   params: {
     payload: ReplyPayload;
     cfg: OpenClawConfig;
@@ -213,7 +242,7 @@ export async function maybeApplyTtsToPayloadCore(
       textForAudio = `${truncateUtf16Safe(textForAudio, maxLength - 3)}...`;
     } else {
       try {
-        const summary = await summarizeText({
+        const summary = await summarizeTextCore({
           text: textForAudio,
           targetLength: maxLength,
           cfg,

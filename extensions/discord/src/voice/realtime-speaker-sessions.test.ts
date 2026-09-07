@@ -306,8 +306,10 @@ defineDiscordVoiceTests(
     });
 
     it("reclaims expired noise-only speakers without giving late callbacks a replacement's authority", async () => {
+      const { DiscordRealtimeSpeakerSession } = await import("./realtime-speaker-session.js");
       const now = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const connections = vi.spyOn(DiscordRealtimeSpeakerSession.prototype, "connect");
       const { entry, manager } = await createJoinedAgentProxyFixture({
         config: { voice: { realtime: { requireWakeName: false } } },
       });
@@ -315,6 +317,7 @@ defineDiscordVoiceTests(
         for (let index = 0; index < 8; index += 1) {
           beginSpeakerTurn(entry, { userId: `guest-${index}`, senderIsOwner: false }).close();
         }
+        await Promise.all(connections.mock.results.map((result) => result.value));
         const retired = lastRealtimeBridge();
         expect(() => beginSpeakerTurn(entry, { userId: "owner", senderIsOwner: true })).toThrow(
           "Voice is busy",
@@ -330,6 +333,7 @@ defineDiscordVoiceTests(
         expect(lastAgentCommandArgs().senderIsOwner).toBe(true);
       } finally {
         clock.mockRestore();
+        connections.mockRestore();
         await manager.destroy();
       }
     });

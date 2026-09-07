@@ -20,6 +20,7 @@ import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   hasFlag,
@@ -1026,7 +1027,11 @@ export async function runCli(
       // top-level plugin preparation is needed. Gateway retains its boot/process owner.
       const gatewayRun = isGatewayRunInvocationArgv(originalArgv);
       return withCliCommandCleanup(gatewayRun, (cleanup) =>
-        gatewayRun ? run() : withPluginCache(createPluginCache(), () => run(cleanup)),
+        gatewayRun
+          ? run()
+          : withPluginRegistryResourceOperationAsync(() =>
+              withPluginCache(createPluginCache(), () => run(cleanup)),
+            ),
       );
     },
     {

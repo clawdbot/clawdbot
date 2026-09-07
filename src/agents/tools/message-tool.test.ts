@@ -29,6 +29,7 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
@@ -2430,26 +2431,28 @@ describe("message tool secret scoping", () => {
         runMessageAction: mocks.runMessageAction as never,
       });
 
-      const invocation = testCase.broadcast
-        ? tool.execute("1", {
-            action: "broadcast",
-            ...("broadcastChannel" in testCase && testCase.broadcastChannel
-              ? { channel: testCase.broadcastChannel }
-              : {}),
-            targets:
-              "broadcastTargets" in testCase
-                ? testCase.broadcastTargets
-                : ["googlechat:spaces/current", "slack:channel:other"],
-            accountId: testCase.accountId,
-            message: "hi",
-          })
-        : tool.execute("1", {
-            action: "send",
-            channel: testCase.channel,
-            target: testCase.channel === "googlechat" ? "spaces/current" : "channel:other",
-            accountId: testCase.accountId,
-            message: "hi",
-          });
+      const invocation = withPluginRegistryResourceOperationAsync(() =>
+        testCase.broadcast
+          ? tool.execute("1", {
+              action: "broadcast",
+              ...("broadcastChannel" in testCase && testCase.broadcastChannel
+                ? { channel: testCase.broadcastChannel }
+                : {}),
+              targets:
+                "broadcastTargets" in testCase
+                  ? testCase.broadcastTargets
+                  : ["googlechat:spaces/current", "slack:channel:other"],
+              accountId: testCase.accountId,
+              message: "hi",
+            })
+          : tool.execute("1", {
+              action: "send",
+              channel: testCase.channel,
+              target: testCase.channel === "googlechat" ? "spaces/current" : "channel:other",
+              accountId: testCase.accountId,
+              message: "hi",
+            }),
+      );
 
       if (testCase.rejected) {
         await expect(invocation).rejects.toThrow("does not match the trusted current account");

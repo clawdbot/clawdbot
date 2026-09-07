@@ -1,5 +1,6 @@
 // Codex tests cover side question plugin behavior.
 import path from "node:path";
+import * as middlewareRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,
@@ -639,6 +640,37 @@ describe("runCodexAppServerSideQuestion", () => {
     resetGlobalHookRunner();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it("unsubscribes the side thread when middleware resource disposal rejects", async () => {
+    const failure = new AggregateError(
+      [new Error("synthetic middleware disposal failure")],
+      "Plugin resource scope disposal failed",
+    );
+    const release = vi.fn(async () => {
+      throw failure;
+    });
+    const runner = middlewareRuntime.acquireAgentToolResultMiddlewareRunner(
+      { runtime: "codex" },
+      [],
+    );
+    const acquire = vi
+      .spyOn(middlewareRuntime, "acquireAgentToolResultMiddlewareRunner")
+      .mockReturnValueOnce({ ...runner, release });
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    try {
+      await expect(runCodexAppServerSideQuestion(sideParams())).rejects.toBe(failure);
+      expect(release).toHaveBeenCalledOnce();
+      expect(
+        client.request.mock.calls
+          .filter(([method]) => method === "thread/unsubscribe")
+          .map(([method, params]) => [method, params]),
+      ).toEqual([["thread/unsubscribe", { threadId: "side-thread" }]]);
+    } finally {
+      acquire.mockRestore();
+      await runner.release();
+    }
   });
 
   it.each([false, true])(

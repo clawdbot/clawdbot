@@ -55,7 +55,7 @@ type OpenClawPluginNodeHostCommandBase = {
   watchAvailability?: (
     context: OpenClawPluginNodeHostCommandAvailabilityContext,
     onChange: () => void,
-  ) => (() => void) | void;
+  ) => (() => void | Promise<void>) | void;
   /** Release command-owned state when the active Gateway connection closes. */
   onDisconnect?: () => Promise<void> | void;
   /** Optional Computer Use declaration published with this command's node manifest. */

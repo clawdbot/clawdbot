@@ -16,6 +16,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import {
+  drainPluginRegistryResourceDisposals,
+  requirePluginRegistryResourceScope,
+  withPluginRegistryResourceOperation,
+} from "../plugins/registry-resources.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -42,7 +47,9 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
-import { projectTalkRealtimeRelayProviderError } from "./talk-realtime-relay-issues.js";
+import { createTalkProviderResourceFixture } from "./talk-provider-resources.test-support.js";
+import { createTalkRealtimeRelayPublicProjection } from "./talk-realtime-relay-issues.js";
+import { closeRelaySession } from "./talk-realtime-relay-operations.js";
 import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-ledger.js";
 import {
@@ -57,7 +64,13 @@ import {
   stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
-import { cleanupTalkConnection } from "./talk-session-registry.js";
+import {
+  cleanupTalkConnection,
+  forgetUnifiedTalkSession,
+  getUnifiedTalkSession,
+  rememberUnifiedTalkSession,
+  resolveUnifiedTalkSessionTarget,
+} from "./talk-session-registry.js";
 import { prepareTalkSessionTarget } from "./talk-session-target.js";
 
 const activeRelaySessions = new Map<string, string>();
@@ -179,10 +192,31 @@ function ensureActiveRelayTurnId(relaySessionId: string): string {
 }
 
 describe("talk realtime relay provider error projection", () => {
+  function projection(opaque: boolean) {
+    return createTalkRealtimeRelayPublicProjection({
+      provider: {
+        id: "relay-test",
+        label: "Relay Test",
+        isConfigured: () => true,
+        createBridge: () => makeRelayTransport(),
+        [Symbol.for("openclaw.internal.realtime-voice-provider.v1")]: {
+          isBrowserSessionConfigured: () => true,
+          projectPublicProjection: ({ config }: { config: Record<string, unknown> }) => {
+            const { model: _model, ...publicConfig } = config;
+            return { config: opaque ? publicConfig : config };
+          },
+        },
+      },
+      providerConfig: {},
+      model: "relay-model",
+      runWithProviderResources: withPluginRegistryResourceOperation,
+    });
+  }
+
   it.each(providerErrorCases)(
     "projects public $name failures to fixed copy",
     ({ error, expected }) => {
-      const message = projectTalkRealtimeRelayProviderError("relay-test", false, error);
+      const message = projection(false).error(error);
 
       expect(message).toBe(expected);
       expect(message).not.toContain(error.message);
@@ -190,7 +224,7 @@ describe("talk realtime relay provider error projection", () => {
   );
 
   it.each(providerErrorCases)("keeps opaque $name failures generic", ({ error }) => {
-    const message = projectTalkRealtimeRelayProviderError("relay-test", true, error);
+    const message = projection(true).error(error);
 
     expect(message).toBe(RELAY_GENERIC_ERROR);
     expect(message).not.toContain(error.message);
@@ -517,6 +551,209 @@ describe("talk realtime gateway relay", () => {
     });
     expect(relay?.activeAgentRuns.size).toBe(0);
     expect(relay?.activeAgentToolCalls.size).toBe(0);
+  });
+
+  it("retains native provider resources when public relay stop fails until the same owner retries", async () => {
+    const fixture = createTalkProviderResourceFixture();
+    fixture.db.exec("CREATE TABLE relay_close_attempts (attempt INTEGER)");
+    let attempts = 0;
+    let request: RealtimeVoiceBridgeCreateRequest | undefined;
+    const sendAudio = vi.fn();
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (next) => {
+      request = next;
+      return makeRelayTransport({
+        sendAudio,
+        close() {
+          fixture.db.prepare("INSERT INTO relay_close_attempts VALUES (?)").run(++attempts);
+          if (attempts === 1) {
+            throw new Error("native relay close failed");
+          }
+        },
+      });
+    };
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({}),
+      logGateway: { warn: vi.fn() },
+    } as never;
+    const session = fixture.resources.run(() =>
+      createTalkRealtimeRelaySession({
+        context,
+        connId: "conn-native-retry",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+      }),
+    );
+    const owned = { relaySessionId: session.relaySessionId, connId: "conn-native-retry" };
+    const relay = relaySessions.get(session.relaySessionId)!;
+    rememberUnifiedTalkSession(session.relaySessionId, {
+      kind: "realtime-relay",
+      ...owned,
+      sessionTarget: relay.sessionTarget,
+    });
+    const target = resolveUnifiedTalkSessionTarget(session.relaySessionId, owned.connId)!;
+    fixture.releaseConstruction();
+    fixture.resources.release();
+    try {
+      expect(() => stopTalkRealtimeRelaySession(owned)).toThrow("native relay close failed");
+      await drainPluginRegistryResourceDisposals();
+      expect(fixture.db.isOpen).toBe(true);
+      expect(getUnifiedTalkSession(session.relaySessionId)).toMatchObject(owned);
+      expect(resolveUnifiedTalkSessionTarget(session.relaySessionId, owned.connId)).toBeUndefined();
+      expect(target.isCurrent()).toBe(false);
+      expect(() => sendTalkRealtimeRelayAudio({ ...owned, audioBase64: "AQI=" })).toThrow(
+        "Unknown realtime relay session",
+      );
+      request?.onAudio(Buffer.from([1, 2]));
+      request?.onTranscript?.("user", "late transcript", true);
+      expect(sendAudio).not.toHaveBeenCalled();
+      expect(attempts).toBe(1);
+
+      stopTalkRealtimeRelaySession(owned);
+      await relay.voiceSessionClose;
+      await drainPluginRegistryResourceDisposals();
+      expect(attempts).toBe(2);
+      expect(fixture.db.isOpen).toBe(false);
+      expect(() => getUnifiedTalkSession(session.relaySessionId)).toThrow("Unknown Talk session");
+    } finally {
+      try {
+        stopTalkRealtimeRelaySessionRaw(owned);
+      } catch {
+        // The baseline may already have discarded the failed cleanup owner.
+      }
+      activeRelaySessions.delete(session.relaySessionId);
+      forgetUnifiedTalkSession(session.relaySessionId);
+      await relay.voiceSessionClose;
+      await fixture.dispose();
+    }
+  });
+
+  it("releases relay capacity after terminal native provider disposal failure", async () => {
+    const disposalError = new Error("native relay disposer failed after close");
+    const fixture = createTalkProviderResourceFixture({ disposalError });
+    const closeProvider = vi.fn(() => {
+      fixture.db.prepare("INSERT INTO calls VALUES (?)").run("close");
+    });
+    const provider = createIdleRelayProvider();
+    provider.createBridge = () => makeRelayTransport({ close: closeProvider });
+    const warn = vi.fn();
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({}),
+      logGateway: { warn },
+    } as never;
+    const common = {
+      context,
+      connId: "conn-terminal-native-disposal",
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    };
+    const session = fixture.resources.run(() =>
+      createTalkRealtimeRelaySession({ ...common, provider }),
+    );
+    const owned = { relaySessionId: session.relaySessionId, connId: common.connId };
+    const relay = relaySessions.get(session.relaySessionId)!;
+    createTalkRealtimeRelaySession({ ...common, provider: createIdleRelayProvider() });
+    fixture.releaseConstruction();
+    fixture.resources.release();
+    try {
+      stopTalkRealtimeRelaySession(owned);
+      const completion = relay.closeState!.completion!;
+      await expect(completion).rejects.toMatchObject({
+        errors: [expect.objectContaining({ cause: disposalError })],
+      });
+      expect(fixture.db.isOpen).toBe(false);
+      expect(closeProvider).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Plugin resource scope disposal failed"),
+      );
+
+      createTalkRealtimeRelaySession({ ...common, provider: createIdleRelayProvider() });
+      closeRelaySession(relay, "completed");
+      expect(relay.closeState!.completion).toBe(completion);
+      await expect(completion).rejects.toThrow("Plugin resource scope disposal failed");
+      expect(() => stopTalkRealtimeRelaySession(owned)).toThrow("Unknown realtime relay session");
+      expect(closeProvider).toHaveBeenCalledOnce();
+    } finally {
+      await relay.closeState?.completion?.catch(() => undefined);
+      // Remove only this fault fixture if the original owner kept its retired capacity.
+      drainingRelaySessions.delete(relay);
+      activeRelaySessions.delete(session.relaySessionId);
+      await fixture.dispose().catch(() => undefined);
+    }
+  });
+
+  it("counts failed native constructor cleanup against relay capacity until connection cleanup succeeds", async () => {
+    const fixture = createTalkProviderResourceFixture();
+    const connId = "conn-native-construction";
+    const logGateway = { warn: vi.fn() };
+    const broadcastToConnIds = vi.fn();
+    const closeAttempts: number[] = [];
+    let allowClose = false;
+    const provider = createIdleRelayProvider();
+    let created = 0;
+    provider.createBridge = (request) => {
+      const index = created++;
+      let attempts = 0;
+      request.onClose?.("completed");
+      return makeRelayTransport({
+        close() {
+          requirePluginRegistryResourceScope().retainFrom(fixture.resources);
+          fixture.db.prepare("INSERT INTO calls VALUES (?)").run(`close-${index}`);
+          closeAttempts[index] = ++attempts;
+          if (!allowClose) {
+            throw new Error("native constructor cleanup failed");
+          }
+        },
+      });
+    };
+    const create = () =>
+      createTalkRealtimeRelaySession({
+        context: {
+          broadcastToConnIds,
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({}),
+          logGateway,
+        } as never,
+        connId,
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+      });
+    try {
+      for (let index = 0; index < 2; index += 1) {
+        expect(() => fixture.resources.run(create)).toThrow(
+          "Realtime provider closed during session creation: completed",
+        );
+      }
+      fixture.releaseConstruction();
+      fixture.resources.release();
+      await drainPluginRegistryResourceDisposals();
+      expect(fixture.db.isOpen).toBe(true);
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+      expect(create).toThrow("Too many active realtime relay sessions for this connection");
+      expect(created).toBe(2);
+      expect(closeAttempts).toEqual([1, 1]);
+
+      allowClose = true;
+      cleanupTalkConnection(connId, logGateway);
+      await drainPluginRegistryResourceDisposals();
+      expect(closeAttempts).toEqual([2, 2]);
+      expect(fixture.db.isOpen).toBe(false);
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    } finally {
+      allowClose = true;
+      cleanupTalkConnection(connId, logGateway);
+      await drainPluginRegistryResourceDisposals();
+      await fixture.dispose();
+    }
   });
 
   it("closes only realtime relays owned by the disconnected connection", async () => {
@@ -1031,7 +1268,7 @@ describe("talk realtime gateway relay", () => {
       ).toThrow("Too many active realtime relay sessions for this connection");
 
       releaseQueue();
-      await relay.voiceSessionClose;
+      await relay.closeState?.completion;
       expect(drainingRelaySessions.has(relay)).toBe(false);
       expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)?.status).toBe(
         "closed",

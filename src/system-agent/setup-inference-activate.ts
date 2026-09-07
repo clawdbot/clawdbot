@@ -707,6 +707,7 @@ async function activateSetupInferenceUnredacted(
         : {}),
     };
   } finally {
+    probePluginGeneration?.release();
     verificationProgress?.stop();
     let codexCleanupError: SetupInferenceActivationIndeterminateError | undefined;
     if (pendingCodexInstall && codexInstallOwnership !== "owned") {

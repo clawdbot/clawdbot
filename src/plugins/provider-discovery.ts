@@ -73,18 +73,25 @@ export async function planRuntimePluginDiscovery(
 }
 
 /** Loads provider runtime discovery and filters to providers that can produce catalog order entries. */
-export async function resolveRuntimePluginDiscoveryProviders(
+export async function acquireRuntimePluginDiscoveryProviders(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
-): Promise<ProviderPlugin[]> {
-  return (await loadProviderRuntime())
-    .resolvePluginDiscoveryProvidersRuntime(params)
-    .filter(
-      (provider) =>
-        resolveProviderCatalogOrderHook(provider) ||
-        (params.includeSyntheticAuthProviders === true &&
-          (typeof provider.resolveSyntheticAuth === "function" ||
-            typeof provider.prepareSyntheticAuth === "function")),
-    );
+) {
+  const handle = (await loadProviderRuntime()).acquirePluginDiscoveryProvidersRuntime(params);
+  try {
+    return {
+      ...handle,
+      providers: handle.providers.filter(
+        (provider) =>
+          resolveProviderCatalogOrderHook(provider) ||
+          (params.includeSyntheticAuthProviders === true &&
+            (typeof provider.resolveSyntheticAuth === "function" ||
+              typeof provider.prepareSyntheticAuth === "function")),
+      ),
+    };
+  } catch (error) {
+    handle.release();
+    throw error;
+  }
 }
 
 /** Groups plugin providers into stable discovery phases for catalog probing. */

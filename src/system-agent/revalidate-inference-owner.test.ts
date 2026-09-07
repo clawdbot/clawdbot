@@ -24,7 +24,12 @@ import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.j
 
 const mocks = vi.hoisted(() => ({ loadAgentRuntimePluginRegistryHandle: vi.fn() }));
 vi.mock("../agents/runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
+  loadAgentRuntimePluginRegistryHandle: (
+    ...args: Parameters<typeof mocks.loadAgentRuntimePluginRegistryHandle>
+  ) => {
+    const registry = mocks.loadAgentRuntimePluginRegistryHandle(...args);
+    return registry ? { registry, release() {} } : undefined;
+  },
 }));
 
 function embeddedRoute(agentHarnessRuntimeOverride: string): SystemAgentConfiguredRoute {
@@ -86,8 +91,12 @@ describe("revalidateSetupInferenceOwner", () => {
             workspaceDir: state.workspaceDir,
             selection: { provider: "fixture", modelId: "model", runtime: "fixture-runtime" },
           });
-          expect(generation.metadataSnapshot.byPluginId.has("fixture-runtime")).toBe(true);
-          expect(resolvePluginMetadataSnapshot(input)).toBe(before);
+          try {
+            expect(generation.metadataSnapshot.byPluginId.has("fixture-runtime")).toBe(true);
+            expect(resolvePluginMetadataSnapshot(input)).toBe(before);
+          } finally {
+            generation.release();
+          }
         });
       },
     );

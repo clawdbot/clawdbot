@@ -22,10 +22,11 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../../plugin-sdk/provider-http.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   generateVideo,
-  listRuntimeVideoGenerationProviders,
+  listRuntimeVideoGenerationProvidersCore,
 } from "../../video-generation/runtime.js";
 import type { VideoGenerationResolution } from "../../video-generation/types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -290,20 +291,22 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runVideoGenerate({
-          prompt: String(opts.prompt),
-          agent: resolveCapabilityAgentOption(command, opts.agent),
-          model: opts.model as string | undefined,
-          output: opts.output as string | undefined,
-          size: opts.size as string | undefined,
-          aspectRatio: opts.aspectRatio as string | undefined,
-          resolution: normalizeVideoResolution(opts.resolution as string | undefined),
-          durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
-          audio: opts.audio === true ? true : undefined,
-          watermark: opts.watermark === true ? true : undefined,
-          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+        return withPluginRegistryResourceOperationAsync(async () => {
+          const result = await runVideoGenerate({
+            prompt: String(opts.prompt),
+            agent: resolveCapabilityAgentOption(command, opts.agent),
+            model: opts.model as string | undefined,
+            output: opts.output as string | undefined,
+            size: opts.size as string | undefined,
+            aspectRatio: opts.aspectRatio as string | undefined,
+            resolution: normalizeVideoResolution(opts.resolution as string | undefined),
+            durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
+            audio: opts.audio === true ? true : undefined,
+            watermark: opts.watermark === true ? true : undefined,
+            timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+          });
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
     });
 
@@ -316,12 +319,14 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runVideoDescribe({
-          file: String(opts.file),
-          agent: resolveCapabilityAgentOption(command, opts.agent),
-          model: opts.model as string | undefined,
+        return withPluginRegistryResourceOperationAsync(async () => {
+          const result = await runVideoDescribe({
+            file: String(opts.file),
+            agent: resolveCapabilityAgentOption(command, opts.agent),
+            model: opts.model as string | undefined,
+          });
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
     });
 
@@ -332,41 +337,45 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(
-          cfg,
-          resolveCapabilityAgentOption(command, opts.agent),
-        );
-        const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
-          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
-        );
-        const result = {
-          generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({
-            available: true,
-            configured:
-              selectedGenerationProvider === provider.id ||
-              providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-            selected: selectedGenerationProvider === provider.id,
-            id: provider.id,
-            label: provider.label,
-            defaultModel: provider.defaultModel,
-            models: provider.models ?? [],
-            capabilities: provider.capabilities,
-          })),
-          description: [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
-            .filter((provider) => provider.capabilities?.includes("video"))
-            .map((provider) => ({
-              available: true,
-              configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-              selected: false,
-              id: provider.id,
-              capabilities: provider.capabilities,
-              defaultModels: provider.defaultModels,
-            })),
-        };
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
-          JSON.stringify(value, null, 2),
-        );
+        return withPluginRegistryResourceOperationAsync(async () => {
+          const cfg = getRuntimeConfig();
+          const agentId = resolveCapabilityProviderAgentId(
+            cfg,
+            resolveCapabilityAgentOption(command, opts.agent),
+          );
+          const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
+            resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
+          );
+          const result = {
+            generation: listRuntimeVideoGenerationProvidersCore({ config: cfg }).map(
+              (provider) => ({
+                available: true,
+                configured:
+                  selectedGenerationProvider === provider.id ||
+                  providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
+                selected: selectedGenerationProvider === provider.id,
+                id: provider.id,
+                label: provider.label,
+                defaultModel: provider.defaultModel,
+                models: provider.models ?? [],
+                capabilities: provider.capabilities,
+              }),
+            ),
+            description: [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
+              .filter((provider) => provider.capabilities?.includes("video"))
+              .map((provider) => ({
+                available: true,
+                configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
+                selected: false,
+                id: provider.id,
+                capabilities: provider.capabilities,
+                defaultModels: provider.defaultModels,
+              })),
+          };
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
+            JSON.stringify(value, null, 2),
+          );
+        });
       });
     });
 }

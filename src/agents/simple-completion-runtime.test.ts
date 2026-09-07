@@ -86,8 +86,8 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 }));
 
 import {
-  prepareSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModel,
+  acquireSimpleCompletionModelForAgent,
   resolveSimpleCompletionSelectionForAgent,
 } from "./simple-completion-runtime.js";
 
@@ -173,7 +173,7 @@ beforeEach(() => {
 });
 
 function expectPreparedModelResult(
-  result: Awaited<ReturnType<typeof prepareSimpleCompletionModel>>,
+  result: Awaited<ReturnType<typeof acquireSimpleCompletionModel>>,
 ): asserts result is Exclude<typeof result, { error: string }> {
   expect(result).not.toHaveProperty("error");
   if ("error" in result) {
@@ -211,7 +211,7 @@ function createOpenAIRouteModelResolver(params: {
   });
 }
 
-describe("prepareSimpleCompletionModel", () => {
+describe("acquireSimpleCompletionModel", () => {
   it("resolves model auth and sets runtime api key", async () => {
     hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
       apiKey: " sk-test ",
@@ -219,7 +219,7 @@ describe("prepareSimpleCompletionModel", () => {
       mode: "api-key",
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -254,7 +254,7 @@ describe("prepareSimpleCompletionModel", () => {
       mode: "api-key",
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: {},
       provider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -316,9 +316,9 @@ describe("prepareSimpleCompletionModel", () => {
       }),
     };
 
-    const before = await prepareSimpleCompletionModel(params);
+    const before = await acquireSimpleCompletionModel(params);
     credential = { ...credential, access: "access-after-refresh", refresh: "refresh-after" };
-    const after = await prepareSimpleCompletionModel(params);
+    const after = await acquireSimpleCompletionModel(params);
 
     expectPreparedModelResult(before);
     expectPreparedModelResult(after);
@@ -339,7 +339,7 @@ describe("prepareSimpleCompletionModel", () => {
       modelRegistry: {},
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "anthropic",
       modelId: "missing-model",
@@ -349,6 +349,8 @@ describe("prepareSimpleCompletionModel", () => {
       error: "Unknown model: anthropic/missing-model",
     });
     expect(hoisted.getApiKeyForModelMock).not.toHaveBeenCalled();
+    const lease = await hoisted.acquireRuntimeLeaseMock.mock.results[0]?.value;
+    expect(lease.release).toHaveBeenCalledOnce();
   });
 
   it("returns error when api key is missing and mode is not allowlisted", async () => {
@@ -357,7 +359,7 @@ describe("prepareSimpleCompletionModel", () => {
       mode: "api-key",
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -391,7 +393,7 @@ describe("prepareSimpleCompletionModel", () => {
       mode: "aws-sdk",
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "amazon-bedrock",
       modelId: "anthropic.claude-sonnet-4-6",
@@ -426,7 +428,7 @@ describe("prepareSimpleCompletionModel", () => {
       mode: "token",
     });
 
-    await prepareSimpleCompletionModel({
+    await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "github-copilot",
       modelId: "gpt-4.1",
@@ -468,7 +470,7 @@ describe("prepareSimpleCompletionModel", () => {
       mode: "token",
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "github-copilot",
       modelId: "gpt-4.1",
@@ -502,7 +504,7 @@ describe("prepareSimpleCompletionModel", () => {
       mode: "token",
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "github-copilot",
       modelId: "gpt-4.1",
@@ -539,7 +541,7 @@ describe("prepareSimpleCompletionModel", () => {
       baseUrl: "https://api.copilot.enterprise.example",
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "github-copilot",
       modelId: "gpt-4.1",
@@ -555,7 +557,7 @@ describe("prepareSimpleCompletionModel", () => {
   it("returns error when getApiKeyForModelCore throws", async () => {
     hoisted.getApiKeyForModelMock.mockRejectedValueOnce(new Error("Profile not found: copilot"));
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -591,7 +593,7 @@ describe("prepareSimpleCompletionModel", () => {
       headers: { Authorization: null },
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "local-openai",
       modelId: "chat-local",
@@ -641,7 +643,7 @@ describe("prepareSimpleCompletionModel", () => {
       baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "amazon-bedrock-mantle",
       modelId: "anthropic.claude-opus-4-7",
@@ -696,7 +698,7 @@ describe("prepareSimpleCompletionModel", () => {
       mode: "api-key",
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "ollama",
       modelId: "llama3.2:latest",
@@ -738,7 +740,7 @@ describe("prepareSimpleCompletionModel", () => {
     // or beforeEach setup don't cause a false positive.
     hoisted.resolveModelMock.mockReset();
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -772,7 +774,7 @@ describe("prepareSimpleCompletionModel", () => {
       modelRegistry: {},
     });
 
-    const result = await prepareSimpleCompletionModel({
+    const result = await acquireSimpleCompletionModel({
       cfg: undefined,
       provider: "mistral",
       modelId: "mistral-medium-3-5",
@@ -797,7 +799,7 @@ describe("prepareSimpleCompletionModel", () => {
   });
 });
 
-describe("prepareSimpleCompletionModelForAgent", () => {
+describe("acquireSimpleCompletionModelForAgent", () => {
   it("resolves explicit aliases in the selected agent scope", () => {
     const cfg = {
       agents: {
@@ -859,7 +861,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       mode: "api-key",
     });
 
-    const result = await prepareSimpleCompletionModelForAgent({
+    const result = await acquireSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
       useUtilityModel: true,
@@ -901,7 +903,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       mode: "oauth",
     });
 
-    const result = await prepareSimpleCompletionModelForAgent({
+    const result = await acquireSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
       modelRef: "openai/gpt-5.5",
@@ -942,7 +944,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       mode: "api-key",
     });
 
-    const result = await prepareSimpleCompletionModelForAgent({
+    const result = await acquireSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
       skipAgentDiscovery: true,
@@ -971,7 +973,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       mode: "api-key",
     });
 
-    const result = await prepareSimpleCompletionModelForAgent({
+    const result = await acquireSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
       modelRef: "openai/gpt-5.5",

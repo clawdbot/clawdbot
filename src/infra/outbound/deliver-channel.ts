@@ -15,6 +15,7 @@ import type {
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -48,10 +49,12 @@ export async function resolveChannelOutboundDirectiveOptions(params: {
   agentId?: string;
   channel: string;
 }): Promise<{ extractMarkdownImages?: boolean }> {
-  const { plugin } = await loadBootstrappedChannelPlugin(params);
-  return {
-    extractMarkdownImages: plugin?.outbound?.extractMarkdownImages === true ? true : undefined,
-  };
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const { plugin } = await loadBootstrappedChannelPlugin(params);
+    return {
+      extractMarkdownImages: plugin?.outbound?.extractMarkdownImages === true ? true : undefined,
+    };
+  });
 }
 
 export async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
@@ -117,60 +120,62 @@ export async function resolveOutboundDurableFinalDeliverySupport(params: {
   channel: string;
   requirements?: DurableFinalDeliveryRequirements;
 }): Promise<OutboundDurableDeliverySupport> {
-  const { plugin } = await loadBootstrappedChannelPlugin(params);
-  const outbound = plugin?.outbound;
-  const message = plugin?.message;
-  if (!message?.send?.text && !outbound?.sendText) {
-    return { ok: false, reason: "missing_outbound_handler" };
-  }
-
-  const messageDurableFinal = message?.durableFinal;
-  const durableFinal =
-    messageDurableFinal?.capabilities ?? outbound?.deliveryCapabilities?.durableFinal;
-  for (const [capability, required] of Object.entries(params.requirements ?? {}) as Array<
-    [DurableFinalDeliveryRequirement, boolean | undefined]
-  >) {
-    if (required === true && durableFinal?.[capability] !== true) {
-      return { ok: false, reason: "capability_mismatch", capability };
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const { plugin } = await loadBootstrappedChannelPlugin(params);
+    const outbound = plugin?.outbound;
+    const message = plugin?.message;
+    if (!message?.send?.text && !outbound?.sendText) {
+      return { ok: false, reason: "missing_outbound_handler" };
     }
-    if (
-      required === true &&
-      capability === "reconcileUnknownSend" &&
-      typeof messageDurableFinal?.reconcileUnknownSend !== "function"
-    ) {
-      return { ok: false, reason: "capability_mismatch", capability };
-    }
-  }
 
-  if (params.requirements?.reconcileUnknownSend === true) {
-    const supportedKinds = messageDurableFinal?.reconcileUnknownSendKinds;
-    // Exact durable sends reject source batches before preparation. The sole
-    // logical payload chooses one transport branch; captioned media is a media attempt.
-    // Keep this resolver correct for independent batch callers: heterogeneous
-    // batches require every concrete branch plus whole-batch reconciliation.
-    const requiredKinds = params.requirements.batch
-      ? unknownSendReconciliationKinds.filter((kind) => params.requirements?.[kind] === true)
-      : unknownSendReconciliationKinds
-          .toReversed()
-          .filter((kind) => params.requirements?.[kind] === true)
-          .slice(0, 1);
-    if (
-      supportedKinds !== undefined &&
-      requiredKinds.some((requiredKind) => supportedKinds[requiredKind] !== true)
-    ) {
-      return {
-        ok: false,
-        reason: "capability_mismatch",
-        capability: "reconcileUnknownSend",
-      };
+    const messageDurableFinal = message?.durableFinal;
+    const durableFinal =
+      messageDurableFinal?.capabilities ?? outbound?.deliveryCapabilities?.durableFinal;
+    for (const [capability, required] of Object.entries(params.requirements ?? {}) as Array<
+      [DurableFinalDeliveryRequirement, boolean | undefined]
+    >) {
+      if (required === true && durableFinal?.[capability] !== true) {
+        return { ok: false, reason: "capability_mismatch", capability };
+      }
+      if (
+        required === true &&
+        capability === "reconcileUnknownSend" &&
+        typeof messageDurableFinal?.reconcileUnknownSend !== "function"
+      ) {
+        return { ok: false, reason: "capability_mismatch", capability };
+      }
     }
-  }
 
-  return {
-    ok: true,
-    automaticUnknownSendReconciliation:
-      messageDurableFinal?.automaticUnknownSendReconciliation === true,
-  };
+    if (params.requirements?.reconcileUnknownSend === true) {
+      const supportedKinds = messageDurableFinal?.reconcileUnknownSendKinds;
+      // Exact durable sends reject source batches before preparation. The sole
+      // logical payload chooses one transport branch; captioned media is a media attempt.
+      // Keep this resolver correct for independent batch callers: heterogeneous
+      // batches require every concrete branch plus whole-batch reconciliation.
+      const requiredKinds = params.requirements.batch
+        ? unknownSendReconciliationKinds.filter((kind) => params.requirements?.[kind] === true)
+        : unknownSendReconciliationKinds
+            .toReversed()
+            .filter((kind) => params.requirements?.[kind] === true)
+            .slice(0, 1);
+      if (
+        supportedKinds !== undefined &&
+        requiredKinds.some((requiredKind) => supportedKinds[requiredKind] !== true)
+      ) {
+        return {
+          ok: false,
+          reason: "capability_mismatch",
+          capability: "reconcileUnknownSend",
+        };
+      }
+    }
+
+    return {
+      ok: true,
+      automaticUnknownSendReconciliation:
+        messageDurableFinal?.automaticUnknownSendReconciliation === true,
+    };
+  });
 }
 
 function createPluginHandler(

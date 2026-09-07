@@ -1,4 +1,34 @@
 // Shared speech-provider implementation helpers for bundled and third-party plugins.
+import type { PreparedSimpleCompletionModel } from "../agents/simple-completion-runtime.js";
+import { summarizeTextCore } from "../tts/tts-core.js";
+
+type SummaryDependencies = NonNullable<Parameters<typeof summarizeTextCore>[1]>;
+type LegacySummaryDependencies = Omit<SummaryDependencies, "acquireSimpleCompletionModel"> & {
+  prepareSimpleCompletionModel: (
+    params: Parameters<SummaryDependencies["acquireSimpleCompletionModel"]>[0],
+  ) => Promise<PreparedSimpleCompletionModel>;
+};
+
+/** Preserve the v2026.9.1 caller-owned dependency contract at the public SDK boundary. */
+export async function summarizeText(
+  params: Parameters<typeof summarizeTextCore>[0],
+  deps?: LegacySummaryDependencies,
+) {
+  return await summarizeTextCore(
+    params,
+    deps
+      ? {
+          completeWithPreparedSimpleCompletionModel: deps.completeWithPreparedSimpleCompletionModel,
+          requireApiKey: deps.requireApiKey,
+          acquireSimpleCompletionModel: async (selection) => {
+            const prepared = await deps.prepareSimpleCompletionModel(selection);
+            // A supplied preparer owns its model resources; the SDK never owned their disposal.
+            return "error" in prepared ? prepared : { ...prepared, release() {} };
+          },
+        }
+      : undefined,
+  );
+}
 
 export type { SpeechProviderPlugin } from "../plugins/types.js";
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "../tts/tts-types.js";
@@ -27,7 +57,6 @@ export type {
 
 export {
   scheduleCleanup,
-  summarizeText,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
@@ -38,9 +67,7 @@ export { parseTtsDirectives } from "../tts/directives.js";
 export { parseSpeechDirectiveNumberOverride } from "../tts/directive-number.js";
 export {
   canonicalizeSpeechProviderId,
-  getSpeechProvider,
   listLoadedSpeechProviders,
-  listSpeechProviders,
   normalizeSpeechProviderId,
 } from "../tts/provider-registry.js";
 export { resolveEffectiveTtsConfig } from "../tts/tts-config.js";
@@ -61,3 +88,10 @@ export {
   trimToUndefined,
   truncateErrorDetail,
 } from "../agents/provider-http-errors.js";
+
+export {
+  getSpeechProvider,
+  listSpeechProviders,
+  acquireSpeechProvider,
+  acquireSpeechProviders,
+} from "./speech-registry-runtime.js";

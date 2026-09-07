@@ -501,6 +501,7 @@ describe("buildGatewayCronService", () => {
     createCronScriptRuntimeMock.mockReturnValue({
       evaluateTrigger: cronTriggerEvaluatorMock,
       executePayload: cronScriptExecutorMock,
+      dispose: vi.fn(async () => {}),
     });
     getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: (hookName: string) => hookName === "cron_changed",

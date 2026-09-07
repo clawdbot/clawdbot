@@ -265,7 +265,8 @@ describe("TTS runtime voice model and streaming behavior", () => {
     expect(result.outputFormat).toBe("pcm");
     expect(result.fileExtension).toBe(".pcm");
     expect(result.target).toBe("audio-file");
-    expect(result.release).toBe(release);
+    await result.release?.();
+    expect(release).toHaveBeenCalledOnce();
     const skippedAttempt = requireAttempt(result.attempts, 0);
     expect(skippedAttempt).toMatchObject({
       provider: "buffered",

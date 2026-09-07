@@ -4,6 +4,7 @@ import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runt
 import { discoverOpenClawPlugins } from "../discovery.js";
 import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../provider-contract-public-artifacts.js";
+import { requirePluginRegistryResourceScope } from "../registry-resources.js";
 import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../web-provider-public-artifacts.explicit.js";
 import {
@@ -12,7 +13,9 @@ import {
 } from "./inventory/bundled-capability-metadata.js";
 import { normalizeContractStringValues } from "./shared.js";
 
-type BundledCapabilityRuntimeRegistry = ReturnType<typeof loadBundledCapabilityRuntimeRegistry>;
+type BundledCapabilityRuntimeRegistry = ReturnType<
+  typeof loadBundledCapabilityRuntimeRegistry
+>["registry"];
 type CapabilityContractEntry<T> = {
   pluginId: string;
   provider: T;
@@ -192,21 +195,26 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
 
   // Manifest IDs exist before registration; only observed runtime entries prove the load worked.
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const registry = loadBundledCapabilityRuntimeRegistry({
+    const handle = loadBundledCapabilityRuntimeRegistry({
       pluginIds: [params.pluginId],
       pluginSdkResolution: "dist",
       discovery,
     });
-    const entries = params.loadEntries(registry);
-    if (entries.length > 0) {
-      return entries;
+    try {
+      const { registry } = handle;
+      const entries = params.loadEntries(registry);
+      if (entries.length > 0) {
+        requirePluginRegistryResourceScope().retain(registry);
+        return entries;
+      }
+      lastFailure = formatBundledCapabilityPluginLoadError({
+        pluginId: params.pluginId,
+        capabilityLabel: params.capabilityLabel,
+        registry,
+      });
+    } finally {
+      handle.release();
     }
-
-    lastFailure = formatBundledCapabilityPluginLoadError({
-      pluginId: params.pluginId,
-      capabilityLabel: params.capabilityLabel,
-      registry,
-    });
   }
 
   throw (
@@ -283,7 +291,7 @@ function resolveWebFetchCredentialValue(provider: WebFetchProviderPlugin): unkno
     : "sk-test";
 }
 
-export function resolveWebFetchProviderContractEntriesForPluginId(
+export function resolveWebFetchProviderContractEntriesForPluginIdCore(
   pluginId: string,
 ): WebFetchProviderContractEntry[] {
   return loadScopedCapabilityRuntimeRegistryEntries({
@@ -300,7 +308,7 @@ export function resolveWebFetchProviderContractEntriesForPluginId(
   });
 }
 
-export function resolveWebSearchProviderContractEntriesForPluginId(
+export function resolveWebSearchProviderContractEntriesForPluginIdCore(
   pluginId: string,
 ): WebSearchProviderContractEntry[] {
   const publicArtifactEntries = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
@@ -359,7 +367,7 @@ function createLazyArrayView<T>(load: () => T[]): T[] {
     },
   });
 }
-export function resolveProviderContractProvidersForPluginIds(
+export function resolveProviderContractProvidersForPluginIdsCore(
   pluginIds: readonly string[],
 ): ProviderPlugin[] {
   const allowed = new Set(pluginIds);

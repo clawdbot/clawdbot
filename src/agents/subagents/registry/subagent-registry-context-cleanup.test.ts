@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PluginRegistryResourceScope } from "../../../plugins/registry-resources.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import {
@@ -13,32 +14,51 @@ describe("subagent registry context cleanup", () => {
     resetSubagentRegistryRuntimeLoadersForTests();
   });
 
-  it("completes ended-hook cleanup when the plugin runtime loader rejects", async () => {
-    const error = new Error("plugin runtime import failed");
-    setSubagentRegistryDepsForTest({
-      getRuntimeConfig: () => ({}),
-      loadAgentRuntimePluginRegistryHandle: () => {
-        throw error;
-      },
-    });
-    const warn = vi.fn();
-    const persist = vi.fn();
-    const cleanup = createSubagentRegistryContextCleanup({
-      deps: () => subagentRegistryDeps,
-      persist,
-      warn,
-    });
-    const entry = createSubagentRunRecord({ runId: "run-ended", endedAt: 4_000 });
+  it.each(["loader", "resource admission"])(
+    "completes ended-hook cleanup when %s rejects",
+    async (failure) => {
+      const error = new Error("plugin runtime import failed");
+      setSubagentRegistryDepsForTest({
+        getRuntimeConfig: () => ({}),
+        loadAgentRuntimePluginRegistryHandle: () => {
+          throw error;
+        },
+      });
+      const warn = vi.fn();
+      const persist = vi.fn();
+      const cleanup = createSubagentRegistryContextCleanup({
+        deps: () => subagentRegistryDeps,
+        persist,
+        warn,
+      });
+      const entry = createSubagentRunRecord({ runId: "run-ended", endedAt: 4_000 });
 
-    await expect(cleanup.emitSubagentEndedHookForRun({ entry })).resolves.toBeUndefined();
+      const invoke = () => cleanup.emitSubagentEndedHookForRun({ entry });
+      let pending: Promise<void>;
+      if (failure === "loader") {
+        pending = invoke();
+      } else {
+        const resources = new PluginRegistryResourceScope();
+        pending = resources.run(() => {
+          resources.release();
+          return invoke();
+        });
+      }
+      await expect(pending).resolves.toBeUndefined();
 
-    expect(warn).toHaveBeenCalledWith("subagent_ended hook failed (best-effort)", {
-      phase: "plugin-runtime",
-      err: error,
-    });
-    expect(entry.endedHookEmittedAt).toBeUndefined();
-    expect(persist).not.toHaveBeenCalled();
-  });
+      expect(warn).toHaveBeenCalledWith("subagent_ended hook failed (best-effort)", {
+        phase: "plugin-runtime",
+        err:
+          failure === "loader"
+            ? error
+            : expect.objectContaining({
+                message: "Plugin registry resource scope has been released",
+              }),
+      });
+      expect(entry.endedHookEmittedAt).toBeUndefined();
+      expect(persist).not.toHaveBeenCalled();
+    },
+  );
 
   it("rechecks lifecycle ownership after resolving the context engine", async () => {
     let releaseResolution!: () => void;

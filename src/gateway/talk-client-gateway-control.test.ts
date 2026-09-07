@@ -1,6 +1,12 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  createPluginRegistryResourceLease,
+  drainPluginRegistryResourceDisposals,
+  getPluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { RealtimeVoiceBridge } from "../talk/provider-types.js";
 import {
   closeTalkClientGatewayControlSession,
@@ -12,6 +18,7 @@ import {
   controlContext,
   controlBridge,
 } from "./talk-client-gateway-control.test-support.js";
+import { createTalkProviderResourceFixture } from "./talk-provider-resources.test-support.js";
 import { cleanupTalkConnection } from "./talk-session-registry.js";
 
 describe("Talk client Gateway control owner", () => {
@@ -574,6 +581,197 @@ describe("Talk client Gateway control owner", () => {
     expect(closeProvider).toHaveBeenCalledOnce();
   });
 
+  it("retains the provider database through failed public close and its retry", async () => {
+    const fixture = createTalkProviderResourceFixture();
+    let failing = true;
+    const closeProvider = vi.fn(async () => {
+      fixture.db.prepare("INSERT INTO calls VALUES (?)").run("close");
+      if (failing) {
+        throw new Error("provider close failed");
+      }
+    });
+    const closeParams = {
+      voiceSessionId: "voice-native-close-retry",
+      sessionKey: sessionTarget.sessionKey,
+      connId: "conn-native-close-retry",
+    };
+    const owner = createTalkClientGatewayControlOwner({
+      ...closeParams,
+      sessionTarget,
+      context: controlContext(),
+      runAgentConsult: vi.fn(async () => ({ text: "done" })),
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession: vi.fn(async () => undefined),
+    });
+    await owner.adoptProvider(
+      () => fixture.resources.run(closeProvider),
+      () => fixture.resources.release(),
+    );
+    owner.activate();
+    fixture.releaseConstruction();
+    try {
+      await expect(closeTalkClientGatewayControlSession(closeParams)).rejects.toThrow(
+        "provider close failed",
+      );
+      await drainPluginRegistryResourceDisposals();
+      expect(fixture.db.isOpen).toBe(true);
+      expect(() => owner.assertOpen()).toThrow(/closed/);
+      failing = false;
+      await expect(closeTalkClientGatewayControlSession(closeParams)).resolves.toBe(true);
+      expect(closeProvider).toHaveBeenCalledTimes(2);
+      await drainPluginRegistryResourceDisposals();
+      expect(fixture.db.isOpen).toBe(false);
+    } finally {
+      failing = false;
+      await owner.close().catch(() => undefined);
+      await fixture.dispose();
+    }
+  });
+
+  it("releases Gateway admission after terminal native provider disposal failure", async () => {
+    const disposalError = new Error("native Gateway disposer failed after close");
+    const fixture = createTalkProviderResourceFixture({ disposalError });
+    const closeProvider = vi.fn(async () => {
+      fixture.db.prepare("INSERT INTO calls VALUES (?)").run("close");
+    });
+    const common = {
+      voiceSessionId: "voice-terminal-native-disposal",
+      connId: "conn-terminal-native-disposal",
+      sessionTarget,
+      context: controlContext(),
+      runAgentConsult: vi.fn(async () => ({ text: "done" })),
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession: vi.fn(async () => undefined),
+    };
+    const closeParams = { ...common, sessionKey: sessionTarget.sessionKey };
+    const owner = createTalkClientGatewayControlOwner(common);
+    let cleanup = false;
+    let replacement: ReturnType<typeof createTalkClientGatewayControlOwner> | undefined;
+    await owner.adoptProvider(
+      () => fixture.resources.run(closeProvider),
+      async () => {
+        fixture.resources.release();
+        if (!cleanup) {
+          await fixture.resources.waitForDisposals();
+        }
+      },
+    );
+    owner.activate();
+    fixture.releaseConstruction();
+    try {
+      await expect(closeTalkClientGatewayControlSession(closeParams)).rejects.toMatchObject({
+        errors: [expect.objectContaining({ cause: disposalError })],
+      });
+      expect(fixture.db.isOpen).toBe(false);
+      expect(closeProvider).toHaveBeenCalledOnce();
+      expect(() => owner.assertOpen()).toThrow(/closed/);
+
+      replacement = createTalkClientGatewayControlOwner(common);
+      await replacement.adoptProvider(async () => undefined);
+      replacement.activate();
+      await expect(owner.close()).rejects.toThrow("Plugin resource scope disposal failed");
+      expect(closeProvider).toHaveBeenCalledOnce();
+      await expect(closeTalkClientGatewayControlSession(closeParams)).resolves.toBe(true);
+      await expect(closeTalkClientGatewayControlSession(closeParams)).resolves.toBe(false);
+
+      replacement = createTalkClientGatewayControlOwner(common);
+      await replacement.adoptProvider(async () => undefined);
+      replacement.activate();
+    } finally {
+      // Let the original broken owner retire after the admission assertion fails.
+      cleanup = true;
+      await owner.close().catch(() => undefined);
+      await replacement?.close();
+      await fixture.dispose().catch(() => undefined);
+    }
+  });
+
+  it.each(["late adoption", "replacement", "late adoption during sibling drain"] as const)(
+    "retains failed %s cleanup until the actual shutdown owner retries",
+    async (ending) => {
+      const fixture = createTalkProviderResourceFixture();
+      const lease = createPluginRegistryResourceLease(fixture.resources);
+      let failing = true;
+      const closeScopes: Array<ReturnType<typeof getPluginRegistryResourceScope>> = [];
+      const closeProvider = vi.fn(async () => {
+        closeScopes.push(getPluginRegistryResourceScope());
+        fixture.db.prepare("INSERT INTO calls VALUES (?)").run("close");
+        if (failing) {
+          throw new Error("provider close failed");
+        }
+      });
+      const common = {
+        voiceSessionId: `voice-native-${ending}`,
+        connId: `conn-native-${ending}`,
+        sessionTarget,
+        context: controlContext(),
+        runWithProviderResources: lease.run,
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        appendTranscript: vi.fn(async () => undefined),
+        flushTranscript: vi.fn(async () => undefined),
+        closeLogicalSession: vi.fn(async () => undefined),
+      };
+      const owner = createTalkClientGatewayControlOwner(common);
+      let replacement: ReturnType<typeof createTalkClientGatewayControlOwner> | undefined;
+      let sibling: ReturnType<typeof createTalkClientGatewayControlOwner> | undefined;
+      const siblingClosed = createDeferred();
+      const release = async () => {
+        lease.release();
+        await fixture.resources.waitForDisposals();
+      };
+      fixture.releaseConstruction();
+      try {
+        if (ending !== "replacement") {
+          if (ending === "late adoption during sibling drain") {
+            sibling = createTalkClientGatewayControlOwner({
+              ...common,
+              voiceSessionId: `${common.voiceSessionId}-sibling`,
+              runWithProviderResources: undefined,
+            });
+            await sibling.adoptProvider(async () => await siblingClosed.promise);
+            sibling.activate();
+          }
+          cleanupTalkConnection(common.connId, { warn: vi.fn() });
+          await owner.close();
+          await expect(owner.adoptProvider(closeProvider, release)).rejects.toThrow(
+            "provider close failed",
+          );
+        } else {
+          await owner.adoptProvider(closeProvider, release);
+          owner.activate();
+          replacement = createTalkClientGatewayControlOwner({
+            ...common,
+            runWithProviderResources: undefined,
+          });
+          await replacement.adoptProvider(async () => undefined);
+          replacement.activate();
+          await expect(owner.close()).rejects.toThrow("provider close failed");
+        }
+        await drainPluginRegistryResourceDisposals();
+        expect(fixture.db.isOpen).toBe(true);
+        expect(closeScopes).toEqual([fixture.resources]);
+        expect(() => createTalkClientGatewayControlOwner(common)).toThrow(
+          "Previous realtime voice session cleanup is still pending",
+        );
+        failing = false;
+        siblingClosed.resolve();
+        await drainGlobalSingletonLifecycleState("restart");
+        expect(closeProvider).toHaveBeenCalledTimes(2);
+        expect(closeScopes).toEqual([fixture.resources, fixture.resources]);
+        expect(fixture.db.isOpen).toBe(false);
+      } finally {
+        failing = false;
+        siblingClosed.resolve();
+        await owner.close().catch(() => undefined);
+        await replacement?.close();
+        await sibling?.close();
+        await fixture.dispose();
+      }
+    },
+  );
+
   it("finishes logical cleanup when provider teardown fails", async () => {
     const closeLogicalSession = vi.fn(async () => undefined);
     const owner = createTalkClientGatewayControlOwner({
@@ -586,11 +784,14 @@ describe("Talk client Gateway control owner", () => {
       flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession,
     });
-    await owner.adoptProvider(vi.fn(() => Promise.reject(new Error("provider close failed"))));
+    await owner.adoptProvider(
+      vi.fn(async () => undefined).mockRejectedValueOnce(new Error("provider close failed")),
+    );
     owner.activate();
 
     await expect(owner.close()).rejects.toThrow("provider close failed");
     expect(closeLogicalSession).toHaveBeenCalledOnce();
+    await owner.close();
   });
 
   it("replaces only the physical transport while preserving the logical owner and run", async () => {

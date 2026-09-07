@@ -1,8 +1,9 @@
 /** CLI integration coverage for plugin commands, setup, status, and registry flows. */
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { aroundEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createPluginCliLoadSession } from "./cli-registry-loader.js";
+import { PluginRegistryResourceScope } from "./registry-resources.js";
 
 const mocks = vi.hoisted(() => ({
   memoryRegister: vi.fn(),
@@ -19,12 +20,29 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./loader.js", () => ({
-  loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
-    mocks.loadOpenClawPluginCliRegistry(...args),
-  loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
-  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
-    mocks.loadOpenClawPlugins({ ...options, activate: false }),
+  loadOpenClawPluginCliRegistry: async (...args: unknown[]) => ({
+    registry: await mocks.loadOpenClawPluginCliRegistry(...args),
+    release() {},
+  }),
+  loadOpenClawPlugins: (...args: unknown[]) => ({
+    registry: mocks.loadOpenClawPlugins(...args),
+    release() {},
+  }),
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) => ({
+    registry: mocks.loadOpenClawPlugins({ ...options, activate: false }),
+    release() {},
+  }),
 }));
+
+aroundEach(async (runTest) => {
+  const resources = new PluginRegistryResourceScope();
+  try {
+    await resources.run(runTest);
+  } finally {
+    resources.release();
+    await resources.waitForDisposals();
+  }
+});
 
 vi.mock("./activation-planner.js", () => ({
   resolveManifestActivationPluginIds: (...args: unknown[]) =>

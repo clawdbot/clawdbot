@@ -40,27 +40,34 @@ async function resolveProviderChoiceModelPrompt(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderChoiceModelPrompt | undefined> {
-  const { resolvePluginProviders, resolveProviderPluginChoice } =
+  const { acquireProviderAuthChoiceProviders, resolveProviderPluginChoice } =
     await import("../plugins/provider-auth-choice.runtime.js");
-  const providers = resolvePluginProviders({
+  const providerHandle = acquireProviderAuthChoiceProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     mode: "setup",
   });
-  const resolved = resolveProviderPluginChoice({
-    providers,
-    choice: params.authChoice,
-  });
-  const wizard = resolved?.provider.wizard?.setup;
-  if (!wizard) {
-    return resolved?.provider.id ? { provider: resolved.provider.id } : undefined;
+  const { providers } = providerHandle;
+  try {
+    const resolved = resolveProviderPluginChoice({
+      providers,
+      choice: params.authChoice,
+    });
+    const wizard = resolved?.provider.wizard?.setup;
+    if (!wizard) {
+      return resolved?.provider.id ? { provider: resolved.provider.id } : undefined;
+    }
+    return {
+      provider: resolved.provider.id,
+      ...wizard.modelAllowlist,
+      ...(wizard.modelSelection?.promptWhenAuthChoiceProvided === true
+        ? { loadCatalog: true }
+        : {}),
+    };
+  } finally {
+    providerHandle.release();
   }
-  return {
-    provider: resolved.provider.id,
-    ...wizard.modelAllowlist,
-    ...(wizard.modelSelection?.promptWhenAuthChoiceProvided === true ? { loadCatalog: true } : {}),
-  };
 }
 
 function hasConfiguredProviderModels(cfg: OpenClawConfig, provider: string | undefined): boolean {

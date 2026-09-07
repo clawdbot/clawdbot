@@ -213,7 +213,10 @@ vi.mock("./models-config.providers.implicit.js", () => ({
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
+  loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) => ({
+    registry: mocks.loadAgentRuntimePluginRegistryHandle(...args),
+    release() {},
+  }),
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({

@@ -12,6 +12,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -397,162 +398,164 @@ function buildInternalSourceReplyToolResult(payload: {
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {
-  const cfg = input.cfg;
-  let params = { ...input.params };
-  const resolvedAgentId =
-    input.agentId ??
-    (input.sessionKey
-      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
-      : undefined);
-  parseJsonMessageParam(params, "presentation");
-  parseJsonMessageParam(params, "delivery");
-  parseInteractiveParam(params);
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const cfg = input.cfg;
+    let params = { ...input.params };
+    const resolvedAgentId =
+      input.agentId ??
+      (input.sessionKey
+        ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
+        : undefined);
+    parseJsonMessageParam(params, "presentation");
+    parseJsonMessageParam(params, "delivery");
+    parseInteractiveParam(params);
 
-  const action = input.action;
-  enforceMessageActionAllowlist({
-    cfg,
-    agentId: resolvedAgentId,
-    action,
-  });
-  if (action === "broadcast") {
-    return handleBroadcastAction({ ...input, agentId: resolvedAgentId }, params);
-  }
-  if (action === "send" && hasPollCreationParams(params)) {
-    throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
-  }
-  if (await shouldUseInternalSourceReplySink(input, params)) {
-    return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
-  }
-
-  const route = await prepareMessageRoute({
-    input,
-    actionParams: params,
-    agentId: resolvedAgentId,
-  });
-  params = route.params;
-  const { channel, channelPlugin, accountId, dryRun, defersExternalTargetResolution } = route;
-
-  const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
-    cfg,
-    action,
-    args: params,
-    channel,
-    accountId,
-    sessionKey: input.sessionKey,
-    sessionId: input.sessionId,
-    agentId: resolvedAgentId,
-    requesterSenderId: input.requesterSenderId,
-    senderIsOwner: input.senderIsOwner,
-  });
-  const structuredAttachmentMode = action === "send" ? "all" : "selected";
-
-  const resolveMediaAccess = () =>
-    input.mediaAccess ??
-    resolveAgentScopedOutboundMediaAccess({
+    const action = input.action;
+    enforceMessageActionAllowlist({
       cfg,
       agentId: resolvedAgentId,
-      mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
-        structuredAttachments: structuredAttachmentMode,
-      }),
-      workspaceMediaAccess: input.workspaceMediaAccess,
-      sessionKey: input.sessionKey,
-      messageProvider: input.sessionKey ? undefined : channel,
-      accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-      requesterSenderId: input.requesterSenderId,
-      requesterSenderName: input.requesterSenderName,
-      requesterSenderUsername: input.requesterSenderUsername,
-      requesterSenderE164: input.requesterSenderE164,
+      action,
     });
-  const mediaAccess = resolveMediaAccess();
-  const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
-    ? mediaAccess.readFile
-    : undefined;
-  const normalizationPolicy = resolveAttachmentMediaPolicy({
-    sandboxRoot: input.sandboxRoot,
-    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
-    mediaAccess,
-    mediaReadFile: sandboxMediaReadFile,
-  });
+    if (action === "broadcast") {
+      return handleBroadcastAction({ ...input, agentId: resolvedAgentId }, params);
+    }
+    if (action === "send" && hasPollCreationParams(params)) {
+      throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
+    }
+    if (await shouldUseInternalSourceReplySink(input, params)) {
+      return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
+    }
 
-  await normalizeSandboxMediaParams({
-    args: params,
-    mediaPolicy: normalizationPolicy,
-    extraParamKeys: extraActionMediaSourceParamKeys,
-    structuredAttachments: structuredAttachmentMode,
-  });
-  const mediaPolicy = resolveAttachmentMediaPolicy({
-    sandboxRoot: input.sandboxRoot,
-    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
-    mediaAccess,
-    mediaReadFile: sandboxMediaReadFile,
-  });
-  const gateway = input.gateway;
-  const preserveSendBuffer =
-    action === "send" &&
-    Boolean(gateway) &&
-    (channelPlugin?.actions?.resolveExecutionMode?.({
-      action: "send",
-    }) === "gateway" ||
-      channelPlugin?.outbound?.deliveryMode === "gateway");
+    const route = await prepareMessageRoute({
+      input,
+      actionParams: params,
+      agentId: resolvedAgentId,
+    });
+    params = route.params;
+    const { channel, channelPlugin, accountId, dryRun, defersExternalTargetResolution } = route;
 
-  const hydrateActionAttachmentParams = () =>
-    hydrateAttachmentParamsForAction({
+    const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
       cfg,
+      action,
+      args: params,
       channel,
       accountId,
-      args: params,
-      action,
-      dryRun,
-      preserveSendBuffer,
-      mediaPolicy,
-      extraParamKeys: extraActionMediaSourceParamKeys,
+      sessionKey: input.sessionKey,
+      sessionId: input.sessionId,
+      agentId: resolvedAgentId,
+      requesterSenderId: input.requesterSenderId,
+      senderIsOwner: input.senderIsOwner,
+    });
+    const structuredAttachmentMode = action === "send" ? "all" : "selected";
+
+    const resolveMediaAccess = () =>
+      input.mediaAccess ??
+      resolveAgentScopedOutboundMediaAccess({
+        cfg,
+        agentId: resolvedAgentId,
+        mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
+          structuredAttachments: structuredAttachmentMode,
+        }),
+        workspaceMediaAccess: input.workspaceMediaAccess,
+        sessionKey: input.sessionKey,
+        messageProvider: input.sessionKey ? undefined : channel,
+        accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+        requesterSenderId: input.requesterSenderId,
+        requesterSenderName: input.requesterSenderName,
+        requesterSenderUsername: input.requesterSenderUsername,
+        requesterSenderE164: input.requesterSenderE164,
+      });
+    const mediaAccess = resolveMediaAccess();
+    const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
+      ? mediaAccess.readFile
+      : undefined;
+    const normalizationPolicy = resolveAttachmentMediaPolicy({
+      sandboxRoot: input.sandboxRoot,
+      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
+      mediaAccess,
+      mediaReadFile: sandboxMediaReadFile,
     });
 
-  if (action !== "send") {
-    await hydrateActionAttachmentParams();
-  }
+    await normalizeSandboxMediaParams({
+      args: params,
+      mediaPolicy: normalizationPolicy,
+      extraParamKeys: extraActionMediaSourceParamKeys,
+      structuredAttachments: structuredAttachmentMode,
+    });
+    const mediaPolicy = resolveAttachmentMediaPolicy({
+      sandboxRoot: input.sandboxRoot,
+      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
+      mediaAccess,
+      mediaReadFile: sandboxMediaReadFile,
+    });
+    const gateway = input.gateway;
+    const preserveSendBuffer =
+      action === "send" &&
+      Boolean(gateway) &&
+      (channelPlugin?.actions?.resolveExecutionMode?.({
+        action: "send",
+      }) === "gateway" ||
+        channelPlugin?.outbound?.deliveryMode === "gateway");
 
-  const resolvedTarget = await resolveMessageTarget({
-    cfg,
-    channel,
-    action,
-    args: params,
-    accountId,
-    toolContext: input.toolContext,
-    agentId: resolvedAgentId,
-    deferExternalTargetResolution: defersExternalTargetResolution,
-    plugin: channelPlugin,
+    const hydrateActionAttachmentParams = () =>
+      hydrateAttachmentParamsForAction({
+        cfg,
+        channel,
+        accountId,
+        args: params,
+        action,
+        dryRun,
+        preserveSendBuffer,
+        mediaPolicy,
+        extraParamKeys: extraActionMediaSourceParamKeys,
+      });
+
+    if (action !== "send") {
+      await hydrateActionAttachmentParams();
+    }
+
+    const resolvedTarget = await resolveMessageTarget({
+      cfg,
+      channel,
+      action,
+      args: params,
+      accountId,
+      toolContext: input.toolContext,
+      agentId: resolvedAgentId,
+      deferExternalTargetResolution: defersExternalTargetResolution,
+      plugin: channelPlugin,
+    });
+
+    if (action === "send") {
+      // Target validation must finish before buffer staging, which can perform
+      // filesystem reads and mutate the outbound action payload.
+      await hydrateActionAttachmentParams();
+    }
+
+    // Channel discovery is process-stable; carry its prepared plugin and route
+    // into every action so handlers cannot rediscover a different transport.
+    const context: ResolvedActionContext = {
+      cfg,
+      params,
+      idempotencyKey: normalizeOptionalString(params.idempotencyKey),
+      channel,
+      channelPlugin,
+      mediaAccess,
+      extraActionMediaSourceParamKeys,
+      accountId,
+      dryRun,
+      gateway,
+      input,
+      agentId: resolvedAgentId,
+      resolvedTarget,
+      abortSignal: input.abortSignal,
+    };
+    if (action === "send") {
+      return executeMessageSend(context);
+    }
+    if (action === "poll") {
+      return executeMessagePoll(context);
+    }
+    return executeMessagePlugin(context);
   });
-
-  if (action === "send") {
-    // Target validation must finish before buffer staging, which can perform
-    // filesystem reads and mutate the outbound action payload.
-    await hydrateActionAttachmentParams();
-  }
-
-  // Channel discovery is process-stable; carry its prepared plugin and route
-  // into every action so handlers cannot rediscover a different transport.
-  const context: ResolvedActionContext = {
-    cfg,
-    params,
-    idempotencyKey: normalizeOptionalString(params.idempotencyKey),
-    channel,
-    channelPlugin,
-    mediaAccess,
-    extraActionMediaSourceParamKeys,
-    accountId,
-    dryRun,
-    gateway,
-    input,
-    agentId: resolvedAgentId,
-    resolvedTarget,
-    abortSignal: input.abortSignal,
-  };
-  if (action === "send") {
-    return executeMessageSend(context);
-  }
-  if (action === "poll") {
-    return executeMessagePoll(context);
-  }
-  return executeMessagePlugin(context);
 }

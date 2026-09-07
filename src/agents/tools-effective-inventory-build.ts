@@ -6,6 +6,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
@@ -172,7 +173,7 @@ function buildEffectiveToolInventoryEntries(
   );
 }
 
-/** Normalizes tools, quarantines incompatible schemas, and returns inventory output. */
+/** Owns provider normalization through projection, without exporting executable tool definitions. */
 export function buildRuntimeCompatibleToolInventory(params: {
   tools: readonly AnyAgentTool[];
   cfg: OpenClawConfig;
@@ -185,27 +186,29 @@ export function buildRuntimeCompatibleToolInventory(params: {
   entries: EffectiveToolInventoryEntry[];
   notices: EffectiveToolInventoryNotice[];
 } {
-  const rawToolsByName = buildReadableToolsByName(params.tools);
-  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
-  const normalizedTools = normalizeAgentRuntimeTools({
-    tools: params.tools,
-    provider: params.modelProvider ?? "",
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    modelId: params.modelId,
-    modelApi: params.modelApi ?? undefined,
-    model: params.runtimeModel,
-    onPreNormalizationSchemaDiagnostics: (diagnostics) =>
-      preNormalizationDiagnostics.push(...diagnostics),
+  return withPluginRegistryResourceOperation(() => {
+    const rawToolsByName = buildReadableToolsByName(params.tools);
+    const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
+    const normalizedTools = normalizeAgentRuntimeTools({
+      tools: params.tools,
+      provider: params.modelProvider ?? "",
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      modelId: params.modelId,
+      modelApi: params.modelApi ?? undefined,
+      model: params.runtimeModel,
+      onPreNormalizationSchemaDiagnostics: (diagnostics) =>
+        preNormalizationDiagnostics.push(...diagnostics),
+    });
+    const projection = filterRuntimeCompatibleTools(normalizedTools);
+    const diagnostics = [...preNormalizationDiagnostics, ...projection.diagnostics];
+    return {
+      entries: buildEffectiveToolInventoryEntries(projection.tools, rawToolsByName),
+      notices: buildUnsupportedToolSchemaNotices({
+        diagnostics,
+        tools: normalizedTools,
+        rawToolsByName,
+      }),
+    };
   });
-  const projection = filterRuntimeCompatibleTools(normalizedTools);
-  const diagnostics = [...preNormalizationDiagnostics, ...projection.diagnostics];
-  return {
-    entries: buildEffectiveToolInventoryEntries(projection.tools, rawToolsByName),
-    notices: buildUnsupportedToolSchemaNotices({
-      diagnostics,
-      tools: normalizedTools,
-      rawToolsByName,
-    }),
-  };
 }

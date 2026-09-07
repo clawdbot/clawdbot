@@ -19,6 +19,7 @@ import { setVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { formatCliCommand } from "./command-format.js";
@@ -271,37 +272,39 @@ export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const resolvedChannel = await resolveChannelPluginForMode(opts, "login", runtime);
-  if (!resolvedChannel) {
-    return;
-  }
-  const { cfg, channelInput, plugin } = resolvedChannel;
-  const login = plugin.auth?.login;
-  if (!login) {
-    throw new Error(
-      formatUnsupportedChannelActionMessage({
-        channel: channelInput,
-        action: "login",
-        inspectCommand: "openclaw channels status --channel " + channelInput,
-      }),
-    );
-  }
-  // Auth-only flow: do not mutate channel config here.
-  setVerbose(Boolean(opts.verbose));
-  const { accountId } = resolveAccountContext(plugin, opts, cfg);
-  await login({
-    cfg,
-    accountId,
-    runtime,
-    verbose: Boolean(opts.verbose),
-    channelInput,
-  });
-  await reconcileGatewayRuntimeAfterLocalLogin({
-    cfg,
-    plugin,
-    channelId: plugin.id,
-    accountId,
-    runtime,
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const resolvedChannel = await resolveChannelPluginForMode(opts, "login", runtime);
+    if (!resolvedChannel) {
+      return;
+    }
+    const { cfg, channelInput, plugin } = resolvedChannel;
+    const login = plugin.auth?.login;
+    if (!login) {
+      throw new Error(
+        formatUnsupportedChannelActionMessage({
+          channel: channelInput,
+          action: "login",
+          inspectCommand: "openclaw channels status --channel " + channelInput,
+        }),
+      );
+    }
+    // Auth-only flow: do not mutate channel config here.
+    setVerbose(Boolean(opts.verbose));
+    const { accountId } = resolveAccountContext(plugin, opts, cfg);
+    await login({
+      cfg,
+      accountId,
+      runtime,
+      verbose: Boolean(opts.verbose),
+      channelInput,
+    });
+    await reconcileGatewayRuntimeAfterLocalLogin({
+      cfg,
+      plugin,
+      channelId: plugin.id,
+      accountId,
+      runtime,
+    });
   });
 }
 
@@ -309,42 +312,44 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const resolvedChannel = await resolveChannelPluginForMode(opts, "logout", runtime);
-  if (!resolvedChannel) {
-    return;
-  }
-  const { cfg, channelInput, plugin } = resolvedChannel;
-  const logoutAccount = plugin.gateway?.logoutAccount;
-  if (!logoutAccount) {
-    throw new Error(
-      formatUnsupportedChannelActionMessage({
-        channel: channelInput,
-        action: "logout",
-        inspectCommand: "openclaw channels status --channel " + channelInput,
-      }),
-    );
-  }
-  // Prefer the live gateway so logout also stops any active channel runtime.
-  const { accountId } = resolveAccountContext(plugin, opts, cfg);
-  let result = await logoutViaGatewayRuntime({
-    cfg,
-    channelId: plugin.id,
-    accountId,
-    runtime,
-  });
-  if (!result) {
-    const account = plugin.config.resolveAccount(cfg, accountId);
-    result = await logoutAccount({
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const resolvedChannel = await resolveChannelPluginForMode(opts, "logout", runtime);
+    if (!resolvedChannel) {
+      return;
+    }
+    const { cfg, channelInput, plugin } = resolvedChannel;
+    const logoutAccount = plugin.gateway?.logoutAccount;
+    if (!logoutAccount) {
+      throw new Error(
+        formatUnsupportedChannelActionMessage({
+          channel: channelInput,
+          action: "logout",
+          inspectCommand: "openclaw channels status --channel " + channelInput,
+        }),
+      );
+    }
+    // Prefer the live gateway so logout also stops any active channel runtime.
+    const { accountId } = resolveAccountContext(plugin, opts, cfg);
+    let result = await logoutViaGatewayRuntime({
       cfg,
+      channelId: plugin.id,
       accountId,
-      account,
       runtime,
     });
-  }
-  const scope = sanitizeForLog(`${plugin.id}/${accountId}`);
-  runtime.log(
-    `${result.cleared ? "Cleared saved auth" : "No saved auth was cleared"} for ${scope}.${
-      result.loggedOut === false ? " Other credentials may still be active." : ""
-    }`,
-  );
+    if (!result) {
+      const account = plugin.config.resolveAccount(cfg, accountId);
+      result = await logoutAccount({
+        cfg,
+        accountId,
+        account,
+        runtime,
+      });
+    }
+    const scope = sanitizeForLog(`${plugin.id}/${accountId}`);
+    runtime.log(
+      `${result.cleared ? "Cleared saved auth" : "No saved auth was cleared"} for ${scope}.${
+        result.loggedOut === false ? " Other credentials may still be active." : ""
+      }`,
+    );
+  });
 }

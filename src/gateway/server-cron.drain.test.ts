@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as cronScripts from "../cron/trigger-script.js";
 
 const { cancelAllMock, getRuntimeConfigMock, stopAllMock } = vi.hoisted(() => ({
   cancelAllMock: vi.fn<() => Promise<void>>(),
@@ -118,6 +119,72 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     } finally {
       exitWatcherDrain.resolve(undefined);
       await cleanGatewayCron(original);
+    }
+  });
+
+  it("waits for independent watcher drains before reporting script resource disposal failure", async () => {
+    const exitWatcherDrain = createDeferred();
+    const streamWatcherDrain = createDeferred();
+    cancelAllMock.mockReturnValue(exitWatcherDrain.promise);
+    stopAllMock.mockReturnValue(streamWatcherDrain.promise);
+    const failure = new Error("script registration resource disposal failed");
+    const createScriptRuntime = cronScripts.createCronScriptRuntime;
+    const scriptDisposed = vi.fn();
+    const createRuntime = vi
+      .spyOn(cronScripts, "createCronScriptRuntime")
+      .mockImplementation((deps) => {
+        const runtime = createScriptRuntime(deps);
+        return {
+          ...runtime,
+          dispose: async () => {
+            await runtime.dispose();
+            scriptDisposed();
+            throw failure;
+          },
+        };
+      });
+    let original: StartedGatewayCron | undefined;
+    let drain: Promise<void> | undefined;
+    let observed: Promise<void> | undefined;
+    try {
+      original = await startGatewayCron("script-disposal-failure");
+      const settled = vi.fn();
+      drain = original.state.cron.stopAndDrain?.();
+      if (!drain) {
+        throw new Error("expected cron stop-and-drain");
+      }
+      observed = drain.then(settled, settled);
+
+      await vi.waitFor(() => expect(scriptDisposed).toHaveBeenCalledOnce());
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(cancelAllMock).toHaveBeenCalledOnce();
+      expect(stopAllMock).toHaveBeenCalledOnce();
+      expect(settled).not.toHaveBeenCalled();
+
+      exitWatcherDrain.resolve(undefined);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).not.toHaveBeenCalled();
+
+      streamWatcherDrain.resolve(undefined);
+      await expect(drain).rejects.toBe(failure);
+      await observed;
+      expect(settled).toHaveBeenCalledExactlyOnceWith(failure);
+    } finally {
+      exitWatcherDrain.resolve(undefined);
+      streamWatcherDrain.resolve(undefined);
+      await observed;
+      try {
+        await original?.state.cron.stopAndDrain?.().catch(() => {});
+      } finally {
+        createRuntime.mockRestore();
+        if (original) {
+          await rm(original.stateDir, { recursive: true, force: true });
+        }
+      }
     }
   });
 

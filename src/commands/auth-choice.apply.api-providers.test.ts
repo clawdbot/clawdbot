@@ -6,7 +6,13 @@ import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-
 import { prepareAuthChoice } from "./auth-choice.apply.js";
 
 const resolvePluginProviders = vi.hoisted(() =>
-  vi.fn<typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders>(),
+  vi.fn<
+    (
+      ...args: Parameters<
+        typeof import("../plugins/provider-auth-choice.runtime.js").acquireProviderAuthChoiceProviders
+      >
+    ) => ProviderPlugin[]
+  >(),
 );
 const resolvePluginSetupProvider = vi.hoisted(() => vi.fn(() => undefined));
 const prepareAuthChoiceLoadedPluginProvider = vi.hoisted(() =>
@@ -21,7 +27,10 @@ const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() =>
 );
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
-  resolvePluginProviders,
+  acquireProviderAuthChoiceProviders: (...args: Parameters<typeof resolvePluginProviders>) => ({
+    providers: resolvePluginProviders(...args),
+    release() {},
+  }),
   resolvePluginSetupProvider,
 }));
 vi.mock("../plugins/provider-auth-choice.js", () => ({

@@ -15,6 +15,7 @@ import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channel
 import type { ChannelPlugin, ChannelPollResult } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -347,298 +348,304 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
 }
 
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
-  const cfg = await resolveMessageConfig(params.cfg);
-  const reply = normalizeOutboundReplyFacts({ reply: params.reply, replyToId: params.replyToId });
-  const prepared = params.preparedPlugin
-    ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
-    : await resolveRequiredChannel({ cfg, channel: params.channel });
-  const { channel, plugin } = prepared;
-  const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
-  const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
-    (source): source is string => Boolean(source),
-  );
-  const hasRealMediaSource = mediaSources.some((source) => source !== SEND_BUFFER_MEDIA_URL);
-  const shouldForwardBuffer =
-    deliveryMode === "gateway" && Boolean(params.buffer) && !hasRealMediaSource;
-  const mediaUrl = params.mediaUrl ?? (shouldForwardBuffer ? SEND_BUFFER_MEDIA_URL : undefined);
-  const mediaUrls = params.mediaUrls ?? (shouldForwardBuffer ? [SEND_BUFFER_MEDIA_URL] : undefined);
-  const outboundPayloads =
-    params.payloads && params.payloads.length > 0
-      ? params.payloads
-      : [
-          {
-            text: params.content,
-            mediaUrl,
-            mediaUrls,
-            audioAsVoice: params.asVoice === true,
-          },
-        ];
-  const outboundPlan = createOutboundPayloadPlan(outboundPayloads);
-  const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
-  const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
-  const mirrorText = mirrorProjection.text;
-  const mirrorMediaUrls = mirrorProjection.mediaUrls;
-  const primaryMediaUrl = mirrorMediaUrls[0] ?? mediaUrl ?? null;
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const cfg = await resolveMessageConfig(params.cfg);
+    const reply = normalizeOutboundReplyFacts({ reply: params.reply, replyToId: params.replyToId });
+    const prepared = params.preparedPlugin
+      ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
+      : await resolveRequiredChannel({ cfg, channel: params.channel });
+    const { channel, plugin } = prepared;
+    const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
+    const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
+      (source): source is string => Boolean(source),
+    );
+    const hasRealMediaSource = mediaSources.some((source) => source !== SEND_BUFFER_MEDIA_URL);
+    const shouldForwardBuffer =
+      deliveryMode === "gateway" && Boolean(params.buffer) && !hasRealMediaSource;
+    const mediaUrl = params.mediaUrl ?? (shouldForwardBuffer ? SEND_BUFFER_MEDIA_URL : undefined);
+    const mediaUrls =
+      params.mediaUrls ?? (shouldForwardBuffer ? [SEND_BUFFER_MEDIA_URL] : undefined);
+    const outboundPayloads =
+      params.payloads && params.payloads.length > 0
+        ? params.payloads
+        : [
+            {
+              text: params.content,
+              mediaUrl,
+              mediaUrls,
+              audioAsVoice: params.asVoice === true,
+            },
+          ];
+    const outboundPlan = createOutboundPayloadPlan(outboundPayloads);
+    const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
+    const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
+    const mirrorText = mirrorProjection.text;
+    const mirrorMediaUrls = mirrorProjection.mediaUrls;
+    const primaryMediaUrl = mirrorMediaUrls[0] ?? mediaUrl ?? null;
 
-  if (params.dryRun) {
-    return {
-      channel,
-      to: params.to,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
-      mediaUrl: primaryMediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-      dryRun: true,
-    };
-  }
-
-  if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
-    const outboundChannel = channel;
-    const resolvedTarget = resolveOutboundTarget({
-      channel: outboundChannel,
-      plugin,
-      to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
-    });
-    if (!resolvedTarget.ok) {
-      throw resolvedTarget.error;
+    if (params.dryRun) {
+      return {
+        channel,
+        to: params.to,
+        via: deliveryMode === "gateway" ? "gateway" : "direct",
+        mediaUrl: primaryMediaUrl,
+        mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+        dryRun: true,
+      };
     }
 
-    const outboundSession = buildOutboundSessionContext({
-      cfg,
-      agentId: params.agentId,
-      sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
-      conversationType: params.conversationType,
-      requesterAccountId: params.requesterAccountId ?? params.accountId,
-      requesterSenderId: params.requesterSenderId,
-      requesterSenderName: params.requesterSenderName,
-      requesterSenderUsername: params.requesterSenderUsername,
-      requesterSenderE164: params.requesterSenderE164,
-    });
-    // Public queuePolicy:"required" is the exact-delivery contract preflighted below.
-    // Lower-level queue-required callers must leave this internal opt-in unset.
-    const requireUnknownSendReconciliation =
-      params.requireUnknownSendReconciliation ?? params.queuePolicy === "required";
-    if (requireUnknownSendReconciliation) {
-      await assertRequiredMessageSendDurability({
+    if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
+      const outboundChannel = channel;
+      const resolvedTarget = resolveOutboundTarget({
+        channel: outboundChannel,
+        plugin,
+        to: params.to,
+        cfg,
+        accountId: params.accountId,
+        mode: "explicit",
+      });
+      if (!resolvedTarget.ok) {
+        throw resolvedTarget.error;
+      }
+
+      const outboundSession = buildOutboundSessionContext({
         cfg,
         agentId: params.agentId,
-        channel: outboundChannel,
-        payloads: normalizedPayloads,
-        replyToId: reply?.replyToId,
-        threadId: params.threadId,
-        silent: params.silent,
+        sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
+        conversationType: params.conversationType,
+        requesterAccountId: params.requesterAccountId ?? params.accountId,
+        requesterSenderId: params.requesterSenderId,
+        requesterSenderName: params.requesterSenderName,
+        requesterSenderUsername: params.requesterSenderUsername,
+        requesterSenderE164: params.requesterSenderE164,
       });
+      // Public queuePolicy:"required" is the exact-delivery contract preflighted below.
+      // Lower-level queue-required callers must leave this internal opt-in unset.
+      const requireUnknownSendReconciliation =
+        params.requireUnknownSendReconciliation ?? params.queuePolicy === "required";
+      if (requireUnknownSendReconciliation) {
+        await assertRequiredMessageSendDurability({
+          cfg,
+          agentId: params.agentId,
+          channel: outboundChannel,
+          payloads: normalizedPayloads,
+          replyToId: reply?.replyToId,
+          threadId: params.threadId,
+          silent: params.silent,
+        });
+      }
+      const send = await sendDurableMessageBatchCore({
+        cfg,
+        channel: outboundChannel,
+        to: resolvedTarget.to,
+        session: outboundSession,
+        runId: params.runId,
+        executionIdentityToken: params.executionIdentityToken,
+        accountId: params.accountId,
+        conversationReadOrigin: params.conversationReadOrigin,
+        payloads: normalizedPayloads,
+        reply,
+        threadId: params.threadId,
+        gifPlayback: params.gifPlayback,
+        forceDocument: params.forceDocument,
+        deps: params.deps,
+        bestEffort: params.bestEffort,
+        ...(requireUnknownSendReconciliation ? { requireUnknownSendReconciliation: true } : {}),
+        durability:
+          params.bestEffort || params.queuePolicy === "best_effort" ? "best_effort" : "required",
+        signal: params.abortSignal,
+        silent: params.silent,
+        mediaAccess: params.mediaAccess,
+        formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
+        preparedMessageId: params.preparedMessageId,
+        deliveryIntentId: params.deliveryIntentId,
+        deliveryCompletion: params.deliveryCompletion,
+        reusePendingDeliveryIntent: params.reusePendingDeliveryIntent,
+        deliveryRetryOwner: params.deliveryRetryOwner,
+        completionRetention: params.completionRetention,
+        ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
+        ...(params.onDeliveryAttempt ? { onDeliveryAttempt: params.onDeliveryAttempt } : {}),
+        ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
+        ...(params.onPlatformSendDispatch
+          ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
+          : {}),
+        skipQueue: params.skipQueue,
+        ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
+        mirror: params.mirror
+          ? {
+              ...params.mirror,
+              text: mirrorText || params.content,
+              mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+              idempotencyKey: params.mirror.idempotencyKey ?? params.idempotencyKey,
+            }
+          : undefined,
+      });
+      const shouldThrowFailure =
+        !params.bestEffort && params.gateway?.clientName !== GATEWAY_CLIENT_NAMES.CLI;
+      if (shouldThrowFailure && (send.status === "failed" || send.status === "partial_failed")) {
+        throw send.error;
+      }
+      const results =
+        send.status === "sent" || send.status === "partial_failed" ? send.results : [];
+      const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes);
+
+      return {
+        channel,
+        to: params.to,
+        via: "direct",
+        mediaUrl: primaryMediaUrl,
+        mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+        result: results.at(-1),
+        deliveryStatus: send.status,
+        ...(send.status === "suppressed" ? { suppressionReason: send.reason } : {}),
+        ...(send.status === "failed" || send.status === "partial_failed"
+          ? { error: formatErrorMessage(send.error) }
+          : {}),
+        ...(send.status === "partial_failed" ? { sentBeforeError: true as const } : {}),
+        ...(payloadOutcomes ? { payloadOutcomes } : {}),
+      };
     }
-    const send = await sendDurableMessageBatchCore({
-      cfg,
-      channel: outboundChannel,
-      to: resolvedTarget.to,
-      session: outboundSession,
-      runId: params.runId,
-      executionIdentityToken: params.executionIdentityToken,
-      accountId: params.accountId,
-      conversationReadOrigin: params.conversationReadOrigin,
-      payloads: normalizedPayloads,
-      reply,
-      threadId: params.threadId,
-      gifPlayback: params.gifPlayback,
-      forceDocument: params.forceDocument,
-      deps: params.deps,
-      bestEffort: params.bestEffort,
-      ...(requireUnknownSendReconciliation ? { requireUnknownSendReconciliation: true } : {}),
-      durability:
-        params.bestEffort || params.queuePolicy === "best_effort" ? "best_effort" : "required",
-      signal: params.abortSignal,
-      silent: params.silent,
-      mediaAccess: params.mediaAccess,
-      formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
-      preparedMessageId: params.preparedMessageId,
-      deliveryIntentId: params.deliveryIntentId,
-      deliveryCompletion: params.deliveryCompletion,
-      reusePendingDeliveryIntent: params.reusePendingDeliveryIntent,
-      deliveryRetryOwner: params.deliveryRetryOwner,
-      completionRetention: params.completionRetention,
-      ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
-      ...(params.onDeliveryAttempt ? { onDeliveryAttempt: params.onDeliveryAttempt } : {}),
-      ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
-      ...(params.onPlatformSendDispatch
-        ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
-        : {}),
-      skipQueue: params.skipQueue,
-      ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
-      mirror: params.mirror
-        ? {
-            ...params.mirror,
-            text: mirrorText || params.content,
-            mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-            idempotencyKey: params.mirror.idempotencyKey ?? params.idempotencyKey,
-          }
-        : undefined,
+
+    const result = await callMessageGateway<{ messageId: string }>({
+      gateway: params.gateway,
+      method: "send",
+      onPlatformSendDispatch: params.onPlatformSendDispatch,
+      params: {
+        to: params.to,
+        message: params.content,
+        mediaUrl,
+        mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : mediaUrls,
+        buffer: shouldForwardBuffer ? params.buffer : undefined,
+        filename: shouldForwardBuffer ? params.filename : undefined,
+        contentType: shouldForwardBuffer ? params.contentType : undefined,
+        asVoice: params.asVoice,
+        gifPlayback: params.gifPlayback,
+        accountId: params.accountId,
+        agentId: params.agentId,
+        channel,
+        replyToId: reply?.replyToId,
+        threadId: params.threadId != null ? String(params.threadId) : undefined,
+        forceDocument: params.forceDocument,
+        silent: params.silent,
+        parseMode: params.parseMode,
+        sessionKey: params.mirror?.sessionKey,
+        idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
+      },
     });
-    const shouldThrowFailure =
-      !params.bestEffort && params.gateway?.clientName !== GATEWAY_CLIENT_NAMES.CLI;
-    if (shouldThrowFailure && (send.status === "failed" || send.status === "partial_failed")) {
-      throw send.error;
-    }
-    const results = send.status === "sent" || send.status === "partial_failed" ? send.results : [];
-    const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes);
 
     return {
       channel,
       to: params.to,
-      via: "direct",
+      via: "gateway",
       mediaUrl: primaryMediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-      result: results.at(-1),
-      deliveryStatus: send.status,
-      ...(send.status === "suppressed" ? { suppressionReason: send.reason } : {}),
-      ...(send.status === "failed" || send.status === "partial_failed"
-        ? { error: formatErrorMessage(send.error) }
-        : {}),
-      ...(send.status === "partial_failed" ? { sentBeforeError: true as const } : {}),
-      ...(payloadOutcomes ? { payloadOutcomes } : {}),
+      result,
     };
-  }
-
-  const result = await callMessageGateway<{ messageId: string }>({
-    gateway: params.gateway,
-    method: "send",
-    onPlatformSendDispatch: params.onPlatformSendDispatch,
-    params: {
-      to: params.to,
-      message: params.content,
-      mediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : mediaUrls,
-      buffer: shouldForwardBuffer ? params.buffer : undefined,
-      filename: shouldForwardBuffer ? params.filename : undefined,
-      contentType: shouldForwardBuffer ? params.contentType : undefined,
-      asVoice: params.asVoice,
-      gifPlayback: params.gifPlayback,
-      accountId: params.accountId,
-      agentId: params.agentId,
-      channel,
-      replyToId: reply?.replyToId,
-      threadId: params.threadId != null ? String(params.threadId) : undefined,
-      forceDocument: params.forceDocument,
-      silent: params.silent,
-      parseMode: params.parseMode,
-      sessionKey: params.mirror?.sessionKey,
-      idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
-    },
   });
-
-  return {
-    channel,
-    to: params.to,
-    via: "gateway",
-    mediaUrl: primaryMediaUrl,
-    mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-    result,
-  };
 }
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
-  const cfg = await resolveMessageConfig(params.cfg);
-  const prepared = params.preparedPlugin
-    ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
-    : await resolveRequiredChannel({ cfg, channel: params.channel });
-  const { channel, plugin } = prepared;
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const cfg = await resolveMessageConfig(params.cfg);
+    const prepared = params.preparedPlugin
+      ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
+      : await resolveRequiredChannel({ cfg, channel: params.channel });
+    const { channel, plugin } = prepared;
 
-  const pollInput: PollInput = {
-    question: params.question,
-    options: params.options,
-    maxSelections: params.maxSelections,
-    durationSeconds: params.durationSeconds,
-    durationHours: params.durationHours,
-  };
-  const outbound = plugin.outbound;
-  if (!outbound?.sendPoll) {
-    throw new Error(`Unsupported poll channel: ${channel}`);
-  }
-  const deliveryMode = outbound.deliveryMode ?? "direct";
-  const normalized = outbound.pollMaxOptions
-    ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
-    : normalizePollInput(pollInput);
+    const pollInput: PollInput = {
+      question: params.question,
+      options: params.options,
+      maxSelections: params.maxSelections,
+      durationSeconds: params.durationSeconds,
+      durationHours: params.durationHours,
+    };
+    const outbound = plugin.outbound;
+    if (!outbound?.sendPoll) {
+      throw new Error(`Unsupported poll channel: ${channel}`);
+    }
+    const deliveryMode = outbound.deliveryMode ?? "direct";
+    const normalized = outbound.pollMaxOptions
+      ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
+      : normalizePollInput(pollInput);
 
-  if (params.dryRun) {
-    return buildMessagePollResult({
-      channel,
-      to: params.to,
-      normalized,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
-      dryRun: true,
-    });
-  }
-
-  assertPollOptionSupport({
-    channel,
-    outbound,
-    durationSeconds: params.durationSeconds,
-    isAnonymous: params.isAnonymous,
-  });
-
-  if (deliveryMode !== "gateway") {
-    const resolvedTarget = resolveOutboundTarget({
-      channel,
-      plugin,
-      to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
-    });
-    if (!resolvedTarget.ok) {
-      throw resolvedTarget.error;
+    if (params.dryRun) {
+      return buildMessagePollResult({
+        channel,
+        to: params.to,
+        normalized,
+        via: deliveryMode === "gateway" ? "gateway" : "direct",
+        dryRun: true,
+      });
     }
 
-    const result = await outbound.sendPoll({
-      cfg,
-      to: resolvedTarget.to,
-      poll: normalized,
-      content: params.content,
-      accountId: params.accountId,
-      threadId: params.threadId,
-      silent: params.silent,
+    assertPollOptionSupport({
+      channel,
+      outbound,
+      durationSeconds: params.durationSeconds,
       isAnonymous: params.isAnonymous,
-      sessionKey: params.sessionKey,
-      inboundEventKind: params.inboundEventKind,
-      onPlatformSendDispatch: params.onPlatformSendDispatch,
+    });
+
+    if (deliveryMode !== "gateway") {
+      const resolvedTarget = resolveOutboundTarget({
+        channel,
+        plugin,
+        to: params.to,
+        cfg,
+        accountId: params.accountId,
+        mode: "explicit",
+      });
+      if (!resolvedTarget.ok) {
+        throw resolvedTarget.error;
+      }
+
+      const result = await outbound.sendPoll({
+        cfg,
+        to: resolvedTarget.to,
+        poll: normalized,
+        content: params.content,
+        accountId: params.accountId,
+        threadId: params.threadId,
+        silent: params.silent,
+        isAnonymous: params.isAnonymous,
+        sessionKey: params.sessionKey,
+        inboundEventKind: params.inboundEventKind,
+        onPlatformSendDispatch: params.onPlatformSendDispatch,
+      });
+
+      return buildMessagePollResult({
+        channel,
+        to: params.to,
+        normalized,
+        via: "direct",
+        result: normalizeMessagePollDeliveryResult(result),
+      });
+    }
+
+    const result = await callMessageGateway<ChannelPollResult>({
+      gateway: params.gateway,
+      method: "poll",
+      params: {
+        to: params.to,
+        question: normalized.question,
+        options: normalized.options,
+        maxSelections: normalized.maxSelections,
+        durationSeconds: normalized.durationSeconds,
+        durationHours: normalized.durationHours,
+        threadId: params.threadId,
+        silent: params.silent,
+        isAnonymous: params.isAnonymous,
+        channel,
+        accountId: params.accountId,
+        idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
+      },
     });
 
     return buildMessagePollResult({
       channel,
       to: params.to,
       normalized,
-      via: "direct",
+      via: "gateway",
       result: normalizeMessagePollDeliveryResult(result),
     });
-  }
-
-  const result = await callMessageGateway<ChannelPollResult>({
-    gateway: params.gateway,
-    method: "poll",
-    params: {
-      to: params.to,
-      question: normalized.question,
-      options: normalized.options,
-      maxSelections: normalized.maxSelections,
-      durationSeconds: normalized.durationSeconds,
-      durationHours: normalized.durationHours,
-      threadId: params.threadId,
-      silent: params.silent,
-      isAnonymous: params.isAnonymous,
-      channel,
-      accountId: params.accountId,
-      idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
-    },
-  });
-
-  return buildMessagePollResult({
-    channel,
-    to: params.to,
-    normalized,
-    via: "gateway",
-    result: normalizeMessagePollDeliveryResult(result),
   });
 }

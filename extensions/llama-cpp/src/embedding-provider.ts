@@ -1,9 +1,9 @@
 import path from "node:path";
-import {
-  getEmbeddingProvider,
-  type EmbeddingProvider,
-  type EmbeddingProviderAdapter,
-  type EmbeddingProviderCreateOptions,
+import * as embeddingProviders from "openclaw/plugin-sdk/embedding-providers";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderAdapter,
+  EmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -138,6 +138,7 @@ async function prepareEmbeddingServer(
 }
 
 function wrapProvider(params: {
+  releaseRegistration(): void;
   provider: EmbeddingProvider;
   canonicalModel: string;
   baseUrl: string;
@@ -169,7 +170,10 @@ function wrapProvider(params: {
       await withFacts(async () => await params.provider.embed(input, callOptions)),
     embedBatch: async (inputs, callOptions) =>
       await withFacts(async () => await params.provider.embedBatch(inputs, callOptions)),
-    close: params.provider.close,
+    close: async () => {
+      await params.provider.close?.();
+      params.releaseRegistration();
+    },
   };
   Object.defineProperty(wrapped, LOCAL_EMBEDDING_RUNTIME_FACTS, {
     enumerable: false,
@@ -193,39 +197,66 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
     const embeddingModel = resolveLlamaCppEmbeddingModel(local);
     const identity = resolveModelIdentity(local, options.dimensions);
     await prepareEmbeddingServer(options, embeddingModel.source, embeddingModel.isDefault);
-    const genericAdapter = getEmbeddingProvider("openai-compatible", options.config);
+    const registration = acquireEmbeddingProvider("openai-compatible", options.config);
+    const genericAdapter = registration.provider;
     if (!genericAdapter) {
+      registration.release();
       throw new Error("OpenAI-compatible embedding transport is unavailable.");
     }
     const acquireLocalService = (options as LocalServiceAwareOptions).acquireLocalService; // SAFETY: core runtime owns this injected option.
-    const result = await genericAdapter.create({
-      ...options,
-      provider: LLAMA_CPP_PROVIDER_ID,
-      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
-      remote: undefined,
-      ...(acquireLocalService
-        ? {
-            acquireLocalService: (...[target, signal]: Parameters<AcquireLocalService>) =>
-              acquireLocalService({ ...target, reconcile: reconcileLocalService }, signal),
-          }
-        : {}),
-    });
-    if (!result.provider) {
-      return result;
+    let transferred = false;
+    try {
+      const result = await registration.run(() =>
+        genericAdapter.create({
+          ...options,
+          provider: LLAMA_CPP_PROVIDER_ID,
+          model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
+          remote: undefined,
+          ...(acquireLocalService
+            ? {
+                acquireLocalService: (...[target, signal]: Parameters<AcquireLocalService>) =>
+                  acquireLocalService({ ...target, reconcile: reconcileLocalService }, signal),
+              }
+            : {}),
+        }),
+      );
+      if (!result.provider) {
+        return result;
+      }
+      transferred = true;
+      return {
+        provider: wrapProvider({
+          releaseRegistration: registration.release,
+          provider: result.provider,
+          canonicalModel: identity.model,
+          baseUrl: resolveConfiguredProvider(options).baseUrl ?? "",
+        }),
+        runtime: {
+          id: "local",
+          inlineQueryTimeoutMs: 5 * 60_000,
+          inlineBatchTimeoutMs: 10 * 60_000,
+          cacheKeyData: identity.cacheKeyData,
+          ...(identity.aliases.length > 0 ? { indexIdentityAliases: identity.aliases } : {}),
+        },
+      };
+    } finally {
+      if (!transferred) {
+        registration.release();
+      }
     }
-    return {
-      provider: wrapProvider({
-        provider: result.provider,
-        canonicalModel: identity.model,
-        baseUrl: resolveConfiguredProvider(options).baseUrl ?? "",
-      }),
-      runtime: {
-        id: "local",
-        inlineQueryTimeoutMs: 5 * 60_000,
-        inlineBatchTimeoutMs: 10 * 60_000,
-        cacheKeyData: identity.cacheKeyData,
-        ...(identity.aliases.length > 0 ? { indexIdentityAliases: identity.aliases } : {}),
-      },
-    };
   },
 };
+
+function acquireEmbeddingProvider(
+  ...args: Parameters<typeof embeddingProviders.acquireEmbeddingProvider>
+): ReturnType<typeof embeddingProviders.acquireEmbeddingProvider> {
+  if (typeof embeddingProviders.acquireEmbeddingProvider === "function") {
+    return embeddingProviders.acquireEmbeddingProvider(...args);
+  }
+  // Older hosts in the plugin's published range retain registration resources themselves.
+  return {
+    provider: embeddingProviders.getEmbeddingProvider(...args),
+    release() {},
+    run: (operation) => operation(),
+  };
+}

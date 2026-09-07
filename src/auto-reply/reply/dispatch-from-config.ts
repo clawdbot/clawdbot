@@ -1,3 +1,4 @@
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 /** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
@@ -38,46 +39,48 @@ async function dispatchReplyFromConfigWithQueuePolicy(
   params: DispatchFromConfigParams,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const ticket = reserveReplyAdmissionTicket([
-    params.ctx.SessionKey,
-    params.ctx.CommandTargetSessionKey,
-  ]);
-  const ticketedParams = ticket
-    ? {
-        ...params,
-        replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
-      }
-    : params;
-  const messageAuditTerminal = createInboundMessageAuditTerminal(params);
-  let refreshedSessionSnapshot = false;
-  try {
-    while (true) {
-      try {
-        const result = await dispatchReplyFromConfigInner(
-          ticketedParams,
-          messageAuditTerminal,
-          allowActiveQueueResolution,
-        );
-        messageAuditTerminal?.finishSuccess(result);
-        return result;
-      } catch (error) {
-        if (
-          error instanceof DispatchSessionRefreshRequiredError &&
-          !refreshedSessionSnapshot &&
-          params.replyOptions?.abortSignal?.aborted !== true
-        ) {
-          // Rebuild once from the latest store entry. If another lifecycle mutation wins the
-          // refreshed admission race, leave the event retryable for the channel ingress owner.
-          refreshedSessionSnapshot = true;
-          continue;
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const ticket = reserveReplyAdmissionTicket([
+      params.ctx.SessionKey,
+      params.ctx.CommandTargetSessionKey,
+    ]);
+    const ticketedParams = ticket
+      ? {
+          ...params,
+          replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
         }
-        messageAuditTerminal?.finishError();
-        throw error;
+      : params;
+    const messageAuditTerminal = createInboundMessageAuditTerminal(params);
+    let refreshedSessionSnapshot = false;
+    try {
+      while (true) {
+        try {
+          const result = await dispatchReplyFromConfigInner(
+            ticketedParams,
+            messageAuditTerminal,
+            allowActiveQueueResolution,
+          );
+          messageAuditTerminal?.finishSuccess(result);
+          return result;
+        } catch (error) {
+          if (
+            error instanceof DispatchSessionRefreshRequiredError &&
+            !refreshedSessionSnapshot &&
+            params.replyOptions?.abortSignal?.aborted !== true
+          ) {
+            // Rebuild once from the latest store entry. If another lifecycle mutation wins the
+            // refreshed admission race, leave the event retryable for the channel ingress owner.
+            refreshedSessionSnapshot = true;
+            continue;
+          }
+          messageAuditTerminal?.finishError();
+          throw error;
+        }
       }
+    } finally {
+      ticket?.release();
     }
-  } finally {
-    ticket?.release();
-  }
+  });
 }
 
 async function dispatchReplyFromConfigInner(

@@ -18,7 +18,7 @@ import { getPluginCache, getPluginMetadataSnapshotCache } from "../../plugins/pl
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   normalizePluginDiscoveryResult,
-  resolveRuntimePluginDiscoveryProviders,
+  acquireRuntimePluginDiscoveryProviders,
   runProviderStaticCatalog,
   type PreparedProviderStaticCatalog,
 } from "../../plugins/provider-discovery.js";
@@ -378,10 +378,10 @@ async function loadBundledProviderStaticCatalogModels(params: {
   const missingPluginIds = params.pluginIds.filter((pluginId) => !preparedPluginIds.has(pluginId));
   // Prepared provider lists are complete only for the plugin ids they name. Full catalog reads
   // must still discover omitted plugins, while reusing cached hook results for covered providers.
-  const discoveredProviders =
+  const discoveryHandle =
     missingPluginIds.length === 0
-      ? []
-      : await resolveRuntimePluginDiscoveryProviders({
+      ? undefined
+      : await acquireRuntimePluginDiscoveryProviders({
           config: params.cfg,
           workspaceDir: params.workspaceDir,
           env: params.env,
@@ -394,49 +394,53 @@ async function loadBundledProviderStaticCatalogModels(params: {
             ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
             : {}),
         });
-  const providers = [...preparedProviders, ...discoveredProviders];
-  const preparedEntries = params.preparedStaticProviderCatalog?.entries.filter(
-    ({ provider }) => provider.pluginId !== undefined && pluginIds.has(provider.pluginId),
-  );
-  const preparedResults = preparedEntries
-    ? new Map(
-        preparedEntries.map(({ provider, result }) => [
-          `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
-          result,
-        ]),
-      )
-    : undefined;
-  const modelsByProvider = new Map<string, ProviderRuntimeModel[]>();
-  for (const catalogProvider of providers) {
-    const preparedResultKey = `${catalogProvider.pluginId ?? ""}\0${normalizeProviderId(catalogProvider.id)}`;
-    const result = preparedResults?.has(preparedResultKey)
-      ? preparedResults.get(preparedResultKey)
-      : await runProviderStaticCatalog({ provider: catalogProvider });
-    const normalized = normalizePluginDiscoveryResult({
-      provider: catalogProvider,
-      result,
-    });
-    for (const [providerIdRaw, providerConfig] of Object.entries(normalized)) {
-      const provider = normalizeProviderId(providerIdRaw);
-      // Empty catalogs never resolve request secrets or transport settings.
-      if (
-        !provider ||
-        !Array.isArray(providerConfig.models) ||
-        providerConfig.models.length === 0
-      ) {
-        continue;
+  try {
+    const providers = [...preparedProviders, ...(discoveryHandle?.providers ?? [])];
+    const preparedEntries = params.preparedStaticProviderCatalog?.entries.filter(
+      ({ provider }) => provider.pluginId !== undefined && pluginIds.has(provider.pluginId),
+    );
+    const preparedResults = preparedEntries
+      ? new Map(
+          preparedEntries.map(({ provider, result }) => [
+            `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
+            result,
+          ]),
+        )
+      : undefined;
+    const modelsByProvider = new Map<string, ProviderRuntimeModel[]>();
+    for (const catalogProvider of providers) {
+      const preparedResultKey = `${catalogProvider.pluginId ?? ""}\0${normalizeProviderId(catalogProvider.id)}`;
+      const result = preparedResults?.has(preparedResultKey)
+        ? preparedResults.get(preparedResultKey)
+        : await runProviderStaticCatalog({ provider: catalogProvider });
+      const normalized = normalizePluginDiscoveryResult({
+        provider: catalogProvider,
+        result,
+      });
+      for (const [providerIdRaw, providerConfig] of Object.entries(normalized)) {
+        const provider = normalizeProviderId(providerIdRaw);
+        // Empty catalogs never resolve request secrets or transport settings.
+        if (
+          !provider ||
+          !Array.isArray(providerConfig.models) ||
+          providerConfig.models.length === 0
+        ) {
+          continue;
+        }
+        const models = modelsByProvider.get(provider) ?? [];
+        models.push(
+          ...buildInlineProviderModels(
+            { [provider]: providerConfig },
+            { providerMetadataOwners: params.providerMetadataOwners },
+          ).map((model) => completeProviderStaticCatalogModel(model, providerConfig)),
+        );
+        modelsByProvider.set(provider, models);
       }
-      const models = modelsByProvider.get(provider) ?? [];
-      models.push(
-        ...buildInlineProviderModels(
-          { [provider]: providerConfig },
-          { providerMetadataOwners: params.providerMetadataOwners },
-        ).map((model) => completeProviderStaticCatalogModel(model, providerConfig)),
-      );
-      modelsByProvider.set(provider, models);
     }
+    return modelsByProvider;
+  } finally {
+    discoveryHandle?.release();
   }
-  return modelsByProvider;
 }
 
 /** Reads static rows from discovery entries and captured owners without activating runtimes. */

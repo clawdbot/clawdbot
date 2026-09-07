@@ -1,6 +1,7 @@
 // Memory Core plugin module implements embeddings behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
-  getMemoryEmbeddingProvider,
+  acquireMemoryEmbeddingProvider,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
   type MemoryEmbeddingProviderCreateOptions,
@@ -44,11 +45,12 @@ function formatProviderError(adapter: MemoryEmbeddingProviderAdapter, err: unkno
 function getAdapter(
   id: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
-): MemoryEmbeddingProviderAdapter {
-  const adapter = getMemoryEmbeddingProvider(id, config);
-  if (adapter) {
-    return adapter;
+): { adapter: MemoryEmbeddingProviderAdapter; release(): void; run<T>(operation: () => T): T } {
+  const lease = acquireMemoryEmbeddingProvider(id, config);
+  if (lease.provider) {
+    return { adapter: lease.provider, release: lease.release, run: lease.run };
   }
+  lease.release();
   if (id === LOCAL_MEMORY_EMBEDDING_PROVIDER_ID) {
     throw createMissingLocalMemoryEmbeddingProviderError();
   }
@@ -77,8 +79,12 @@ export function resolveEmbeddingProviderFallbackModel(
   fallbackSourceModel: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
 ): string {
-  const adapter = getMemoryEmbeddingProvider(providerId, config);
-  return adapter?.defaultModel ?? fallbackSourceModel;
+  const lease = acquireMemoryEmbeddingProvider(providerId, config);
+  try {
+    return lease.provider?.defaultModel ?? fallbackSourceModel;
+  } finally {
+    lease.release();
+  }
 }
 
 export function resolveEmbeddingProviderFallbackRemote(
@@ -97,7 +103,12 @@ export function resolveEmbeddingProviderAdapterTransport(
   config?: MemoryEmbeddingProviderCreateOptions["config"],
 ): MemoryEmbeddingProviderAdapter["transport"] {
   try {
-    return getAdapter(providerId, config).transport;
+    const lease = getAdapter(providerId, config);
+    try {
+      return lease.adapter.transport;
+    } finally {
+      lease.release();
+    }
   } catch {
     return undefined;
   }
@@ -107,29 +118,103 @@ export function resolveEmbeddingProviderIndexIdentity(options: CreateEmbeddingPr
   const provider =
     options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
   try {
-    const adapter = getAdapter(provider, options.config);
-    const createOptions = resolveAdapterCreateOptions(adapter, { ...options, provider });
-    const identity = adapter.resolveIndexIdentity?.(createOptions);
-    return {
-      provider: { id: adapter.id, model: identity?.model ?? createOptions.model },
-      cacheKeyData: identity?.cacheKeyData,
-      aliases: identity?.aliases,
-    };
+    const lease = getAdapter(provider, options.config);
+    try {
+      const { adapter } = lease;
+      const createOptions = lease.run(() =>
+        resolveAdapterCreateOptions(adapter, { ...options, provider }),
+      );
+      const identity = lease.run(() => adapter.resolveIndexIdentity?.(createOptions));
+      return {
+        provider: { id: adapter.id, model: identity?.model ?? createOptions.model },
+        cacheKeyData: identity?.cacheKeyData,
+        aliases: identity?.aliases,
+      };
+    } finally {
+      lease.release();
+    }
   } catch {
     return undefined;
   }
 }
 
 async function createWithAdapter(
-  adapter: MemoryEmbeddingProviderAdapter,
+  lease: {
+    adapter: MemoryEmbeddingProviderAdapter;
+    release(): void;
+    run<T>(operation: () => T): T;
+  },
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
-  const createOptions = resolveAdapterCreateOptions(adapter, options);
-  const result = await adapter.create(createOptions);
+  const { adapter } = lease;
+  const createOptions = lease.run(() => resolveAdapterCreateOptions(adapter, options));
+  const result = await lease.run(() => adapter.create(createOptions));
+  const { provider, runtime } = result;
+  if (!provider) {
+    lease.release();
+    return { provider, requestedProvider: options.provider, runtime };
+  }
+  let closing: Promise<void> | undefined;
+  const methods: Pick<EmbeddingProvider, "embed" | "embedBatch" | "close"> = {
+    embed: (...args) => lease.run(() => provider.embed(...args)),
+    embedBatch: (...args) => lease.run(() => provider.embedBatch(...args)),
+    close() {
+      if (closing) {
+        return closing;
+      }
+      const completion = createDeferred<void>();
+      // Publish the attempt before plugin code can reenter; failed cleanup stays retryable.
+      closing = completion.promise;
+      void (async () => {
+        try {
+          await lease.run(() => provider.close?.());
+          lease.release();
+          completion.resolve();
+        } catch (error) {
+          closing = undefined;
+          completion.reject(error);
+        }
+      })();
+      return completion.promise;
+    },
+  };
+  // A separate target can override frozen methods while inheriting discoverable metadata.
+  Object.setPrototypeOf(methods, provider);
   return {
-    provider: result.provider,
+    provider: new Proxy(methods, {
+      get(target, property) {
+        if (Object.hasOwn(target, property)) {
+          return Reflect.get(target, property) as unknown;
+        }
+        const value = Reflect.get(provider, property, provider) as unknown;
+        return typeof value === "function" ? value.bind(provider) : value;
+      },
+      // SAFETY: scoped methods override the original; all other provider fields are forwarded.
+    }) as EmbeddingProvider,
     requestedProvider: options.provider,
-    runtime: result.runtime,
+    runtime: runtime?.batchEmbed
+      ? {
+          get id() {
+            return runtime.id;
+          },
+          get cacheKeyData() {
+            return runtime.cacheKeyData;
+          },
+          get indexIdentityAliases() {
+            return runtime.indexIdentityAliases;
+          },
+          get inlineQueryTimeoutMs() {
+            return runtime.inlineQueryTimeoutMs;
+          },
+          get inlineBatchTimeoutMs() {
+            return runtime.inlineBatchTimeoutMs;
+          },
+          get sourceWideBatchEmbed() {
+            return runtime.sourceWideBatchEmbed;
+          },
+          batchEmbed: (params) => lease.run(() => runtime.batchEmbed!(params)),
+        }
+      : runtime,
   };
 }
 
@@ -138,18 +223,25 @@ export async function createEmbeddingProvider(
 ): Promise<EmbeddingProviderResult> {
   const provider =
     options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
-  const primaryAdapter = getAdapter(provider, options.config);
+  const primaryLease = getAdapter(provider, options.config);
+  const primaryAdapter = primaryLease.adapter;
   try {
-    return await createWithAdapter(primaryAdapter, {
+    return await createWithAdapter(primaryLease, {
       ...options,
       provider,
     });
   } catch (primaryErr) {
-    const reason = formatProviderError(primaryAdapter, primaryErr);
+    let reason: string;
+    try {
+      reason = primaryLease.run(() => formatProviderError(primaryAdapter, primaryErr));
+    } finally {
+      primaryLease.release();
+    }
     if (options.fallback && options.fallback !== "none" && options.fallback !== provider) {
-      const fallbackAdapter = getAdapter(options.fallback, options.config);
+      const fallbackLease = getAdapter(options.fallback, options.config);
+      const fallbackAdapter = fallbackLease.adapter;
       try {
-        const fallbackResult = await createWithAdapter(fallbackAdapter, {
+        const fallbackResult = await createWithAdapter(fallbackLease, {
           ...options,
           provider: options.fallback,
           remote: resolveEmbeddingProviderFallbackRemote(options.remote),
@@ -161,7 +253,14 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
-        const fallbackReason = formatProviderError(fallbackAdapter, fallbackErr);
+        let fallbackReason: string;
+        try {
+          fallbackReason = fallbackLease.run(() =>
+            formatProviderError(fallbackAdapter, fallbackErr),
+          );
+        } finally {
+          fallbackLease.release();
+        }
         const wrapped = new Error(
           `${reason}\n\nFallback to ${options.fallback} failed: ${fallbackReason}`,
         ) as Error & { cause?: unknown };

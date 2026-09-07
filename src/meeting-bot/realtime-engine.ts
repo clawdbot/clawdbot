@@ -1,6 +1,11 @@
 // Shared meeting bot realtime engines own provider and audio-transport orchestration.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  PluginRegistryResourceScope,
+  createPluginRegistryResourceLease,
+  getPluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceTool, RealtimeVoiceToolCallEvent } from "../talk/provider-types.js";
@@ -18,6 +23,7 @@ import type {
   MeetingRealtimeAudioTransport,
   MeetingRealtimeAudioTransportHealth,
 } from "./realtime-audio-transport.js";
+import { MeetingRealtimeStartupCleanupError } from "./realtime-engine-error.js";
 import {
   buildMeetingSpeakExactUserMessage,
   createMeetingRealtimeLifecycleHandlers,
@@ -114,10 +120,41 @@ export async function startMeetingRealtimeEngine(params: {
   transport: MeetingRealtimeAudioTransport;
   logger: RuntimeLogger;
   providers?: RealtimeVoiceProviderPlugin[];
+  /** Registers cleanup before provider construction; retain it until stop succeeds. */
+  onCleanupReady?: (stop: () => Promise<void>) => void | Promise<void>;
   consultAgent: (params: MeetingAgentConsultParams) => Promise<{ text: string }>;
   tools: RealtimeVoiceTool[];
   handleToolCall: (params: MeetingRealtimeToolCallParams) => Promise<void>;
 }): Promise<MeetingRealtimeAudioEngineHandle> {
+  const resources = createPluginRegistryResourceLease(
+    getPluginRegistryResourceScope()?.fork() ?? new PluginRegistryResourceScope(),
+  );
+  let cleanupOwned = false;
+  try {
+    return await resources.run(() =>
+      startMeetingRealtimeEngineWithResources(
+        {
+          ...params,
+          onCleanupReady: (stop) => {
+            cleanupOwned = true;
+            return params.onCleanupReady?.(stop);
+          },
+        },
+        resources,
+      ),
+    );
+  } catch (error) {
+    if (!cleanupOwned) {
+      resources.release();
+    }
+    throw error;
+  }
+}
+
+async function startMeetingRealtimeEngineWithResources(
+  params: Parameters<typeof startMeetingRealtimeEngine>[0],
+  resources: ReturnType<typeof createPluginRegistryResourceLease>,
+): Promise<MeetingRealtimeAudioEngineHandle> {
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
   let bridgeClosed = false;
@@ -170,44 +207,49 @@ export async function startMeetingRealtimeEngine(params: {
       await stopPromise;
       return;
     }
-    const cleanup = Promise.resolve().then(async () => {
-      if (!bridgeClosed) {
-        bridgeClosed = true;
-        harness.close();
-        try {
-          bridge?.close();
-        } catch (error) {
-          params.logger.debug?.(
-            `${params.platform.logScope} ${realtimeLogScope}${params.logPrefix ? "" : " voice"} bridge close ignored: ${formatErrorMessage(error)}`,
-          );
+    if (bridgeClosed && transportStopped && transportDisposed) {
+      return;
+    }
+    const cleanup = resources.run(() =>
+      Promise.resolve().then(async () => {
+        let cleanupError: unknown;
+        if (!bridgeClosed) {
+          harness.close();
+          try {
+            bridge?.close();
+            bridgeClosed = true;
+          } catch (error) {
+            cleanupError = error;
+          }
         }
-      }
-      let cleanupError: unknown;
-      if (!transportStopped) {
-        try {
-          await params.transport.stop();
-          transportStopped = true;
-        } catch (error) {
-          cleanupError = error;
+        if (!transportStopped) {
+          try {
+            await params.transport.stop();
+            transportStopped = true;
+          } catch (error) {
+            cleanupError ??= error;
+          }
         }
-      }
-      if (!transportDisposed) {
-        try {
-          await params.transport.dispose();
-          transportDisposed = true;
-        } catch (error) {
-          cleanupError ??= error;
+        if (!transportDisposed) {
+          try {
+            await params.transport.dispose();
+            transportDisposed = true;
+          } catch (error) {
+            cleanupError ??= error;
+          }
         }
-      }
-      if (cleanupError) {
-        throw cleanupError instanceof Error
-          ? cleanupError
-          : new Error("Meeting realtime transport cleanup failed", { cause: cleanupError });
-      }
-    });
+        // Failed provider closure keeps the same retry owner even after transport cleanup succeeds.
+        if (!bridgeClosed || !transportStopped || !transportDisposed) {
+          throw cleanupError instanceof Error
+            ? cleanupError
+            : new Error("Meeting realtime cleanup failed", { cause: cleanupError });
+        }
+      }),
+    );
     stopPromise = cleanup;
     try {
       await cleanup;
+      resources.release();
     } finally {
       if (stopPromise === cleanup) {
         stopPromise = undefined;
@@ -454,40 +496,50 @@ export async function startMeetingRealtimeEngine(params: {
       },
     },
   });
-  harness.emit({
-    type: "session.started",
-    payload: params.talkContext
-      ? { ...meetingTalkPayload, nodeId: params.talkContext.nodeId }
-      : meetingTalkPayload,
-  });
-  params.transport.onFatal(() => {
-    stopAfterFailure("audio transport");
-  });
-  // onFatal replays a pre-registration failure synchronously; abort before creating a
-  // voice bridge that the already-completed stop() could never close.
-  if (stopped) {
-    throw new Error(
-      `${params.platform.displayName} audio transport failed before realtime provider setup`,
-    );
-  }
-  const lifecycleHandlers = createMeetingRealtimeLifecycleHandlers({
-    clearOutputPlayback,
-    getContinuityResetActive: () => continuityResetActive,
-    harness,
-    invalidateOutputPlayback,
-    logger: params.logger,
-    logScope: params.platform.logScope,
-    outputOwner,
-    outputTalkPayload,
-    realtimeLogScope,
-    resetToolContinuity: (reason) => toolContinuity.reset(reason),
-    setContinuityResetActive: (active) => (continuityResetActive = active),
-    setOutputGenerationActive: (active) => (outputGenerationActive = active),
-    setRealtimeReady: (ready) => (realtimeReady = ready),
-  });
   try {
+    const cleanupReady = params.onCleanupReady?.(stop);
+    if (cleanupReady) {
+      await cleanupReady;
+    }
+    if (stopped) {
+      throw new Error(
+        `${params.platform.displayName} audio transport stopped before realtime provider setup`,
+      );
+    }
+    harness.emit({
+      type: "session.started",
+      payload: params.talkContext
+        ? { ...meetingTalkPayload, nodeId: params.talkContext.nodeId }
+        : meetingTalkPayload,
+    });
+    params.transport.onFatal(() => {
+      stopAfterFailure("audio transport");
+    });
+    // onFatal replays a pre-registration failure synchronously; abort before creating a
+    // voice bridge that the already-completed stop() could never close.
+    if (stopped) {
+      throw new Error(
+        `${params.platform.displayName} audio transport failed before realtime provider setup`,
+      );
+    }
+    const lifecycleHandlers = createMeetingRealtimeLifecycleHandlers({
+      clearOutputPlayback,
+      getContinuityResetActive: () => continuityResetActive,
+      harness,
+      invalidateOutputPlayback,
+      logger: params.logger,
+      logScope: params.platform.logScope,
+      outputOwner,
+      outputTalkPayload,
+      realtimeLogScope,
+      resetToolContinuity: (reason) => toolContinuity.reset(reason),
+      setContinuityResetActive: (active) => (continuityResetActive = active),
+      setOutputGenerationActive: (active) => (outputGenerationActive = active),
+      setRealtimeReady: (ready) => (realtimeReady = ready),
+    });
     bridge = harness.createBridge({
       provider: resolved.provider,
+      runWithProviderResources: resources.run,
       cfg: params.fullConfig,
       agentId: params.config.realtime.agentId,
       providerConfig: resolved.providerConfig,
@@ -573,17 +625,19 @@ export async function startMeetingRealtimeEngine(params: {
       onEvent: lifecycleHandlers.onEvent,
       onResponseDone: lifecycleHandlers.onResponseDone,
       onToolCall: (event, session) =>
-        toolContinuity.run({
-          session,
-          call: {
-            strategy,
-            event,
-            meetingSessionId: params.meetingSessionId,
-            requesterSessionKey: params.requesterSessionKey,
-            transcript: harness.transcript,
-          },
-          harness,
-        }),
+        resources.run(() =>
+          toolContinuity.run({
+            session,
+            call: {
+              strategy,
+              event,
+              meetingSessionId: params.meetingSessionId,
+              requesterSessionKey: params.requesterSessionKey,
+              transcript: harness.transcript,
+            },
+            harness,
+          }),
+        ),
       onError: (error) => {
         // Provider errors may be recoverable; onClose owns terminal teardown.
         harness.emit({
@@ -646,9 +700,12 @@ export async function startMeetingRealtimeEngine(params: {
       try {
         await stop();
       } catch (retryError) {
-        params.logger.debug?.(
-          `${params.platform.logScope} ${realtimeLogScope} failed-start cleanup retry ignored: ${formatErrorMessage(retryError)}`,
-        );
+        throw new MeetingRealtimeStartupCleanupError({
+          meetingSessionId: params.meetingSessionId,
+          cause: error,
+          cleanupError: retryError,
+          stop,
+        });
       }
     }
     throw error;
@@ -657,11 +714,13 @@ export async function startMeetingRealtimeEngine(params: {
   return {
     providerId: resolved.provider.id,
     speak: (instructions) => {
-      bridge?.triggerGreeting(instructions);
+      if (!stopped) {
+        bridge?.triggerGreeting(instructions);
+      }
     },
     getHealth: () => ({
       ...harness.getHealth({
-        providerConnected: bridge?.bridge.isConnected() ?? false,
+        providerConnected: !stopped && resources.run(() => bridge?.bridge.isConnected() ?? false),
         realtimeReady,
       }),
       ...params.transport.getHealth?.(),

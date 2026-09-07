@@ -1,7 +1,7 @@
 // Token-provider normalization hooks for provider-backed auth choices.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
-import { resolvePluginProviders } from "../plugins/provider-auth-choice.runtime.js";
+import { acquireProviderAuthChoiceProviders } from "../plugins/provider-auth-choice.runtime.js";
 import type { ProviderAuthKind } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 import type { AuthChoice } from "./onboard-types.js";
@@ -13,17 +13,19 @@ function resolveProviderAuthChoiceByKind(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoice | undefined {
-  const provider = resolveProviderMatch(
-    resolvePluginProviders({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      mode: "setup",
-    }),
-    params.providerId,
-  );
-  const choiceId = provider?.auth.find((method) => method.kind === params.kind)?.wizard?.choiceId;
-  return choiceId as AuthChoice | undefined;
+  const handle = acquireProviderAuthChoiceProviders({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    mode: "setup",
+  });
+  try {
+    const provider = resolveProviderMatch(handle.providers, params.providerId);
+    const choiceId = provider?.auth.find((method) => method.kind === params.kind)?.wizard?.choiceId;
+    return choiceId as AuthChoice | undefined;
+  } finally {
+    handle.release();
+  }
 }
 
 /** Translate generic api-key/token choices to provider-specific auth choices when possible. */

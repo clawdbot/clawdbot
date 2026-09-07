@@ -4,8 +4,9 @@
  * Formats provider listing, active-task status, and duplicate-guard responses for the tool.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRegistryResourceOperation } from "../../plugins/registry-resources.js";
 import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
-import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
+import { listRuntimeVideoGenerationProvidersCore } from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildVideoGenerationTaskStatusDetails,
@@ -22,7 +23,7 @@ import {
 type VideoGenerateActionResult = MediaGenerateActionResult;
 
 function summarizeVideoGenerationCapabilities(
-  provider: ReturnType<typeof listRuntimeVideoGenerationProviders>[number],
+  provider: ReturnType<typeof listRuntimeVideoGenerationProvidersCore>[number],
   options?: { modes?: readonly string[]; includeModes?: boolean },
 ): string {
   const supportedModes = options?.modes ?? listSupportedVideoGenerationModes(provider);
@@ -114,7 +115,16 @@ export function createVideoGenerateListActionResult(
   config?: OpenClawConfig,
   options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
 ): VideoGenerateActionResult {
-  const providers = listRuntimeVideoGenerationProviders({ config });
+  return withPluginRegistryResourceOperation(() =>
+    createVideoGenerateListActionResultWithResources(config, options),
+  );
+}
+
+function createVideoGenerateListActionResultWithResources(
+  config?: OpenClawConfig,
+  options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
+): VideoGenerateActionResult {
+  const providers = listRuntimeVideoGenerationProvidersCore({ config });
   return createMediaGenerateProviderListActionResult({
     kind: "video_generation",
     providers,

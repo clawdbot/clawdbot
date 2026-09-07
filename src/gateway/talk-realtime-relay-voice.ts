@@ -8,7 +8,7 @@ import {
   normalizeVoiceTranscriptText,
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "../talk/voice-transcript.js";
-import { drainingRelaySessions, type RelaySession } from "./talk-realtime-relay-state.js";
+import type { RelaySession } from "./talk-realtime-relay-state.js";
 
 const RELAY_TRANSCRIPT_RETRY_DELAYS_MS = [0, 500, 2_000] as const;
 
@@ -118,9 +118,5 @@ export function closeRelayVoiceSession(session: RelaySession): Promise<void> {
     .catch((error: unknown) => {
       logRelayVoiceFailure(session, "realtime relay voice session close failed", error);
     });
-  drainingRelaySessions.add(session);
-  void session.voiceSessionClose.finally(() => {
-    drainingRelaySessions.delete(session);
-  });
   return session.voiceSessionClose;
 }

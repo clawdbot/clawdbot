@@ -24,9 +24,9 @@ import { getModelProviderLocalServiceReconciler } from "./provider-local-service
 import { getModelProviderLocalService } from "./provider-local-service.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import {
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModelCore,
+  acquireSimpleCompletionModel,
+  acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 
 const tempRoots = createSyncSuiteTempRootTracker("openclaw-simple-completion-plugin-scope");
@@ -107,7 +107,7 @@ describe("simple completion prepared plugin scope", () => {
         provider: string;
         modelId: string;
       }) =>
-        prepareSimpleCompletionModel({
+        acquireSimpleCompletionModel({
           cfg: params.config,
           agentId: "main",
           provider: params.provider,
@@ -124,7 +124,7 @@ describe("simple completion prepared plugin scope", () => {
         provider: string;
         modelId: string;
       }) =>
-        prepareSimpleCompletionModelForAgent({
+        acquireSimpleCompletionModelForAgent({
           cfg: params.config,
           agentId: "main",
           useUtilityModel: true,
@@ -357,7 +357,7 @@ module.exports = {
             // Loading the public SDK must retain the host's registered metadata owners.
             const metadataReaders = readHostMetadataReaders();
             expect(metadataReaders.every((reader) => typeof reader === "function")).toBe(true);
-            const prepared = await prepareSimpleCompletionModel({
+            const prepared = await acquireSimpleCompletionModel({
               cfg,
               agentId: "main",
               agentDir: input.agentDir,
@@ -369,28 +369,34 @@ module.exports = {
             if ("error" in prepared) {
               throw new Error(prepared.error);
             }
-            if (mode === "acquired") {
-              activateAmbient();
+            try {
+              if (mode === "acquired") {
+                activateAmbient();
+              }
+              // Callers use the logical API before dispatch, including CLI system-prompt selection.
+              expect(prepared.model.api).toBe("openai-completions");
+              expect(isColdPluginRuntimeLoaded(ambient)).toBe(true);
+              const owner = mode === "empty" ? "none" : "A";
+              const auth = mode === "empty" ? "fixture-auth-source" : "fixture-auth-A";
+              for (const turn of [1, 2]) {
+                const result = await completeWithPreparedSimpleCompletionModelCore({
+                  model: prepared.model,
+                  auth: prepared.auth,
+                  cfg,
+                  context: {
+                    messages: [{ role: "user", content: `Turn ${turn}`, timestamp: turn }],
+                  },
+                });
+                expect(result).toMatchObject({
+                  stopReason: "stop",
+                  content: [{ type: "text", text: `${turn}|${owner}|${owner}|Bearer ${auth}` }],
+                });
+              }
+              expect(prepared.model.api).toBe("openai-completions");
+              expect(isColdPluginRuntimeLoaded(unrelated)).toBe(false);
+            } finally {
+              prepared.release();
             }
-            // Callers use the logical API before dispatch, including CLI system-prompt selection.
-            expect(prepared.model.api).toBe("openai-completions");
-            expect(isColdPluginRuntimeLoaded(ambient)).toBe(true);
-            const owner = mode === "empty" ? "none" : "A";
-            const auth = mode === "empty" ? "fixture-auth-source" : "fixture-auth-A";
-            for (const turn of [1, 2]) {
-              const result = await completeWithPreparedSimpleCompletionModel({
-                model: prepared.model,
-                auth: prepared.auth,
-                cfg,
-                context: { messages: [{ role: "user", content: `Turn ${turn}`, timestamp: turn }] },
-              });
-              expect(result).toMatchObject({
-                stopReason: "stop",
-                content: [{ type: "text", text: `${turn}|${owner}|${owner}|Bearer ${auth}` }],
-              });
-            }
-            expect(prepared.model.api).toBe("openai-completions");
-            expect(isColdPluginRuntimeLoaded(unrelated)).toBe(false);
             expect(
               readHostMetadataReaders(),
               "public SDK loading must preserve registered host metadata readers",
@@ -489,7 +495,7 @@ module.exports = {
         OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
       };
       await withEnvAsync(env, async () => {
-        const prepared = await prepareSimpleCompletionModel({
+        const prepared = await acquireSimpleCompletionModel({
           cfg,
           agentId: "main",
           agentDir: path.join(tempRoot, "agent"),
@@ -500,36 +506,42 @@ module.exports = {
         if ("error" in prepared) {
           throw new Error(prepared.error);
         }
-        const completionTransport = getModelCompletionTransport(prepared.model);
-        if (!completionTransport) {
-          throw new Error("Managed completion transport was not prepared");
-        }
-        expect(getModelProviderLocalService(prepared.model)).toBeDefined();
-        expect(getModelProviderLocalService(completionTransport)).toBeDefined();
-        expect(getModelProviderLocalServiceReconciler(prepared.model)).toBeTypeOf("function");
-        expect(getModelProviderLocalServiceReconciler(completionTransport)).toBeTypeOf("function");
-        if (failReconciliation) {
-          fs.writeFileSync(selected.reconcileFailureMarker, "fail", "utf8");
-          await expect(
-            completeWithPreparedSimpleCompletionModel({
-              model: prepared.model,
-              auth: prepared.auth,
-              cfg,
-              context: { messages: [{ role: "user", content: "Complete", timestamp: 1 }] },
-            }),
-          ).resolves.toMatchObject({ stopReason: "error", content: [] });
-        } else {
-          await expect(
-            completeWithPreparedSimpleCompletionModel({
-              model: prepared.model,
-              auth: prepared.auth,
-              cfg,
-              context: { messages: [{ role: "user", content: "Complete", timestamp: 1 }] },
-            }),
-          ).resolves.toMatchObject({
-            stopReason: "stop",
-            content: [{ type: "text", text: "done" }],
-          });
+        try {
+          const completionTransport = getModelCompletionTransport(prepared.model);
+          if (!completionTransport) {
+            throw new Error("Managed completion transport was not prepared");
+          }
+          expect(getModelProviderLocalService(prepared.model)).toBeDefined();
+          expect(getModelProviderLocalService(completionTransport)).toBeDefined();
+          expect(getModelProviderLocalServiceReconciler(prepared.model)).toBeTypeOf("function");
+          expect(getModelProviderLocalServiceReconciler(completionTransport)).toBeTypeOf(
+            "function",
+          );
+          if (failReconciliation) {
+            fs.writeFileSync(selected.reconcileFailureMarker, "fail", "utf8");
+            await expect(
+              completeWithPreparedSimpleCompletionModelCore({
+                model: prepared.model,
+                auth: prepared.auth,
+                cfg,
+                context: { messages: [{ role: "user", content: "Complete", timestamp: 1 }] },
+              }),
+            ).resolves.toMatchObject({ stopReason: "error", content: [] });
+          } else {
+            await expect(
+              completeWithPreparedSimpleCompletionModelCore({
+                model: prepared.model,
+                auth: prepared.auth,
+                cfg,
+                context: { messages: [{ role: "user", content: "Complete", timestamp: 1 }] },
+              }),
+            ).resolves.toMatchObject({
+              stopReason: "stop",
+              content: [{ type: "text", text: "done" }],
+            });
+          }
+        } finally {
+          prepared.release();
         }
       });
       const reloadIndex = requestPaths.indexOf("/models?reload=1");

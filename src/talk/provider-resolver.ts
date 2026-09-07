@@ -6,6 +6,11 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredCapabilityProvider } from "../plugin-sdk/provider-selection-runtime.js";
+import {
+  PluginRegistryResourceScope,
+  createPluginRegistryResourceLease,
+  withPluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   isInternalRealtimeVoiceBrowserSessionConfigured,
@@ -14,7 +19,10 @@ import {
   resolveInternalRealtimeVoiceGatewayRelayCapabilities,
   type InternalRealtimeVoiceProviderCapabilities,
 } from "./provider-internal.js";
-import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
+import {
+  getRealtimeVoiceProviderCore,
+  listRealtimeVoiceProvidersCore,
+} from "./provider-registry.js";
 import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderConfig,
@@ -100,7 +108,7 @@ export function isRealtimeVoiceProviderConfigured(params: {
 }
 
 /** Resolve the configured realtime voice provider or auto-select the first configured one. */
-export function resolveConfiguredRealtimeVoiceProvider(
+export function resolveConfiguredRealtimeVoiceProviderCore(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): ResolvedRealtimeVoiceProvider {
   const cfgForResolve = params.cfgForResolve ?? params.cfg ?? ({} as OpenClawConfig);
@@ -111,10 +119,10 @@ export function resolveConfiguredRealtimeVoiceProvider(
     cfgForResolve,
     getConfiguredProvider: (providerId) =>
       params.providers?.find((entry) => entry.id === providerId) ??
-      getRealtimeVoiceProvider(providerId, params.cfg),
+      getRealtimeVoiceProviderCore(providerId, params.cfg),
     listProviders: () =>
       params.providers ??
-      listRealtimeVoiceProviders(params.cfg, Object.keys(params.providerConfigs ?? {})),
+      listRealtimeVoiceProvidersCore(params.cfg, Object.keys(params.providerConfigs ?? {})),
     isProviderAvailable: params.isProviderAvailable
       ? ({ provider }) => params.isProviderAvailable?.(provider) === true
       : undefined,
@@ -166,4 +174,20 @@ export function resolveConfiguredRealtimeVoiceProvider(
     provider: resolution.provider,
     providerConfig: resolution.providerConfig,
   };
+}
+
+/** Acquires the selected provider for a realtime session's explicit lifetime. */
+export function acquireConfiguredRealtimeVoiceProvider(
+  params: ResolveConfiguredRealtimeVoiceProviderParams,
+) {
+  const resources = new PluginRegistryResourceScope();
+  try {
+    const resolved = withPluginRegistryResourceScope(resources, () =>
+      resolveConfiguredRealtimeVoiceProviderCore(params),
+    );
+    return { ...resolved, ...createPluginRegistryResourceLease(resources) };
+  } catch (error) {
+    resources.release();
+    throw error;
+  }
 }

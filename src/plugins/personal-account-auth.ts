@@ -23,7 +23,7 @@ export function listPersonalAccountAuthChoices(config: OpenClawConfig) {
   return choices.filter((choice) => allowed.has(choice.pluginId));
 }
 
-export async function resolvePersonalAccountAuthMethod(
+export async function acquirePersonalAccountAuthMethod(
   config: OpenClawConfig,
   providerId: string,
   methodId: string,
@@ -34,14 +34,27 @@ export async function resolvePersonalAccountAuthMethod(
   if (!choice) {
     return undefined;
   }
-  const { resolvePluginProvidersCore } = await import("./providers.runtime.js");
-  const provider = resolvePluginProvidersCore({
+  const { acquirePluginProvidersCore } = await import("./providers.runtime.js");
+  const handle = acquirePluginProvidersCore({
     config,
     onlyPluginIds: [choice.pluginId],
     mode: "setup",
     cache: true,
     activate: false,
     includeUntrustedWorkspacePlugins: false,
-  }).find((entry) => entry.pluginId === choice.pluginId && entry.id === providerId);
-  return provider?.auth.find((method) => method.id === methodId);
+  });
+  try {
+    const provider = handle.providers.find(
+      (entry) => entry.pluginId === choice.pluginId && entry.id === providerId,
+    );
+    const method = provider?.auth.find((candidate) => candidate.id === methodId);
+    if (method) {
+      return { method, release: handle.release };
+    }
+    handle.release();
+    return undefined;
+  } catch (error) {
+    handle.release();
+    throw error;
+  }
 }

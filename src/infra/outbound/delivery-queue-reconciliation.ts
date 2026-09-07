@@ -4,6 +4,7 @@ import type {
   ChannelMessageUnknownSendReconciliationResult,
 } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
@@ -61,25 +62,27 @@ export async function reconcileUnknownQueuedDelivery(params: {
   cfg: OpenClawConfig;
   warn: (message: string) => void;
 }): Promise<ChannelMessageUnknownSendReconciliationResult | null> {
-  const adapter = resolveOutboundChannelMessageAdapter({
-    channel: params.entry.channel,
-    cfg: params.cfg,
-    agentId: params.entry.session?.agentId,
-    allowBootstrap: true,
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const adapter = resolveOutboundChannelMessageAdapter({
+      channel: params.entry.channel,
+      cfg: params.cfg,
+      agentId: params.entry.session?.agentId,
+      allowBootstrap: true,
+    });
+    if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
+      return null;
+    }
+    const reconcileUnknownSend = adapter.durableFinal.reconcileUnknownSend;
+    if (!reconcileUnknownSend) {
+      return null;
+    }
+    const { entry } = params;
+    try {
+      return await reconcileUnknownSend(buildUnknownSendContext(params));
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      params.warn(`Delivery entry ${entry.id} unknown-send reconciliation failed: ${message}`);
+      return { status: "unresolved", error: message, retryable: true };
+    }
   });
-  if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
-    return null;
-  }
-  const reconcileUnknownSend = adapter.durableFinal.reconcileUnknownSend;
-  if (!reconcileUnknownSend) {
-    return null;
-  }
-  const { entry } = params;
-  try {
-    return await reconcileUnknownSend(buildUnknownSendContext(params));
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    params.warn(`Delivery entry ${entry.id} unknown-send reconciliation failed: ${message}`);
-    return { status: "unresolved", error: message, retryable: true };
-  }
 }

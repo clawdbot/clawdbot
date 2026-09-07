@@ -19,8 +19,8 @@ const { getTranscriptSourceProviderMock } = vi.hoisted(() => ({
   getTranscriptSourceProviderMock: vi.fn(),
 }));
 vi.mock("../../transcripts/provider-registry.js", () => ({
-  getTranscriptSourceProvider: getTranscriptSourceProviderMock,
-  listTranscriptSourceProviders: () => [],
+  getTranscriptSourceProviderCore: getTranscriptSourceProviderMock,
+  listTranscriptSourceProvidersCore: () => [],
 }));
 
 const tempDirs = createTempDirTracker();

@@ -155,6 +155,12 @@ export type PluginSessionActionRegistration = {
 export type PluginRuntimeLifecycleRegistration = {
   id: string;
   description?: string;
+  /**
+   * Releases only resources captured by this registration instance after its final scoped
+   * user finishes. Must not delete durable state or disable another live registration.
+   * Host disable/reset/delete/restart notifications continue to use cleanup separately.
+   */
+  dispose?: () => void | Promise<void>;
   cleanup?: (ctx: {
     reason: PluginHostCleanupReason;
     sessionKey?: string;

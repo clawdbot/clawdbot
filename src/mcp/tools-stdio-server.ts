@@ -3,24 +3,81 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import {
+  PluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "../plugins/registry-resources.js";
 import { VERSION } from "../version.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
-export function createToolsMcpServer(params: { name: string; tools: AnyAgentTool[] }): Server {
-  const handlers = createPluginToolsMcpHandlers(params.tools);
-  const server = new Server(
-    { name: params.name, version: VERSION },
-    { capabilities: { tools: {} } },
-  );
+class ToolsMcpServer extends Server {
+  readonly #resources: PluginRegistryResourceScope;
+  readonly #pending = new Set<Promise<unknown>>();
+  #closing = false;
+  #drained: Promise<void> | undefined;
 
-  server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-    return await handlers.callTool(request.params, extra.signal);
-  });
+  override onclose = () => {
+    void this.#drain().catch((error: unknown) =>
+      this.onerror?.(toErrorObject(error, "MCP tool resource disposal failed")),
+    );
+  };
 
-  return server;
+  constructor(params: {
+    name: string;
+    tools: AnyAgentTool[];
+    resources?: PluginRegistryResourceScope;
+  }) {
+    super({ name: params.name, version: VERSION }, { capabilities: { tools: {} } });
+    this.#resources = params.resources ?? new PluginRegistryResourceScope();
+    const handlers = createPluginToolsMcpHandlers(params.tools);
+    this.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
+    this.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+      if (this.#closing) {
+        throw new Error("MCP tool server is closing");
+      }
+      const execution = Promise.resolve().then(() =>
+        withPluginRegistryResourceScope(this.#resources, () =>
+          handlers.callTool(request.params, extra.signal),
+        ),
+      );
+      this.#pending.add(execution);
+      try {
+        return await execution;
+      } finally {
+        this.#pending.delete(execution);
+      }
+    });
+  }
+
+  #drain(): Promise<void> {
+    this.#closing = true;
+    return (this.#drained ??= (async () => {
+      // SDK transport close only aborts handlers; plugins may still be using SQLite.
+      // Keep their exact registration resources until admitted work actually settles.
+      await Promise.allSettled(this.#pending);
+      this.#resources.release();
+      await this.#resources.waitForDisposals();
+    })());
+  }
+
+  override async close(): Promise<void> {
+    this.#closing = true;
+    try {
+      await super.close();
+    } finally {
+      await this.#drain();
+    }
+  }
+}
+
+export function createToolsMcpServer(params: {
+  name: string;
+  tools: AnyAgentTool[];
+  resources?: PluginRegistryResourceScope;
+}): Server {
+  return new ToolsMcpServer(params);
 }
 
 export async function connectToolsMcpServerToStdio(
@@ -70,8 +127,12 @@ export async function connectToolsMcpServerToStdio(
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 
-  await server.connect(transport);
-  if (options.onShutdown) {
+  try {
+    await server.connect(transport);
+  } catch (error) {
+    shutdown();
     await shutdownComplete;
+    throw error;
   }
+  await shutdownComplete;
 }

@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 vi.mock("./model-picker.runtime.js", () => ({
-  modelPickerRuntime: { resolvePluginProviders: () => [] },
+  modelPickerRuntime: { acquirePluginProviders: () => ({ providers: [], release() {} }) },
 }));
 
 import { promptDefaultModel } from "./model-picker.js";

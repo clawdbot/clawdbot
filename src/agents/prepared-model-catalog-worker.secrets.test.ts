@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createConfigIoContext } from "../config/io.context.js";
 import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
@@ -13,6 +14,9 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearPluginRegistryLoadCache } from "../plugins/loader-cache.js";
+import { drainPluginRegistryResourceDisposals } from "../plugins/registry-resources.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -24,10 +28,8 @@ import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.
 import * as modelsConfig from "./models-config.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import { runPreparedModelCatalogWorkerRequest } from "./prepared-model-catalog.worker.js";
-import {
-  prepareAgentCatalogSource,
-  prepareWorkspaceBuildGroup,
-} from "./prepared-model-runtime.facts.js";
+import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
+import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 
 // Run the real worker entrypoint without attaching it to Vitest's own worker port.
 vi.mock("node:worker_threads", async (importOriginal) => ({
@@ -53,12 +55,19 @@ describe("serialized catalog credential provenance", () => {
     owner: "config" | "profile";
     label: string;
     value: string;
+    delayed?: boolean;
     loader?: { authored: string; env?: NodeJS.ProcessEnv; pending?: boolean; resolved?: boolean };
   }>([
     { owner: "config", label: "literal bytes", value: "synthetic-worker-config-key" },
     { owner: "config", label: "marker bytes", value: NON_ENV_SECRETREF_MARKER },
     { owner: "config", label: "env-template bytes", value: "${OPAQUE_WORKER_KEY}" },
     { owner: "profile", label: "profile-only sibling", value: "synthetic-worker-profile-key" },
+    {
+      owner: "config",
+      label: "timed-out provider without delaying healthy catalog results",
+      value: "synthetic-delayed-worker-key",
+      delayed: true,
+    },
     {
       owner: "config",
       label: "loader-substituted literal",
@@ -83,16 +92,31 @@ describe("serialized catalog credential provenance", () => {
     },
   ])(
     "preserves $owner $label through discovery and the writable plan",
-    async ({ owner, value, loader }) => {
+    async ({ owner, value, loader, delayed }) => {
       const requests: boolean[] = [];
+      const releaseCatalog = createDeferredCore();
+      const resourceSymbol = Symbol.for("openclaw.catalogTimeoutResourcesTest");
+      const nativeResources: Array<{
+        db: DatabaseSync;
+        used: boolean;
+        read?: number;
+        disposals: number;
+      }> = [];
+      if (delayed) {
+        Reflect.set(globalThis, resourceSymbol, nativeResources);
+      } else {
+        releaseCatalog.resolve();
+      }
       const server = createServer((request, response) => {
         requests.push(
           request.url === "/v1/models" && request.headers.authorization === `Bearer ${value}`,
         );
         response.setHeader("content-type", "application/json");
-        response.end(
-          JSON.stringify({ data: [{ id: "discovered-model", name: "Discovered model" }] }),
-        );
+        void releaseCatalog.promise.then(() => {
+          response.end(
+            JSON.stringify({ data: [{ id: "discovered-model", name: "Discovered model" }] }),
+          );
+        });
       });
       server.listen(0, "127.0.0.1");
       await once(server, "listening");
@@ -109,14 +133,27 @@ module.exports = {
   id: ${JSON.stringify(provider)},
   register(api) {
     const baseUrl = ${JSON.stringify(baseUrl)};
+    ${
+      delayed
+        ? `const db = new (require("node:sqlite").DatabaseSync)(":memory:");
+    const resource = { db, used: false, disposals: 0 };
+    globalThis[Symbol.for("openclaw.catalogTimeoutResourcesTest")].push(resource);
+    api.lifecycle.registerRuntimeLifecycle({ id: "catalog-db", dispose() {
+      resource.disposals++;
+      db.close();
+    } });`
+        : ""
+    }
     api.registerProvider({
       id: ${JSON.stringify(provider)}, label: "Worker secret fixture", auth: [],
       staticCatalog: { run: async () => ({ provider: { baseUrl, api: "openai-completions", models: [] } }) },
       catalog: { run: async (context) => {
         const auth = context.resolveProviderApiKey(${JSON.stringify(provider)});
         if (!auth.discoveryApiKey) return null;
+        ${delayed ? "resource.used = true;" : ""}
         const response = await fetch(baseUrl + "/models", { headers: { authorization: "Bearer " + auth.discoveryApiKey } });
         const body = await response.json();
+        ${delayed ? 'resource.read = db.prepare("SELECT 1 AS value").get().value;' : ""}
         return { provider: { baseUrl, api: "openai-completions", apiKey: auth.apiKey, models: body.data } };
       } },
     });
@@ -309,10 +346,60 @@ module.exports = {
             return result;
           },
         );
-        const result = await runPreparedModelCatalogWorkerRequest(serialized, {
+        if (delayed) {
+          prepared.resources.release();
+        }
+        const pending = runPreparedModelCatalogWorkerRequest(serialized, {
           kind: "catalog",
           syntheticAuth: [],
         });
+        if (delayed) {
+          let replied = false;
+          void pending.then(() => {
+            replied = true;
+          });
+          try {
+            await expect.poll(() => requests.length, { timeout: 15_000 }).toBe(1);
+            // The worker's normal five-second discovery deadline must publish without joining
+            // the still-running provider. The loopback gate stays closed until finally.
+            await expect.poll(() => replied, { timeout: 15_000 }).toBe(true);
+            expect(await pending).toMatchObject({
+              status: "ok",
+              kind: "catalog",
+              snapshot: {
+                entries: expect.arrayContaining([
+                  expect.objectContaining({ provider: "healthy-fixture", id: "model" }),
+                ]),
+                providerOutcomes: expect.arrayContaining([{ provider, status: "unavailable" }]),
+              },
+            });
+            // Retire the cache's independent claim while the hook is still blocked, so the
+            // late SQLite read proves callback ownership rather than cached registration reuse.
+            clearPluginRegistryLoadCache();
+            const activeResources = nativeResources.filter((resource) => resource.used);
+            expect(activeResources).toHaveLength(1);
+            expect(activeResources[0]?.db.isOpen).toBe(true);
+            expect(activeResources[0]?.read).toBeUndefined();
+            expect(activeResources[0]?.disposals).toBe(0);
+          } finally {
+            releaseCatalog.resolve();
+            await pending;
+            await drainPluginRegistryResourceDisposals();
+          }
+          expect(await pending).toMatchObject({
+            snapshot: {
+              providerOutcomes: expect.arrayContaining([{ provider, status: "unavailable" }]),
+            },
+          });
+          expect(
+            nativeResources.filter((resource) => resource.used).map(({ read }) => read),
+          ).toEqual([1]);
+          expect(nativeResources.every(({ db, disposals }) => !db.isOpen && disposals === 1)).toBe(
+            true,
+          );
+          return;
+        }
+        const result = await pending;
         expect(result.status).toBe("ok");
         const runtimeFacts = getConfigResolutionFacts(serialized.input.config);
         const sourceFacts = getConfigResolutionFacts(serialized.sourceConfigForSecrets);
@@ -379,6 +466,13 @@ module.exports = {
           expect(serialized.generationFingerprint).not.toBe(alternativeFingerprint);
         }
       } finally {
+        releaseCatalog.resolve();
+        for (const { db } of nativeResources) {
+          if (db.isOpen) {
+            db.close();
+          }
+        }
+        Reflect.deleteProperty(globalThis, resourceSymbol);
         server.closeAllConnections();
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));

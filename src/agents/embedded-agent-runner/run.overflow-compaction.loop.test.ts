@@ -49,7 +49,7 @@ vi.mock("../harness/selection.js", () => ({
 }));
 
 vi.mock("../runtime-plan/build.js", () => ({
-  buildAgentRuntimePlan: ({
+  buildAgentRuntimePlanCore: ({
     provider,
     modelId,
     preparedAuthPlan,

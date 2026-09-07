@@ -48,7 +48,7 @@ function prepareCleanupHarnessOwners(config: OpenClawConfig, workspaceDir: strin
     throwOnLoadError: true,
   });
   return {
-    registry,
+    ...registry,
     excludedOwners: harnessOwners
       .filter(({ plugin }) => !pluginIds.includes(plugin.id))
       .map(({ plugin }) => plugin),
@@ -117,45 +117,51 @@ export async function runLocalSessionsCleanup(
   const ownersByWorkspace = new Map<string, ReturnType<typeof prepareCleanupHarnessOwners>>();
   const results: CleanupRunResult[] = [];
   let failure: CleanupRunResult["failure"];
-  for (const target of params.targets) {
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, target.agentId);
-    let owners = ownersByWorkspace.get(workspaceDir);
-    if (!owners) {
-      owners = prepareCleanupHarnessOwners(params.cfg, workspaceDir);
-      ownersByWorkspace.set(workspaceDir, owners);
-    }
-    let result: CleanupRunResult;
-    try {
-      result = await withPluginRuntimeRegistryScope(owners.registry, () =>
-        runSessionsCleanup({ ...params, targets: [target] }),
-      );
-    } catch (cause) {
-      // The local runner changes plugin scope per store, so it owns combining
-      // earlier results with the same partial outcome as the cleanup service.
-      if (results.length === 0) {
-        throw cause;
+  try {
+    for (const target of params.targets) {
+      const workspaceDir = resolveAgentWorkspaceDir(params.cfg, target.agentId);
+      let owners = ownersByWorkspace.get(workspaceDir);
+      if (!owners) {
+        owners = prepareCleanupHarnessOwners(params.cfg, workspaceDir);
+        ownersByWorkspace.set(workspaceDir, owners);
       }
-      failure =
-        cause instanceof SessionsCleanupFailureError
-          ? cause.failure
-          : createSessionsCleanupFailure(target, cause, false);
-      break;
+      let result: CleanupRunResult;
+      try {
+        result = await withPluginRuntimeRegistryScope(owners.registry, () =>
+          runSessionsCleanup({ ...params, targets: [target] }),
+        );
+      } catch (cause) {
+        // The local runner changes plugin scope per store, so it owns combining
+        // earlier results with the same partial outcome as the cleanup service.
+        if (results.length === 0) {
+          throw cause;
+        }
+        failure =
+          cause instanceof SessionsCleanupFailureError
+            ? cause.failure
+            : createSessionsCleanupFailure(target, cause, false);
+        break;
+      }
+      warnUnavailableCleanupOwners(owners, result, runtime);
+      results.push(result);
+      if (result.failure) {
+        failure = result.failure;
+        break;
+      }
     }
-    warnUnavailableCleanupOwners(owners, result, runtime);
-    results.push(result);
-    if (result.failure) {
-      failure = result.failure;
-      break;
+    const first = results[0];
+    if (!first) {
+      return await runSessionsCleanup(params);
+    }
+    return {
+      mode: first.mode,
+      previewResults: results.flatMap((result) => result.previewResults),
+      appliedSummaries: results.flatMap((result) => result.appliedSummaries),
+      ...(failure ? { failure } : {}),
+    };
+  } finally {
+    for (const owners of ownersByWorkspace.values()) {
+      owners.release();
     }
   }
-  const first = results[0];
-  if (!first) {
-    return await runSessionsCleanup(params);
-  }
-  return {
-    mode: first.mode,
-    previewResults: results.flatMap((result) => result.previewResults),
-    appliedSummaries: results.flatMap((result) => result.appliedSummaries),
-    ...(failure ? { failure } : {}),
-  };
 }

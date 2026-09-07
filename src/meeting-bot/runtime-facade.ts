@@ -123,7 +123,8 @@ export function createMeetingRuntimeFacade<
         refreshStatus: async (session) => await this.#refreshStatus(session),
         refreshReusableSession: async (session, request) =>
           await options.hooks?.refreshReusableSession?.(session, request, this.#hookContext()),
-        ensureRealtimeBridge: async (session) => await this.#ensureRealtimeBridge(session),
+        ensureRealtimeBridge: async (session, onCleanupReady) =>
+          await this.#ensureRealtimeBridge(session, onCleanupReady),
         captureTranscript: async (session, captureOptions) =>
           await this.#captureTranscript(session, captureOptions),
         speakViaTransport: async () => undefined,
@@ -259,6 +260,8 @@ export function createMeetingRuntimeFacade<
         mode: session.mode,
         url: session.url,
         logger: this.params.logger,
+        onCleanupReady: (stop: () => Promise<void>) =>
+          context.attachRuntimeHandles(session, { stop }),
       };
       const result =
         session.transport === "chrome-node"
@@ -319,6 +322,7 @@ export function createMeetingRuntimeFacade<
 
     async #ensureRealtimeBridge(
       session: Session,
+      onCleanupReady: (stop: () => Promise<void>) => void | Promise<void>,
     ): Promise<MeetingSessionRuntimeHandles<Health> | undefined> {
       const audioBridgeActive =
         options.hooks?.isAudioBridgeActive?.(session) ?? Boolean(session.chrome?.audioBridge);
@@ -350,6 +354,7 @@ export function createMeetingRuntimeFacade<
         trackedTargetId: session.chrome.browserTab?.targetId,
         url: session.url,
         logger: this.params.logger,
+        onCleanupReady,
       };
       const result =
         session.transport === "chrome-node"

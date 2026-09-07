@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import type { RealtimeVoiceAgentControlResult } from "../talk/agent-run-control.js";
 import type {
-  RealtimeVoiceBrowserAudioContract,
-  RealtimeVoiceAudioClearReason,
   RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceAudioClearReason,
+  RealtimeVoiceBrowserAudioContract,
+  RealtimeVoiceCloseOptions,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
@@ -182,6 +184,15 @@ export class TalkRealtimeRelayOutputOwnership {
 }
 
 export type RelaySession = {
+  resources: PluginRegistryResourceScope;
+  releaseResources: (pending?: Promise<unknown>) => void;
+  creationFailed?: true;
+  closeState?: {
+    disposition: NonNullable<RealtimeVoiceCloseOptions["disposition"]>;
+    attempting: boolean;
+    providerClosed: boolean;
+    completion?: Promise<void>;
+  };
   getToolAuthorityOverlay?: (
     authority?: TalkAgentConsultAuthority,
     source?: "reply" | "attempt",
@@ -248,10 +259,23 @@ export type TalkRealtimeRelaySessionResult = {
 };
 
 export const relaySessions = new Map<string, RelaySession>();
-// Closed relays leave the active map immediately so late provider/client events
-// are ignored, but their accepted transcript prefix still owns bounded memory
-// until durable close settles. Session limits count both maps.
+// Closed relays leave active authority immediately, but keep their capacity slot
+// until provider teardown, accepted work, and durable close have finished.
 export const drainingRelaySessions = new Set<RelaySession>();
+
+export function pruneInactiveRelayAgentRuns(session: RelaySession): number {
+  for (const runId of session.activeAgentRuns.keys()) {
+    if (!session.context.chatAbortControllers.has(runId)) {
+      session.activeAgentRuns.delete(runId);
+    }
+  }
+  for (const [callId, runId] of session.activeAgentToolCalls) {
+    if (!session.activeAgentRuns.has(runId)) {
+      session.activeAgentToolCalls.delete(callId);
+    }
+  }
+  return session.activeAgentRuns.size;
+}
 
 export function adoptRelayProviderToolCallId(
   session: RelaySession,

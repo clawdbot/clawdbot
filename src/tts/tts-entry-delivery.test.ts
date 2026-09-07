@@ -12,6 +12,7 @@ import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabili
 import type { ChannelTtsVoiceDeliveryCapabilities } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -19,7 +20,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { listSpeechProviders } from "./provider-registry.js";
+import { listSpeechProvidersCore } from "./provider-registry.js";
 import { maybeApplyTtsToPayload, textToSpeech } from "./tts.js";
 
 // Constructed Ogg/Opus metadata fixture; no provider or decoder has been run.
@@ -89,7 +90,11 @@ function installFixture(voice: ChannelTtsVoiceDeliveryCapabilities, compatible =
   ]);
   registry.speechProviders.push({ pluginId: PROVIDER, source: "synthetic", provider });
   setActivePluginRegistry(registry);
-  expect(listSpeechProviders(cfg).map((entry) => entry.id)).toEqual([PROVIDER]);
+  expect(
+    withPluginRegistryResourceOperation(() =>
+      listSpeechProvidersCore(cfg).map((entry) => entry.id),
+    ),
+  ).toEqual([PROVIDER]);
   expect(resolveChannelTtsVoiceDelivery(CHANNEL)).toEqual(voice);
 }
 

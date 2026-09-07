@@ -1,10 +1,14 @@
 // Provider contract helpers expose reusable provider plugin contract test setup.
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   providerContractLoadError,
-  resolveProviderContractProvidersForPluginIds,
+  resolveProviderContractProvidersForPluginIdsCore,
 } from "../../plugins/contracts/registry.js";
 import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../../plugins/provider-contract-public-artifacts.js";
+import {
+  PluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "../../plugins/registry-resources.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 import { installProviderPluginContractSuite } from "./provider-contract-suites.js";
 
@@ -27,6 +31,8 @@ function resolveProviderContractProvidersFromPublicArtifact(
 }
 
 export function describeProviderContracts(pluginId: string) {
+  const resources = new PluginRegistryResourceScope();
+  afterAll(() => resources.release());
   let providerEntries: ProviderContractEntry[] | undefined;
   const resolveProviderEntries = (): ProviderContractEntry[] => {
     if (providerEntries) {
@@ -37,7 +43,9 @@ export function describeProviderContracts(pluginId: string) {
       providerEntries = publicArtifactProviders;
       return providerEntries;
     }
-    providerEntries = resolveProviderContractProvidersForPluginIds([pluginId]).map((provider) => ({
+    providerEntries = withPluginRegistryResourceScope(resources, () =>
+      resolveProviderContractProvidersForPluginIdsCore([pluginId]),
+    ).map((provider) => ({
       pluginId,
       provider,
     }));

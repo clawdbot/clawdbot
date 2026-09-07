@@ -1,3 +1,4 @@
+import { associatePluginRegistryResourceAlias } from "./registry-resources.js";
 import type { PluginWidgetPresenterRegistration, PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -39,7 +40,13 @@ export function adoptRuntimeWidgetPresenterRegistrations(
       changed = true;
     }
   }
-  return changed ? { ...targetRegistry, widgetPresenters: presenters } : targetRegistry;
+  return changed
+    ? associatePluginRegistryResourceAlias(
+        { ...targetRegistry, widgetPresenters: presenters },
+        targetRegistry,
+        runtimeRegistry,
+      )
+    : targetRegistry;
 }
 
 /** Returns presenter registrations from the exact request registry when available. */

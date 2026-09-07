@@ -22,8 +22,8 @@ export async function getPluginCliCommandDescriptors(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
   loaderOptions?: PluginCliLoaderOptions,
-): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
-  const descriptorGroups: OpenClawPluginCliRootCommandDescriptor[][] = [];
+): Promise<Omit<OpenClawPluginCliRootCommandDescriptor, "machineOutput">[]> {
+  const descriptorGroups: Omit<OpenClawPluginCliRootCommandDescriptor, "machineOutput">[][] = [];
   try {
     const context = resolvePluginRuntimeLoadContext({ config: cfg, env, logger: quietLogger });
     const snapshot = context.metadataSnapshot;
@@ -80,17 +80,28 @@ export async function getPluginCliCommandDescriptors(
 
     if (legacyExternalPluginIds.length > 0) {
       const { loadOpenClawPluginCliRegistry } = await import("./loader.js");
-      const registry = await loadOpenClawPluginCliRegistry(
+      const handle = await loadOpenClawPluginCliRegistry(
         buildPluginRuntimeLoadOptions(context, {
           ...loaderOptions,
           onlyPluginIds: legacyExternalPluginIds,
         }),
       );
-      descriptorGroups.push(
-        ...registry.cliRegistrars
-          .filter((entry) => (entry.parentPath ?? []).length === 0)
-          .map((entry) => entry.descriptors),
-      );
+      try {
+        // Help must not return executable closures after their registration is released.
+        descriptorGroups.push(
+          ...handle.registry.cliRegistrars
+            .filter((entry) => (entry.parentPath ?? []).length === 0)
+            .map((entry) =>
+              entry.descriptors.map(({ name, description, hasSubcommands }) => ({
+                name,
+                description,
+                hasSubcommands,
+              })),
+            ),
+        );
+      } finally {
+        handle.release();
+      }
     }
     return collectUniqueCommandDescriptors(descriptorGroups);
   } catch {

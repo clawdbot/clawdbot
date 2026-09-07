@@ -6,6 +6,10 @@ import { isPluginRegistryLoadInFlight, loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope.js";
+import {
+  type PluginRegistryResourceScope,
+  requirePluginRegistryResourceScope,
+} from "./registry-resources.js";
 import type { PluginRegistry } from "./registry.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import {
@@ -25,6 +29,7 @@ type ResolvePluginWebProvidersParams = {
   origin?: PluginManifestRecord["origin"];
   sandboxed?: boolean;
   manifestRecords?: readonly PluginManifestRecord[];
+  resourceScope?: PluginRegistryResourceScope;
 };
 
 export type WebProviderRuntimeResolution<TEntry> = {
@@ -164,6 +169,8 @@ export function resolvePluginWebProviders<TEntry>(
   params: ResolvePluginWebProvidersParams,
   deps: WebProviderRuntimeResolution<TEntry>,
 ): TEntry[] {
+  const resourceScope = params.resourceScope ?? requirePluginRegistryResourceScope();
+  resourceScope.assertRetained();
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
   if (params.mode === "setup") {
@@ -192,27 +199,29 @@ export function resolvePluginWebProviders<TEntry>(
         return bundledArtifactProviders;
       }
     }
-    const registry = loadOpenClawPlugins(
-      buildPluginRuntimeLoadOptionsFromValues(
-        {
-          config: withActivatedPluginIds({
-            config: params.config,
-            pluginIds,
-          }),
-          activationSourceConfig: params.config,
-          autoEnabledReasons: {},
-          workspaceDir,
-          env,
-          logger: createPluginRuntimeLoaderLogger(),
-          ...(params.manifestRecords
-            ? { manifestRegistry: { plugins: [...params.manifestRecords], diagnostics: [] } }
-            : {}),
-        },
-        {
-          onlyPluginIds: pluginIds,
-          cache: params.cache ?? true,
-          activate: params.activate ?? false,
-        },
+    const registry = resourceScope.adopt(
+      loadOpenClawPlugins(
+        buildPluginRuntimeLoadOptionsFromValues(
+          {
+            config: withActivatedPluginIds({
+              config: params.config,
+              pluginIds,
+            }),
+            activationSourceConfig: params.config,
+            autoEnabledReasons: {},
+            workspaceDir,
+            env,
+            logger: createPluginRuntimeLoaderLogger(),
+            ...(params.manifestRecords
+              ? { manifestRegistry: { plugins: [...params.manifestRecords], diagnostics: [] } }
+              : {}),
+          },
+          {
+            onlyPluginIds: pluginIds,
+            cache: params.cache ?? true,
+            activate: params.activate ?? false,
+          },
+        ),
       ),
     );
     return deps.mapRegistryProviders({ registry, onlyPluginIds: pluginIds });
@@ -236,6 +245,7 @@ export function resolvePluginWebProviders<TEntry>(
       onlyPluginIds: context.onlyPluginIds,
     });
     if (providers.length > 0 || hasExplicitEmptyScope) {
+      resourceScope.retain(compatible);
       return providers;
     }
   }
@@ -261,7 +271,7 @@ export function resolvePluginWebProviders<TEntry>(
       return bundledArtifactProviders;
     }
   }
-  const registry = loadOpenClawPlugins(loadOptions);
+  const registry = resourceScope.adopt(loadOpenClawPlugins(loadOptions));
   return deps.mapRegistryProviders({
     registry,
     onlyPluginIds: context.onlyPluginIds,

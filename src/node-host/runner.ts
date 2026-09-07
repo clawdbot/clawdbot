@@ -323,7 +323,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onWinningCandidate: persistWinningGateway,
   });
-  const activeRuntime = startNodeHostConnection({
+  const activeRuntime = await startNodeHostConnection({
     prepared: preparedRuntime,
     client,
     writeStderrLine,

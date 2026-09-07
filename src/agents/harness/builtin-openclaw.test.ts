@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 
 const runEmbeddedAttempt = vi.hoisted(() => vi.fn());
-const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
+const completeWithPreparedSimpleCompletionModelCore = vi.hoisted(() => vi.fn());
 
 vi.mock("../embedded-agent-runner/run/attempt.js", () => ({ runEmbeddedAttempt }));
-vi.mock("../simple-completion-execution.js", () => ({ completeWithPreparedSimpleCompletionModel }));
+vi.mock("../simple-completion-execution.js", () => ({
+  completeWithPreparedSimpleCompletionModelCore,
+}));
 
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 
@@ -37,8 +39,8 @@ describe("createOpenClawAgentHarness", () => {
         itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
       };
     });
-    completeWithPreparedSimpleCompletionModel.mockReset();
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+    completeWithPreparedSimpleCompletionModelCore.mockReset();
+    completeWithPreparedSimpleCompletionModelCore.mockResolvedValue({
       role: "assistant",
       content: [{ type: "text", text: "done" }],
       stopReason: "stop",
@@ -138,7 +140,7 @@ describe("createOpenClawAgentHarness", () => {
     await expect(createOpenClawAgentHarness().runIsolatedCompletionV2?.(params)).resolves.toEqual({
       assistant: expect.objectContaining({ stopReason: "stop" }),
     });
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+    expect(completeWithPreparedSimpleCompletionModelCore).toHaveBeenCalledWith(
       expect.objectContaining({
         model: expect.objectContaining({ provider: "openai", id: "gpt-test" }),
         auth: expect.objectContaining({ apiKey: "secret", mode: "api-key" }),
@@ -179,6 +181,6 @@ describe("createOpenClawAgentHarness", () => {
     await expect(createOpenClawAgentHarness().runIsolatedCompletionV2?.(params)).rejects.toThrow(
       "requires host-prepared authorization",
     );
-    expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(completeWithPreparedSimpleCompletionModelCore).not.toHaveBeenCalled();
   });
 });

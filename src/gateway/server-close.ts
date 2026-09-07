@@ -13,6 +13,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
+import { drainPluginRegistryResourceDisposals } from "../plugins/registry-resources.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
@@ -72,6 +73,57 @@ async function shutdownStep(
     shutdownLog.warn(`${name}: ${detail}`);
     recordShutdownWarning(warnings, name);
     return false;
+  }
+}
+
+async function finishPluginResourceOwnerShutdown(params: {
+  restartExpectedMs: number | null;
+  warnings: string[];
+  clearSecretsRuntimeSnapshot: () => void;
+}): Promise<void> {
+  const { restartExpectedMs, warnings } = params;
+  const registryCleanupFailures: unknown[] = [];
+  await shutdownStep(
+    "plugin-host-registry",
+    async () => {
+      try {
+        await clearActivePluginRegistry();
+      } catch (error) {
+        registryCleanupFailures.push(error);
+        throw error;
+      }
+    },
+    warnings,
+  );
+  // Channel and plugin teardown still resolve account credentials. Keep the
+  // active snapshot until every teardown owner is done, then always scrub it.
+  try {
+    // Plugin cleanup may still read ambient slots. A failed owner drain must
+    // stop restart so the next lifecycle cannot reuse incomplete shutdown.
+    const [owners] = await Promise.allSettled([
+      drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart"),
+    ]);
+    // Default host owners release after the earlier plugin-registry phase. Join disposal
+    // only after all of those releases have settled, including failed host cleanup.
+    const [resources] = await Promise.allSettled([drainPluginRegistryResourceDisposals()]);
+    const failures = [
+      ...registryCleanupFailures,
+      ...[owners, resources].flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      ),
+    ];
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Plugin resource owners failed to finish shutdown");
+    }
+  } finally {
+    try {
+      params.clearSecretsRuntimeSnapshot();
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -614,20 +666,11 @@ export async function completeGatewayClose(
     if (mediaCleanupStopResult === "drained") {
       await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
     }
-    await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
-    // Channel and plugin teardown still resolve account credentials. Keep the
-    // active snapshot until every teardown owner is done, then always scrub it.
-    try {
-      // Plugin cleanup may still read ambient slots. A failed owner drain must
-      // stop restart so the next lifecycle cannot reuse incomplete shutdown.
-      await drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart");
-    } finally {
-      try {
-        params.clearSecretsRuntimeSnapshot?.();
-      } catch {
-        /* ignore */
-      }
-    }
+    await finishPluginResourceOwnerShutdown({
+      restartExpectedMs,
+      warnings,
+      clearSecretsRuntimeSnapshot: () => params.clearSecretsRuntimeSnapshot?.(),
+    });
   }
 
   const durationMs = Date.now() - start;

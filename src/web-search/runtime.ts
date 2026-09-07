@@ -15,6 +15,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
+import {
+  withPluginRegistryResourceOperation,
+  withPluginRegistryResourceOperationAsync,
+} from "../plugins/registry-resources.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
   resolvePluginWebSearchProviders,
@@ -151,6 +155,15 @@ export function listConfiguredWebSearchProviders(params?: {
 
 /** Resolves configured or auto-detected web_search provider id. */
 export function resolveWebSearchProviderId(params: {
+  search?: WebSearchConfig;
+  config?: OpenClawConfig;
+  agentDir?: string;
+  providers?: PluginWebSearchProviderEntry[];
+}): string {
+  return withPluginRegistryResourceOperation(() => resolveWebSearchProviderIdWithResources(params));
+}
+
+function resolveWebSearchProviderIdWithResources(params: {
   search?: WebSearchConfig;
   config?: OpenClawConfig;
   agentDir?: string;
@@ -347,7 +360,7 @@ export function hasUsableWebSearchProvider(options?: ResolveWebSearchDefinitionP
   if (normalizeOptionalLowercaseString(options?.runtimeWebSearch?.selectedProvider)) {
     return true;
   }
-  return resolveWebSearchCandidates(options).length > 0;
+  return withPluginRegistryResourceOperation(() => resolveWebSearchCandidates(options).length > 0);
 }
 
 function hasExplicitWebSearchSelection(params: {
@@ -384,6 +397,10 @@ function hasExplicitWebSearchSelection(params: {
 
 /** Executes web_search with fallback when selection was not explicit. */
 export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
+  return withPluginRegistryResourceOperationAsync(() => runWebSearchWithResources(params));
+}
+
+async function runWebSearchWithResources(params: RunWebSearchParams): Promise<RunWebSearchResult> {
   const config = resolveWebSearchRuntimeConfig({
     config: params.config,
     preferInputConfig: params.preferInputConfig,

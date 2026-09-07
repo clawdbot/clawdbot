@@ -12,6 +12,7 @@ import type { AgentHarness } from "../harness/types.js";
 import type { ModelAuthMode } from "../model-auth.js";
 import type {
   PreparedModelRuntimeInput,
+  PreparedModelRuntimeLease,
   PreparedModelRuntimeLeaseOptions,
 } from "../prepared-model-runtime.types.js";
 import type { AgentRuntimePlan, BuildAgentRuntimePlanParams } from "../runtime-plan/types.js";
@@ -458,8 +459,8 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
 };
 
 export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
-  async (input: PreparedModelRuntimeInput, _options?: PreparedModelRuntimeLeaseOptions) => ({
-    snapshot: {
+  async (input: PreparedModelRuntimeInput, _options?: PreparedModelRuntimeLeaseOptions) => {
+    const snapshot = {
       agentId: input.agentId,
       agentDir: input.agentDir,
       config: input.config,
@@ -468,9 +469,20 @@ export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
       configuredRuntimeModels: [],
       inlineProviderModels: [],
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
-    },
-    release: vi.fn(),
-  }),
+    };
+    const pluginGeneration: PreparedModelRuntimeLease["pluginGeneration"] = {
+      pluginMetadataSnapshot: snapshot.metadataSnapshot,
+      inlineProviderModels: snapshot.inlineProviderModels,
+      configuredCatalogEntries: [],
+    };
+    return {
+      snapshot,
+      pluginGeneration,
+      release: vi.fn(),
+    } satisfies Pick<PreparedModelRuntimeLease, "pluginGeneration" | "release"> & {
+      snapshot: typeof snapshot;
+    };
+  },
 );
 const getCurrentPluginMetadataSnapshotMock: Mock<
   typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
@@ -1056,7 +1068,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   }));
 
   vi.doMock("../runtime-plan/build.js", () => ({
-    buildAgentRuntimePlan: buildAgentRuntimePlanMock,
+    buildAgentRuntimePlanCore: buildAgentRuntimePlanMock,
     resolvePreparedProviderRuntimeHandle: vi.fn(
       ({ providerRuntimeHandle, provider, modelId, workspaceDir }: BuildAgentRuntimePlanParams) =>
         providerRuntimeHandle ?? { provider, modelId, workspaceDir, prepared: true },

@@ -20,9 +20,9 @@ const LINUX_NODE_COMMANDS = [
   "system.notify",
 ] as const;
 
-function resetPluginState(): void {
+async function resetPluginState(): Promise<void> {
   resetPluginLoaderTestStateForTest();
-  resetNodeHostPluginRegistry();
+  await resetNodeHostPluginRegistry();
 }
 
 const tempBundledRoots: string[] = [];
@@ -43,10 +43,10 @@ function createLinuxNodeBundledRoot(): string {
   return root;
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  resetPluginState();
+  await resetPluginState();
   for (const root of tempBundledRoots.splice(0)) {
     fs.rmSync(root, { force: true, recursive: true });
   }
@@ -54,7 +54,7 @@ afterEach(() => {
 
 describe("linux-node node-host integration", () => {
   it("loads and advertises enabled commands through the node-host runtime", async () => {
-    resetPluginState();
+    await resetPluginState();
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     if (!platformDescriptor) {
       throw new Error("process.platform descriptor unavailable");

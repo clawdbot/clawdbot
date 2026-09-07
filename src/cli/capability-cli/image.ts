@@ -8,7 +8,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import {
   generateImage,
-  listRuntimeImageGenerationProviders,
+  listRuntimeImageGenerationProvidersCore,
 } from "../../image-generation/runtime.js";
 import type {
   ImageGenerationBackground,
@@ -22,6 +22,7 @@ import {
   prepareImageDescriptionInput,
 } from "../../media-understanding/runtime.js";
 import { getImageMetadata } from "../../media/media-services.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -296,12 +297,14 @@ export function registerImageCapabilityCommands(capability: Command): void {
       .requiredOption("--prompt <text>", "Prompt text"),
   ).action(async (opts, command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const result = await runImageGenerate({
-        capability: "image.generate",
-        prompt: String(opts.prompt),
-        ...resolveImageGenerationOptions(opts, command),
+      return withPluginRegistryResourceOperationAsync(async () => {
+        const result = await runImageGenerate({
+          capability: "image.generate",
+          prompt: String(opts.prompt),
+          ...resolveImageGenerationOptions(opts, command),
+        });
+        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
-      emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
     });
   });
 
@@ -313,14 +316,16 @@ export function registerImageCapabilityCommands(capability: Command): void {
       .requiredOption("--prompt <text>", "Prompt text"),
   ).action(async (opts, command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const files = Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)];
-      const result = await runImageGenerate({
-        capability: "image.edit",
-        prompt: String(opts.prompt),
-        file: files,
-        ...resolveImageGenerationOptions(opts, command),
+      return withPluginRegistryResourceOperationAsync(async () => {
+        const files = Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)];
+        const result = await runImageGenerate({
+          capability: "image.edit",
+          prompt: String(opts.prompt),
+          file: files,
+          ...resolveImageGenerationOptions(opts, command),
+        });
+        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
-      emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
     });
   });
 
@@ -338,15 +343,17 @@ export function registerImageCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runImageDescribe({
-          capability: "image.describe",
-          files: [String(opts.file)],
-          model: opts.model as string | undefined,
-          prompt: opts.prompt as string | undefined,
-          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
-          agent: resolveCapabilityAgentOption(command, opts.agent),
+        return withPluginRegistryResourceOperationAsync(async () => {
+          const result = await runImageDescribe({
+            capability: "image.describe",
+            files: [String(opts.file)],
+            model: opts.model as string | undefined,
+            prompt: opts.prompt as string | undefined,
+            timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+            agent: resolveCapabilityAgentOption(command, opts.agent),
+          });
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
     });
 
@@ -364,15 +371,17 @@ export function registerImageCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runImageDescribe({
-          capability: "image.describe-many",
-          files: opts.file as string[],
-          model: opts.model as string | undefined,
-          prompt: opts.prompt as string | undefined,
-          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
-          agent: resolveCapabilityAgentOption(command, opts.agent),
+        return withPluginRegistryResourceOperationAsync(async () => {
+          const result = await runImageDescribe({
+            capability: "image.describe-many",
+            files: opts.file as string[],
+            model: opts.model as string | undefined,
+            prompt: opts.prompt as string | undefined,
+            timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+            agent: resolveCapabilityAgentOption(command, opts.agent),
+          });
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
     });
 
@@ -383,27 +392,31 @@ export function registerImageCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(
-          cfg,
-          resolveCapabilityAgentOption(command, opts.agent),
-        );
-        const selectedProvider = resolveSelectedProviderFromModelRef(
-          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
-        );
-        const result = listRuntimeImageGenerationProviders({ config: cfg }).map((provider) => ({
-          available: true,
-          configured:
-            selectedProvider === provider.id ||
-            providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-          selected: selectedProvider === provider.id,
-          id: provider.id,
-          label: provider.label,
-          defaultModel: provider.defaultModel,
-          models: provider.models ?? [],
-          capabilities: provider.capabilities,
-        }));
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
+        return withPluginRegistryResourceOperationAsync(async () => {
+          const cfg = getRuntimeConfig();
+          const agentId = resolveCapabilityProviderAgentId(
+            cfg,
+            resolveCapabilityAgentOption(command, opts.agent),
+          );
+          const selectedProvider = resolveSelectedProviderFromModelRef(
+            resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
+          );
+          const result = listRuntimeImageGenerationProvidersCore({ config: cfg }).map(
+            (provider) => ({
+              available: true,
+              configured:
+                selectedProvider === provider.id ||
+                providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
+              selected: selectedProvider === provider.id,
+              id: provider.id,
+              label: provider.label,
+              defaultModel: provider.defaultModel,
+              models: provider.models ?? [],
+              capabilities: provider.capabilities,
+            }),
+          );
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
+        });
       });
     });
 }

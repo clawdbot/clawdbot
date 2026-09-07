@@ -10,6 +10,7 @@ import {
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { runMediaCapability } from "./apply-capability.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -149,172 +150,177 @@ export async function applyMediaUnderstanding(params: {
   /** Attachment indexes the caller (ACP) has already resolved into native turn attachments. */
   deliveredImageIndexes?: ReadonlySet<number>;
 }): Promise<ApplyMediaUnderstandingResult> {
-  const { ctx, cfg } = params;
-  const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
-  const originalUserText =
-    commandCandidates
-      .map((value) => normalizeOptionalString(value))
-      .find((value) => value && value.trim()) ?? undefined;
+  return withPluginRegistryResourceOperationAsync(async () => {
+    const { ctx, cfg } = params;
+    const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
+    const originalUserText =
+      commandCandidates
+        .map((value) => normalizeOptionalString(value))
+        .find((value) => value && value.trim()) ?? undefined;
 
-  const attachments = normalizeMediaAttachments(ctx);
-  const providerRegistry = buildProviderRegistry(params.providers, cfg);
-  const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({
-      cfg,
-      ctx,
+    const attachments = normalizeMediaAttachments(ctx);
+    const providerRegistry = buildProviderRegistry(params.providers, cfg);
+    const cache = createMediaAttachmentCache(attachments, {
+      localPathRoots: resolveMediaAttachmentLocalRoots({
+        cfg,
+        ctx,
+        workspaceDir: params.workspaceDir,
+      }),
+      ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
       workspaceDir: params.workspaceDir,
-    }),
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-    workspaceDir: params.workspaceDir,
-  });
+    });
 
-  try {
-    const results = await pMap(
-      params.processingMode === "audio-only" ? AUDIO_ONLY_CAPABILITY_ORDER : CAPABILITY_ORDER,
-      async (capability) =>
-        await runMediaCapability({
-          capability,
-          cfg,
-          ctx,
-          attachments: cache,
-          media: attachments,
-          agentId: params.agentId,
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          providerRegistry,
-          config: cfg.tools?.media?.[capability],
-          activeModel: params.activeModel,
-        }),
-      { concurrency: resolveConcurrency(cfg), stopOnError: false },
-    );
-    const outputs: MediaUnderstandingOutput[] = [];
-    const decisions: MediaUnderstandingDecision[] = [];
-    const audioAttachmentIndexes = new Set<number>();
-    for (const entry of results) {
-      decisions.push(entry.decision);
-      if (entry.decision.capability !== "audio") {
+    try {
+      const results = await pMap(
+        params.processingMode === "audio-only" ? AUDIO_ONLY_CAPABILITY_ORDER : CAPABILITY_ORDER,
+        async (capability) =>
+          await runMediaCapability({
+            capability,
+            cfg,
+            ctx,
+            attachments: cache,
+            media: attachments,
+            agentId: params.agentId,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            providerRegistry,
+            config: cfg.tools?.media?.[capability],
+            activeModel: params.activeModel,
+          }),
+        { concurrency: resolveConcurrency(cfg), stopOnError: false },
+      );
+      const outputs: MediaUnderstandingOutput[] = [];
+      const decisions: MediaUnderstandingDecision[] = [];
+      const audioAttachmentIndexes = new Set<number>();
+      for (const entry of results) {
+        decisions.push(entry.decision);
+        if (entry.decision.capability !== "audio") {
+          for (const output of entry.outputs) {
+            outputs.push(output);
+          }
+          continue;
+        }
+        const audioOutputsByAttachmentIndex = new Map<number, MediaUnderstandingOutput>();
         for (const output of entry.outputs) {
-          outputs.push(output);
+          audioOutputsByAttachmentIndex.set(output.attachmentIndex, output);
+          audioAttachmentIndexes.add(output.attachmentIndex);
         }
-        continue;
-      }
-      const audioOutputsByAttachmentIndex = new Map<number, MediaUnderstandingOutput>();
-      for (const output of entry.outputs) {
-        audioOutputsByAttachmentIndex.set(output.attachmentIndex, output);
-        audioAttachmentIndexes.add(output.attachmentIndex);
-      }
-      // Capability results retain image/audio/video order. Project audio in the
-      // runner's selected order so placeholders honor attachments.prefer and
-      // stay before video even when every audio attachment was too small.
-      for (const attachment of entry.decision.attachments) {
-        const output = audioOutputsByAttachmentIndex.get(attachment.attachmentIndex);
-        if (output) {
-          outputs.push(output);
-        } else if (
-          attachment.attempts.some((attempt) => attempt.reason?.trim().startsWith("tooSmall"))
-        ) {
-          outputs.push({
-            kind: "audio.transcription",
-            attachmentIndex: attachment.attachmentIndex,
-            text: EMPTY_VOICE_NOTE_PLACEHOLDER,
-            provider: "openclaw",
-            model: "synthetic-empty-audio",
-          });
+        // Capability results retain image/audio/video order. Project audio in the
+        // runner's selected order so placeholders honor attachments.prefer and
+        // stay before video even when every audio attachment was too small.
+        for (const attachment of entry.decision.attachments) {
+          const output = audioOutputsByAttachmentIndex.get(attachment.attachmentIndex);
+          if (output) {
+            outputs.push(output);
+          } else if (
+            attachment.attempts.some((attempt) => attempt.reason?.trim().startsWith("tooSmall"))
+          ) {
+            outputs.push({
+              kind: "audio.transcription",
+              attachmentIndex: attachment.attachmentIndex,
+              text: EMPTY_VOICE_NOTE_PLACEHOLDER,
+              provider: "openclaw",
+              model: "synthetic-empty-audio",
+            });
+          }
         }
       }
-    }
 
-    if (decisions.length > 0) {
-      ctx.MediaUnderstandingDecisions = [...(ctx.MediaUnderstandingDecisions ?? []), ...decisions];
-    }
+      if (decisions.length > 0) {
+        ctx.MediaUnderstandingDecisions = [
+          ...(ctx.MediaUnderstandingDecisions ?? []),
+          ...decisions,
+        ];
+      }
 
-    if (outputs.length > 0) {
-      const audioOutputs = outputs.filter((output) => output.kind === "audio.transcription");
-      if (audioOutputs.length > 0) {
-        const transcript = formatAudioTranscripts(audioOutputs);
-        ctx.Transcript = transcript;
-        if (originalUserText) {
+      if (outputs.length > 0) {
+        const audioOutputs = outputs.filter((output) => output.kind === "audio.transcription");
+        if (audioOutputs.length > 0) {
+          const transcript = formatAudioTranscripts(audioOutputs);
+          ctx.Transcript = transcript;
+          if (originalUserText) {
+            ctx.CommandBody = originalUserText;
+            ctx.RawBody = originalUserText;
+          } else {
+            ctx.CommandBody = transcript;
+            ctx.RawBody = transcript;
+          }
+          // Echo transcript back to chat before agent processing, if configured.
+          const audioCfg = cfg.tools?.media?.audio;
+          if (audioCfg?.echoTranscript && transcript) {
+            await sendTranscriptEcho({
+              ctx,
+              cfg,
+              transcript,
+              format: audioCfg.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+            });
+          }
+        } else if (originalUserText) {
           ctx.CommandBody = originalUserText;
           ctx.RawBody = originalUserText;
-        } else {
-          ctx.CommandBody = transcript;
-          ctx.RawBody = transcript;
         }
-        // Echo transcript back to chat before agent processing, if configured.
-        const audioCfg = cfg.tools?.media?.audio;
-        if (audioCfg?.echoTranscript && transcript) {
-          await sendTranscriptEcho({
-            ctx,
-            cfg,
-            transcript,
-            format: audioCfg.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
-          });
-        }
-      } else if (originalUserText) {
-        ctx.CommandBody = originalUserText;
-        ctx.RawBody = originalUserText;
+        ctx.MediaUnderstanding = [...(ctx.MediaUnderstanding ?? []), ...outputs];
       }
-      ctx.MediaUnderstanding = [...(ctx.MediaUnderstanding ?? []), ...outputs];
-    }
-    // Only skip file extraction for attachments that have a real (non-synthetic)
-    // audio transcription. Synthetic placeholders should not prevent file extraction
-    // for tiny audio-MIME files that could be recovered as text via forcedTextMime.
-    const fileContext =
-      params.processingMode === "audio-only"
-        ? { blocks: [], images: [], localPathSelfServeUpgrades: [] }
-        : await extractFileContext({
-            attachments,
-            cache,
-            cfg,
-            limits: resolveFileExtractionLimits(cfg),
-            skipAttachmentIndexes:
-              audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
-            // Placement is the caller's fact. Absent an authoritative host-readable
-            // placement, suppress — a wrong path is worse than the plain marker (#122411).
-            selfServePathsEnabled: params.selfServeLocalPaths === true,
-          });
-    // Only processed capabilities have decisions, so audio-only runs cannot
-    // add markers for image/video inputs still owned by the native harness.
-    const mediaMarkers = renderMediaAttachmentMarkers({
-      attachments,
-      decisions,
-      outputs,
-      deliveredImageIndexes: params.deliveredImageIndexes,
-    });
-    const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
-    if (outputs.length > 0 || contextBlocks.length > 0) {
-      const enrich = (body?: string) =>
-        appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), contextBlocks);
-      // Channels may carry preflight transcripts only in prepared agent text.
-      // Enrich that base before changing the separate transport envelope.
-      ctx.agentText = enrich(ctx.agentText ?? ctx.BodyForAgent ?? ctx.Body);
-      ctx.Body = enrich(ctx.Body);
-      finalizeInboundContext(ctx, { forceBodyForCommands: true });
-    }
+      // Only skip file extraction for attachments that have a real (non-synthetic)
+      // audio transcription. Synthetic placeholders should not prevent file extraction
+      // for tiny audio-MIME files that could be recovered as text via forcedTextMime.
+      const fileContext =
+        params.processingMode === "audio-only"
+          ? { blocks: [], images: [], localPathSelfServeUpgrades: [] }
+          : await extractFileContext({
+              attachments,
+              cache,
+              cfg,
+              limits: resolveFileExtractionLimits(cfg),
+              skipAttachmentIndexes:
+                audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
+              // Placement is the caller's fact. Absent an authoritative host-readable
+              // placement, suppress — a wrong path is worse than the plain marker (#122411).
+              selfServePathsEnabled: params.selfServeLocalPaths === true,
+            });
+      // Only processed capabilities have decisions, so audio-only runs cannot
+      // add markers for image/video inputs still owned by the native harness.
+      const mediaMarkers = renderMediaAttachmentMarkers({
+        attachments,
+        decisions,
+        outputs,
+        deliveredImageIndexes: params.deliveredImageIndexes,
+      });
+      const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
+      if (outputs.length > 0 || contextBlocks.length > 0) {
+        const enrich = (body?: string) =>
+          appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), contextBlocks);
+        // Channels may carry preflight transcripts only in prepared agent text.
+        // Enrich that base before changing the separate transport envelope.
+        ctx.agentText = enrich(ctx.agentText ?? ctx.BodyForAgent ?? ctx.Body);
+        ctx.Body = enrich(ctx.Body);
+        finalizeInboundContext(ctx, { forceBodyForCommands: true });
+      }
 
-    return {
-      outputs,
-      decisions,
-      extractedFileImages: fileContext.images,
-      appliedImage: outputs.some((output) => output.kind === "image.description"),
-      appliedAudio: outputs.some((output) => output.kind === "audio.transcription"),
-      appliedVideo: outputs.some((output) => output.kind === "video.description"),
-      appliedFile: fileContext.blocks.length > 0,
-      ...(fileContext.localPathSelfServeUpgrades.length > 0
-        ? {
-            enableLocalPathSelfServe: (
-              contexts: MsgContext[],
-              stagedPaths?: ReadonlyMap<number, string>,
-            ) =>
-              enableLocalPathSelfServe(
-                fileContext.localPathSelfServeUpgrades,
-                contexts,
-                stagedPaths,
-              ),
-          }
-        : {}),
-    };
-  } finally {
-    await cache.cleanup();
-  }
+      return {
+        outputs,
+        decisions,
+        extractedFileImages: fileContext.images,
+        appliedImage: outputs.some((output) => output.kind === "image.description"),
+        appliedAudio: outputs.some((output) => output.kind === "audio.transcription"),
+        appliedVideo: outputs.some((output) => output.kind === "video.description"),
+        appliedFile: fileContext.blocks.length > 0,
+        ...(fileContext.localPathSelfServeUpgrades.length > 0
+          ? {
+              enableLocalPathSelfServe: (
+                contexts: MsgContext[],
+                stagedPaths?: ReadonlyMap<number, string>,
+              ) =>
+                enableLocalPathSelfServe(
+                  fileContext.localPathSelfServeUpgrades,
+                  contexts,
+                  stagedPaths,
+                ),
+            }
+          : {}),
+      };
+    } finally {
+      await cache.cleanup();
+    }
+  });
 }

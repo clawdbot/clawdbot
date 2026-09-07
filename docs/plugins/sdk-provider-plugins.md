@@ -1050,6 +1050,15 @@ catalog, API-key auth, and dynamic model resolution.
         other work so it snapshots the bytes immediately.
       </Tab>
       <Tab title="Realtime voice">
+        Session owners using `acquireConfiguredRealtimeVoiceProvider(...)` pass
+        `runWithProviderResources: acquired.run` to
+        `createRealtimeVoiceBridgeSession(...)` or the session harness's `createBridge(...)`.
+        This binds provider methods, live capability reads, and deferred playback acknowledgments
+        to the acquired registration, including asynchronous connection and tool-result completion.
+        Close the session before releasing the acquisition. If provider cleanup throws, keep the
+        session and acquisition for a later close attempt; input admission remains closed.
+        Callers that omit the optional runner retain the existing host-owned callback behavior.
+
         Consumers can pass candidate provider IDs as the optional second argument
         to `listRealtimeVoiceProviders(cfg, providerIds)`. Omit the argument for
         ordinary catalog discovery; per-call candidates do not change that catalog.

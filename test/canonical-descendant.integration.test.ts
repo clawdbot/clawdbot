@@ -47,6 +47,10 @@ import {
   markPluginRegistryActive,
   markPluginRegistryRetired,
 } from "../src/plugins/registry-lifecycle.js";
+import {
+  createPluginRegistryResourceLease,
+  PluginRegistryResourceScope,
+} from "../src/plugins/registry-resources.js";
 import { withPluginRuntimeGenerationScope } from "../src/plugins/runtime/generation-scope.js";
 import { setPluginRuntimeLoadContext } from "../src/plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../src/plugins/runtime/load-context.resolve.js";
@@ -265,8 +269,11 @@ async function withFixture(
               },
             }),
         );
+        const resourceLease = createPluginRegistryResourceLease(new PluginRegistryResourceScope());
         return {
           ...host,
+          runWithScope: <T>(operation: () => Promise<T>) =>
+            resourceLease.run(() => host.runWithScope(operation)),
           abortController,
           invalidate: async (reason) => {
             if (reason === "claim") {
@@ -297,12 +304,16 @@ async function withFixture(
           },
           userTurnTranscriptRecorder: recorder,
           close: () => {
-            host.close();
-            if (workerClaim) {
-              placements?.releaseTurn(workerClaim);
+            try {
+              host.close();
+              if (workerClaim) {
+                placements?.releaseTurn(workerClaim);
+              }
+              admission.close();
+              successor?.close();
+            } finally {
+              resourceLease.release();
             }
-            admission.close();
-            successor?.close();
           },
         };
       },

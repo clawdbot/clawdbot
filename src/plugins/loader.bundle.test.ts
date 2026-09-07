@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginsForTest as loadOpenClawPlugins } from "./loader-handles.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadBundleFixture,

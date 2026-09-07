@@ -13,7 +13,10 @@ import {
   listRegisteredEmbeddingProviders,
 } from "./embedding-providers.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import {
+  loadOpenClawPluginsForTest as loadOpenClawPlugins,
+  type PluginLoadOptions,
+} from "./loader-handles.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,

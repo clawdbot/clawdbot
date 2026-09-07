@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   bindModelLlmRuntime,
   getModelCompletionTransport,
+  getModelCompletionRunner,
   getModelLlmRuntime,
 } from "../llm/model-runtime-binding.js";
 import { completeSimple } from "../llm/stream.js";
@@ -34,7 +35,7 @@ type SimpleCompletionModelOptions = {
   signal?: AbortSignal;
 };
 
-export async function completeWithPreparedSimpleCompletionModel(params: {
+export async function completeWithPreparedSimpleCompletionModelCore(params: {
   assertCurrent?: () => void;
   model: Model;
   auth: ResolvedProviderAuth;
@@ -42,12 +43,21 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   cfg?: OpenClawConfig;
   options?: SimpleCompletionModelOptions;
 }): Promise<AssistantMessage> {
+  const runCompletion = getModelCompletionRunner(params.model);
+  return await (runCompletion
+    ? runCompletion(() => executePreparedSimpleCompletion(params))
+    : executePreparedSimpleCompletion(params));
+}
+
+async function executePreparedSimpleCompletion(
+  params: Parameters<typeof completeWithPreparedSimpleCompletionModelCore>[0],
+): Promise<AssistantMessage> {
   const runtime = getModelLlmRuntime(params.model);
   let completionModel =
     getModelCompletionTransport(params.model) ??
     prepareModelForSimpleCompletion({
-      // Direct SDK callers that did not use the preparation helper keep the shipped
-      // process-default behavior; all prepared host paths carry their lifecycle owner.
+      // The SDK facade owns legacy shared-transport resources for bare-model callers.
+      // Prepared host paths carry their exact lifecycle runtime.
       apiRegistry: runtime?.registry ?? defaultApiRegistry,
       model: params.model,
       cfg: params.cfg,

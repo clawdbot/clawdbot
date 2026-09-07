@@ -4,11 +4,11 @@
  * Defines channel metadata, capabilities, action discovery, setup, status, and runtime contexts.
  */
 import type { TSchema } from "typebox";
+import type { AgentTool, AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type {
   GatewayClientMode,
   GatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";

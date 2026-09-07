@@ -1,11 +1,15 @@
 /**
  * Contract suite for bundled web fetch provider registration and runtime behavior.
  */
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   pluginRegistrationContractRegistry,
-  resolveWebFetchProviderContractEntriesForPluginId,
+  resolveWebFetchProviderContractEntriesForPluginIdCore,
 } from "../../plugins/contracts/registry.js";
+import {
+  PluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "../../plugins/registry-resources.js";
 import { resolveBundledExplicitWebFetchProvidersFromPublicArtifacts } from "../../plugins/web-provider-public-artifacts.explicit.js";
 import type { WebFetchProviderPlugin } from "../provider-web-fetch-contract.js";
 import { installWebFetchProviderContractSuite } from "./provider-contract-suites.js";
@@ -23,6 +27,8 @@ function resolveWebFetchCredentialValue(provider: WebFetchProviderPlugin): unkno
 
 /** Installs web fetch provider contract tests for all providers owned by one plugin. */
 export function describeWebFetchProviderContracts(pluginId: string) {
+  const resources = new PluginRegistryResourceScope();
+  afterAll(() => resources.release());
   const providerIds =
     pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
       ?.webFetchProviderIds ?? [];
@@ -49,7 +55,9 @@ export function describeWebFetchProviderContracts(pluginId: string) {
       }));
       return providerEntries;
     }
-    providerEntries = resolveWebFetchProviderContractEntriesForPluginId(pluginId);
+    providerEntries = withPluginRegistryResourceScope(resources, () =>
+      resolveWebFetchProviderContractEntriesForPluginIdCore(pluginId),
+    );
     return providerEntries;
   };
 

@@ -1,16 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionCleanupSummary } from "../config/sessions.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runLocalSessionsCleanup } from "./sessions-cleanup.runtime.js";
 
 const runSessionsCleanup = vi.hoisted(() => vi.fn());
+const releasePluginRegistry = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions.js")>()),
   runSessionsCleanup,
 }));
 vi.mock("../plugins/loader.js", () => ({
-  loadPluginRegistryHandle: vi.fn(() => ({})),
+  loadPluginRegistryHandle: vi.fn<typeof import("../plugins/loader.js").loadPluginRegistryHandle>(
+    () => ({ registry: createEmptyPluginRegistry(), release: releasePluginRegistry }),
+  ),
 }));
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: vi.fn(() => ({
@@ -95,5 +99,6 @@ describe("runLocalSessionsCleanup", () => {
       target: { agentId: "work", storePath: "/tmp/work/sessions.json" },
       lifecycleCommitted: false,
     });
+    expect(releasePluginRegistry).toHaveBeenCalledOnce();
   });
 });

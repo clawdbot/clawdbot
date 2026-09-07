@@ -11,6 +11,7 @@ import type {
   Usage,
 } from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAiTransportHost } from "../host.js";
 import {
   appendAssistantMessageDiagnostic,
   createAssistantMessageDiagnostic,
@@ -248,6 +249,7 @@ async function awaitProviderLifecycleCallback(
     return;
   }
   const callbackPromise = Promise.resolve().then(callback);
+  getAiTransportHost().observePendingProviderWork?.(callbackPromise);
   if (!signal) {
     await callbackPromise;
     return;
@@ -275,7 +277,10 @@ function startProviderStreamCancellation(cancelStream: ProviderStreamCancel, err
   const reason = error instanceof Error ? error : new Error(String(error));
   try {
     // The lifecycle failure remains authoritative. Cleanup must not delay or replace it.
-    void Promise.resolve(cancelStream(reason)).catch(() => undefined);
+    const pending = Promise.resolve(cancelStream(reason));
+    // Observe the same cleanup promise without delaying the original failure.
+    void pending.catch(() => undefined);
+    getAiTransportHost().observePendingProviderWork?.(pending);
   } catch {
     // A synchronous cleanup failure cannot replace the lifecycle failure either.
   }

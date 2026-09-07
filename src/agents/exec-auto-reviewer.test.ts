@@ -2,6 +2,7 @@
 // reviewer prompt isolation, and timeout resolution.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 
 const input = {
@@ -24,6 +25,7 @@ const input = {
 function createReviewerHarness(decision: "allow" | "ask" = "allow") {
   const prepare = vi.fn(async () => ({
     selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
+    release: vi.fn(),
     model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
     auth: { apiKey: "redacted", mode: "env" as const },
   }));
@@ -43,10 +45,10 @@ function createReviewerHarness(decision: "allow" | "ask" = "allow") {
   const reviewer = createModelExecAutoReviewer({
     cfg: {},
     deps: {
-      prepareSimpleCompletionModelForAgent:
-        prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-      completeWithPreparedSimpleCompletionModel:
-        complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      acquireSimpleCompletionModelForAgent:
+        prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+      completeWithPreparedSimpleCompletionModelCore:
+        complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
     },
   });
   return { reviewer, prepare, complete };
@@ -55,6 +57,7 @@ function createReviewerHarness(decision: "allow" | "ask" = "allow") {
 async function reviewExecResponse(text: string) {
   const prepare = vi.fn(async () => ({
     selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
+    release: vi.fn(),
     model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
     auth: { apiKey: "redacted", mode: "env" as const },
   }));
@@ -65,10 +68,10 @@ async function reviewExecResponse(text: string) {
   const reviewer = createModelExecAutoReviewer({
     cfg: {},
     deps: {
-      prepareSimpleCompletionModelForAgent:
-        prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-      completeWithPreparedSimpleCompletionModel:
-        complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      acquireSimpleCompletionModelForAgent:
+        prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+      completeWithPreparedSimpleCompletionModelCore:
+        complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
     },
   });
   return reviewer(input);
@@ -307,6 +310,7 @@ describe("createModelExecAutoReviewer", () => {
 
   it("uses the configured exec reviewer model for review calls", async () => {
     const prepare = vi.fn(async () => ({
+      release: vi.fn(),
       selection: {
         provider: "openrouter",
         modelId: "anthropic/claude-sonnet-4-6",
@@ -339,10 +343,10 @@ describe("createModelExecAutoReviewer", () => {
       agentId: "ops",
       reviewer: { model: { primary: "openrouter/anthropic/claude-sonnet-4-6" } },
       deps: {
-        prepareSimpleCompletionModelForAgent:
-          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-        completeWithPreparedSimpleCompletionModel:
-          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+        acquireSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModelCore:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
       },
     });
 
@@ -392,6 +396,7 @@ describe("createModelExecAutoReviewer", () => {
     // Command content is adversarial input to the reviewer. Prompt-injection
     // attempts force human review even if the model returns a low-risk allow.
     const prepare = vi.fn(async () => ({
+      release: vi.fn(),
       selection: {
         provider: "openrouter",
         modelId: "anthropic/claude-sonnet-4-6",
@@ -416,10 +421,10 @@ describe("createModelExecAutoReviewer", () => {
     const reviewer = createModelExecAutoReviewer({
       cfg: {},
       deps: {
-        prepareSimpleCompletionModelForAgent:
-          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-        completeWithPreparedSimpleCompletionModel:
-          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+        acquireSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModelCore:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
       },
     });
 
@@ -447,8 +452,8 @@ describe("createModelExecAutoReviewer", () => {
     const reviewer = createModelExecAutoReviewer({
       cfg: {},
       deps: {
-        prepareSimpleCompletionModelForAgent:
-          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        acquireSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
       },
     });
 
@@ -463,9 +468,9 @@ describe("createModelExecAutoReviewer", () => {
     const reviewer = createModelExecAutoReviewer({
       cfg: {},
       deps: {
-        prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+        acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
           error: "missing API key",
-        })) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        })) as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
       },
     });
 
@@ -488,7 +493,8 @@ describe("createModelExecAutoReviewer", () => {
     const reviewer = createModelExecAutoReviewer({
       cfg: {},
       deps: {
-        prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+        acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
+          release: vi.fn(),
           selection: {
             provider: "atlassian-aigw",
             modelId: "gpt-5.4-nano",
@@ -496,9 +502,9 @@ describe("createModelExecAutoReviewer", () => {
           },
           model: { provider: "atlassian-aigw", id: "gpt-5.4-nano", api: "openai-responses" },
           auth: { apiKey: "key", mode: "env" },
-        })) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-        completeWithPreparedSimpleCompletionModel:
-          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+        })) as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModelCore:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
       },
     });
 
@@ -520,9 +526,9 @@ describe("createModelExecAutoReviewer", () => {
     const reviewer = createModelExecAutoReviewer({
       cfg: {},
       deps: {
-        prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+        acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
           error: message,
-        })) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        })) as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
       },
     });
 
@@ -548,13 +554,13 @@ describe("createModelExecAutoReviewer", () => {
     const reviewer = createModelExecAutoReviewer({
       cfg: {},
       deps: {
-        prepareSimpleCompletionModelForAgent:
-          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-        completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
+        acquireSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModelCore: vi.fn(async () => ({
           stopReason: "error" as const,
           errorMessage: message,
           content: [],
-        })) as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+        })) as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
       },
     });
 
@@ -579,9 +585,9 @@ describe("createModelExecAutoReviewer", () => {
     const reviewer = createModelExecAutoReviewer({
       cfg: {},
       deps: {
-        prepareSimpleCompletionModelForAgent: vi.fn(async () => {
+        acquireSimpleCompletionModelForAgent: vi.fn(async () => {
           throw new Error(message);
-        }) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        }) as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
       },
     });
 
@@ -602,12 +608,13 @@ describe("createModelExecAutoReviewer", () => {
       const reviewer = createModelExecAutoReviewer({
         cfg: {},
         deps: {
-          prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+          acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
+            release: vi.fn(),
             selection: { provider: "openai", modelId: "gpt-5.5", agentDir: "/agent" },
             model: { provider: "openai", id: "gpt-5.5", api: "openai-responses" },
             auth: { apiKey: "key", mode: "env" },
-          })) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-          completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
+          })) as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+          completeWithPreparedSimpleCompletionModelCore: vi.fn(async () => ({
             stopReason,
             content: [
               {
@@ -619,7 +626,7 @@ describe("createModelExecAutoReviewer", () => {
                 }),
               },
             ],
-          })) as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+          })) as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
         },
       });
 
@@ -631,36 +638,62 @@ describe("createModelExecAutoReviewer", () => {
     },
   );
 
-  it("applies the reviewer timeout while preparing the model", async () => {
+  it("releases a model that finishes preparation after the reviewer timeout", async () => {
     vi.useFakeTimers();
     try {
-      const prepare = vi.fn(
-        () =>
-          new Promise<never>(() => {
-            // Keep model preparation pending until the reviewer timeout wins.
-          }),
-      );
+      const { prepare: fixture } = createReviewerHarness();
+      const prepared = await fixture();
+      const acquisition = createDeferredCore<typeof prepared>();
+      const prepare = vi.fn(() => acquisition.promise);
       const reviewer = createModelExecAutoReviewer({
         cfg: {},
         reviewer: { timeoutMs: 5_000 },
         deps: {
-          prepareSimpleCompletionModelForAgent:
-            prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+          acquireSimpleCompletionModelForAgent:
+            prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
         },
       });
-
-      let settled = false;
-      const result = Promise.resolve(reviewer(input)).then((decision) => {
-        settled = true;
-        return decision;
-      });
+      const result = reviewer(input);
       await vi.advanceTimersByTimeAsync(5_001);
-
-      expect(settled).toBe(true);
       await expect(result).resolves.toMatchObject({
         decision: "ask",
         rationale: "exec reviewer timed out after 5000ms",
       });
+      expect(prepared.release).not.toHaveBeenCalled();
+      acquisition.resolve(prepared);
+      await acquisition.promise;
+      expect(prepared.release).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains a timed-out completion until the actual provider work settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const { prepare: fixture, complete: completionFixture } = createReviewerHarness();
+      const prepared = await fixture();
+      const completion = createDeferredCore<Awaited<ReturnType<typeof completionFixture>>>();
+      const complete = vi.fn(() => completion.promise);
+      const reviewer = createModelExecAutoReviewer({
+        cfg: {},
+        reviewer: { timeoutMs: 5_000 },
+        deps: {
+          acquireSimpleCompletionModelForAgent: vi.fn(
+            async () => prepared,
+          ) as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+          completeWithPreparedSimpleCompletionModelCore:
+            complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
+        },
+      });
+      const result = reviewer(input);
+      await vi.advanceTimersByTimeAsync(5_001);
+      await expect(result).resolves.toMatchObject({ decision: "ask" });
+      expect(complete).toHaveBeenCalledOnce();
+      expect(prepared.release).not.toHaveBeenCalled();
+      completion.resolve(await completionFixture());
+      await completion.promise;
+      expect(prepared.release).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
@@ -673,8 +706,8 @@ describe("createModelExecAutoReviewer", () => {
       cfg: {},
       signal: controller.signal,
       deps: {
-        prepareSimpleCompletionModelForAgent:
-          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        acquireSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
       },
     });
 
@@ -701,13 +734,14 @@ describe("createModelExecAutoReviewer", () => {
       cfg: {},
       signal: controller.signal,
       deps: {
-        prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+        acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
+          release: vi.fn(),
           selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
           model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
           auth: { apiKey: "redacted", mode: "env" as const },
-        })) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-        completeWithPreparedSimpleCompletionModel:
-          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+        })) as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModelCore:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
       },
     });
 
@@ -728,8 +762,8 @@ describe("createModelExecAutoReviewer", () => {
         cfg: {},
         reviewer: { timeoutMs: Number.MAX_SAFE_INTEGER },
         deps: {
-          prepareSimpleCompletionModelForAgent:
-            prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+          acquireSimpleCompletionModelForAgent:
+            prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
         },
       });
 
@@ -752,12 +786,14 @@ describe("createModelExecAutoReviewer", () => {
       const prepare = vi.fn(
         () =>
           new Promise<{
+            release(): void;
             selection: { provider: string; modelId: string; agentDir: string };
             model: { provider: string; id: string; api: "openai" };
             auth: { apiKey: string; mode: "env" };
           }>((resolve) => {
             setTimeout(() => {
               resolve({
+                release: vi.fn(),
                 selection: {
                   provider: "openrouter",
                   modelId: "anthropic/claude-sonnet-4-6",
@@ -796,10 +832,10 @@ describe("createModelExecAutoReviewer", () => {
         cfg: {},
         reviewer: { timeoutMs: 5_000 },
         deps: {
-          prepareSimpleCompletionModelForAgent:
-            prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-          completeWithPreparedSimpleCompletionModel:
-            complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+          acquireSimpleCompletionModelForAgent:
+            prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+          completeWithPreparedSimpleCompletionModelCore:
+            complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
         },
       });
 
@@ -917,6 +953,7 @@ describe("createModelExecAutoReviewer", () => {
       }
       return {
         selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
+        release: vi.fn(),
         model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
         auth: { apiKey: "redacted", mode: "env" as const },
       };
@@ -942,10 +979,10 @@ describe("createModelExecAutoReviewer", () => {
         },
       },
       deps: {
-        prepareSimpleCompletionModelForAgent:
-          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
-        completeWithPreparedSimpleCompletionModel:
-          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+        acquireSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModelCore:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModelCore,
       },
     });
 

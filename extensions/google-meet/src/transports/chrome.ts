@@ -93,6 +93,7 @@ export async function launchChromeMeet(params: {
   mode: GoogleMeetMode;
   url: string;
   logger: RuntimeLogger;
+  onCleanupReady?: (stop: () => Promise<void>) => void | Promise<void>;
 }): Promise<{
   launched: boolean;
   audioBackend?: MeetingAudioBackend;
@@ -186,6 +187,7 @@ export async function launchChromeMeet(params: {
             transport,
             logger: params.logger,
             consultAgent: bindings.consultAgent,
+            onCleanupReady: params.onCleanupReady,
           })
         : await startMeetingRealtimeEngine({
             config: {
@@ -199,6 +201,7 @@ export async function launchChromeMeet(params: {
             requesterSessionKey: params.requesterSessionKey,
             transport,
             logger: params.logger,
+            onCleanupReady: params.onCleanupReady,
           });
     return {
       type: "command-pair",
@@ -442,6 +445,7 @@ export async function launchChromeMeetOnNode(params: {
   mode: GoogleMeetMode;
   url: string;
   logger: RuntimeLogger;
+  onCleanupReady?: (stop: () => Promise<void>) => void | Promise<void>;
 }): Promise<{
   nodeId: string;
   launched: boolean;
@@ -579,6 +583,7 @@ export async function launchChromeMeetOnNode(params: {
             transport,
             logger: params.logger,
             consultAgent: bindings.consultAgent,
+            onCleanupReady: params.onCleanupReady,
           })
         : await startMeetingRealtimeEngine({
             config: {
@@ -595,6 +600,7 @@ export async function launchChromeMeetOnNode(params: {
             talkContext: { nodeId, bridgeId: result.bridgeId },
             transport,
             logger: params.logger,
+            onCleanupReady: params.onCleanupReady,
           });
     const bridge: ChromeNodeRealtimeAudioBridgeHandle = {
       type: "node-command-pair",

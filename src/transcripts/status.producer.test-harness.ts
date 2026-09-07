@@ -31,6 +31,9 @@ export function useTranscriptStatusFixture() {
     previousRegistry = captureActivePluginRegistrySnapshot();
   });
   afterEach(() => {
+    for (const entry of activeSessions.values()) {
+      entry.resources.release();
+    }
     activeSessions.clear();
     resetConfigRuntimeState();
     closeOpenClawStateDatabaseForTest();
@@ -62,8 +65,8 @@ export function useTranscriptStatusFixture() {
       start: async ({ session }) => ({ ok: true, session }),
       stop: async ({ sessionId }) => ({ ok: true, sessionId }),
     };
-    vi.spyOn(providerRegistry, "getTranscriptSourceProvider").mockReturnValue(provider);
-    vi.spyOn(providerRegistry, "listTranscriptSourceProviders").mockReturnValue([provider]);
+    vi.spyOn(providerRegistry, "getTranscriptSourceProviderCore").mockReturnValue(provider);
+    vi.spyOn(providerRegistry, "listTranscriptSourceProvidersCore").mockReturnValue([provider]);
     const registry = createEmptyPluginRegistry();
     registry.transcriptSourceProviders.push({ pluginId: "fixture", source: "fixture", provider });
     setActivePluginRegistry(registry);

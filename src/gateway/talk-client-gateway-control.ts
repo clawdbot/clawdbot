@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { readErrorName } from "../infra/errors.js";
+import { runOutsidePluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -37,9 +38,13 @@ import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
 import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 type GatewayControlOwner = {
-  adoptProvider: (closeProvider: () => Promise<void>) => Promise<void>;
+  adoptProvider: (
+    closeProvider: () => Promise<void>,
+    releaseResources?: () => void | Promise<void>,
+  ) => Promise<void>;
   activate: () => void;
   assertOpen: () => void;
+  readonly closing: boolean;
   close: (options?: {
     preserveLogicalSession?: boolean;
     preserveRuns?: boolean;
@@ -217,6 +222,21 @@ export function boundTalkClientRealtimeInitialItems(
   return newestFirst.toReversed();
 }
 
+function assertGatewayControlCleanupAvailable(
+  target: Pick<GatewayControlOwner, "connId" | "voiceSessionId">,
+  current?: GatewayControlOwner,
+): void {
+  for (const previous of [...pendingOwners, ...owners.values()]) {
+    if (
+      previous !== current &&
+      previous.closing &&
+      (previous.connId === target.connId || previous.voiceSessionId === target.voiceSessionId)
+    ) {
+      throw new Error("Previous realtime voice session cleanup is still pending");
+    }
+  }
+}
+
 export function createTalkClientGatewayControlOwner(params: {
   voiceSessionId: string;
   providerId?: string;
@@ -238,10 +258,17 @@ export function createTalkClientGatewayControlOwner(params: {
   flushTranscript: () => Promise<void>;
   closeLogicalSession: () => Promise<void>;
   controlAgentRun?: typeof controlRealtimeVoiceAgentRun;
+  runWithProviderResources?: <T>(operation: () => T) => T;
   getToolAuthorityOverlay?: (source?: "reply" | "attempt") => ReplyToolAuthorityOverlay;
 }): GatewayControlOwner {
+  assertGatewayControlCleanupAvailable(params);
+  const runWithProviderResources =
+    params.runWithProviderResources ?? (<T>(operation: () => T): T => operation());
   let commands: GatewayControlCommands | undefined;
   let closeProvider: (() => Promise<void>) | undefined;
+  let releaseProviderResources: (() => void | Promise<void>) | undefined;
+  let providerClosed = false;
+  let closeOptions: Parameters<GatewayControlOwner["close"]>[0];
   let closing: Promise<void> | undefined;
   const lifetime = new AbortController();
   const { signal } = lifetime;
@@ -305,10 +332,12 @@ export function createTalkClientGatewayControlOwner(params: {
   };
   const submit = async (callId: string, result: unknown): Promise<void> => {
     assertActive();
-    if (!commands?.submitToolResult) {
-      throw new Error("Realtime voice tool control is not available");
-    }
-    await commands.submitToolResult(callId, result);
+    await runWithProviderResources(() => {
+      if (!commands?.submitToolResult) {
+        throw new Error("Realtime voice tool control is not available");
+      }
+      return commands.submitToolResult(callId, result);
+    });
   };
   const rejectToolCall = (callId: string, message: string) => {
     void submit(callId, { error: message }).catch((error: unknown) => {
@@ -385,10 +414,12 @@ export function createTalkClientGatewayControlOwner(params: {
     prepare: prepareControl,
     speak: (message) => {
       assertActive();
-      if (!commands?.sendUserMessage) {
-        throw new Error("Realtime voice speech control is not available");
-      }
-      commands.sendUserMessage(message);
+      runWithProviderResources(() => {
+        if (!commands?.sendUserMessage) {
+          throw new Error("Realtime voice speech control is not available");
+        }
+        return commands.sendUserMessage(message);
+      });
     },
     warn,
   });
@@ -456,13 +487,38 @@ export function createTalkClientGatewayControlOwner(params: {
     }
   };
 
+  const registerConnectionCleanup = () =>
+    registerTalkConnectionCleanup(params.connId, "browser-control", async () => {
+      const results = await Promise.allSettled(
+        [...new Set([...pendingOwners, ...owners.values()])]
+          .filter((current) => current.connId === params.connId)
+          .map((current) => current.close()),
+      );
+      const failures = results.flatMap((result) => {
+        if (result.status !== "rejected") {
+          return [];
+        }
+        warn(`talk disconnected Gateway control close failed: ${formatError(result.reason)}`);
+        return [result.reason];
+      });
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Gateway Talk provider cleanup did not complete");
+      }
+    });
+
   const owner: GatewayControlOwner = {
     connId: params.connId,
     sessionTarget: params.sessionTarget,
     voiceSessionId: params.voiceSessionId,
+    get closing() {
+      return signal.aborted;
+    },
     assertOpen: () => {
       signal.throwIfAborted();
       params.assertConnectionOpen?.();
+      if (pendingOwners.has(owner)) {
+        assertGatewayControlCleanupAvailable(params, owner);
+      }
     },
     runAgentConsult: async ({ prompt, signal: consultSignal = new AbortController().signal }) => {
       assertActive();
@@ -473,7 +529,10 @@ export function createTalkClientGatewayControlOwner(params: {
       // leaves accepted provider work under its own cancellation owner.
       consultControllers.set(consultId, { controller, closeDisposition: "detach" });
       try {
-        return await admitConsult({ question: prompt }, delegatedSignal);
+        // Accepted backend work owns its own prepared runtime and outlives this transport.
+        return await runOutsidePluginRegistryResourceScope(() =>
+          admitConsult({ question: prompt }, delegatedSignal),
+        );
       } finally {
         consultControllers.delete(consultId);
       }
@@ -512,7 +571,7 @@ export function createTalkClientGatewayControlOwner(params: {
                 (message) => {
                   // The call owns this reply even when cancellation ended its backing task.
                   assertActive();
-                  respond(message);
+                  runWithProviderResources(() => respond(message));
                 },
                 params.flushTranscript,
               );
@@ -556,12 +615,22 @@ export function createTalkClientGatewayControlOwner(params: {
         });
       },
     },
-    adoptProvider: async (nextCloseProvider) => {
-      if (signal.aborted) {
-        await nextCloseProvider();
-        signal.throwIfAborted();
+    adoptProvider: async (nextCloseProvider, releaseResources) => {
+      // A disconnect can finish its logical close before creation returns the
+      // physical provider. Adoption reinstates custody before attempting cleanup.
+      if (closing) {
+        await closing.catch(() => undefined);
       }
       closeProvider = nextCloseProvider;
+      releaseProviderResources = releaseResources;
+      providerClosed = false;
+      pendingOwners.add(owner);
+      registerConnectionCleanup();
+      if (signal.aborted) {
+        closing = undefined;
+        closeOptions = { ...closeOptions, skipProvider: false };
+        await owner.close();
+      }
       owner.assertOpen();
     },
     activate: () => {
@@ -581,15 +650,16 @@ export function createTalkClientGatewayControlOwner(params: {
       if (closing) {
         return closing;
       }
-      // Fence admission synchronously, then defer teardown so provider callbacks
-      // can re-enter close after the closing promise has been assigned.
-      closing = Promise.resolve().then(async () => {
-        pendingOwners.delete(owner);
+      closeOptions ??= options ?? {};
+      const disposition = closeOptions;
+      // Keep cleanup addressable after retiring active invocation authority.
+      pendingOwners.add(owner);
+      const attempt = Promise.resolve().then(async () => {
         harness.close();
         if (owners.get(params.voiceSessionId) === owner) {
           owners.delete(params.voiceSessionId);
         }
-        if (!options?.preserveRuns) {
+        if (!disposition.preserveRuns) {
           for (const { controller, closeDisposition } of consultControllers.values()) {
             if (closeDisposition === "abort") {
               controller.abort(new Error("Realtime voice session closed"));
@@ -597,39 +667,49 @@ export function createTalkClientGatewayControlOwner(params: {
           }
         }
         consultQueue.seal();
-        const providerClose = options?.skipProvider
-          ? Promise.resolve()
-          : Promise.resolve().then(() => closeProvider?.());
+        const providerClose = Promise.resolve().then(async () => {
+          if (!providerClosed) {
+            if (!disposition.skipProvider && closeProvider) {
+              await runWithProviderResources(closeProvider);
+            }
+            providerClosed = true;
+          }
+        });
         const [providerResult] = await Promise.allSettled([
           providerClose,
           params.flushTranscript(),
           runControl.close(),
           consultQueue.flush(),
         ]);
-        if (!options?.preserveLogicalSession) {
+        if (!disposition.preserveLogicalSession) {
           await params.closeLogicalSession();
         }
         if (providerResult?.status === "rejected") {
           throw providerResult.reason;
         }
+        try {
+          await releaseProviderResources?.();
+        } finally {
+          // Physical closure is complete; a terminal disposer error must not block replacement.
+          releaseProviderResources = undefined;
+          pendingOwners.delete(owner);
+        }
+      });
+      closing = attempt;
+      void attempt.catch(() => {
+        if (closing === attempt && pendingOwners.has(owner)) {
+          closing = undefined;
+        }
       });
       lifetime.abort(new Error("Realtime voice session closed"));
-      return closing;
+      return attempt;
     },
   };
   // Track creation before the provider resolves. Replacement activates only after
   // startup succeeds, so a failed new transport cannot evict the current one.
   owner.assertOpen();
   pendingOwners.add(owner);
-  registerTalkConnectionCleanup(params.connId, "browser-control", () => {
-    for (const current of [...pendingOwners, ...owners.values()]) {
-      if (current.connId === params.connId) {
-        void current.close().catch((error: unknown) => {
-          warn(`talk disconnected Gateway control close failed: ${formatError(error)}`);
-        });
-      }
-    }
-  });
+  registerConnectionCleanup();
   return owner;
 }
 
@@ -638,7 +718,7 @@ export async function closeTalkClientGatewayControlSession(params: {
   sessionKey: string;
   connId?: string;
 }): Promise<boolean> {
-  const matching = [...pendingOwners, ...owners.values()].filter(
+  const matching = [...new Set([...pendingOwners, ...owners.values()])].filter(
     (owner) => owner.voiceSessionId === params.voiceSessionId,
   );
   if (matching.length === 0) {

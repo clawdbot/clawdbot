@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentDeliveryPlanWithSessionRoute } from "../../infra/outbound/agent-delivery.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
@@ -179,78 +180,81 @@ export async function resolveBareSessionResetResult(params: {
   assertCurrent?: () => void;
   ackText?: string;
 }) {
-  params.assertCurrent?.();
-  if (params.request.deliver !== true) {
-    return buildBareSessionResetResult({
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    params.assertCurrent?.();
+    if (params.request.deliver !== true) {
+      return buildBareSessionResetResult({
+        reason: params.reason,
+        sessionId: params.sessionId,
+        ackText: params.ackText,
+      });
+    }
+    const sendPolicy = resolveSendPolicy({
+      cfg: params.cfg,
+      entry: params.sessionEntry,
+      sessionKey: params.sessionKey,
+      channel: sessionDeliveryChannel(params.sessionEntry),
+      chatType: params.sessionEntry?.chatType,
+    });
+    if (sendPolicy === "deny") {
+      throw new Error("send blocked by session policy");
+    }
+    const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: params.cfg,
+      agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+      currentSessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      requestedChannel:
+        normalizeOptionalString(params.request.replyChannel) ??
+        normalizeOptionalString(params.request.channel),
+      explicitTo:
+        normalizeOptionalString(params.request.replyTo) ??
+        normalizeOptionalString(params.request.to),
+      explicitThreadId: normalizeOptionalString(params.request.threadId),
+      accountId:
+        normalizeOptionalString(params.request.replyAccountId) ??
+        normalizeOptionalString(params.request.accountId),
+      wantsDelivery: true,
+      turnSourceChannel: normalizeOptionalString(params.request.channel),
+      turnSourceTo: normalizeOptionalString(params.request.to),
+      turnSourceAccountId: normalizeOptionalString(params.request.accountId),
+      turnSourceThreadId: normalizeOptionalString(params.request.threadId),
+    });
+    params.assertCurrent?.();
+    const mainSessionKey = resolveAgentMainSessionKey({
+      cfg: params.cfg,
+      agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+    });
+    // Main/global resets default to best-effort delivery because no caller session may remain.
+    const bestEffortDeliver =
+      typeof params.request.bestEffortDeliver === "boolean"
+        ? params.request.bestEffortDeliver
+        : params.sessionKey === mainSessionKey || params.sessionKey === "global"
+          ? true
+          : undefined;
+    return await deliverBareSessionResetResult({
+      cfg: params.cfg,
+      context: params.context,
       reason: params.reason,
       sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      sessionEntry: params.sessionEntry,
+      preparedPlugin: deliveryPlan.plugin,
+      request: {
+        ...params.request,
+        channel: deliveryPlan.resolvedChannel,
+        to: deliveryPlan.resolvedTo ?? deliveryPlan.baseDelivery.to,
+        accountId: deliveryPlan.resolvedAccountId ?? deliveryPlan.baseDelivery.accountId,
+        threadId: deliveryPlan.resolvedThreadId,
+      },
+      bestEffortDeliver,
+      deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? deliveryPlan.baseDelivery.mode,
+      originMessageChannel: params.originMessageChannel ?? deliveryPlan.resolvedChannel,
+      runId: params.runId,
+      assertCurrent: params.assertCurrent,
       ackText: params.ackText,
     });
-  }
-  const sendPolicy = resolveSendPolicy({
-    cfg: params.cfg,
-    entry: params.sessionEntry,
-    sessionKey: params.sessionKey,
-    channel: sessionDeliveryChannel(params.sessionEntry),
-    chatType: params.sessionEntry?.chatType,
-  });
-  if (sendPolicy === "deny") {
-    throw new Error("send blocked by session policy");
-  }
-  const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
-    cfg: params.cfg,
-    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-    currentSessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    requestedChannel:
-      normalizeOptionalString(params.request.replyChannel) ??
-      normalizeOptionalString(params.request.channel),
-    explicitTo:
-      normalizeOptionalString(params.request.replyTo) ?? normalizeOptionalString(params.request.to),
-    explicitThreadId: normalizeOptionalString(params.request.threadId),
-    accountId:
-      normalizeOptionalString(params.request.replyAccountId) ??
-      normalizeOptionalString(params.request.accountId),
-    wantsDelivery: true,
-    turnSourceChannel: normalizeOptionalString(params.request.channel),
-    turnSourceTo: normalizeOptionalString(params.request.to),
-    turnSourceAccountId: normalizeOptionalString(params.request.accountId),
-    turnSourceThreadId: normalizeOptionalString(params.request.threadId),
-  });
-  params.assertCurrent?.();
-  const mainSessionKey = resolveAgentMainSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-  });
-  // Main/global resets default to best-effort delivery because no caller session may remain.
-  const bestEffortDeliver =
-    typeof params.request.bestEffortDeliver === "boolean"
-      ? params.request.bestEffortDeliver
-      : params.sessionKey === mainSessionKey || params.sessionKey === "global"
-        ? true
-        : undefined;
-  return await deliverBareSessionResetResult({
-    cfg: params.cfg,
-    context: params.context,
-    reason: params.reason,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    sessionEntry: params.sessionEntry,
-    preparedPlugin: deliveryPlan.plugin,
-    request: {
-      ...params.request,
-      channel: deliveryPlan.resolvedChannel,
-      to: deliveryPlan.resolvedTo ?? deliveryPlan.baseDelivery.to,
-      accountId: deliveryPlan.resolvedAccountId ?? deliveryPlan.baseDelivery.accountId,
-      threadId: deliveryPlan.resolvedThreadId,
-    },
-    bestEffortDeliver,
-    deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? deliveryPlan.baseDelivery.mode,
-    originMessageChannel: params.originMessageChannel ?? deliveryPlan.resolvedChannel,
-    runId: params.runId,
-    assertCurrent: params.assertCurrent,
-    ackText: params.ackText,
   });
 }
 

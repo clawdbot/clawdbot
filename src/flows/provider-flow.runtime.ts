@@ -25,19 +25,23 @@ function resolveProviderDocsById(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Map<string, string> {
-  return new Map(
-    providersRuntime
-      .resolvePluginProvidersCore({
-        config: params?.config,
-        workspaceDir: params?.workspaceDir,
-        env: params?.env,
-        mode: "setup",
-      })
-      .filter((provider): provider is ProviderPlugin & { docsPath: string } =>
-        Boolean(normalizeOptionalString(provider.docsPath)),
-      )
-      .map((provider) => [provider.id, normalizeOptionalString(provider.docsPath)!]),
-  );
+  const handle = providersRuntime.acquirePluginProvidersCore({
+    config: params?.config,
+    workspaceDir: params?.workspaceDir,
+    env: params?.env,
+    mode: "setup",
+  });
+  try {
+    return new Map(
+      handle.providers
+        .filter((provider): provider is ProviderPlugin & { docsPath: string } =>
+          Boolean(normalizeOptionalString(provider.docsPath)),
+        )
+        .map((provider) => [provider.id, normalizeOptionalString(provider.docsPath)!]),
+    );
+  } finally {
+    handle.release();
+  }
 }
 
 /** Resolves provider model-picker options without exposing contribution metadata. */

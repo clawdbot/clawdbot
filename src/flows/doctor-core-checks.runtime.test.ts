@@ -82,7 +82,10 @@ vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
 }));
 
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
+  acquirePluginProvidersCore: (...args: Parameters<typeof mocks.resolvePluginProvidersCore>) => ({
+    providers: mocks.resolvePluginProvidersCore(...args),
+    release() {},
+  }),
 }));
 
 const {

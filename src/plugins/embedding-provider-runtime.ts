@@ -11,14 +11,29 @@ import {
   listRegisteredEmbeddingProviders,
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
+import {
+  PluginRegistryResourceScope,
+  createPluginRegistryResourceLease,
+  withPluginRegistryResourceScope,
+  requirePluginRegistryResourceScope,
+} from "./registry-resources.js";
+import { getPluginRegistryForContext } from "./runtime.js";
 
-/** Lists embedding provider adapters registered directly with the process registry. */
-function listRegisteredEmbeddingProviderAdapters(): EmbeddingProviderAdapter[] {
+function retainRegisteredEmbeddingProviders(): void {
+  const registry = getPluginRegistryForContext();
+  if (registry) {
+    requirePluginRegistryResourceScope().retain(registry);
+  }
+}
+
+/** Lists registered adapters retained by the current caller's resource owner. */
+export function listRegisteredEmbeddingProviderAdapters(): EmbeddingProviderAdapter[] {
+  retainRegisteredEmbeddingProviders();
   return listRegisteredEmbeddingProviders().map((entry) => entry.adapter);
 }
 
 /** Lists embedding providers from registered adapters and plugin capabilities. */
-export function listEmbeddingProviders(cfg?: OpenClawConfig): EmbeddingProviderAdapter[] {
+export function listEmbeddingProvidersCore(cfg?: OpenClawConfig): EmbeddingProviderAdapter[] {
   return listRuntimeEmbeddingProviderAdapters({
     key: "embeddingProviders",
     cfg,
@@ -42,14 +57,29 @@ function resolveEmbeddingProviderLookupIds(id: string, cfg?: OpenClawConfig): st
 }
 
 /** Resolves one embedding provider adapter by id, including configured API aliases. */
-export function getEmbeddingProvider(
+export function getEmbeddingProviderCore(
   id: string,
   cfg?: OpenClawConfig,
 ): EmbeddingProviderAdapter | undefined {
+  retainRegisteredEmbeddingProviders();
   return getRuntimeEmbeddingProviderAdapter({
     key: "embeddingProviders",
     cfg,
     lookupIds: resolveEmbeddingProviderLookupIds(id, cfg),
     getRegisteredProvider: getRegisteredEmbeddingProvider,
   });
+}
+
+/** Retains one adapter's registrations until its created provider has closed. */
+export function acquireEmbeddingProvider(id: string, cfg?: OpenClawConfig) {
+  const resources = new PluginRegistryResourceScope();
+  try {
+    const provider = withPluginRegistryResourceScope(resources, () =>
+      getEmbeddingProviderCore(id, cfg),
+    );
+    return { provider, ...createPluginRegistryResourceLease(resources) };
+  } catch (error) {
+    resources.release();
+    throw error;
+  }
 }

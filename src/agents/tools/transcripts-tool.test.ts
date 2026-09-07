@@ -26,8 +26,8 @@ vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../transcripts/provider-registry.js")>();
   return {
     ...actual,
-    getTranscriptSourceProvider: getTranscriptSourceProviderMock,
-    listTranscriptSourceProviders: listTranscriptSourceProvidersMock,
+    getTranscriptSourceProviderCore: getTranscriptSourceProviderMock,
+    listTranscriptSourceProvidersCore: listTranscriptSourceProvidersMock,
   };
 });
 const tempDirs = createTempDirTracker();

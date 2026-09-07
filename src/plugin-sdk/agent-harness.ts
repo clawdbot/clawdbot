@@ -2,6 +2,7 @@
 // Keep model/vendor-specific protocol code in the plugin that registers the harness.
 
 export {
+  acquireAgentToolResultMiddlewareRunner,
   abortAgentHarnessRun,
   abortAndDrainAgentHarnessRun,
   createAgentToolResultMiddlewareRunner,

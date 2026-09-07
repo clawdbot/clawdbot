@@ -1,6 +1,10 @@
 /** Starts diagnostics exporter plugin services for one-shot CLI embedded agent runs. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  PluginRegistryResourceScope,
+  createPluginRegistryResourceLease,
+} from "./registry-resources.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -75,12 +79,13 @@ export async function startOneShotDiagnosticsExporters(params: {
   // Scoped, non-activating load: honors the same plugin enablement config as
   // the gateway's startup load without replacing the active runtime registry
   // the embedded run resolves providers/tools from.
-  const registry = loadOpenClawPlugins({
+  const registryHandle = loadOpenClawPlugins({
     config,
     onlyPluginIds: [...ONE_SHOT_DIAGNOSTICS_SERVICE_IDS],
     activate: false,
     preferBuiltPluginArtifacts: true,
   });
+  const { registry } = registryHandle;
   // The scope-piggyback loader rules (e.g. dreaming sidecars) can widen a
   // scoped load, so re-filter to the flush-safe exporter allowlist.
   const services = registry.services.filter((entry) =>
@@ -93,25 +98,41 @@ export async function startOneShotDiagnosticsExporters(params: {
     log.warn(
       "diagnostics.otel is enabled but the diagnostics-otel plugin is not installed or not enabled; this run exports no telemetry.",
     );
+    registryHandle.release();
     return null;
   }
-  const handle = await startPluginServices({
-    registry: { ...registry, services },
-    config,
-    oneShotStopTimeouts: {
-      eventDrainMs: ONE_SHOT_DIAGNOSTICS_DRAIN_TIMEOUT_MS,
-      serviceStopMs: ONE_SHOT_DIAGNOSTICS_FLUSH_TIMEOUT_MS,
-    },
-  });
+  const resourceScope = new PluginRegistryResourceScope();
+  resourceScope.adopt(registryHandle);
+  const resources = createPluginRegistryResourceLease(resourceScope);
+  let handle;
+  try {
+    handle = await resources.run(() =>
+      startPluginServices({
+        registry: { ...registry, services },
+        config,
+        oneShotStopTimeouts: {
+          eventDrainMs: ONE_SHOT_DIAGNOSTICS_DRAIN_TIMEOUT_MS,
+          serviceStopMs: ONE_SHOT_DIAGNOSTICS_FLUSH_TIMEOUT_MS,
+        },
+      }),
+    );
+  } catch (error) {
+    resources.release();
+    throw error;
+  }
+  let stop: Promise<void> | undefined;
   return {
-    stop: async () => {
-      try {
-        await handle.stop();
-      } catch (error) {
-        for (const failure of error instanceof AggregateError ? error.errors : [error]) {
-          log.warn(`one-shot diagnostics shutdown failed: ${String(failure)}`);
+    stop: () =>
+      (stop ??= (async () => {
+        try {
+          await resources.run(() => handle.stop());
+        } catch (error) {
+          for (const failure of error instanceof AggregateError ? error.errors : [error]) {
+            log.warn(`one-shot diagnostics shutdown failed: ${String(failure)}`);
+          }
+        } finally {
+          resources.release();
         }
-      }
-    },
+      })()),
   };
 }

@@ -458,7 +458,7 @@ export function createManagerIndexFixture(deps: {
     missingMessage = "manager missing",
   ): MemoryIndexManager => {
     if (!result.manager) {
-      throw new Error(missingMessage);
+      throw new Error(result.error ? `${missingMessage}: ${result.error}` : missingMessage);
     }
     return result.manager as unknown as MemoryIndexManager;
   };

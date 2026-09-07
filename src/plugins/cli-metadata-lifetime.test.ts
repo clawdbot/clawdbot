@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, aroundEach, describe, expect, it, vi } from "vitest";
 import { readBestEffortConfigSnapshot } from "../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -20,7 +20,7 @@ import {
 import { registerPluginCliCommands, registerPluginCliCommandsFromValidatedConfig } from "./cli.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
-import { loadOpenClawPluginCliRegistry } from "./loader.js";
+import { loadOpenClawPluginCliRegistryForTest as loadOpenClawPluginCliRegistry } from "./loader-handles.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -29,7 +29,21 @@ import {
 } from "./loader.test-fixtures.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import {
+  PluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "./registry-resources.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
+
+aroundEach(async (runTest) => {
+  const resources = new PluginRegistryResourceScope();
+  try {
+    await withPluginRegistryResourceScope(resources, runTest);
+  } finally {
+    resources.release();
+    await resources.waitForDisposals();
+  }
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

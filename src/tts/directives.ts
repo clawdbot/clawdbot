@@ -2,10 +2,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { extractTtsDirectiveFacts } from "./directive-facts.js";
 import { compareSpeechProviderOrder } from "./provider-registry-core.js";
-import { listSpeechProviders } from "./provider-registry.js";
+import { listSpeechProvidersCore } from "./provider-registry.js";
 import type {
   SpeechModelOverridePolicy,
   SpeechProviderConfig,
@@ -33,7 +34,7 @@ type TtsDirectiveTextStreamCleaner = {
 };
 
 function resolveDirectiveProviders(options?: ParseTtsDirectiveOptions): SpeechProviderPlugin[] {
-  const providers = options?.providers ?? listSpeechProviders(options?.cfg);
+  const providers = options?.providers ?? listSpeechProvidersCore(options?.cfg);
   return providers.toSorted(compareSpeechProviderOrder);
 }
 
@@ -190,6 +191,16 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
 
 /** Resolve persisted TTS facts against the active model/provider policy. */
 export function resolveTtsDirectiveFacts(
+  facts: AssistantDeliveryTtsFacts | undefined,
+  policy: SpeechModelOverridePolicy,
+  options?: ParseTtsDirectiveOptions,
+): Omit<TtsDirectiveParseResult, "cleanedText"> {
+  return withPluginRegistryResourceOperation(() =>
+    resolveTtsDirectiveFactsWithResources(facts, policy, options),
+  );
+}
+
+function resolveTtsDirectiveFactsWithResources(
   facts: AssistantDeliveryTtsFacts | undefined,
   policy: SpeechModelOverridePolicy,
   options?: ParseTtsDirectiveOptions,

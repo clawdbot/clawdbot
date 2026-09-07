@@ -47,6 +47,7 @@ import {
   isGatewayExternallySupervised,
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
@@ -511,6 +512,12 @@ export async function ensureGatewayServiceForOnboarding(params: {
 }
 
 export async function finalizeSetupWizard(
+  options: FinalizeOnboardingOptions,
+): Promise<{ launchedTui: boolean }> {
+  return withPluginRegistryResourceOperationAsync(() => finalizeSetupWizardWithResources(options));
+}
+
+async function finalizeSetupWizardWithResources(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;

@@ -26,6 +26,10 @@ import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarnessAttemptParams } from "../harness/types.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeLease,
+} from "../prepared-model-runtime.types.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
@@ -191,24 +195,34 @@ const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 const buildMockAgentRuntimePlan = () => makeMockRuntimePlan() as AgentRuntimePlan;
 export const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(buildMockAgentRuntimePlan);
 export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
-  async (input: Record<string, unknown>) => {
+  async (input: Partial<PreparedModelRuntimeInput>) => {
     const pluginRegistry = getActivePluginRegistry();
+    const snapshot = {
+      agentId: input.agentId,
+      agentDir: input.agentDir,
+      config: input.config,
+      workspaceDir: input.workspaceDir,
+      pluginRegistry: pluginRegistry
+        ? {
+            ...pluginRegistry,
+            agentHarnesses: [...pluginRegistry.agentHarnesses],
+          }
+        : undefined,
+      metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    };
+    const pluginGeneration: PreparedModelRuntimeLease["pluginGeneration"] = {
+      pluginMetadataSnapshot: snapshot.metadataSnapshot,
+      pluginRegistry: snapshot.pluginRegistry,
+      inlineProviderModels: [],
+      configuredCatalogEntries: [],
+    };
     return {
-      snapshot: {
-        agentId: input.agentId,
-        agentDir: input.agentDir,
-        config: input.config,
-        workspaceDir: input.workspaceDir,
-        pluginRegistry: pluginRegistry
-          ? {
-              ...pluginRegistry,
-              agentHarnesses: [...pluginRegistry.agentHarnesses],
-            }
-          : undefined,
-        metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
-        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
-      },
+      snapshot,
+      pluginGeneration,
       release: vi.fn(),
+    } satisfies Pick<PreparedModelRuntimeLease, "pluginGeneration" | "release"> & {
+      snapshot: typeof snapshot;
     };
   },
 );
@@ -763,7 +777,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../runtime-plan/build.js", () => ({
-    buildAgentRuntimePlan: mockedBuildAgentRuntimePlan,
+    buildAgentRuntimePlanCore: mockedBuildAgentRuntimePlan,
   }));
 
   vi.doMock("../model-runtime-aliases.js", () => ({

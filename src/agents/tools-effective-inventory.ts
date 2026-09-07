@@ -15,6 +15,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
+import {
+  withPluginRegistryResourceOperation,
+  withPluginRegistryResourceOperationAsync,
+} from "../plugins/registry-resources.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
@@ -235,46 +239,48 @@ function resolveStaticToolInventoryRuntimeModelContext(params: {
   };
 }
 
-/** Resolves dynamic model metadata after publishing a request-owned read snapshot when needed. */
+/** Owns static provider reads and dynamic preparation until model metadata is projected. */
 export async function resolveEffectiveToolInventoryRuntimeModelContextAsync(
   params: Parameters<typeof resolveStaticToolInventoryRuntimeModelContext>[0],
 ): Promise<ReturnType<typeof resolveStaticToolInventoryRuntimeModelContext>> {
-  const staticContext = resolveStaticToolInventoryRuntimeModelContext(params);
-  if (staticContext.runtimeModel) {
-    return staticContext;
-  }
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const staticContext = resolveStaticToolInventoryRuntimeModelContext(params);
+    if (staticContext.runtimeModel) {
+      return staticContext;
+    }
 
-  const provider = normalizeProviderId(params.modelProvider ?? "");
-  const modelId = params.modelId?.trim() ?? "";
-  if (!provider || !modelId) {
-    return {};
-  }
-  const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
-  const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
-  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
-  const lease = await acquireReadOnlyPreparedModelRuntime({
-    agentId,
-    agentDir,
-    config: params.cfg,
-    workspaceDir,
-    // The selected provider owner must join the generation before dynamic hooks resolve.
-    loadRuntimePlugins: true,
-    runtimePluginSelections: [{ provider, modelId, agentId }],
-  });
-  try {
-    const stores = lease.snapshot.createStores();
-    const resolved = await resolveModelAsync(provider, modelId, agentDir, params.cfg, {
+    const provider = normalizeProviderId(params.modelProvider ?? "");
+    const modelId = params.modelId?.trim() ?? "";
+    if (!provider || !modelId) {
+      return {};
+    }
+    const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
+    const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
+    const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
+    const lease = await acquireReadOnlyPreparedModelRuntime({
       agentId,
+      agentDir,
+      config: params.cfg,
       workspaceDir,
-      authStorage: stores.authStorage,
-      modelRegistry: stores.modelRegistry,
-      preparedModelRuntime: lease.snapshot,
+      // The selected provider owner must join the generation before dynamic hooks resolve.
+      loadRuntimePlugins: true,
+      runtimePluginSelections: [{ provider, modelId, agentId }],
     });
-    const runtimeModel = resolved.model as ProviderRuntimeModel | undefined;
-    return runtimeModel ? { modelApi: runtimeModel.api, runtimeModel } : {};
-  } finally {
-    lease.release();
-  }
+    try {
+      const stores = lease.snapshot.createStores();
+      const resolved = await resolveModelAsync(provider, modelId, agentDir, params.cfg, {
+        agentId,
+        workspaceDir,
+        authStorage: stores.authStorage,
+        modelRegistry: stores.modelRegistry,
+        preparedModelRuntime: lease.snapshot,
+      });
+      const runtimeModel = resolved.model as ProviderRuntimeModel | undefined;
+      return runtimeModel ? { modelApi: runtimeModel.api, runtimeModel } : {};
+    } finally {
+      lease.release();
+    }
+  });
 }
 
 /** Resolves compatibility metadata explicitly configured for a provider/model pair. */
@@ -310,82 +316,85 @@ export function resolveConfiguredModelCompat(params: {
 export function resolveEffectiveToolInventory(
   params: ResolveEffectiveToolInventoryParams,
 ): EffectiveToolInventoryResult {
-  const agentId =
-    params.agentId?.trim() ||
-    resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
-  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
-  const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
-  const runtimeModelContext =
-    Object.hasOwn(params, "modelApi") || Object.hasOwn(params, "runtimeModel")
-      ? {
-          modelApi: params.modelApi ?? params.runtimeModel?.api,
-          runtimeModel: params.runtimeModel,
-        }
-      : resolveStaticToolInventoryRuntimeModelContext({
-          cfg: params.cfg,
-          agentId,
-          agentDir,
-          workspaceDir,
-          modelProvider: params.modelProvider,
-          modelId: params.modelId,
-        });
-  const modelCompat = resolveConfiguredModelCompat({
-    cfg: params.cfg,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
+  // Tool factories and normalizers may borrow callbacks; only inventory data leaves this scope.
+  return withPluginRegistryResourceOperation(() => {
+    const agentId =
+      params.agentId?.trim() ||
+      resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+    const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
+    const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
+    const runtimeModelContext =
+      Object.hasOwn(params, "modelApi") || Object.hasOwn(params, "runtimeModel")
+        ? {
+            modelApi: params.modelApi ?? params.runtimeModel?.api,
+            runtimeModel: params.runtimeModel,
+          }
+        : resolveStaticToolInventoryRuntimeModelContext({
+            cfg: params.cfg,
+            agentId,
+            agentDir,
+            workspaceDir,
+            modelProvider: params.modelProvider,
+            modelId: params.modelId,
+          });
+    const modelCompat = resolveConfiguredModelCompat({
+      cfg: params.cfg,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+    });
 
-  const effectiveTools = createOpenClawCodingTools({
-    agentId,
-    sessionKey: params.sessionKey,
-    workspaceDir,
-    agentDir,
-    config: params.cfg,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    modelApi: runtimeModelContext.modelApi,
-    modelCompat,
-    messageProvider: params.messageProvider,
-    senderId: params.senderId,
-    senderName: params.senderName ?? undefined,
-    senderUsername: params.senderUsername ?? undefined,
-    senderE164: params.senderE164 ?? undefined,
-    agentAccountId: params.accountId ?? undefined,
-    currentChannelId: params.currentChannelId,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    groupId: params.groupId ?? undefined,
-    groupChannel: params.groupChannel ?? undefined,
-    groupSpace: params.groupSpace ?? undefined,
-    replyToMode: params.replyToMode,
-    allowGatewaySubagentBinding: true,
-    modelHasVision: params.modelHasVision,
-    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-    disableMessageTool: params.disableMessageTool,
-  });
-  const projectedInventory = buildRuntimeCompatibleToolInventory({
-    tools: effectiveTools,
-    cfg: params.cfg,
-    workspaceDir,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    modelApi: runtimeModelContext.modelApi,
-    runtimeModel: runtimeModelContext.runtimeModel,
-  });
-  const effectivePolicy = resolveEffectiveToolPolicy({
-    config: params.cfg,
-    agentId,
-    sessionKey: params.sessionKey,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
-  const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
-  const entries = projectedInventory.entries;
-  const notices = [
-    ...projectedInventory.notices,
-    ...(buildToolInventoryNotices({ cfg: params.cfg, profile, entries, effectivePolicy }) ?? []),
-  ];
-  const groups = buildEffectiveToolInventoryGroups(entries);
+    const effectiveTools = createOpenClawCodingTools({
+      agentId,
+      sessionKey: params.sessionKey,
+      workspaceDir,
+      agentDir,
+      config: params.cfg,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+      modelApi: runtimeModelContext.modelApi,
+      modelCompat,
+      messageProvider: params.messageProvider,
+      senderId: params.senderId,
+      senderName: params.senderName ?? undefined,
+      senderUsername: params.senderUsername ?? undefined,
+      senderE164: params.senderE164 ?? undefined,
+      agentAccountId: params.accountId ?? undefined,
+      currentChannelId: params.currentChannelId,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      groupId: params.groupId ?? undefined,
+      groupChannel: params.groupChannel ?? undefined,
+      groupSpace: params.groupSpace ?? undefined,
+      replyToMode: params.replyToMode,
+      allowGatewaySubagentBinding: true,
+      modelHasVision: params.modelHasVision,
+      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+      disableMessageTool: params.disableMessageTool,
+    });
+    const projectedInventory = buildRuntimeCompatibleToolInventory({
+      tools: effectiveTools,
+      cfg: params.cfg,
+      workspaceDir,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+      modelApi: runtimeModelContext.modelApi,
+      runtimeModel: runtimeModelContext.runtimeModel,
+    });
+    const effectivePolicy = resolveEffectiveToolPolicy({
+      config: params.cfg,
+      agentId,
+      sessionKey: params.sessionKey,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+    });
+    const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
+    const entries = projectedInventory.entries;
+    const notices = [
+      ...projectedInventory.notices,
+      ...(buildToolInventoryNotices({ cfg: params.cfg, profile, entries, effectivePolicy }) ?? []),
+    ];
+    const groups = buildEffectiveToolInventoryGroups(entries);
 
-  return { agentId, profile, groups, ...(notices.length > 0 ? { notices } : {}) };
+    return { agentId, profile, groups, ...(notices.length > 0 ? { notices } : {}) };
+  });
 }

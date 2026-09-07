@@ -43,12 +43,14 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   // Registration is process-stable; provider methods read live config so a
   // channel hot reload can enable discussions without restarting the gateway.
   registerSessionDiscussionProvider(service.provider);
+  const dispose = () => {
+    unregisterSessionAccess();
+    service.cleanup();
+  };
   api.lifecycle.registerRuntimeLifecycle({
     id: "clickclack-discussions",
+    dispose,
     description: "Stops the lifecycle reconciler for managed ClickClack discussions.",
-    cleanup: () => {
-      unregisterSessionAccess();
-      service.cleanup();
-    },
+    cleanup: dispose,
   });
 }

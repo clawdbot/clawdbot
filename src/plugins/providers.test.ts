@@ -1,6 +1,6 @@
 // Covers provider plugin registration and runtime composition.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -8,6 +8,7 @@ import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry-types.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
@@ -23,9 +24,11 @@ type LoadPluginRegistrySnapshot = typeof import("./plugin-registry.js").loadPlug
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
-const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
+const resolveRuntimePluginRegistryMock =
+  vi.fn<(...args: Parameters<ResolveRuntimePluginRegistry>) => PluginRegistry | undefined>();
 const resolveCompatibleRuntimePluginRegistryMock = vi.fn<ResolveCompatibleRuntimePluginRegistry>();
-const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
+const loadOpenClawPluginsMock =
+  vi.fn<(...args: Parameters<LoadOpenClawPlugins>) => PluginRegistry>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_options) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
 const loadPluginMetadataSnapshotMock = vi.fn<LoadPluginMetadataSnapshot>();
@@ -45,7 +48,9 @@ let resolveUsageHookProviderPluginContracts: typeof import("./providers.js").res
 let resolveExternalAuthProfileProviderPluginIds: typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
 let resolveDiscoveredProviderPluginIds: typeof import("./providers.js").resolveDiscoveredProviderPluginIds;
 let resolveDiscoverableProviderOwnerPluginIds: typeof import("./providers.js").resolveDiscoverableProviderOwnerPluginIds;
-let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProvidersCore;
+let resolvePluginProviders: (
+  params: Parameters<typeof import("./providers.runtime.js").acquirePluginProvidersCore>[0],
+) => ProviderPlugin[];
 let setActivePluginRegistry: SetActivePluginRegistry;
 
 type ManifestProviderPluginFixture = {
@@ -460,15 +465,19 @@ describe("resolvePluginProviders", () => {
       diagnostics: [],
     });
     vi.doMock("./loader.js", () => ({
-      loadOpenClawPlugins: (...args: Parameters<LoadOpenClawPlugins>) =>
-        loadOpenClawPluginsMock(...args),
+      loadOpenClawPlugins: (...args: Parameters<LoadOpenClawPlugins>) => ({
+        registry: loadOpenClawPluginsMock(...args),
+        release() {},
+      }),
       isPluginRegistryLoadInFlight: (...args: Parameters<IsPluginRegistryLoadInFlight>) =>
         isPluginRegistryLoadInFlightMock(...args),
       resolveCompatibleRuntimePluginRegistry: (
         ...args: Parameters<ResolveCompatibleRuntimePluginRegistry>
       ) => resolveCompatibleRuntimePluginRegistryMock(...args),
-      resolveRuntimePluginRegistry: (...args: Parameters<ResolveRuntimePluginRegistry>) =>
-        resolveRuntimePluginRegistryMock(...args),
+      resolveRuntimePluginRegistry: (...args: Parameters<ResolveRuntimePluginRegistry>) => {
+        const registry = resolveRuntimePluginRegistryMock(...args);
+        return registry ? { registry, release() {} } : undefined;
+      },
     }));
     vi.doMock("./providers.runtime.js", async () => {
       const { createProviderRegistryResolver } = await import("./providers.runtime-core.js");
@@ -532,13 +541,17 @@ describe("resolvePluginProviders", () => {
       resolveDiscoveredProviderPluginIds,
       resolveDiscoverableProviderOwnerPluginIds,
     } = await import("./providers.js"));
-    ({ resolvePluginProvidersCore: resolvePluginProviders } =
-      await import("./providers.runtime.js"));
+    const { acquirePluginProvidersCore } = await import("./providers.runtime.js");
+    resolvePluginProviders = (params) => {
+      const handle = acquirePluginProvidersCore(params);
+      onTestFinished(() => handle.release());
+      return handle.providers;
+    };
     ({ setActivePluginRegistry } = await import("./runtime.js"));
   });
 
   it("offers only opted-in personal methods under the installed plugin policy", async () => {
-    const { listPersonalAccountAuthChoices, resolvePersonalAccountAuthMethod } =
+    const { listPersonalAccountAuthChoices, acquirePersonalAccountAuthMethod } =
       await import("./personal-account-auth.js");
     const bundled = createManifestProviderPlugin({
       id: "personal-provider",
@@ -578,11 +591,11 @@ describe("resolvePluginProviders", () => {
     ]) {
       expect(listPersonalAccountAuthChoices({ plugins })).toEqual([]);
       expect(
-        await resolvePersonalAccountAuthMethod({ plugins }, "personal-provider", "api-key"),
+        await acquirePersonalAccountAuthMethod({ plugins }, "personal-provider", "api-key"),
       ).toBeUndefined();
     }
     expect(
-      await resolvePersonalAccountAuthMethod({}, "personal-provider", "host-import"),
+      await acquirePersonalAccountAuthMethod({}, "personal-provider", "host-import"),
     ).toBeUndefined();
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });

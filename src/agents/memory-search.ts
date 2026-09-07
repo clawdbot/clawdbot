@@ -14,7 +14,8 @@ import {
   normalizeMemoryMultimodalSettings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
-import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+import { getMemoryEmbeddingProviderCore } from "../plugins/memory-embedding-provider-runtime.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -164,7 +165,7 @@ function getConfiguredMemoryEmbeddingProvider(providerId: string, cfg: OpenClawC
   if (normalizeProviderId(providerId) === "none") {
     return undefined;
   }
-  return getMemoryEmbeddingProvider(providerId, cfg);
+  return getMemoryEmbeddingProviderCore(providerId, cfg);
 }
 
 /** Resolves source and query settings without loading an embedding provider runtime. */
@@ -231,125 +232,127 @@ export function resolveMemorySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedMemorySearchConfig | null {
-  const indexConfig = resolveMemorySearchIndexConfig(cfg, agentId);
-  if (!indexConfig) {
-    return null;
-  }
-  const defaults = cfg.memory?.search;
-  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
-  const rawProvider = overrides?.provider ?? defaults?.provider;
-  const provider =
-    rawProvider?.trim() === "auto"
-      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
-      : rawProvider?.trim() || DEFAULT_MEMORY_EMBEDDING_PROVIDER;
-  const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
-  const defaultRemote = defaults?.remote;
-  const overrideRemote = overrides?.remote;
-  const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
-  const fallbackAdapter =
-    normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
-      ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
+  return withPluginRegistryResourceOperation(() => {
+    const indexConfig = resolveMemorySearchIndexConfig(cfg, agentId);
+    if (!indexConfig) {
+      return null;
+    }
+    const defaults = cfg.memory?.search;
+    const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
+    const rawProvider = overrides?.provider ?? defaults?.provider;
+    const provider =
+      rawProvider?.trim() === "auto"
+        ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+        : rawProvider?.trim() || DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+    const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
+    const defaultRemote = defaults?.remote;
+    const overrideRemote = overrides?.remote;
+    const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+    const fallbackAdapter =
+      normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
+        ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
+        : undefined;
+    const hasRemoteConfig = Boolean(
+      overrideRemote?.baseUrl ||
+      overrideRemote?.apiKey ||
+      overrideRemote?.headers ||
+      defaultRemote?.baseUrl ||
+      defaultRemote?.apiKey ||
+      defaultRemote?.headers ||
+      false,
+    );
+    const includeRemote =
+      hasRemoteConfig ||
+      primaryAdapter?.transport !== "local" ||
+      fallbackAdapter?.transport === "remote";
+    const batch = {
+      enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
+      wait: true,
+      concurrency: 2,
+      pollIntervalMs: DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS,
+      timeoutMinutes: DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES,
+    };
+    const remote = includeRemote
+      ? {
+          baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
+          apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
+          headers: overrideRemote?.headers ?? defaultRemote?.headers,
+          batch,
+        }
       : undefined;
-  const hasRemoteConfig = Boolean(
-    overrideRemote?.baseUrl ||
-    overrideRemote?.apiKey ||
-    overrideRemote?.headers ||
-    defaultRemote?.baseUrl ||
-    defaultRemote?.apiKey ||
-    defaultRemote?.headers ||
-    false,
-  );
-  const includeRemote =
-    hasRemoteConfig ||
-    primaryAdapter?.transport !== "local" ||
-    fallbackAdapter?.transport === "remote";
-  const batch = {
-    enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
-    wait: true,
-    concurrency: 2,
-    pollIntervalMs: DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS,
-    timeoutMinutes: DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES,
-  };
-  const remote = includeRemote
-    ? {
-        baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
-        apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
-        headers: overrideRemote?.headers ?? defaultRemote?.headers,
-        batch,
-      }
-    : undefined;
-  const model = overrides?.model ?? defaults?.model ?? primaryAdapter?.defaultModel ?? "";
-  const inputType = overrides?.inputType?.trim() || defaults?.inputType?.trim() || undefined;
-  const queryInputType =
-    overrides?.queryInputType?.trim() || defaults?.queryInputType?.trim() || undefined;
-  const documentInputType =
-    overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
-  const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
-  const local = {
-    modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
-  };
-  const multimodal = normalizeMemoryMultimodalSettings({
-    enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
-    modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
-    maxFileBytes: overrides?.multimodal?.maxFileBytes ?? defaults?.multimodal?.maxFileBytes,
-  });
-  const vector = {
-    enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
-    extensionPath:
-      overrides?.store?.vector?.extensionPath ?? defaults?.store?.vector?.extensionPath,
-  };
-  const fts = {
-    tokenizer: overrides?.store?.fts?.tokenizer ?? defaults?.store?.fts?.tokenizer ?? "unicode61",
-  };
-  const store = {
-    driver: "sqlite" as const,
-    databasePath: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
-    fts,
-    vector,
-  };
-  const chunking = {
-    tokens: DEFAULT_CHUNK_TOKENS,
-    overlap: DEFAULT_CHUNK_OVERLAP,
-  };
-  const cache = {
-    enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
-    maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
-  };
+    const model = overrides?.model ?? defaults?.model ?? primaryAdapter?.defaultModel ?? "";
+    const inputType = overrides?.inputType?.trim() || defaults?.inputType?.trim() || undefined;
+    const queryInputType =
+      overrides?.queryInputType?.trim() || defaults?.queryInputType?.trim() || undefined;
+    const documentInputType =
+      overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
+    const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
+    const local = {
+      modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
+    };
+    const multimodal = normalizeMemoryMultimodalSettings({
+      enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
+      modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
+      maxFileBytes: overrides?.multimodal?.maxFileBytes ?? defaults?.multimodal?.maxFileBytes,
+    });
+    const vector = {
+      enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
+      extensionPath:
+        overrides?.store?.vector?.extensionPath ?? defaults?.store?.vector?.extensionPath,
+    };
+    const fts = {
+      tokenizer: overrides?.store?.fts?.tokenizer ?? defaults?.store?.fts?.tokenizer ?? "unicode61",
+    };
+    const store = {
+      driver: "sqlite" as const,
+      databasePath: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
+      fts,
+      vector,
+    };
+    const chunking = {
+      tokens: DEFAULT_CHUNK_TOKENS,
+      overlap: DEFAULT_CHUNK_OVERLAP,
+    };
+    const cache = {
+      enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
+      maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
+    };
 
-  const resolved: ResolvedMemorySearchConfig = {
-    ...indexConfig,
-    multimodal,
-    provider,
-    remote,
-    fallback,
-    model,
-    inputType,
-    queryInputType,
-    documentInputType,
-    outputDimensionality,
-    local,
-    store,
-    chunking,
-    cache,
-  };
-  const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  // Custom provider ids can map to a memory adapter through models.providers.<id>.api.
-  // Reuse the same config-aware adapter for defaults and multimodal validation.
-  if (
-    multimodalActive &&
-    primaryAdapter &&
-    !(primaryAdapter.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
-  ) {
-    throw new Error(
-      "memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
-    );
-  }
-  if (multimodalActive && resolved.fallback !== "none") {
-    throw new Error(
-      'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
-    );
-  }
-  return resolved;
+    const resolved: ResolvedMemorySearchConfig = {
+      ...indexConfig,
+      multimodal,
+      provider,
+      remote,
+      fallback,
+      model,
+      inputType,
+      queryInputType,
+      documentInputType,
+      outputDimensionality,
+      local,
+      store,
+      chunking,
+      cache,
+    };
+    const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
+    // Custom provider ids can map to a memory adapter through models.providers.<id>.api.
+    // Reuse the same config-aware adapter for defaults and multimodal validation.
+    if (
+      multimodalActive &&
+      primaryAdapter &&
+      !(primaryAdapter.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
+    ) {
+      throw new Error(
+        "memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
+      );
+    }
+    if (multimodalActive && resolved.fallback !== "none") {
+      throw new Error(
+        'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
+      );
+    }
+    return resolved;
+  });
 }
 
 function resolveSyncConfig(): ResolvedMemorySearchSyncConfig {

@@ -1,3 +1,4 @@
+import { withPluginRegistryResourceOperationAsync } from "../../../plugins/registry-resources.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import {
@@ -33,21 +34,23 @@ export function createSubagentRegistryContextCleanup(config: {
     params: ContextEngineSubagentEndedParams,
     options?: { isCurrent?: () => boolean },
   ): Promise<void> {
-    const cfg = deps().getRuntimeConfig();
-    const registry = await loadSubagentRegistryPluginRuntimeHandle({
-      config: cfg,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      allowGatewaySubagentBinding: true,
-    });
-    await withPluginRuntimeRegistryScope(registry, async () => {
-      const engine = await resolveSubagentRegistryContextEngine(cfg, {
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
+    return await withPluginRegistryResourceOperationAsync(async () => {
+      const cfg = deps().getRuntimeConfig();
+      const registry = await loadSubagentRegistryPluginRuntimeHandle({
+        config: cfg,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        allowGatewaySubagentBinding: true,
       });
-      if (options?.isCurrent?.() === false) {
-        return;
-      }
-      await engine.onSubagentEnded?.(params);
+      await withPluginRuntimeRegistryScope(registry, async () => {
+        const engine = await resolveSubagentRegistryContextEngine(cfg, {
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+        });
+        if (options?.isCurrent?.() === false) {
+          return;
+        }
+        await engine.onSubagentEnded?.(params);
+      });
     });
   }
 
@@ -135,39 +138,42 @@ export function createSubagentRegistryContextCleanup(config: {
     if (params.entry.endedHookEmittedAt) {
       return;
     }
-    // Loading and entering plugin scope are part of the best-effort hook boundary.
+    // Resource admission, loading, and plugin scope all belong to the best-effort boundary.
     try {
-      const cfg = deps().getRuntimeConfig();
-      const registry = await loadSubagentRegistryPluginRuntimeHandle({
-        config: cfg,
-        ...(params.entry.workspaceDir ? { workspaceDir: params.entry.workspaceDir } : {}),
-        allowGatewaySubagentBinding: true,
-      });
-      await withPluginRuntimeRegistryScope(registry, async () => {
-        if (params.entry.endedHookEmittedAt || params.isCurrent?.() === false) {
-          return;
-        }
-        // Plugin loading yields after the terminal lock is released. Resolve the
-        // event from the canonical row only after that boundary so an older callback
-        // cannot claim the exactly-once hook with a superseded timeout or error.
-        const reason = params.entry.endedReason ?? params.reason ?? SUBAGENT_ENDED_REASON_COMPLETE;
-        const outcome =
-          reason === SUBAGENT_ENDED_REASON_KILLED
-            ? SUBAGENT_ENDED_OUTCOME_KILLED
-            : resolveLifecycleOutcomeFromRunOutcome(params.entry.execution.outcome);
-        const error =
-          params.entry.execution.outcome?.status === "error"
-            ? params.entry.execution.outcome.error
-            : undefined;
-        await emitSubagentEndedHookOnce({
-          entry: params.entry,
-          reason,
-          sendFarewell: params.sendFarewell,
-          accountId: params.accountId ?? params.entry.requesterOrigin?.accountId,
-          outcome,
-          error,
-          inFlightRunIds: endedHookInFlightRunIds,
-          persist,
+      await withPluginRegistryResourceOperationAsync(async () => {
+        const cfg = deps().getRuntimeConfig();
+        const registry = await loadSubagentRegistryPluginRuntimeHandle({
+          config: cfg,
+          ...(params.entry.workspaceDir ? { workspaceDir: params.entry.workspaceDir } : {}),
+          allowGatewaySubagentBinding: true,
+        });
+        await withPluginRuntimeRegistryScope(registry, async () => {
+          if (params.entry.endedHookEmittedAt || params.isCurrent?.() === false) {
+            return;
+          }
+          // Plugin loading yields after the terminal lock is released. Resolve the
+          // event from the canonical row only after that boundary so an older callback
+          // cannot claim the exactly-once hook with a superseded timeout or error.
+          const reason =
+            params.entry.endedReason ?? params.reason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+          const outcome =
+            reason === SUBAGENT_ENDED_REASON_KILLED
+              ? SUBAGENT_ENDED_OUTCOME_KILLED
+              : resolveLifecycleOutcomeFromRunOutcome(params.entry.execution.outcome);
+          const error =
+            params.entry.execution.outcome?.status === "error"
+              ? params.entry.execution.outcome.error
+              : undefined;
+          await emitSubagentEndedHookOnce({
+            entry: params.entry,
+            reason,
+            sendFarewell: params.sendFarewell,
+            accountId: params.accountId ?? params.entry.requesterOrigin?.accountId,
+            outcome,
+            error,
+            inFlightRunIds: endedHookInFlightRunIds,
+            persist,
+          });
         });
       });
     } catch (err) {

@@ -1,9 +1,8 @@
 // Metadata registry loader builds plugin metadata registries without activating runtime barrels.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadPluginRegistryHandle } from "../loader.js";
+import { loadPluginRegistryHandle, type PluginRegistryHandle } from "../loader.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
 import { hasExplicitPluginIdScope } from "../plugin-scope.js";
-import type { PluginRegistry } from "../registry.js";
 import type { PluginLogger } from "../types.js";
 import { buildPluginRuntimeLoadOptions, type PluginRuntimeLoadContext } from "./load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
@@ -19,7 +18,7 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
   loadModules?: boolean;
   manifestRegistry?: PluginManifestRegistry;
   runtimeContext?: PluginRuntimeLoadContext;
-}): PluginRegistry {
+}): PluginRegistryHandle {
   const context = options?.runtimeContext ?? resolvePluginRuntimeLoadContext(options);
 
   return loadPluginRegistryHandle(

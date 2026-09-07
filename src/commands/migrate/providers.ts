@@ -5,6 +5,7 @@ import {
   resolvePluginMigrationProvider,
   resolvePluginMigrationProviders,
 } from "../../plugins/migration-provider-runtime.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import type { MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { buildMigrationContext } from "./context.js";
@@ -51,20 +52,22 @@ export async function createMigrationPlan(
   runtime: RuntimeEnv,
   opts: MigrateCommonOptions & { provider: string },
 ): Promise<MigrationPlan> {
-  if (opts.verifyPluginApps && opts.provider !== "codex") {
-    throw new Error("--verify-plugin-apps is only supported for Codex migrations.");
-  }
-  const provider = resolveMigrationProvider(opts.provider, opts.configOverride);
-  const ctx = buildMigrationContext({
-    source: opts.source,
-    targetAgentId: opts.targetAgentId,
-    itemKinds: opts.itemKinds,
-    includeSecrets: opts.includeSecrets,
-    overwrite: opts.overwrite,
-    configOverride: opts.configOverride,
-    providerOptions: buildMigrationProviderOptions(opts),
-    runtime,
-    json: opts.json,
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    if (opts.verifyPluginApps && opts.provider !== "codex") {
+      throw new Error("--verify-plugin-apps is only supported for Codex migrations.");
+    }
+    const provider = resolveMigrationProvider(opts.provider, opts.configOverride);
+    const ctx = buildMigrationContext({
+      source: opts.source,
+      targetAgentId: opts.targetAgentId,
+      itemKinds: opts.itemKinds,
+      includeSecrets: opts.includeSecrets,
+      overwrite: opts.overwrite,
+      configOverride: opts.configOverride,
+      providerOptions: buildMigrationProviderOptions(opts),
+      runtime,
+      json: opts.json,
+    });
+    return await provider.plan(ctx);
   });
-  return await provider.plan(ctx);
 }

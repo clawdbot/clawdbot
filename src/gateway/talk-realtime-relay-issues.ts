@@ -1,4 +1,7 @@
 import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
+import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import { projectInternalRealtimeVoicePublicConfig } from "../talk/provider-internal.js";
+import type { RealtimeVoiceProviderConfig } from "../talk/provider-types.js";
 
 type TalkRealtimeRelayIssue = {
   code: "realtime_unavailable";
@@ -41,7 +44,37 @@ export function buildTalkRealtimeRelayIssuePayload(
   };
 }
 
-export function projectTalkRealtimeRelayProviderError(
+export function createTalkRealtimeRelayPublicProjection(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  providerConfig: RealtimeVoiceProviderConfig;
+  model?: string;
+  runWithProviderResources: <T>(operation: () => T) => T;
+}) {
+  const model = projectInternalRealtimeVoicePublicConfig({
+    provider: params.provider,
+    providerConfig: params.providerConfig,
+    config: { model: params.model },
+  }).model;
+  const opaqueRoute =
+    typeof params.model === "string" && params.model.length > 0 && model !== params.model;
+  const error = (cause: unknown) =>
+    params.runWithProviderResources(() =>
+      projectTalkRealtimeRelayProviderError(params.provider.id, opaqueRoute, cause),
+    );
+  return {
+    model,
+    error,
+    issue: (cause: unknown, phase: string) =>
+      createTalkRealtimeRelayIssue({
+        message: error(cause),
+        provider: params.provider.id,
+        model,
+        phase,
+      }),
+  };
+}
+
+function projectTalkRealtimeRelayProviderError(
   provider: string,
   opaqueRoute: boolean,
   error: unknown,

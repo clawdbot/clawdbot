@@ -487,7 +487,7 @@ plugins.
 | `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
 | `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
 | `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, settings, or tab surfaces                                                                      |
-| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
+| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Host cleanup notifications and optional resource disposal for scoped registration instances                                                                |
 | `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                              |
 | `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
 | `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                                            |
@@ -495,6 +495,30 @@ plugins.
 | `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
 | `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
 | `api.registerBoardWidgetContentKind(...)`                                            | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
+
+**Runtime resource disposal:**
+`api.lifecycle.registerRuntimeLifecycle({ id, cleanup?, dispose? })` accepts an
+optional `dispose: () => void | Promise<void>` callback for resources captured by
+that registration instance. OpenClaw calls it at most once after the last scoped
+cache, build, publication, or run owner releases the instance. A copied registry
+alias shares the original resource owner. Failed registration and abandoned
+construction also dispose resources through this callback, after any started
+registration work settles.
+
+Keep `dispose` limited to closing that instance's connections, subscriptions, and
+other resources. It must not delete durable data, reset sessions or scheduled
+jobs, or stop another registration of the same plugin. Finish accepted work
+before resolving. A caller timeout or cancellation does not mean that the
+underlying operation has settled. Disposal failures are reported and are not
+retried automatically.
+
+`cleanup` retains its existing `disable`, `reset`, `delete`, and `restart`
+notifications. Active composition roots still use their service and host-cleanup
+lifecycle; retain those handlers for full-mode resources. OpenClaw never substitutes
+a cleanup reason for `dispose`. Plugins that omit `dispose` keep their existing
+behavior, and OpenClaw cannot automatically close arbitrary resources they own.
+For callback-bearing SDK acquisitions, follow the explicit ownership rules in
+[SDK migration](/plugins/sdk-migration).
 
 `registerBoardWidgetContentKind(...)` is for plugins that own a declarative
 widget source format. The registration supplies a globally unique lowercase

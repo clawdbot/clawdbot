@@ -1,7 +1,8 @@
 import type { OpenClawConfig, TtsConfig } from "../config/types.js";
 import { mergeDeep } from "../infra/deep-merge.js";
+import { withPluginRegistryResourceOperation } from "../plugins/registry-resources.js";
 import { parseTtsDirectives } from "./directives.js";
-import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
+import { canonicalizeSpeechProviderId, getSpeechProviderCore } from "./provider-registry.js";
 import type {
   SpeechProviderOverrides,
   TtsDirectiveOverrides,
@@ -46,6 +47,21 @@ export function resolveExplicitTtsOverrides(params: {
   channelId?: string;
   accountId?: string;
 }): TtsDirectiveOverrides {
+  return withPluginRegistryResourceOperation(() =>
+    resolveExplicitTtsOverridesWithResources(params),
+  );
+}
+
+function resolveExplicitTtsOverridesWithResources(params: {
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+  provider?: string;
+  modelId?: string;
+  voiceId?: string;
+  agentId?: string;
+  channelId?: string;
+  accountId?: string;
+}): TtsDirectiveOverrides {
   const cfg = resolveTtsRuntimeConfig(params.cfg);
   const providerInput = params.provider?.trim();
   const modelId = params.modelId?.trim();
@@ -72,7 +88,7 @@ export function resolveExplicitTtsOverrides(params: {
     throw new Error("TTS model or voice overrides require a resolved provider.");
   }
 
-  const provider = getSpeechProvider(selectedProvider, cfg);
+  const provider = getSpeechProviderCore(selectedProvider, cfg);
   if (!provider) {
     throw new Error(`speech provider ${selectedProvider} is not registered`);
   }

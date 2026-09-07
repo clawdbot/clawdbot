@@ -17,25 +17,30 @@ export async function resolvePreferredProviderForAuthChoice(params: {
     return manifestResolved.providerId;
   }
 
-  const { resolveProviderPluginChoice, resolvePluginProviders } =
+  const { resolveProviderPluginChoice, acquireProviderAuthChoiceProviders } =
     await import("./provider-auth-choice.runtime.js");
-  const providers = resolvePluginProviders({
+  const providerHandle = acquireProviderAuthChoiceProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     mode: "setup",
     includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
   });
-  const pluginResolved = resolveProviderPluginChoice({
-    providers,
-    choice,
-  });
-  if (pluginResolved) {
-    return pluginResolved.provider.id;
-  }
+  const { providers } = providerHandle;
+  try {
+    const pluginResolved = resolveProviderPluginChoice({
+      providers,
+      choice,
+    });
+    if (pluginResolved) {
+      return pluginResolved.provider.id;
+    }
 
-  if (choice === "custom-api-key") {
-    return "custom";
+    if (choice === "custom-api-key") {
+      return "custom";
+    }
+    return undefined;
+  } finally {
+    providerHandle.release();
   }
-  return undefined;
 }

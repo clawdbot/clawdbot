@@ -14,6 +14,7 @@ import {
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
@@ -48,6 +49,13 @@ export function listRuntimeMusicGenerationProviders(
 export async function generateMusic(
   params: GenerateMusicParams,
   deps: MusicGenerationRuntimeDeps = {},
+): Promise<GenerateMusicRuntimeResult> {
+  return withPluginRegistryResourceOperationAsync(() => generateMusicWithResources(params, deps));
+}
+
+async function generateMusicWithResources(
+  params: GenerateMusicParams,
+  deps: MusicGenerationRuntimeDeps,
 ): Promise<GenerateMusicRuntimeResult> {
   const getProvider = deps.getProvider ?? getMusicGenerationProvider;
   const listProviders = deps.listProviders ?? listMusicGenerationProviders;

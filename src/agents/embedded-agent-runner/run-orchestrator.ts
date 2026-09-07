@@ -25,6 +25,7 @@ import {
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { runWithOwnedPluginRegistryResources } from "../../plugins/registry-resources.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -46,6 +47,7 @@ import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
+import { retainPreparedPluginGenerationResources } from "../prepared-model-runtime.plugin-generation.js";
 import { resolveProjectKey } from "../project-memory-scope.js";
 import {
   applyAgentRunSessionTargetIdentity,
@@ -561,7 +563,10 @@ async function runEmbeddedAgentInternal(
           }
         };
         const runWithPreparedRuntime = () =>
-          withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
+          runWithOwnedPluginRegistryResources(
+            retainPreparedPluginGenerationResources(preparedModelRuntimeLease.pluginGeneration),
+            async () => await withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared),
+          );
         return params.pluginGeneration
           ? await withPreparedModelRuntimePluginGenerationScope(
               preparedModelRuntimeLease.pluginGeneration,

@@ -12,6 +12,7 @@ export {
   type MeetingRuntimePlatform,
 } from "../meeting-bot/realtime-engine.js";
 export { startMeetingAgentRealtimeEngine } from "../meeting-bot/realtime-agent-engine.js";
+export { MeetingRealtimeStartupCleanupError } from "../meeting-bot/realtime-engine-error.js";
 export {
   type MeetingRealtimeAudioTransport,
   type MeetingRealtimeAudioTransportHealth,

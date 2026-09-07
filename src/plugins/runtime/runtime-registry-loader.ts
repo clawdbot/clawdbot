@@ -10,7 +10,7 @@ import { normalizePluginsConfig } from "../config-state.js";
 import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-plugin-ids.js";
 import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index-scope-lookup.js";
-import { loadOpenClawPlugins } from "../loader.js";
+import { loadAndActivateRootPluginRegistry } from "../loader.js";
 import { hasNonEmptyPluginIdScope } from "../plugin-scope.js";
 import { buildPluginRuntimeLoadOptionsFromValues } from "./load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
@@ -139,7 +139,7 @@ export function ensurePluginRegistryLoaded(options?: {
         pluginIds,
       }) ?? context.activationSourceConfig)
     : context.activationSourceConfig;
-  loadOpenClawPlugins(
+  loadAndActivateRootPluginRegistry(
     buildPluginRuntimeLoadOptionsFromValues(
       { ...context, config, activationSourceConfig },
       {

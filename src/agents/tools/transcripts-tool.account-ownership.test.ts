@@ -15,8 +15,8 @@ const { getTranscriptSourceProviderMock, listTranscriptSourceProvidersMock } = v
 
 vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../transcripts/provider-registry.js")>()),
-  getTranscriptSourceProvider: getTranscriptSourceProviderMock,
-  listTranscriptSourceProviders: listTranscriptSourceProvidersMock,
+  getTranscriptSourceProviderCore: getTranscriptSourceProviderMock,
+  listTranscriptSourceProvidersCore: listTranscriptSourceProvidersMock,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

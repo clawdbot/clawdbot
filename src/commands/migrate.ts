@@ -14,6 +14,7 @@ import {
   ensureStandaloneMigrationProviderRegistryLoaded,
   resolvePluginMigrationProviders,
 } from "../plugins/migration-provider-runtime.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
@@ -289,32 +290,34 @@ function logNoCodexSelection(runtime: RuntimeEnv, plan: MigrationPlan): void {
 
 /** Lists available migration providers as JSON or terse terminal rows. */
 export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
-  const cfg = getRuntimeConfig();
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg });
-  const providers = resolvePluginMigrationProviders({ cfg }).map((provider) => ({
-    id: provider.id,
-    label: provider.label,
-    description: provider.description,
-  }));
-  if (opts.json) {
-    writeRuntimeJson(runtime, { providers });
-    return;
-  }
-  if (providers.length === 0) {
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const cfg = getRuntimeConfig();
+    ensureStandaloneMigrationProviderRegistryLoaded({ cfg });
+    const providers = resolvePluginMigrationProviders({ cfg }).map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      description: provider.description,
+    }));
+    if (opts.json) {
+      writeRuntimeJson(runtime, { providers });
+      return;
+    }
+    if (providers.length === 0) {
+      runtime.log(
+        `No migration providers found. Run ${formatCliCommand("openclaw plugins list")} to verify provider plugins are installed and enabled.`,
+      );
+      return;
+    }
     runtime.log(
-      `No migration providers found. Run ${formatCliCommand("openclaw plugins list")} to verify provider plugins are installed and enabled.`,
+      providers
+        .map((provider) =>
+          provider.description
+            ? `${provider.id}\t${provider.label} - ${provider.description}`
+            : `${provider.id}\t${provider.label}`,
+        )
+        .join("\n"),
     );
-    return;
-  }
-  runtime.log(
-    providers
-      .map((provider) =>
-        provider.description
-          ? `${provider.id}\t${provider.label} - ${provider.description}`
-          : `${provider.id}\t${provider.label}`,
-      )
-      .join("\n"),
-  );
+  });
 }
 
 /** Creates and prints a migration plan without applying it. */
@@ -322,24 +325,26 @@ export async function migratePlanCommand(
   runtime: RuntimeEnv,
   opts: MigrateCommonOptions,
 ): Promise<MigrationPlan> {
-  const providerId = opts.provider?.trim();
-  if (!providerId) {
-    throw new Error(
-      `Migration provider is required. Run ${formatCliCommand("openclaw migrate list")} to choose one.`,
-    );
-  }
-  const resolvedOpts = resolveDefaultIncludeSecrets(opts);
-  assertVerifyPluginAppsProvider(providerId, resolvedOpts);
-  const plan = await createMigrationPlanWithProgress(runtime, {
-    ...resolvedOpts,
-    provider: providerId,
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const providerId = opts.provider?.trim();
+    if (!providerId) {
+      throw new Error(
+        `Migration provider is required. Run ${formatCliCommand("openclaw migrate list")} to choose one.`,
+      );
+    }
+    const resolvedOpts = resolveDefaultIncludeSecrets(opts);
+    assertVerifyPluginAppsProvider(providerId, resolvedOpts);
+    const plan = await createMigrationPlanWithProgress(runtime, {
+      ...resolvedOpts,
+      provider: providerId,
+    });
+    if (resolvedOpts.json) {
+      writeRuntimeJson(runtime, redactMigrationPlan(plan));
+    } else if (resolvedOpts.suppressPlanLog !== true) {
+      log.message(formatMigrationPreview(plan).join("\n"));
+    }
+    return plan;
   });
-  if (resolvedOpts.json) {
-    writeRuntimeJson(runtime, redactMigrationPlan(plan));
-  } else if (resolvedOpts.suppressPlanLog !== true) {
-    log.message(formatMigrationPreview(plan).join("\n"));
-  }
-  return plan;
 }
 
 /** Applies a migration non-interactively when `yes` is true. */
@@ -356,62 +361,64 @@ export async function migrateApplyCommand(
   runtime: RuntimeEnv,
   opts: MigrateApplyOptions,
 ): Promise<MigrationApplyResult | MigrationPlan> {
-  const providerId = opts.provider?.trim();
-  if (!providerId) {
-    throw new Error(
-      `Migration provider is required. Run ${formatCliCommand("openclaw migrate list")} to choose one.`,
-    );
-  }
-  assertVerifyPluginAppsProvider(providerId, opts);
-  if (opts.noBackup && !opts.force) {
-    throw new Error("--no-backup requires --force because it skips the automatic rollback copy.");
-  }
-  if (!opts.yes && !process.stdin.isTTY) {
-    throw new Error(
-      `openclaw migrate apply requires --yes in non-interactive mode. Preview first with ${formatCliCommand(`openclaw migrate plan '${providerId.replaceAll("'", "'\\''")}'`)}.`,
-    );
-  }
-  const provider = resolveMigrationProvider(providerId, opts.configOverride);
-  if (!opts.yes) {
-    const plan = await createInteractiveMigrationPlanWithAuthPrompt(runtime, {
-      ...opts,
-      provider: providerId,
-      json: opts.json,
-    });
-    if (opts.json) {
-      return plan;
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const providerId = opts.provider?.trim();
+    if (!providerId) {
+      throw new Error(
+        `Migration provider is required. Run ${formatCliCommand("openclaw migrate list")} to choose one.`,
+      );
     }
-    const selectedPlan = await promptCodexMigrationSelections(runtime, plan, opts);
-    if (!selectedPlan) {
-      return plan;
+    assertVerifyPluginAppsProvider(providerId, opts);
+    if (opts.noBackup && !opts.force) {
+      throw new Error("--no-backup requires --force because it skips the automatic rollback copy.");
     }
-    if (shouldSkipCodexApplyAfterInteractiveSelection(selectedPlan)) {
-      logNoCodexSelection(runtime, selectedPlan);
-      return selectedPlan;
+    if (!opts.yes && !process.stdin.isTTY) {
+      throw new Error(
+        `openclaw migrate apply requires --yes in non-interactive mode. Preview first with ${formatCliCommand(`openclaw migrate plan '${providerId.replaceAll("'", "'\\''")}'`)}.`,
+      );
     }
-    const ok = await promptYesNo("Apply this migration now?", false);
-    if (!ok) {
-      runtime.log("Migration cancelled.");
-      return selectedPlan;
+    const provider = resolveMigrationProvider(providerId, opts.configOverride);
+    if (!opts.yes) {
+      const plan = await createInteractiveMigrationPlanWithAuthPrompt(runtime, {
+        ...opts,
+        provider: providerId,
+        json: opts.json,
+      });
+      if (opts.json) {
+        return plan;
+      }
+      const selectedPlan = await promptCodexMigrationSelections(runtime, plan, opts);
+      if (!selectedPlan) {
+        return plan;
+      }
+      if (shouldSkipCodexApplyAfterInteractiveSelection(selectedPlan)) {
+        logNoCodexSelection(runtime, selectedPlan);
+        return selectedPlan;
+      }
+      const ok = await promptYesNo("Apply this migration now?", false);
+      if (!ok) {
+        runtime.log("Migration cancelled.");
+        return selectedPlan;
+      }
+      return await runMigrationApply({
+        runtime,
+        opts: {
+          ...opts,
+          provider: providerId,
+          yes: true,
+          includeSecrets: opts.includeSecrets ?? hasPlannedAuthCredentialItem(selectedPlan),
+          preflightPlan: selectedPlan,
+        },
+        providerId,
+        provider,
+      });
     }
     return await runMigrationApply({
       runtime,
-      opts: {
-        ...opts,
-        provider: providerId,
-        yes: true,
-        includeSecrets: opts.includeSecrets ?? hasPlannedAuthCredentialItem(selectedPlan),
-        preflightPlan: selectedPlan,
-      },
+      opts: resolveDefaultIncludeSecrets(opts),
       providerId,
       provider,
     });
-  }
-  return await runMigrationApply({
-    runtime,
-    opts: resolveDefaultIncludeSecrets(opts),
-    providerId,
-    provider,
   });
 }
 
@@ -420,81 +427,83 @@ export async function migrateDefaultCommand(
   runtime: RuntimeEnv,
   opts: MigrateDefaultOptions,
 ): Promise<MigrationPlan | MigrationApplyResult> {
-  const providerId = opts.provider?.trim();
-  if (!providerId) {
-    await migrateListCommand(runtime, { json: opts.json });
-    return {
-      providerId: "list",
-      source: "",
-      summary: {
-        total: 0,
-        planned: 0,
-        migrated: 0,
-        skipped: 0,
-        conflicts: 0,
-        errors: 0,
-        sensitive: 0,
-      },
-      items: [],
-    };
-  }
-  assertVerifyPluginAppsProvider(providerId, opts);
-  const resolvedOpts = resolveDefaultIncludeSecrets(opts);
-  const plan =
-    opts.json && opts.yes && !opts.dryRun
-      ? selectMigrationItems(
-          await createMigrationPlan(runtime, { ...resolvedOpts, provider: providerId }),
-          resolvedOpts,
-        )
-      : !opts.yes && process.stdin.isTTY
-        ? await createInteractiveMigrationPlanWithAuthPrompt(runtime, {
-            ...opts,
-            provider: providerId,
-            json: opts.json && (opts.dryRun || !opts.yes),
-          })
-        : await migratePlanCommand(runtime, {
-            ...resolvedOpts,
-            provider: providerId,
-            json: opts.json && (opts.dryRun || !opts.yes),
-          });
-  if (opts.dryRun) {
-    return plan;
-  }
-  if (opts.json && !opts.yes) {
-    return plan;
-  }
-  if (!opts.yes) {
-    if (!process.stdin.isTTY) {
-      runtime.log("Re-run with --yes to apply this migration non-interactively.");
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const providerId = opts.provider?.trim();
+    if (!providerId) {
+      await migrateListCommand(runtime, { json: opts.json });
+      return {
+        providerId: "list",
+        source: "",
+        summary: {
+          total: 0,
+          planned: 0,
+          migrated: 0,
+          skipped: 0,
+          conflicts: 0,
+          errors: 0,
+          sensitive: 0,
+        },
+        items: [],
+      };
+    }
+    assertVerifyPluginAppsProvider(providerId, opts);
+    const resolvedOpts = resolveDefaultIncludeSecrets(opts);
+    const plan =
+      opts.json && opts.yes && !opts.dryRun
+        ? selectMigrationItems(
+            await createMigrationPlan(runtime, { ...resolvedOpts, provider: providerId }),
+            resolvedOpts,
+          )
+        : !opts.yes && process.stdin.isTTY
+          ? await createInteractiveMigrationPlanWithAuthPrompt(runtime, {
+              ...opts,
+              provider: providerId,
+              json: opts.json && (opts.dryRun || !opts.yes),
+            })
+          : await migratePlanCommand(runtime, {
+              ...resolvedOpts,
+              provider: providerId,
+              json: opts.json && (opts.dryRun || !opts.yes),
+            });
+    if (opts.dryRun) {
       return plan;
     }
-    const selectedPlan = await promptCodexMigrationSelections(runtime, plan, opts);
-    if (!selectedPlan) {
+    if (opts.json && !opts.yes) {
       return plan;
     }
-    if (shouldSkipCodexApplyAfterInteractiveSelection(selectedPlan)) {
-      logNoCodexSelection(runtime, selectedPlan);
-      return selectedPlan;
-    }
-    const ok = await promptYesNo("Apply this migration now?", false);
-    if (!ok) {
-      runtime.log("Migration cancelled.");
-      return selectedPlan;
+    if (!opts.yes) {
+      if (!process.stdin.isTTY) {
+        runtime.log("Re-run with --yes to apply this migration non-interactively.");
+        return plan;
+      }
+      const selectedPlan = await promptCodexMigrationSelections(runtime, plan, opts);
+      if (!selectedPlan) {
+        return plan;
+      }
+      if (shouldSkipCodexApplyAfterInteractiveSelection(selectedPlan)) {
+        logNoCodexSelection(runtime, selectedPlan);
+        return selectedPlan;
+      }
+      const ok = await promptYesNo("Apply this migration now?", false);
+      if (!ok) {
+        runtime.log("Migration cancelled.");
+        return selectedPlan;
+      }
+      return await migrateApplyCommand(runtime, {
+        ...opts,
+        provider: providerId,
+        yes: true,
+        includeSecrets: opts.includeSecrets ?? hasPlannedAuthCredentialItem(selectedPlan),
+        json: opts.json,
+        preflightPlan: selectedPlan,
+      });
     }
     return await migrateApplyCommand(runtime, {
-      ...opts,
+      ...resolvedOpts,
       provider: providerId,
       yes: true,
-      includeSecrets: opts.includeSecrets ?? hasPlannedAuthCredentialItem(selectedPlan),
       json: opts.json,
-      preflightPlan: selectedPlan,
+      preflightPlan: plan,
     });
-  }
-  return await migrateApplyCommand(runtime, {
-    ...resolvedOpts,
-    provider: providerId,
-    yes: true,
-    json: opts.json,
-    preflightPlan: plan,
   });
 }

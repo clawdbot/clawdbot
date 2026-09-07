@@ -150,8 +150,13 @@ export default definePluginEntry({
       },
       stop: stopService,
     });
+    const dispose = () => {
+      retired = true;
+      return stopService();
+    };
     api.lifecycle.registerRuntimeLifecycle({
       id: "logbook-service",
+      dispose,
       cleanup: ({ reason, sessionKey, runId }) => {
         // Registry-only retirement does not run service.stop; scoped session cleanup stays local.
         if (
@@ -159,8 +164,7 @@ export default definePluginEntry({
           runId === undefined &&
           (reason === "restart" || reason === "disable")
         ) {
-          retired = true;
-          return stopService();
+          return dispose();
         }
         return undefined;
       },

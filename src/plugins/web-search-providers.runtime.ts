@@ -1,6 +1,10 @@
-// Runtime bridge for web-search providers supplied by plugins.
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+// Runtime bridge for web-search providers supplied by plugins.
+import {
+  getPluginRegistryResourceScope,
+  withPluginRegistryResourceScope,
+} from "./registry-resources.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
   resolveBundledWebSearchProvidersFromPublicArtifacts,
@@ -33,17 +37,22 @@ function resolveLazyBundledWebSearchProviders(
   params: Parameters<typeof resolveEnabledBundledWebSearchProvidersFromPublicArtifacts>[0],
 ): PluginWebSearchProviderEntry[] | null {
   const providers = resolveEnabledBundledWebSearchProvidersFromPublicArtifacts(params);
+  const resourceScope = getPluginRegistryResourceScope();
+  if (!resourceScope) {
+    throw new Error("Lazy web providers require a caller resource scope");
+  }
   return (
     providers?.map((provider) => {
       const lazyProvider = Object.assign({}, provider);
-      lazyProvider.createTool = (context) => {
-        // Public descriptors can have setup-only factories; execution belongs to the scoped registry.
-        const runtime = resolvePluginWebProviders(
-          { ...params, onlyPluginIds: [provider.pluginId] },
-          providerResolution,
-        ).find((entry) => entry.pluginId === provider.pluginId && entry.id === provider.id);
-        return runtime?.createTool(context) ?? null;
-      };
+      lazyProvider.createTool = (context) =>
+        withPluginRegistryResourceScope(resourceScope, () => {
+          // Public descriptors can have setup-only factories; execution belongs to the scoped registry.
+          const runtime = resolvePluginWebProviders(
+            { ...params, onlyPluginIds: [provider.pluginId] },
+            providerResolution,
+          ).find((entry) => entry.pluginId === provider.pluginId && entry.id === provider.id);
+          return runtime?.createTool(context) ?? null;
+        });
       return lazyProvider;
     }) ?? null
   );

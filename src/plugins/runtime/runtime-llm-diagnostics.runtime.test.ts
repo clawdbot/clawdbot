@@ -9,14 +9,15 @@ import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-l
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
 const hoisted = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
-  completeWithPreparedSimpleCompletionModel: vi.fn(),
+  acquireSimpleCompletionModelForAgent: vi.fn(),
+  completeWithPreparedSimpleCompletionModelCore: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgent,
-  completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
+  acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModelCore:
+    hoisted.completeWithPreparedSimpleCompletionModelCore,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
 }));
 
@@ -29,6 +30,7 @@ const cfg = {
 } satisfies OpenClawConfig;
 
 const preparedModel = {
+  release: vi.fn(),
   selection: {
     provider: "openai",
     modelId: "gpt-5.5",
@@ -77,12 +79,12 @@ function captureUsageEvents() {
 describe("runtime.llm.complete diagnostics", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    hoisted.prepareSimpleCompletionModelForAgent.mockReset();
-    hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
+    hoisted.acquireSimpleCompletionModelForAgent.mockReset();
+    hoisted.completeWithPreparedSimpleCompletionModelCore.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
-    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue(preparedModel);
+    hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(preparedModel);
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue(preparedModel.selection);
-    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+    hoisted.completeWithPreparedSimpleCompletionModelCore.mockResolvedValue({
       content: [{ type: "text", text: "done" }],
       usage: {
         input: 11,
@@ -195,7 +197,7 @@ describe("runtime.llm.complete diagnostics", () => {
   ] as const)(
     "emits usage only for positive enabled tokens or cost: %s",
     async (_name, rawUsage, enabled, expectedEventUsage, expectedCostUsd) => {
-      hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      hoisted.completeWithPreparedSimpleCompletionModelCore.mockResolvedValueOnce({
         content: [{ type: "text", text: "done" }],
         usage: rawUsage,
         stopReason: "stop",
@@ -232,7 +234,7 @@ describe("runtime.llm.complete diagnostics", () => {
     ["resolved provider abort", "aborted", [{ type: "text", text: "partial" }], "partial"],
     ["thinking-only completion", "stop", [{ type: "thinking", thinking: "hidden" }], ""],
   ] as const)("keeps %s usage silent", async (_name, stopReason, content, expectedText) => {
-    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+    hoisted.completeWithPreparedSimpleCompletionModelCore.mockResolvedValueOnce({
       content,
       stopReason,
       usage: { input: 11, output: 7, totalTokens: 18 },
@@ -253,7 +255,7 @@ describe("runtime.llm.complete diagnostics", () => {
 
   it("emits no usage when the provider fails", async () => {
     const usageEvents = captureUsageEvents();
-    hoisted.completeWithPreparedSimpleCompletionModel.mockRejectedValueOnce(
+    hoisted.completeWithPreparedSimpleCompletionModelCore.mockRejectedValueOnce(
       new Error("provider failed"),
     );
     const llm = createRuntimeLlm({

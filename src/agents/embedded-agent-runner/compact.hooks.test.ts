@@ -1694,6 +1694,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     } as never;
     acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
       snapshot: preparedModelRuntime,
+      pluginGeneration: {
+        pluginMetadataSnapshot: metadataSnapshot,
+        inlineProviderModels: [],
+        configuredCatalogEntries: [],
+      },
       release: vi.fn(),
     });
     createOpenClawCodingToolsMock.mockReturnValueOnce([
@@ -4673,6 +4678,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       return {
         ...lease,
         snapshot: { ...lease.snapshot, pluginRegistry: registry },
+        pluginGeneration: { ...lease.pluginGeneration, pluginRegistry: registry },
       };
     });
     selectAgentHarnessMock.mockReturnValue(registeredHarness);

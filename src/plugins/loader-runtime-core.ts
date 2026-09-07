@@ -28,8 +28,15 @@ import type { PluginLoadOptions } from "./loader-types.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { pluginLoaderCacheState } from "./registry-lifecycle.js";
+import {
+  createPluginRegistryResourceOwner,
+  abandonPluginRegistryResourceConstruction,
+  retainPluginRegistryResources,
+  type PluginRegistryHandle,
+  type PluginRegistryResourceClaim,
+} from "./registry-resources.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
-import { createPluginRegistry, type PluginRegistry } from "./registry.js";
+import { createPluginRegistry } from "./registry.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -68,7 +75,7 @@ export function loadOpenClawPluginsCore(
   options: PluginLoadOptions,
   nativeBindings: NativePluginLoadBindings,
   overrides?: InternalPluginLoadOverrides,
-): PluginRegistry {
+): PluginRegistryHandle {
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
   if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
@@ -82,7 +89,13 @@ export function loadOpenClawPluginsCore(
         options.workspaceDir,
       );
     }
-    return emptyRegistry;
+    return {
+      registry: emptyRegistry,
+      ...createPluginRegistryResourceOwner(
+        emptyRegistry,
+        options.activate === false ? "scoped" : "root",
+      ),
+    };
   }
 
   const context = resolvePluginLoadCacheContext(options);
@@ -102,12 +115,13 @@ export function loadOpenClawPluginsCore(
           options.workspaceDir,
         );
       }
-      return cached;
+      return { registry: cached, ...retainPluginRegistryResources(cached) };
     }
   }
 
   pluginLoaderCacheState.beginLoad(context.cacheKey);
   let registryBuilder: ReturnType<typeof createPluginRegistry> | undefined;
+  let construction: PluginRegistryResourceClaim | undefined;
   try {
     // Module and runtime loading stay lazy for discovery-only or disabled-plugin paths.
     const loadPluginModule = createPluginModuleLoader({
@@ -163,6 +177,10 @@ export function loadOpenClawPluginsCore(
       activateGlobalSideEffects: context.shouldActivate,
     });
     const { registry } = registryBuilder;
+    construction = createPluginRegistryResourceOwner(
+      registry,
+      context.shouldActivate ? "root" : "scoped",
+    );
     const { manifestRegistry, orderedCandidates, manifestBySource, provenance } =
       resolvePluginLoadDiscovery({
         options,
@@ -298,7 +316,9 @@ export function loadOpenClawPluginsCore(
     if (cacheEnabled) {
       pluginLoaderCacheState.set(context.cacheKey, registry);
     }
-    return registry;
+    const handle = { registry, ...construction };
+    construction = undefined;
+    return handle;
   } catch (error) {
     // Registration failures discard only an inactive builder. Activation is failure-atomic, and
     // any later cache failure must not strip the registry already serving runtime consumers.
@@ -308,9 +328,13 @@ export function loadOpenClawPluginsCore(
           registryBuilder?.rollbackPluginGlobalSideEffects(plugin.id);
         }
       }
+      if (registryBuilder) {
+        abandonPluginRegistryResourceConstruction(registryBuilder.registry);
+      }
     }
     throw error;
   } finally {
+    construction?.release();
     pluginLoaderCacheState.finishLoad(context.cacheKey);
   }
 }

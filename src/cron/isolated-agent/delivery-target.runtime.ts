@@ -10,6 +10,10 @@ import {
   resolveChannelTarget,
   type ResolvedMessagingTarget,
 } from "../../infra/outbound/target-resolver.js";
+import {
+  withPluginRegistryResourceOperation,
+  withPluginRegistryResourceOperationAsync,
+} from "../../plugins/registry-resources.js";
 export { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 export { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 export { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
@@ -22,29 +26,31 @@ export async function resolveChannelTargetForDelivery(params: {
   input: string;
   accountId?: string | null;
 }): Promise<{ ok: true; target: ResolvedMessagingTarget } | { ok: false; error: Error }> {
-  // Delivery may be the first channel touch after startup; allow bootstrap so
-  // plugin config and account metadata are available before target resolution.
-  const plugin = resolveOutboundChannelPlugin({
-    channel: params.channel,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    allowBootstrap: true,
-  });
-  try {
-    return await resolveChannelTarget({
-      cfg: params.cfg,
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    // Delivery may be the first channel touch after startup; allow bootstrap so
+    // plugin config and account metadata are available before target resolution.
+    const plugin = resolveOutboundChannelPlugin({
       channel: params.channel,
-      input: params.input,
-      accountId: params.accountId,
-      unknownTargetMode: "normalized",
-      plugin,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      allowBootstrap: true,
     });
-  } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err : new Error(String(err)),
-    };
-  }
+    try {
+      return await resolveChannelTarget({
+        cfg: params.cfg,
+        channel: params.channel,
+        input: params.input,
+        accountId: params.accountId,
+        unknownTargetMode: "normalized",
+        plugin,
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err : new Error(String(err)),
+      };
+    }
+  });
 }
 
 /** Resolves the outbound session route used for cron delivery threading and mirrors. */
@@ -58,15 +64,17 @@ export async function resolveOutboundSessionRouteForDelivery(params: {
   threadId?: string | number | null;
   currentSessionKey?: string;
 }): Promise<OutboundSessionRoute | null> {
-  // Route lookup also bootstraps the plugin so canonical thread/session mapping
-  // matches the send-time channel runtime.
-  const plugin = resolveOutboundChannelPlugin({
-    channel: params.channel,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    allowBootstrap: true,
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    // Route lookup also bootstraps the plugin so canonical thread/session mapping
+    // matches the send-time channel runtime.
+    const plugin = resolveOutboundChannelPlugin({
+      channel: params.channel,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      allowBootstrap: true,
+    });
+    return await resolveOutboundSessionRoute({ ...params, plugin });
   });
-  return await resolveOutboundSessionRoute({ ...params, plugin });
 }
 
 /** Returns whether a channel can canonicalize outbound cron delivery sessions. */
@@ -75,12 +83,14 @@ export function channelCanResolveOutboundSessionRoute(params: {
   channel: ChannelId;
   agentId: string;
 }): boolean {
-  return Boolean(
-    resolveOutboundChannelPlugin({
-      channel: params.channel,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      allowBootstrap: true,
-    })?.messaging?.resolveOutboundSessionRoute,
-  );
+  return withPluginRegistryResourceOperation(() => {
+    return Boolean(
+      resolveOutboundChannelPlugin({
+        channel: params.channel,
+        cfg: params.cfg,
+        agentId: params.agentId,
+        allowBootstrap: true,
+      })?.messaging?.resolveOutboundSessionRoute,
+    );
+  });
 }

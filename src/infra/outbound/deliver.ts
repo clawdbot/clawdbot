@@ -1,3 +1,4 @@
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 // Public facade for outbound delivery planning, queueing, and transport.
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { runOutboundDelivery, runOutboundDeliveryInternal } from "./deliver-queue.js";
@@ -23,11 +24,15 @@ export { resolveOutboundDurableFinalDeliverySupport } from "./deliver-channel.js
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
-  return await runOutboundDelivery(params);
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    return await runOutboundDelivery(params);
+  });
 }
 
 export async function deliverOutboundPayloadsInternal(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
-  return await runOutboundDeliveryInternal(params);
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    return await runOutboundDeliveryInternal(params);
+  });
 }

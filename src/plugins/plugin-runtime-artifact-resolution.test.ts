@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
+import {
+  clearPluginRegistryLoadCache,
+  loadOpenClawPluginsForTest as loadOpenClawPlugins,
+} from "./loader-handles.test-support.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import {
   clearPluginRuntimeArtifactResolutionMemo,

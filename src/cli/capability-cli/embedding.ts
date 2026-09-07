@@ -4,8 +4,9 @@ import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { createEmbeddingProvider } from "../../plugin-sdk/memory-core-bundled-runtime.js";
-import { listEmbeddingProviders } from "../../plugins/embedding-provider-runtime.js";
-import { listRegisteredMemoryEmbeddingProviderAdapters } from "../../plugins/memory-embedding-provider-runtime.js";
+import { listEmbeddingProvidersCore } from "../../plugins/embedding-provider-runtime.js";
+import { listRegisteredMemoryEmbeddingProviderAdaptersCore } from "../../plugins/memory-embedding-provider-runtime.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../command-secret-targets.js";
@@ -119,13 +120,15 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runMemoryEmbeddingCreate({
-          texts: opts.text as string[],
-          agent: resolveCapabilityAgentOption(command, opts.agent),
-          provider: opts.provider as string | undefined,
-          model: opts.model as string | undefined,
+        return withPluginRegistryResourceOperationAsync(async () => {
+          const result = await runMemoryEmbeddingCreate({
+            texts: opts.text as string[],
+            agent: resolveCapabilityAgentOption(command, opts.agent),
+            provider: opts.provider as string | undefined,
+            model: opts.model as string | undefined,
+          });
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
     });
 
@@ -136,61 +139,63 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(
-          cfg,
-          resolveCapabilityAgentOption(command, opts.agent),
-        );
-        const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
-        const selectedProvider = resolvedMemory?.provider;
-        const providers = new Map(
-          listRegisteredMemoryEmbeddingProviderAdapters().map((provider) => [
-            provider.id,
-            {
+        return withPluginRegistryResourceOperationAsync(async () => {
+          const cfg = getRuntimeConfig();
+          const agentId = resolveCapabilityProviderAgentId(
+            cfg,
+            resolveCapabilityAgentOption(command, opts.agent),
+          );
+          const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
+          const selectedProvider = resolvedMemory?.provider;
+          const providers = new Map(
+            listRegisteredMemoryEmbeddingProviderAdaptersCore().map((provider) => [
+              provider.id,
+              {
+                id: provider.id,
+                defaultModel: provider.defaultModel,
+                transport: provider.transport,
+                autoSelectPriority: provider.autoSelectPriority,
+              },
+            ]),
+          );
+          for (const provider of listEmbeddingProvidersCore(cfg)) {
+            if (providers.has(provider.id)) {
+              continue;
+            }
+            providers.set(provider.id, {
               id: provider.id,
               defaultModel: provider.defaultModel,
               transport: provider.transport,
-              autoSelectPriority: provider.autoSelectPriority,
-            },
-          ]),
-        );
-        for (const provider of listEmbeddingProviders(cfg)) {
-          if (providers.has(provider.id)) {
-            continue;
+              autoSelectPriority: undefined,
+            });
           }
-          providers.set(provider.id, {
+          if (selectedProvider && !providers.has(selectedProvider)) {
+            providers.set(selectedProvider, {
+              id: selectedProvider,
+              defaultModel: resolvedMemory?.model || undefined,
+              transport: providerHasGenericConfig({ cfg, providerId: selectedProvider, agentId })
+                ? "remote"
+                : undefined,
+              autoSelectPriority: undefined,
+            });
+          }
+          const result = Array.from(providers.values()).map((provider) => ({
+            available: true,
+            configured:
+              provider.id === selectedProvider ||
+              providerHasGenericConfig({
+                cfg,
+                providerId: provider.id,
+                agentId,
+              }),
+            selected: provider.id === selectedProvider,
             id: provider.id,
             defaultModel: provider.defaultModel,
             transport: provider.transport,
-            autoSelectPriority: undefined,
-          });
-        }
-        if (selectedProvider && !providers.has(selectedProvider)) {
-          providers.set(selectedProvider, {
-            id: selectedProvider,
-            defaultModel: resolvedMemory?.model || undefined,
-            transport: providerHasGenericConfig({ cfg, providerId: selectedProvider, agentId })
-              ? "remote"
-              : undefined,
-            autoSelectPriority: undefined,
-          });
-        }
-        const result = Array.from(providers.values()).map((provider) => ({
-          available: true,
-          configured:
-            provider.id === selectedProvider ||
-            providerHasGenericConfig({
-              cfg,
-              providerId: provider.id,
-              agentId,
-            }),
-          selected: provider.id === selectedProvider,
-          id: provider.id,
-          defaultModel: provider.defaultModel,
-          transport: provider.transport,
-          autoSelectPriority: provider.autoSelectPriority,
-        }));
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
+            autoSelectPriority: provider.autoSelectPriority,
+          }));
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
+        });
       });
     });
 }

@@ -81,6 +81,7 @@ const cases = [
   },
   {
     name: "prepareSimpleCompletionModelForAgent",
+    ownerName: "acquireSimpleCompletionModelForAgent",
     owner: "../agents/simple-completion-runtime.js",
     args: [preparationParams],
     load: async () => {
@@ -119,7 +120,7 @@ describe("lazy SDK execution facades", () => {
       for (const entry of cases) {
         vi.doMock(entry.owner, () => {
           loaded.push(entry.owner);
-          return { [entry.name]: execute };
+          return { [entry.ownerName ?? entry.name]: execute };
         });
       }
 

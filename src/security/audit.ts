@@ -488,90 +488,109 @@ async function collectPluginSecurityAuditFindings(
   if (!context.loadPluginSecurityCollectors) {
     return [];
   }
-  const { getActivePluginRegistry } = await loadPluginRuntimeModule();
-  let collectors = getActivePluginRegistry()?.securityAuditCollectors ?? [];
-  if (collectors.length === 0) {
-    const { applyPluginAutoEnable } = await loadPluginAutoEnableModule();
-    const autoEnabled = applyPluginAutoEnable({
-      config: context.sourceConfig,
-      env: context.env,
-    });
-    const requestedPluginIds = new Set<string>();
-    for (const pluginId of Object.keys(autoEnabled.autoEnabledReasons)) {
-      const normalized = pluginId.trim();
-      if (normalized) {
-        requestedPluginIds.add(normalized);
-      }
-    }
-    for (const pluginId of autoEnabled.config.plugins?.allow ?? []) {
-      if (typeof pluginId !== "string") {
-        continue;
-      }
-      const normalized = pluginId.trim();
-      if (normalized) {
-        requestedPluginIds.add(normalized);
-      }
-    }
-    for (const [pluginId, entry] of Object.entries(autoEnabled.config.plugins?.entries ?? {})) {
-      if (entry?.enabled === false) {
-        continue;
-      }
-      const normalized = pluginId.trim();
-      if (normalized) {
-        requestedPluginIds.add(normalized);
-      }
-    }
-    if (context.includeChannelSecurity && context.plugins !== undefined) {
-      const { resolveConfiguredChannelPluginIds } = await loadChannelPluginIdsModule();
-      const auditedChannelPluginIds = new Set(context.plugins.map((plugin) => plugin.id));
-      for (const pluginId of resolveConfiguredChannelPluginIds({
-        config: autoEnabled.config,
-        activationSourceConfig: context.sourceConfig,
-        workspaceDir: context.workspaceDir,
+  const [
+    { getActivePluginRegistry },
+    { withPluginRegistryResourceOperationAsync, requirePluginRegistryResourceScope },
+    { withPluginRuntimeRegistryScope },
+  ] = await Promise.all([
+    loadPluginRuntimeModule(),
+    import("../plugins/registry-resources.js"),
+    import("../plugins/runtime/gateway-request-scope.js"),
+  ]);
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    const resources = requirePluginRegistryResourceScope();
+    let registry = getActivePluginRegistry();
+    let collectors = registry?.securityAuditCollectors ?? [];
+    if (collectors.length === 0) {
+      const { applyPluginAutoEnable } = await loadPluginAutoEnableModule();
+      const autoEnabled = applyPluginAutoEnable({
+        config: context.sourceConfig,
         env: context.env,
-      })) {
-        if (auditedChannelPluginIds.has(pluginId)) {
-          requestedPluginIds.delete(pluginId);
+      });
+      const requestedPluginIds = new Set<string>();
+      for (const pluginId of Object.keys(autoEnabled.autoEnabledReasons)) {
+        const normalized = pluginId.trim();
+        if (normalized) {
+          requestedPluginIds.add(normalized);
         }
       }
-    }
-    if (requestedPluginIds.size === 0) {
-      return [];
-    }
-    const snapshot = (
-      await loadPluginMetadataRegistryLoaderModule()
-    ).loadPluginMetadataRegistrySnapshot({
-      config: autoEnabled.config,
-      activationSourceConfig: context.sourceConfig,
-      env: context.env,
-      workspaceDir: context.workspaceDir,
-      onlyPluginIds: [...requestedPluginIds],
-    });
-    collectors = snapshot.securityAuditCollectors ?? [];
-  }
-  const collectorResults = await Promise.all(
-    collectors.map(async (entry) => {
-      try {
-        return await entry.collector({
-          config: context.cfg,
-          sourceConfig: context.sourceConfig,
-          env: context.env,
-          stateDir: context.stateDir,
-          configPath: context.configPath,
-        });
-      } catch (err) {
-        return [
-          {
-            checkId: `plugins.${entry.pluginId}.security_audit_failed`,
-            severity: "warn" as const,
-            title: "Plugin security audit collector failed",
-            detail: `${entry.pluginId}: ${String(err)}`,
-          },
-        ];
+      for (const pluginId of autoEnabled.config.plugins?.allow ?? []) {
+        if (typeof pluginId !== "string") {
+          continue;
+        }
+        const normalized = pluginId.trim();
+        if (normalized) {
+          requestedPluginIds.add(normalized);
+        }
       }
-    }),
-  );
-  return collectorResults.flat();
+      for (const [pluginId, entry] of Object.entries(autoEnabled.config.plugins?.entries ?? {})) {
+        if (entry?.enabled === false) {
+          continue;
+        }
+        const normalized = pluginId.trim();
+        if (normalized) {
+          requestedPluginIds.add(normalized);
+        }
+      }
+      if (context.includeChannelSecurity && context.plugins !== undefined) {
+        const { resolveConfiguredChannelPluginIds } = await loadChannelPluginIdsModule();
+        const auditedChannelPluginIds = new Set(context.plugins.map((plugin) => plugin.id));
+        for (const pluginId of resolveConfiguredChannelPluginIds({
+          config: autoEnabled.config,
+          activationSourceConfig: context.sourceConfig,
+          workspaceDir: context.workspaceDir,
+          env: context.env,
+        })) {
+          if (auditedChannelPluginIds.has(pluginId)) {
+            requestedPluginIds.delete(pluginId);
+          }
+        }
+      }
+      if (requestedPluginIds.size === 0) {
+        return [];
+      }
+      const snapshot = (
+        await loadPluginMetadataRegistryLoaderModule()
+      ).loadPluginMetadataRegistrySnapshot({
+        config: autoEnabled.config,
+        activationSourceConfig: context.sourceConfig,
+        env: context.env,
+        workspaceDir: context.workspaceDir,
+        onlyPluginIds: [...requestedPluginIds],
+      });
+      registry = resources.adopt(snapshot);
+      collectors = registry.securityAuditCollectors ?? [];
+    } else if (registry) {
+      resources.retain(registry);
+    }
+    return await withPluginRuntimeRegistryScope(registry ?? undefined, async () => {
+      const pending = collectors.map(async (entry) => {
+        try {
+          return await entry.collector({
+            config: context.cfg,
+            sourceConfig: context.sourceConfig,
+            env: context.env,
+            stateDir: context.stateDir,
+            configPath: context.configPath,
+          });
+        } catch (err) {
+          return [
+            {
+              checkId: `plugins.${entry.pluginId}.security_audit_failed`,
+              severity: "warn" as const,
+              title: "Plugin security audit collector failed",
+              detail: `${entry.pluginId}: ${String(err)}`,
+            },
+          ];
+        }
+      });
+      // Keep each started collector alive if the aggregate rejects before its siblings settle.
+      for (const collector of pending) {
+        resources.hold(collector);
+      }
+      return (await Promise.all(pending)).flat();
+    });
+  });
 }
 
 function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {

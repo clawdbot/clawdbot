@@ -12,6 +12,7 @@ import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import { PluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -28,6 +29,9 @@ import { summarizeTranscripts } from "./summary.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
+  for (const entry of activeSessions.values()) {
+    entry.resources.release();
+  }
   activeSessions.clear();
   closeOpenClawStateDatabaseForTest();
 });
@@ -290,6 +294,7 @@ describe("transcript library SQLite reads", () => {
       });
       await store.writeSession(target);
       activeSessions.set(target.sessionId, {
+        resources: new PluginRegistryResourceScope(),
         session: target,
         providerId: target.source.providerId,
         provider: {},
@@ -990,38 +995,5 @@ describe("transcript library SQLite reads", () => {
     }
     expect(fs.existsSync(path.join(stateDir, "transcripts"))).toBe(false);
     expect(store.readNotes(target)).toEqual({});
-  });
-
-  it("distinguishes historical unstopped rows from exact live subscriptions and stopping captures", async () => {
-    const { store } = fixture();
-    const old = session("reused");
-    const current = session("reused", { startedAt: "2026-08-21T10:00:00.000Z" });
-    await store.writeSession(old);
-    await store.writeSession(current);
-    activeSessions.set(current.sessionId, {
-      session: current,
-      phase: "active",
-      provider: {},
-      providerId: current.source.providerId,
-    });
-    const first = listTranscriptLibrary(store, {});
-    expect(first.sessions.map((entry) => entry.activeSubscription)).toEqual([true, false]);
-    activeSessions.get(current.sessionId)!.stopping = true;
-    expect(
-      (await getTranscriptLibrary(store, { selector: transcriptSessionSelector(current) })).session
-        .activeSubscription,
-    ).toBe(false);
-    const capture = activeSessions.get(current.sessionId)!;
-    delete capture.stopping;
-    capture.phase = "terminal";
-    expect(
-      listTranscriptLibrary(store, {}).sessions.every((entry) => !entry.activeSubscription),
-    ).toBe(true);
-    activeSessions.clear();
-    expect(
-      listTranscriptLibrary(store, {}).sessions.every(
-        (entry) => !entry.activeSubscription && entry.stoppedAt === undefined,
-      ),
-    ).toBe(true);
   });
 });

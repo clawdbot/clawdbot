@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type {
   WorkerTranscriptCommitRequestFrame,
   WorkerTranscriptMessage,
@@ -10,7 +11,6 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
-import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
 
 const SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";

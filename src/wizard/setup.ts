@@ -11,6 +11,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withPluginRegistryResourceOperationAsync } from "../plugins/registry-resources.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
@@ -60,10 +61,13 @@ export async function runSetupWizard(
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
-  await runWizardWithPromptNavigation(
-    prompter,
-    async (navigationPrompter) => await runSetupWizardOnce(opts, runtimeInput, navigationPrompter),
-  );
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    await runWizardWithPromptNavigation(
+      prompter,
+      async (navigationPrompter) =>
+        await runSetupWizardOnce(opts, runtimeInput, navigationPrompter),
+    );
+  });
 }
 
 async function runSetupWizardOnce(

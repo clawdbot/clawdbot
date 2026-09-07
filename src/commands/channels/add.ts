@@ -20,6 +20,7 @@ import { isTerminalInteractive } from "../../cli/terminal-interactivity.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
+import { withPluginRegistryResourceOperationAsync } from "../../plugins/registry-resources.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
@@ -116,15 +117,17 @@ export async function channelsAddCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
-  try {
-    return await channelsAddCommandImpl(opts, runtime, params);
-  } catch (err) {
-    if (err instanceof WizardCancelledError) {
-      runtime.exit(1);
-      return;
+  return await withPluginRegistryResourceOperationAsync(async () => {
+    try {
+      return await channelsAddCommandImpl(opts, runtime, params);
+    } catch (err) {
+      if (err instanceof WizardCancelledError) {
+        runtime.exit(1);
+        return;
+      }
+      throw err;
     }
-    throw err;
-  }
+  });
 }
 
 async function channelsAddCommandImpl(

@@ -2,7 +2,7 @@
 // helpers used by speech-capable plugins.
 import type { TtsProvider } from "../config/types.js";
 import { parseTtsDirectives } from "./directives.js";
-import { summarizeText } from "./tts-core.js";
+import { summarizeTextCore } from "./tts-core.js";
 import { getResolvedSpeechProviderConfig, resolveTtsProvider } from "./tts-provider-resolution.js";
 import { resolveModelOverridePolicy, type ResolvedTtsConfig } from "./tts-settings.js";
 import { formatTtsProviderError, sanitizeTtsErrorForLog } from "./tts-synthesis-support.js";
@@ -65,7 +65,7 @@ export const testApi = {
   supportsTranscodedVoiceNoteTts,
   resolveTtsSynthesisTarget,
   shouldDeliverTtsAsVoice,
-  summarizeText,
+  summarizeText: summarizeTextCore,
   getResolvedSpeechProviderConfig,
   formatTtsProviderError,
   sanitizeTtsErrorForLog,

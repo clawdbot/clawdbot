@@ -114,7 +114,7 @@ describe("doctor context-engine host compatibility", () => {
           lifecycle: "readOnlyDiscovery",
         });
       }
-      vi.mocked(loadPluginRegistryHandle).mockReturnValue(registry);
+      vi.mocked(loadPluginRegistryHandle).mockReturnValue({ registry, release() {} });
       const cfg = configWithEngine(id);
       const params = { cfg, doctorFixCommand: "openclaw doctor --fix" };
       const warnings = await collectContextEngineHostCompatibilityWarnings(params);

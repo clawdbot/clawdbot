@@ -25,6 +25,14 @@ import {
   loadInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "./installed-plugin-index-records.js";
+import {
+  clearPluginRegistryLoadCache,
+  loadAndActivateRootPluginRegistry,
+  loadOpenClawPluginCliRegistryForTest as loadOpenClawPluginCliRegistry,
+  loadOpenClawPluginsForTest as loadOpenClawPlugins,
+  loadPluginRegistryHandleForTest as loadPluginRegistryHandle,
+  resolveRuntimePluginRegistryForTest as resolveRuntimePluginRegistry,
+} from "./loader-handles.test-support.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import * as loaderModule from "./loader-module-runtime.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
@@ -32,14 +40,6 @@ import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
 } from "./loader-runtime-load.js";
-import {
-  clearPluginRegistryLoadCache,
-  loadAndActivateRootPluginRegistry,
-  loadOpenClawPluginCliRegistry,
-  loadOpenClawPlugins,
-  loadPluginRegistryHandle,
-  resolveRuntimePluginRegistry,
-} from "./loader.js";
 import {
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,

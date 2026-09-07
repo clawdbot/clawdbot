@@ -21,9 +21,10 @@ import {
 import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { getEmbeddingProvider } from "./embedding-provider-runtime.js";
+import { getEmbeddingProviderCore } from "./embedding-provider-runtime.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-provider-types.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
+import { withPluginRegistryResourceOperationAsync } from "./registry-resources.js";
 
 describe("OpenAI-compatible embedding destination credential ownership", () => {
   const vector = [0.25, 0.5, 0.75];
@@ -348,20 +349,22 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
           provider,
           model: "fixture-model",
         };
-        const adapter = getEmbeddingProvider(provider, options.config);
-        expect(adapter).toBe(openAICompatibleEmbeddingProviderAdapter);
-        const embed = async () => {
-          const result = await adapter!.create(options);
-          return await result.provider?.embed("hello");
-        };
-        if (provider === "openai" && credentialType === "token") {
-          await expect.soft(embed()).rejects.toThrow(/requires an OpenAI API key profile/);
-          expect(requests).toEqual([]);
-        } else {
-          await expect(embed()).resolves.toEqual(vector);
-          expect(requests).toHaveLength(1);
-          expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-bound-profile-key");
-        }
+        await withPluginRegistryResourceOperationAsync(async () => {
+          const adapter = getEmbeddingProviderCore(provider, options.config);
+          expect(adapter).toBe(openAICompatibleEmbeddingProviderAdapter);
+          const embed = async () => {
+            const result = await adapter!.create(options);
+            return await result.provider?.embed("hello");
+          };
+          if (provider === "openai" && credentialType === "token") {
+            await expect.soft(embed()).rejects.toThrow(/requires an OpenAI API key profile/);
+            expect(requests).toEqual([]);
+          } else {
+            await expect(embed()).resolves.toEqual(vector);
+            expect(requests).toHaveLength(1);
+            expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-bound-profile-key");
+          }
+        });
       } finally {
         closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
         closeOpenClawAgentDatabases(agentDir);

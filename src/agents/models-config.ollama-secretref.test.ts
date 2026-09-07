@@ -21,7 +21,9 @@ import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js"
 
 const discovery = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
 vi.mock("../plugins/provider-discovery.runtime.js", () => ({
-  resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
+  acquirePluginDiscoveryProvidersRuntime: (): ReturnType<
+    typeof import("../plugins/provider-discovery.runtime.js").acquirePluginDiscoveryProvidersRuntime
+  > => ({ providers: discovery.providers, release() {} }),
 }));
 
 describe("registered Ollama catalog SecretRef ownership", () => {

@@ -14,6 +14,7 @@ import {
 } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
+import { getPluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
@@ -30,6 +31,7 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
 }
 
 configureAiTransportHost({
+  observePendingProviderWork: (pending) => getPluginRegistryResourceScope()?.hold(pending),
   buildModelFetch: buildGuardedModelFetch,
   resolveSecretSentinel: (value) => {
     const swapped = swapSecretSentinelsInText(value);

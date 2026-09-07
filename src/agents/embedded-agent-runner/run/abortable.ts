@@ -2,6 +2,7 @@
  * AbortSignal-aware promise racing helper for embedded-agent attempts.
  */
 import { toErrorObject } from "../../../infra/errors.js";
+import { getPluginRegistryResourceScope } from "../../../plugins/registry-resources.js";
 
 function getAbortReason(signal: AbortSignal): unknown {
   return "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
@@ -76,12 +77,12 @@ export function joinWithRunLivenessDeadline(input: {
       return;
     }
     input.runAbortSignal?.addEventListener("abort", onAbort, { once: true });
-    Promise.resolve()
-      .then(() => input.joinWork())
-      .then(
-        () => finish("settled"),
-        () => finish("settled"),
-      );
+    const work = Promise.resolve().then(() => input.joinWork());
+    getPluginRegistryResourceScope()?.hold(work);
+    work.then(
+      () => finish("settled"),
+      () => finish("settled"),
+    );
   });
 }
 
@@ -91,6 +92,8 @@ export function joinWithRunLivenessDeadline(input: {
  * normalized so callers can safely log/inspect them as Error objects.
  */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
+  // The promise already exists; an abort result does not end its captured resource lifetime.
+  getPluginRegistryResourceScope()?.hold(promise);
   if (signal.aborted) {
     return Promise.reject(makeAbortError(signal));
   }

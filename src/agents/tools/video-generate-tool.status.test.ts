@@ -26,7 +26,7 @@ vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 
 function resetVideoStatusMocks() {
   vi.restoreAllMocks();
-  vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
+  vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProvidersCore").mockReturnValue([]);
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
   taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();

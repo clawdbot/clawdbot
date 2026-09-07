@@ -123,7 +123,12 @@ vi.mock("./config.js", () => ({
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  notifyRegisteredNodeHostCommandDisconnect: vi.fn<
+    typeof import("./plugin-node-host.js").notifyRegisteredNodeHostCommandDisconnect
+  >(async () => {}),
+  ensureNodeHostPluginRegistry: vi.fn<
+    typeof import("./plugin-node-host.js").ensureNodeHostPluginRegistry
+  >(async () => ({ release: vi.fn() })),
   listRegisteredNodeHostCapsAndCommands: vi.fn((context: { env: NodeJS.ProcessEnv }) => {
     mocks.runtimeSteps.push(`commands:${context.env.PATH ?? ""}`);
     return {
@@ -189,7 +194,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
         workerHostingEnabled: mocks.fakeRuntimeWorkerHosting,
         workerHostingDisabledReason: mocks.fakeRuntimeWorkerHostingDisabledReason,
         initialInventory: { skills: [], pluginTools: [] },
-        start: (params) => {
+        start: async (params) => {
           mocks.runtimeClient = params.client;
           mocks.runnerCapacityChanged = params.onRunnerCapacityChanged;
           return mocks.activeRuntime;

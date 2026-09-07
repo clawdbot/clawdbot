@@ -227,6 +227,7 @@ export function createMeetingChromeTransport<
     mode: Mode;
     logger: RuntimeLogger;
     audio: MeetingAudioRuntime;
+    onCleanupReady?: (stop: () => Promise<void>) => void | Promise<void>;
   }): Promise<LocalAudioBridge | undefined> {
     if (!options.isTalkBackMode(params.mode)) {
       return undefined;
@@ -259,6 +260,7 @@ export function createMeetingChromeTransport<
               transport,
               logger: params.logger,
               consultAgent: bindings.consultAgent,
+              onCleanupReady: params.onCleanupReady,
             })
           : await options.runtime.startRealtimeEngine({
               config: {
@@ -272,6 +274,7 @@ export function createMeetingChromeTransport<
               requesterSessionKey: params.requesterSessionKey,
               transport,
               logger: params.logger,
+              onCleanupReady: params.onCleanupReady,
             });
       return { type: "command-pair", ...engine };
     } catch (error) {
@@ -290,6 +293,7 @@ export function createMeetingChromeTransport<
     trackedTargetId?: string;
     url: string;
     logger: RuntimeLogger;
+    onCleanupReady?: (stop: () => Promise<void>) => void | Promise<void>;
   }): Promise<{
     launched: boolean;
     audioBackend?: MeetingAudioBackend;
@@ -379,6 +383,7 @@ export function createMeetingChromeTransport<
     trackedTargetId?: string;
     url: string;
     logger: RuntimeLogger;
+    onCleanupReady?: (stop: () => Promise<void>) => void | Promise<void>;
   }): Promise<{
     nodeId: string;
     launched: boolean;
@@ -524,6 +529,7 @@ export function createMeetingChromeTransport<
                 transport,
                 logger: params.logger,
                 consultAgent: bindings.consultAgent,
+                onCleanupReady: params.onCleanupReady,
               })
             : await options.runtime.startRealtimeEngine({
                 config: {
@@ -540,6 +546,7 @@ export function createMeetingChromeTransport<
                 talkContext: { nodeId, bridgeId: result.bridgeId },
                 transport,
                 logger: params.logger,
+                onCleanupReady: params.onCleanupReady,
               });
       } catch (error) {
         await transport.dispose().catch(() => {});

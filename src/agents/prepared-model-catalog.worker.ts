@@ -15,6 +15,7 @@ import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
+import { withPluginRegistryResourceScope } from "../plugins/registry-resources.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
@@ -133,27 +134,37 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
     undefined,
     metadata,
   );
-  const agentFacts = prepared.agentFacts[0];
-  if (!agentFacts) {
-    throw new Error("prepared model catalog worker produced no agent facts");
+  try {
+    const agentFacts = prepared.agentFacts[0];
+    if (!agentFacts) {
+      throw new Error("prepared model catalog worker produced no agent facts");
+    }
+    const reconstructedFingerprint = fingerprintPreparedModelCatalogGeneration({
+      input: value.input,
+      sourceConfigForSecrets: value.sourceConfigForSecrets,
+      configResolutionFacts: value.configResolutionFacts,
+      sourceConfigResolutionFacts: value.sourceConfigResolutionFacts,
+      authStore: value.authStore,
+      providerIds: value.providerIds,
+      preferBuiltPluginArtifacts: prepared.pluginGeneration.preferBuiltPluginArtifacts,
+      pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+    });
+    return {
+      agentFacts,
+      pluginGeneration: prepared.pluginGeneration,
+      reconstructedFingerprint,
+      resources: prepared.resources,
+    };
+  } catch (error) {
+    prepared.resources.release();
+    throw error;
   }
-  const reconstructedFingerprint = fingerprintPreparedModelCatalogGeneration({
-    input: value.input,
-    sourceConfigForSecrets: value.sourceConfigForSecrets,
-    configResolutionFacts: value.configResolutionFacts,
-    sourceConfigResolutionFacts: value.sourceConfigResolutionFacts,
-    authStore: value.authStore,
-    providerIds: value.providerIds,
-    preferBuiltPluginArtifacts: prepared.pluginGeneration.preferBuiltPluginArtifacts,
-    pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
-  });
-  return { agentFacts, pluginGeneration: prepared.pluginGeneration, reconstructedFingerprint };
 }
 
 export async function runPreparedModelCatalogWorkerRequest(
   value: PreparedModelCatalogWorkerInput,
   request: PreparedModelWorkerRequest,
-  prepareGeneration = () => prepareWorkerGeneration(value),
+  prepareGeneration?: () => ReturnType<typeof prepareWorkerGeneration>,
 ): Promise<PreparedModelWorkerResult> {
   try {
     restorePreparedSyntheticAuthFacts(value.input.config, request.syntheticAuth, {
@@ -164,159 +175,180 @@ export async function runPreparedModelCatalogWorkerRequest(
       workspaceDir: value.input.workspaceDir,
     });
     const generationFingerprint = fingerprintPreparedModelWorkerRequest(value, request);
-    const prepared = await prepareGeneration();
-    // Every ok reply is cached under the owner's generation. Facts rebuilt under another
-    // fingerprint leave only as this typed outcome, so the owner retires the worker instead.
-    if (prepared.reconstructedFingerprint !== value.generationFingerprint) {
-      return {
-        status: "generation-mismatch",
-        generationFingerprint: value.generationFingerprint,
-        reconstructedFingerprint: prepared.reconstructedFingerprint,
-      };
-    }
-    const pluginGenerationScope = {
-      metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
-      pluginRegistry: prepared.pluginGeneration.pluginRegistry,
-    };
-    const resolveSyntheticCredentials = (providerIds: readonly string[]) =>
-      withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-        resolveAmbientAgentCredentialsForDiscovery({
+    const prepared = await (prepareGeneration?.() ?? prepareWorkerGeneration(value));
+    // Cached generations belong to the worker host; a direct request owns its build.
+    const resources = prepareGeneration ? prepared.resources.fork() : prepared.resources;
+    try {
+      return await withPluginRegistryResourceScope(resources, async () => {
+        // Every ok reply is cached under the owner's generation. Facts rebuilt under another
+        // fingerprint leave only as this typed outcome, so the owner retires the worker instead.
+        if (prepared.reconstructedFingerprint !== value.generationFingerprint) {
+          return {
+            status: "generation-mismatch",
+            generationFingerprint: value.generationFingerprint,
+            reconstructedFingerprint: prepared.reconstructedFingerprint,
+          };
+        }
+        const pluginGenerationScope = {
+          metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+          pluginRegistry: prepared.pluginGeneration.pluginRegistry,
+        };
+        const resolveSyntheticCredentials = (providerIds: readonly string[]) =>
+          withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+            resolveAmbientAgentCredentialsForDiscovery({
+              config: value.input.config,
+              env: value.input.env,
+              authoritativeSyntheticAuthProviderRefs:
+                prepared.pluginGeneration.pluginMetadataSnapshot.owners.cliBackends.keys(),
+              syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
+                resolveRuntimeSyntheticAuthProviderRefs(),
+                providerIds,
+              ),
+              ...(value.input.workspaceDir ? { workspaceDir: value.input.workspaceDir } : {}),
+            }),
+          );
+        if (request.kind === "auth-refresh") {
+          const authStore = refreshAuthStore({
+            agentDir: value.input.agentDir,
+            inheritedAuthDir: value.input.inheritedAuthDir,
+            authStore: value.authStore,
+            config: value.input.config,
+            env: value.input.env ?? process.env,
+            ...(request.profileIds ? { profileIds: request.profileIds } : {}),
+            providerIds: request.providerIds,
+            pluginGeneration: prepared.pluginGeneration,
+          });
+          return {
+            status: "ok",
+            kind: "auth-refresh",
+            generationFingerprint,
+            authStore,
+            authModes: resolveUsableAgentCredentialModes({
+              ...resolveSyntheticCredentials(request.providerIds),
+              ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
+            }),
+          };
+        }
+        const { prepareAgentCatalogSource } =
+          await import("./prepared-model-runtime.scoped-catalog.js");
+        const { prepareFullCatalogFacts } =
+          await import("./prepared-model-runtime.full-catalog.js");
+        // Full discovery is one point-in-time operation: refresh first, then let every provider hook
+        // and the returned availability projection consume the same exact store.
+        const authStore = refreshAuthStore({
+          agentDir: value.input.agentDir,
+          inheritedAuthDir: value.input.inheritedAuthDir,
+          authStore: value.authStore,
+          config: value.input.config,
+          env: value.input.env ?? process.env,
+          providerIds: listExternalCliSyncProviderIds(),
+          pluginGeneration: prepared.pluginGeneration,
+        });
+        replaceRuntimeAuthProfileStoreSnapshots([
+          { agentDir: value.input.agentDir, store: authStore },
+        ]);
+        const ambientCredentials = resolveSyntheticCredentials(value.providerIds);
+        const startupProviderIds = new Set(value.providerIds.map(normalizeProviderId));
+        const credentials = {
+          ...ambientCredentials,
+          ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
+        };
+        const exactAgentFacts = {
+          ...prepared.agentFacts,
+          authStore,
+          templateAuthStorage: AuthStorage.inMemory(credentials),
+          credentials,
+          providerIds: [...new Set([...value.providerIds, ...Object.keys(credentials)])].toSorted(
+            (left, right) => left.localeCompare(right),
+          ),
+        };
+        const { pluginMetadataSnapshot, pluginRegistry } = prepared.pluginGeneration;
+        const discoveryScope = resolveImplicitProviderDiscoveryScope({
           config: value.input.config,
           env: value.input.env,
-          authoritativeSyntheticAuthProviderRefs:
-            prepared.pluginGeneration.pluginMetadataSnapshot.owners.cliBackends.keys(),
-          syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
-            resolveRuntimeSyntheticAuthProviderRefs(),
-            providerIds,
+          workspaceDir: value.input.workspaceDir,
+          pluginMetadataSnapshot,
+          providerDiscoveryProviderIds: exactAgentFacts.providerIds,
+        });
+        const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
+        const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+          planRuntimePluginDiscovery({
+            config: value.input.config,
+            env: value.input.env,
+            workspaceDir: value.input.workspaceDir,
+            pluginMetadataSnapshot,
+            onlyPluginIds: discoveryPluginIds,
+          }),
+        );
+        let catalogGeneration = prepared.pluginGeneration;
+        if (discoveryPlan.kind === "runtime") {
+          // Refresh can reveal credential-only providers absent at startup. Materialize their
+          // catalog owners from the captured metadata before binding the authoritative registry.
+          const catalogRegistry = resources.adopt(
+            loadAgentRuntimePluginRegistryHandle({
+              ...value.input,
+              metadataSnapshot: pluginMetadataSnapshot,
+              preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
+              reusableRegistry: pluginRegistry,
+              basePluginIds: [
+                ...(pluginRegistry ? listRuntimePluginIdsFromRegistry(pluginRegistry) : []),
+                ...(discoveryPlan.pluginIds ?? discoveryPluginIds),
+              ],
+            }),
+          );
+          prepareOwnedPluginLoadContext(
+            value.input,
+            value.input.env ?? process.env,
+            catalogRegistry,
+            pluginMetadataSnapshot,
+            value.preferBuiltPluginArtifacts,
+          );
+          pluginGenerationScope.pluginRegistry = catalogRegistry;
+          catalogGeneration = Object.freeze({
+            ...catalogGeneration,
+            pluginRegistry: catalogRegistry,
+            providerStaticModels: undefined,
+          });
+        }
+        const source = await prepareAgentCatalogSource(
+          exactAgentFacts,
+          catalogGeneration,
+          "live",
+          false,
+          { authStore },
+        );
+        const facts = await prepareFullCatalogFacts(
+          exactAgentFacts,
+          catalogGeneration,
+          "live",
+          source,
+        );
+        // Full discovery can publish routes absent from startup config. Pair those exact rows with
+        // provider-owned synthetic auth before the catalog and auth modes cross the worker boundary.
+        const catalogCredentials = {
+          ...resolveSyntheticCredentials(
+            [...facts.modelCatalog.entries, ...facts.modelCatalog.routeVariants]
+              .map((entry) => entry.provider)
+              .filter((provider) => !startupProviderIds.has(normalizeProviderId(provider))),
           ),
-          ...(value.input.workspaceDir ? { workspaceDir: value.input.workspaceDir } : {}),
-        }),
-      );
-    if (request.kind === "auth-refresh") {
-      const authStore = refreshAuthStore({
-        agentDir: value.input.agentDir,
-        inheritedAuthDir: value.input.inheritedAuthDir,
-        authStore: value.authStore,
-        config: value.input.config,
-        env: value.input.env ?? process.env,
-        ...(request.profileIds ? { profileIds: request.profileIds } : {}),
-        providerIds: request.providerIds,
-        pluginGeneration: prepared.pluginGeneration,
+          ...credentials,
+        };
+        return {
+          status: "ok",
+          kind: "catalog",
+          generationFingerprint,
+          snapshot: facts.modelCatalog,
+          configuredRuntimeModels: facts.configuredRuntimeModels,
+          credentials: catalogCredentials,
+          authStore,
+          authModes: resolveUsableAgentCredentialModes(catalogCredentials),
+        };
       });
-      return {
-        status: "ok",
-        kind: "auth-refresh",
-        generationFingerprint,
-        authStore,
-        authModes: resolveUsableAgentCredentialModes({
-          ...resolveSyntheticCredentials(request.providerIds),
-          ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
-        }),
-      };
+    } finally {
+      // Timed-out hooks retain their actual work; joining the worker's global drain here
+      // would defeat the provider deadline before healthy catalog results can be published.
+      resources.release();
     }
-    const { prepareAgentCatalogSource } = await import("./prepared-model-runtime.facts.js");
-    const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
-    // Full discovery is one point-in-time operation: refresh first, then let every provider hook
-    // and the returned availability projection consume the same exact store.
-    const authStore = refreshAuthStore({
-      agentDir: value.input.agentDir,
-      inheritedAuthDir: value.input.inheritedAuthDir,
-      authStore: value.authStore,
-      config: value.input.config,
-      env: value.input.env ?? process.env,
-      providerIds: listExternalCliSyncProviderIds(),
-      pluginGeneration: prepared.pluginGeneration,
-    });
-    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
-    const ambientCredentials = resolveSyntheticCredentials(value.providerIds);
-    const startupProviderIds = new Set(value.providerIds.map(normalizeProviderId));
-    const credentials = {
-      ...ambientCredentials,
-      ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
-    };
-    const exactAgentFacts = {
-      ...prepared.agentFacts,
-      authStore,
-      templateAuthStorage: AuthStorage.inMemory(credentials),
-      credentials,
-      providerIds: [...new Set([...value.providerIds, ...Object.keys(credentials)])].toSorted(
-        (left, right) => left.localeCompare(right),
-      ),
-    };
-    const { pluginMetadataSnapshot, pluginRegistry } = prepared.pluginGeneration;
-    const discoveryScope = resolveImplicitProviderDiscoveryScope({
-      config: value.input.config,
-      env: value.input.env,
-      workspaceDir: value.input.workspaceDir,
-      pluginMetadataSnapshot,
-      providerDiscoveryProviderIds: exactAgentFacts.providerIds,
-    });
-    const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
-    const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-      planRuntimePluginDiscovery({
-        config: value.input.config,
-        env: value.input.env,
-        workspaceDir: value.input.workspaceDir,
-        pluginMetadataSnapshot,
-        onlyPluginIds: discoveryPluginIds,
-      }),
-    );
-    let catalogGeneration = prepared.pluginGeneration;
-    if (discoveryPlan.kind === "runtime") {
-      // Refresh can reveal credential-only providers absent at startup. Materialize their
-      // catalog owners from the captured metadata before binding the authoritative registry.
-      const catalogRegistry = loadAgentRuntimePluginRegistryHandle({
-        ...value.input,
-        metadataSnapshot: pluginMetadataSnapshot,
-        preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
-        reusableRegistry: pluginRegistry,
-        basePluginIds: [
-          ...(pluginRegistry ? listRuntimePluginIdsFromRegistry(pluginRegistry) : []),
-          ...(discoveryPlan.pluginIds ?? discoveryPluginIds),
-        ],
-      });
-      prepareOwnedPluginLoadContext(
-        value.input,
-        value.input.env ?? process.env,
-        catalogRegistry,
-        pluginMetadataSnapshot,
-        value.preferBuiltPluginArtifacts,
-      );
-      pluginGenerationScope.pluginRegistry = catalogRegistry;
-      catalogGeneration = Object.freeze({
-        ...catalogGeneration,
-        pluginRegistry: catalogRegistry,
-        providerStaticModels: undefined,
-      });
-    }
-    const source = await prepareAgentCatalogSource(
-      exactAgentFacts,
-      catalogGeneration,
-      "live",
-      false,
-      { authStore },
-    );
-    const facts = await prepareFullCatalogFacts(exactAgentFacts, catalogGeneration, "live", source);
-    // Full discovery can publish routes absent from startup config. Pair those exact rows with
-    // provider-owned synthetic auth before the catalog and auth modes cross the worker boundary.
-    const catalogCredentials = {
-      ...resolveSyntheticCredentials(
-        [...facts.modelCatalog.entries, ...facts.modelCatalog.routeVariants]
-          .map((entry) => entry.provider)
-          .filter((provider) => !startupProviderIds.has(normalizeProviderId(provider))),
-      ),
-      ...credentials,
-    };
-    return {
-      status: "ok",
-      kind: "catalog",
-      generationFingerprint,
-      snapshot: facts.modelCatalog,
-      configuredRuntimeModels: facts.configuredRuntimeModels,
-      credentials: catalogCredentials,
-      authStore,
-      authModes: resolveUsableAgentCredentialModes(catalogCredentials),
-    };
   } catch (error) {
     return {
       status: "failed",
@@ -341,6 +373,7 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
 
 if (parentPort) {
   const value = workerData as PreparedModelCatalogWorkerInput;
+  // Confirmed worker termination closes native resources; forced exit cannot await plugin disposers.
   let preparedGeneration: ReturnType<typeof prepareWorkerGeneration> | undefined;
   serveWorkerTasks((request) => {
     if (!isWorkerRequest(request)) {

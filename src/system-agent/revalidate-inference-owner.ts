@@ -62,7 +62,7 @@ export function loadSetupInferencePluginGeneration(params: {
         ...(index ? { index } : {}),
       }),
     };
-    const pluginRegistry = withPluginRuntimeGenerationScope(generation, () =>
+    const registryHandle = withPluginRuntimeGenerationScope(generation, () =>
       loadAgentRuntimePluginRegistryHandle({
         config: params.config,
         workspaceDir: params.workspaceDir,
@@ -71,10 +71,14 @@ export function loadSetupInferencePluginGeneration(params: {
         selections: [params.selection],
       }),
     );
-    if (!pluginRegistry) {
+    if (!registryHandle) {
       throw new Error(`Could not load the ${params.selection.runtime} runtime plugin.`);
     }
-    return { ...generation, pluginRegistry };
+    return {
+      ...generation,
+      pluginRegistry: registryHandle.registry,
+      release: registryHandle.release,
+    };
   });
 }
 
@@ -127,7 +131,11 @@ export async function revalidateSetupInferenceOwner(params: {
       },
       resolvePluginMetadataSnapshot: params.deps.resolvePluginMetadataSnapshot,
     });
-    return await withPluginRuntimeGenerationScope(generation, createBinding);
+    try {
+      return await withPluginRuntimeGenerationScope(generation, createBinding);
+    } finally {
+      generation.release();
+    }
   }
   return await createBinding();
 }

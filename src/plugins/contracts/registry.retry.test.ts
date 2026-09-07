@@ -1,5 +1,9 @@
 // Registry retry tests cover plugin registry retry behavior after transient failures.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  PluginRegistryResourceScope,
+  drainPluginRegistryResourceDisposals,
+} from "../registry-resources.js";
 import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 
 type MockPluginRecord = {
@@ -26,17 +30,26 @@ function createMockRuntimeRegistry(params: {
   webFetchProviders?: Array<{ pluginId: string; provider: WebFetchProviderPlugin }>;
   webSearchProviders?: Array<{ pluginId: string; provider: WebSearchProviderPlugin }>;
   diagnostics?: Array<{ pluginId?: string; message: string }>;
-}): MockRuntimeRegistry {
+}): { registry: MockRuntimeRegistry; release(): void } {
   return {
-    plugins: [params.plugin],
-    diagnostics: params.diagnostics ?? [],
-    providers: params.providers ?? [],
-    webFetchProviders: params.webFetchProviders ?? [],
-    webSearchProviders: params.webSearchProviders ?? [],
+    registry: {
+      plugins: [params.plugin],
+      diagnostics: params.diagnostics ?? [],
+      providers: params.providers ?? [],
+      webFetchProviders: params.webFetchProviders ?? [],
+      webSearchProviders: params.webSearchProviders ?? [],
+    },
+    release() {},
   };
 }
 
-afterEach(() => {
+let resources: PluginRegistryResourceScope;
+beforeEach(() => {
+  resources = new PluginRegistryResourceScope();
+});
+afterEach(async () => {
+  resources.release();
+  await drainPluginRegistryResourceDisposals();
   vi.resetModules();
   vi.restoreAllMocks();
 });
@@ -88,10 +101,12 @@ describe("plugin contract registry scoped retries", () => {
       resolveBundledExplicitProviderContractsFromPublicArtifacts: () => null,
     }));
 
-    const { resolveProviderContractProvidersForPluginIds } = await import("./registry.js");
+    const { resolveProviderContractProvidersForPluginIdsCore } = await import("./registry.js");
 
     expect(
-      resolveProviderContractProvidersForPluginIds(["arcee"]).map((provider) => provider.id),
+      resources
+        .run(() => resolveProviderContractProvidersForPluginIdsCore(["arcee"]))
+        .map((provider) => provider.id),
     ).toEqual(["arcee"]);
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
   });
@@ -155,12 +170,13 @@ describe("plugin contract registry scoped retries", () => {
       resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: () => null,
     }));
 
-    const { resolveWebSearchProviderContractEntriesForPluginId } = await import("./registry.js");
+    const { resolveWebSearchProviderContractEntriesForPluginIdCore } =
+      await import("./registry.js");
 
     expect(
-      resolveWebSearchProviderContractEntriesForPluginId("searxng").map(
-        (entry) => entry.provider.id,
-      ),
+      resources
+        .run(() => resolveWebSearchProviderContractEntriesForPluginIdCore("searxng"))
+        .map((entry) => entry.provider.id),
     ).toEqual(["searxng"]);
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
   });
@@ -211,10 +227,12 @@ describe("plugin contract registry scoped retries", () => {
       resolveBundledExplicitProviderContractsFromPublicArtifacts,
     }));
 
-    const { resolveProviderContractProvidersForPluginIds } = await import("./registry.js");
+    const { resolveProviderContractProvidersForPluginIdsCore } = await import("./registry.js");
 
     expect(
-      resolveProviderContractProvidersForPluginIds(["openai"]).map((provider) => provider.id),
+      resources
+        .run(() => resolveProviderContractProvidersForPluginIdsCore(["openai"]))
+        .map((provider) => provider.id),
     ).toEqual(["openai"]);
     expect(resolveBundledExplicitProviderContractsFromPublicArtifacts).toHaveBeenCalledTimes(1);
     expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
@@ -255,12 +273,13 @@ describe("plugin contract registry scoped retries", () => {
       resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
     }));
 
-    const { resolveWebSearchProviderContractEntriesForPluginId } = await import("./registry.js");
+    const { resolveWebSearchProviderContractEntriesForPluginIdCore } =
+      await import("./registry.js");
 
     expect(
-      resolveWebSearchProviderContractEntriesForPluginId("google").map(
-        (entry) => entry.provider.id,
-      ),
+      resources
+        .run(() => resolveWebSearchProviderContractEntriesForPluginIdCore("google"))
+        .map((entry) => entry.provider.id),
     ).toEqual(["gemini"]);
     expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifacts).toHaveBeenCalledTimes(1);
     expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
@@ -324,12 +343,12 @@ describe("plugin contract registry scoped retries", () => {
       loadBundledCapabilityRuntimeRegistry,
     }));
 
-    const { resolveWebFetchProviderContractEntriesForPluginId } = await import("./registry.js");
+    const { resolveWebFetchProviderContractEntriesForPluginIdCore } = await import("./registry.js");
 
     expect(
-      resolveWebFetchProviderContractEntriesForPluginId("firecrawl").map(
-        (entry) => entry.provider.id,
-      ),
+      resources
+        .run(() => resolveWebFetchProviderContractEntriesForPluginIdCore("firecrawl"))
+        .map((entry) => entry.provider.id),
     ).toEqual(["firecrawl"]);
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
   });

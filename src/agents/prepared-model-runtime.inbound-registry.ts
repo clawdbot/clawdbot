@@ -5,6 +5,11 @@ import {
 } from "../plugins/active-runtime-registry.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  requirePluginRegistryResourceScope,
+  retainPluginRegistryResources,
+  type PluginRegistryHandle,
+} from "../plugins/registry-resources.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getActivePluginRegistry,
@@ -27,7 +32,7 @@ export type PreparedInboundRegistryLoader = (
   input: PreparedInboundRegistryInput,
   metadataSnapshot: PluginMetadataSnapshot,
   configuredHarnessRuntimes?: readonly string[],
-) => PluginRegistry;
+) => PluginRegistryHandle;
 
 function inboundRegistryIdentity(input: PreparedInboundRegistryInput): string {
   return JSON.stringify({
@@ -61,7 +66,7 @@ export function loadPreparedInboundPluginRegistry(
   input: PreparedInboundRegistryInput,
   metadataSnapshot = prepareOwnedPluginLoadContext(input, input.env ?? process.env, undefined),
   configuredHarnessRuntimes?: readonly string[],
-): PluginRegistry {
+): PluginRegistryHandle {
   const activeRegistry = getActivePluginRegistry();
   // Identity is the generation authority. Manifest equivalence alone could let a
   // stale active registry satisfy a newer bundled snapshot.
@@ -83,41 +88,73 @@ export function loadPreparedInboundPluginRegistry(
     )
       ? activeRegistry
       : undefined;
-  const registry =
-    reusableGatewayRegistry ??
-    loadAgentRuntimePluginRegistryHandle({
-      config: input.config,
-      env: input.env ?? process.env,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+  const handle = reusableGatewayRegistry
+    ? {
+        registry: reusableGatewayRegistry,
+        ...retainPluginRegistryResources(reusableGatewayRegistry),
+      }
+    : loadAgentRuntimePluginRegistryHandle({
+        config: input.config,
+        env: input.env ?? process.env,
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+        metadataSnapshot,
+        preferBuiltPluginArtifacts: true,
+        configuredHarnessRuntimes,
+      });
+  try {
+    prepareOwnedPluginLoadContext(
+      input,
+      input.env ?? process.env,
+      handle.registry,
       metadataSnapshot,
-      preferBuiltPluginArtifacts: true,
-      configuredHarnessRuntimes,
-    });
-  prepareOwnedPluginLoadContext(input, input.env ?? process.env, registry, metadataSnapshot, true);
-  return registry;
+      true,
+    );
+    return handle;
+  } catch (error) {
+    handle.release();
+    throw error;
+  }
 }
 
 /** Creates one lifecycle-batch loader that shares exact generic registry identities. */
-export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLoader {
+export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLoader & {
+  release(): void;
+} {
   const registries = new Map<
     string,
-    { metadataSnapshot: PluginMetadataSnapshot; registry: PluginRegistry }
+    { metadataSnapshot: PluginMetadataSnapshot; handle: PluginRegistryHandle }
   >();
-  return (input, metadataSnapshot, configuredHarnessRuntimes) => {
+  const load: PreparedInboundRegistryLoader = (
+    input,
+    metadataSnapshot,
+    configuredHarnessRuntimes,
+  ) => {
     const key = inboundRegistryIdentity(input);
     const existing = registries.get(key);
     if (existing?.metadataSnapshot === metadataSnapshot) {
-      return existing.registry;
+      return {
+        registry: existing.handle.registry,
+        ...retainPluginRegistryResources(existing.handle.registry),
+      };
     }
-    const registry = loadPreparedInboundPluginRegistry(
+    const handle = loadPreparedInboundPluginRegistry(
       input,
       metadataSnapshot,
       configuredHarnessRuntimes,
     );
-    registries.set(key, { metadataSnapshot, registry });
-    return registry;
+    registries.set(key, { metadataSnapshot, handle });
+    existing?.handle.release();
+    return { registry: handle.registry, ...retainPluginRegistryResources(handle.registry) };
   };
+  return Object.assign(load, {
+    release() {
+      for (const { handle } of registries.values()) {
+        handle.release();
+      }
+      registries.clear();
+    },
+  });
 }
 
 /** Prepares distinct generic-inbound and model-selected registries for one workspace generation. */
@@ -138,34 +175,47 @@ export function prepareWorkspacePluginRegistries(
   if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
     return {};
   }
+  const resources = requirePluginRegistryResourceScope();
+  const retain = (registry: PluginRegistry | undefined) => {
+    if (registry) {
+      resources.retain(registry);
+    }
+    return registry;
+  };
   // Resolve batch facts only for a registry load; read-only and reused registries need no scan.
+  const inboundHandle =
+    !input.readOnly && !reusableGeneration?.inboundPluginRegistry
+      ? loadInboundRegistry?.(input, metadataSnapshot, getConfiguredHarnessRuntimes?.())
+      : undefined;
   const inboundPluginRegistry = input.readOnly
     ? undefined
-    : (reusableGeneration?.inboundPluginRegistry ??
-      loadInboundRegistry?.(input, metadataSnapshot, getConfiguredHarnessRuntimes?.()));
-  const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
+    : (retain(reusableGeneration?.inboundPluginRegistry) ??
+      (inboundHandle ? resources.adopt(inboundHandle) : undefined));
+  const baseRegistry = retain(reusableGeneration?.pluginRegistry) ?? inboundPluginRegistry;
   const runtimePluginRegistry =
     input.runtimePluginSelections || !baseRegistry
-      ? loadAgentRuntimePluginRegistryHandle({
-          ...(input.loadRuntimePlugins
-            ? { basePluginIds: [] }
-            : baseRegistry
-              ? { basePluginIds: listRuntimePluginIdsFromRegistry(baseRegistry) }
-              : basePluginIds !== undefined
-                ? { basePluginIds }
-                : {}),
-          ...(reusableGeneration?.pluginRegistry
-            ? { reusableRegistry: reusableGeneration.pluginRegistry }
-            : {}),
-          config: input.config,
-          env: input.env ?? process.env,
-          ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-          ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-          metadataSnapshot,
-          ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
-          selections: input.runtimePluginSelections,
-          configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
-        })
+      ? resources.adopt(
+          loadAgentRuntimePluginRegistryHandle({
+            ...(input.loadRuntimePlugins
+              ? { basePluginIds: [] }
+              : baseRegistry
+                ? { basePluginIds: listRuntimePluginIdsFromRegistry(baseRegistry) }
+                : basePluginIds !== undefined
+                  ? { basePluginIds }
+                  : {}),
+            ...(reusableGeneration?.pluginRegistry
+              ? { reusableRegistry: reusableGeneration.pluginRegistry }
+              : {}),
+            config: input.config,
+            env: input.env ?? process.env,
+            ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+            ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+            metadataSnapshot,
+            ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
+            selections: input.runtimePluginSelections,
+            configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
+          }),
+        )
       : baseRegistry;
   return {
     runtimePluginRegistry,

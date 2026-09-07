@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { loadPluginRegistryHandle } from "./loader.js";
+import { loadPluginRegistryHandleForTest as loadPluginRegistryHandle } from "./loader-handles.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   activatePluginRecordLifecycleEpoch,
@@ -8,11 +8,18 @@ import {
   capturePluginRegistryLifecycleSignal,
   isPluginRecordLifecycleEpochActive,
   isPluginRegistryActivated,
+  isPluginRegistryRetired,
   isPluginRegistryLifecycleEpochActive,
   markPluginRegistryActive,
   markPluginRegistryRetired,
   revokePluginRecordLifecycleEpoch,
 } from "./registry-lifecycle.js";
+import {
+  associatePluginRegistryResourceAlias,
+  createPluginRegistryResourceOwner,
+  drainPluginRegistryResourceDisposals,
+  retainPluginRegistryResources,
+} from "./registry-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -39,6 +46,58 @@ function captureActivation(registry: PluginRegistry) {
 afterEach(() => resetPluginRuntimeStateForTest());
 
 describe("plugin registry retirement notifications", () => {
+  it("inherits source retirement through chained aliases without borrowing root activation", async () => {
+    const source = createEmptyPluginRegistry();
+    const root = createEmptyPluginRegistry();
+    const construction = createPluginRegistryResourceOwner(source, "scoped");
+    markPluginRegistryActive(root);
+    const rootSignal = captureActivation(root).signal;
+    const first = associatePluginRegistryResourceAlias({ ...source }, source, root);
+    const second = associatePluginRegistryResourceAlias({ ...first }, first, root);
+    const claim = retainPluginRegistryResources(second);
+    const signals = [first, second].map((registry) => {
+      expect(isPluginRegistryActivated(registry)).toBe(false);
+      expect(capturePluginRegistryLifecycleEpoch(registry)).toBeUndefined();
+      expect(capturePluginRegistryLifecycleSignal(registry, undefined)).toBeUndefined();
+      return capturePluginRegistryLifecycleSignal(registry, undefined, { scopedRuntime: true })!;
+    });
+    const observations: boolean[] = [];
+    signals[1]!.addEventListener("abort", () => observations.push(isPluginRegistryRetired(second)));
+    construction.release();
+    expect(signals.every((signal) => !signal.aborted)).toBe(true);
+    claim.release();
+    await drainPluginRegistryResourceDisposals();
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect([first, second].every(isPluginRegistryRetired)).toBe(true);
+    expect(observations).toEqual([true]);
+    expect(rootSignal.aborted).toBe(false);
+  });
+
+  it("retires an alias independently and never revives aliases when their source reactivates", () => {
+    const source = createEmptyPluginRegistry();
+    markPluginRegistryActive(source);
+    const sourceSignal = captureActivation(source).signal;
+    const first = associatePluginRegistryResourceAlias({ ...source }, source);
+    const sibling = associatePluginRegistryResourceAlias({ ...source }, source);
+    const signal = capturePluginRegistryLifecycleSignal(first, undefined, { scopedRuntime: true })!;
+    const siblingSignal = capturePluginRegistryLifecycleSignal(sibling, undefined, {
+      scopedRuntime: true,
+    })!;
+    const authority = capturePluginLifecycleAuthority(sibling, undefined, { scopedRuntime: true })!;
+    markPluginRegistryRetired(first);
+    expect(signal.aborted).toBe(true);
+    expect(siblingSignal.aborted).toBe(false);
+    expect(sourceSignal.aborted).toBe(false);
+    expect(authority()).toBe(true);
+    markPluginRegistryActive(source);
+    expect(siblingSignal.aborted).toBe(true);
+    expect(authority()).toBe(false);
+    expect(isPluginRegistryRetired(sibling)).toBe(true);
+    const fresh = associatePluginRegistryResourceAlias({ ...source }, source);
+    expect(isPluginRegistryRetired(fresh)).toBe(false);
+    expect(isPluginRegistryActivated(fresh)).toBe(false);
+  });
+
   it.each(["retire", "activate"] as const)(
     "notifies a scoped loader handle on %s without inventing an activation epoch",
     (action) => {

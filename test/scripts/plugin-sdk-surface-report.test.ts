@@ -138,6 +138,21 @@ describe("plugin SDK surface report", () => {
     expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
   });
 
+  it.each([0, 42])("uses explicit export caps of %i without default allowances", (cap) => {
+    const budgetConfig = readPluginSdkSurfaceBudgets({
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: String(cap),
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(cap),
+    });
+    const counts = readCurrentPublicSurfaceCounts();
+
+    expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toEqual(
+      expect.arrayContaining([
+        `public exports ${counts.exports} > ${cap}`,
+        `public callable exports ${counts.callableExports} > ${cap}`,
+      ]),
+    );
+  });
+
   it("keeps approval store internals out of the deprecated infra barrel", () => {
     const source = fs.readFileSync("src/plugin-sdk/infra-runtime.ts", "utf8");
     expect(source).not.toMatch(/export\s+(?:type\s+)?\*\s+from\s+["'][^"']*exec-approvals/u);

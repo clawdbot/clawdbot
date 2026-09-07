@@ -5,7 +5,7 @@ import type { FailoverReason as ProtocolFailoverReason } from "../../../packages
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { PromptMode } from "../system-prompt.types.js";
-import type { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlan } from "./build.js";
+import type { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlanCore } from "./build.js";
 import type {
   AgentRuntimePlan,
   BuildAgentRuntimeDeliveryPlanParams,
@@ -50,7 +50,7 @@ describe("AgentRuntimePlan structural type compatibility", () => {
       Parameters<typeof buildAgentRuntimeDeliveryPlan>[0]
     >().toEqualTypeOf<BuildAgentRuntimeDeliveryPlanParams>();
     expectTypeOf<
-      Parameters<typeof buildAgentRuntimePlan>[0]
+      Parameters<typeof buildAgentRuntimePlanCore>[0]
     >().toEqualTypeOf<BuildAgentRuntimePlanParams>();
   });
 });

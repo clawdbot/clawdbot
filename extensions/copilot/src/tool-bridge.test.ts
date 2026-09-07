@@ -6,6 +6,7 @@ import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/
 import { expectDefined } from "@openclaw/normalization-core";
 import { createOpenClawCodingTools as createRealOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
+  acquireAgentRuntimePlan,
   type AnyAgentTool,
   type SandboxContext,
   wrapToolWithBeforeToolCallHook,
@@ -329,27 +330,16 @@ describe("createCopilotToolBridge", () => {
           ],
         },
       } as never;
+      const runtime = acquireAgentRuntimePlan({
+        provider: "github-copilot",
+        modelId: "gpt-4o",
+        config,
+      });
       try {
-        const sharedFullControl = createRealOpenClawCodingTools({
-          config: { ...config, tools: { profile: "full" } },
-          includeCoreTools: false,
-          toolConstructionPlan: {
-            includeBaseCodingTools: false,
-            includeChannelTools: false,
-            includeOpenClawTools: false,
-            includePluginTools: true,
-            includeShellTools: false,
-          },
-        });
-        expect({
-          names: sharedFullControl.map((tool) => tool.name),
-        }).toEqual({ names: declaredToolNames });
-
-        for (const profile of ["coding", "messaging"] as const) {
-          const sharedTools = createRealOpenClawCodingTools({
-            config: { ...config, tools: { profile } },
+        await runtime.run(async () => {
+          const sharedFullControl = createRealOpenClawCodingTools({
+            config: { ...config, tools: { profile: "full" } },
             includeCoreTools: false,
-            preparedModelRuntime,
             toolConstructionPlan: {
               includeBaseCodingTools: false,
               includeChannelTools: false,
@@ -358,74 +348,101 @@ describe("createCopilotToolBridge", () => {
               includeShellTools: false,
             },
           });
-          expect(sharedTools.map((tool) => tool.name)).toEqual([profiledToolName]);
-        }
+          expect({
+            names: sharedFullControl.map((tool) => tool.name),
+          }).toEqual({ names: declaredToolNames });
 
-        const cases = [
-          { profile: "coding", surface: "direct" },
-          { profile: "messaging", surface: "direct" },
-          { profile: "coding", surface: "tool-search" },
-          { profile: "messaging", surface: "code-mode" },
-        ] as const;
-        const observedSurfaces: Array<{
-          profile: (typeof cases)[number]["profile"];
-          surface: (typeof cases)[number]["surface"];
-          profiledTool: boolean;
-          undeclaredSibling: boolean;
-        }> = [];
-        for (const { profile, surface } of cases) {
-          let catalogRef: { current?: { entries?: Array<{ name: string }> } } | undefined;
-          const result = await createCopilotToolBridge({
-            attemptParams: {
-              config: {
-                ...config,
-                tools: {
-                  profile,
-                  ...(surface === "tool-search" ? { toolSearch: true } : {}),
-                  ...(surface === "code-mode" ? { codeMode: true } : {}),
-                },
-              },
+          for (const profile of ["coding", "messaging"] as const) {
+            const sharedTools = createRealOpenClawCodingTools({
+              config: { ...config, tools: { profile } },
+              includeCoreTools: false,
               preparedModelRuntime,
-              runId: `profile-${profile}-${surface}`,
-              sessionKey: `agent:agent-1:${profile}-${surface}`,
-            } as never,
-            createOpenClawCodingTools: (options) => {
-              catalogRef = options?.toolSearchCatalogRef as typeof catalogRef;
-              return createRealOpenClawCodingTools(options);
-            },
-            sessionId: `${profile}-${surface}`,
-          });
-          const surfacedNames =
-            surface === "direct"
-              ? result.sourceTools.map((tool) => tool.name)
-              : (catalogRef?.current?.entries?.map((entry) => entry.name) ?? []);
-          observedSurfaces.push({
-            profile,
-            surface,
-            profiledTool: surfacedNames.includes(profiledToolName),
-            undeclaredSibling: surfacedNames.includes(siblingToolName),
-          });
-        }
-        expect(observedSurfaces).toEqual(
-          cases.map(({ profile, surface }) => ({
-            profile,
-            surface,
-            profiledTool: true,
-            undeclaredSibling: false,
-          })),
-        );
+              toolConstructionPlan: {
+                includeBaseCodingTools: false,
+                includeChannelTools: false,
+                includeOpenClawTools: false,
+                includePluginTools: true,
+                includeShellTools: false,
+              },
+            });
+            expect(sharedTools.map((tool) => tool.name)).toEqual([profiledToolName]);
+          }
 
-        const fullWithoutPrepared = await createCopilotToolBridge({
-          attemptParams: { config: { ...config, tools: { profile: "full" } } } as never,
-          createOpenClawCodingTools: createRealOpenClawCodingTools,
-          sessionId: "full-without-prepared",
+          const cases = [
+            { profile: "coding", surface: "direct" },
+            { profile: "messaging", surface: "direct" },
+            { profile: "coding", surface: "tool-search" },
+            { profile: "messaging", surface: "code-mode" },
+          ] as const;
+          const observedSurfaces: Array<{
+            profile: (typeof cases)[number]["profile"];
+            surface: (typeof cases)[number]["surface"];
+            profiledTool: boolean;
+            undeclaredSibling: boolean;
+          }> = [];
+          for (const { profile, surface } of cases) {
+            let catalogRef: { current?: { entries?: Array<{ name: string }> } } | undefined;
+            const result = await createCopilotToolBridge({
+              attemptParams: {
+                config: {
+                  ...config,
+                  tools: {
+                    profile,
+                    ...(surface === "tool-search" ? { toolSearch: true } : {}),
+                    ...(surface === "code-mode" ? { codeMode: true } : {}),
+                  },
+                },
+                preparedModelRuntime,
+                runId: `profile-${profile}-${surface}`,
+                sessionKey: `agent:agent-1:${profile}-${surface}`,
+              } as never,
+              createOpenClawCodingTools: (options) => {
+                catalogRef = options?.toolSearchCatalogRef as typeof catalogRef;
+                return createRealOpenClawCodingTools(options);
+              },
+              sessionId: `${profile}-${surface}`,
+            });
+            try {
+              const surfacedNames =
+                surface === "direct"
+                  ? result.sourceTools.map((tool) => tool.name)
+                  : (catalogRef?.current?.entries?.map((entry) => entry.name) ?? []);
+              observedSurfaces.push({
+                profile,
+                surface,
+                profiledTool: surfacedNames.includes(profiledToolName),
+                undeclaredSibling: surfacedNames.includes(siblingToolName),
+              });
+            } finally {
+              result.cleanup?.();
+            }
+          }
+          expect(observedSurfaces).toEqual(
+            cases.map(({ profile, surface }) => ({
+              profile,
+              surface,
+              profiledTool: true,
+              undeclaredSibling: false,
+            })),
+          );
+
+          const fullWithoutPrepared = await createCopilotToolBridge({
+            attemptParams: { config: { ...config, tools: { profile: "full" } } } as never,
+            createOpenClawCodingTools: createRealOpenClawCodingTools,
+            sessionId: "full-without-prepared",
+          });
+          try {
+            expect(
+              fullWithoutPrepared.sourceTools
+                .map((tool) => tool.name)
+                .filter((name) => declaredToolNames.includes(name)),
+            ).toEqual(declaredToolNames);
+          } finally {
+            fullWithoutPrepared.cleanup?.();
+          }
         });
-        expect(
-          fullWithoutPrepared.sourceTools
-            .map((tool) => tool.name)
-            .filter((name) => declaredToolNames.includes(name)),
-        ).toEqual(declaredToolNames);
       } finally {
+        runtime.release();
         resetPluginRuntimeStateForTest();
       }
     });
