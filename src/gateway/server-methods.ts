@@ -25,6 +25,7 @@ import {
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { admitChannelAdministratorRequest } from "./channel-administrator-authority.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
   consumeControlPlaneWriteBudget,
@@ -492,6 +493,55 @@ export async function handleGatewayRequest(
   },
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
+  const administrator = (() => {
+    try {
+      return admitChannelAdministratorRequest(opts.client, opts.req.method);
+    } catch (error) {
+      opts.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+      return false;
+    }
+  })();
+  if (administrator === false) {
+    return;
+  }
+  if (administrator) {
+    const original = opts;
+    const assertCurrent = () => {
+      administrator.assertActive();
+      original.sessionMutationCommitGuard?.();
+    };
+    opts = {
+      ...opts,
+      client: administrator.client,
+      sessionMutationCommitGuard: assertCurrent,
+      respond: (...args) => {
+        // Mutation owners fence their commit; never turn an already-committed
+        // effect (including self-revocation) into a retryable failure.
+        if (
+          args[0] &&
+          resolveLeastPrivilegeOperatorScopesForMethod(
+            original.req.method,
+            original.req.params,
+          ).includes("operator.read")
+        ) {
+          try {
+            assertCurrent();
+          } catch (error) {
+            original.respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, String(error)),
+            );
+            return;
+          }
+        }
+        original.respond(...args);
+      },
+    };
+    opts.context.logGateway.info(
+      `channel administrator request method=${opts.req.method} runId=${opts.client?.internal?.agentRuntimeIdentity?.operationalRunInstance.runId}`,
+    );
+  }
   const { req, respond, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } =
     opts;
   const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);

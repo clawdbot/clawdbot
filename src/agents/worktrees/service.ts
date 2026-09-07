@@ -141,13 +141,17 @@ export type WorktreeCleanupLimits = {
   maxTotalSizeBytes?: number;
 };
 
-type ManagedWorktreeGcParams = {
+type ManagedWorktreeGcParams = WorktreeMutationGuard & {
   shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   shouldRemoveOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   limits?: WorktreeCleanupLimits;
 };
 
 type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard">;
+function assertWorktreeMutationCurrent(guard: WorktreeMutationGuard): void {
+  guard.signal?.throwIfAborted();
+  guard.commitGuard?.();
+}
 type RemoveWorktreeParams = WorktreeMutationGuard & {
   id: string;
   reason: string;
@@ -1497,12 +1501,14 @@ export class ManagedWorktreeService {
   }
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
+    assertWorktreeMutationCurrent(params);
     const now = this.now();
     let removed: string[] = [];
     const records = listRegistryWorktrees(this.env);
     for (const record of records) {
       try {
         if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
+          assertWorktreeMutationCurrent(params);
           updateRegistryWorktree(this.env, record.id, { removedAt: now });
           record.removedAt = now;
         }
@@ -1516,22 +1522,24 @@ export class ManagedWorktreeService {
           expiresWhenIdle &&
           (retiredOwner || now - record.lastActiveAt > IDLE_GC_MS)
         ) {
-          if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner)) {
+          if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner, params)) {
             continue;
           }
           await this.remove({
             id: record.id,
             reason: retiredOwner ? "owner-gc" : "idle-gc",
+            signal: params.signal,
             commitGuard: () => this.assertOwnerAllowsCleanup(record, params, retiredOwner),
           });
           removed.push(record.id);
         }
       } catch (error) {
+        assertWorktreeMutationCurrent(params);
         log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
       }
     }
     removed = removed.concat(await this.enforceCleanupLimits(params));
-    const orphansDeleted = await this.reconcileOrphans(records);
+    const orphansDeleted = await this.reconcileOrphans(records, params);
     let snapshotsPruned = 0;
     for (const record of listRegistryWorktrees(this.env)) {
       if (record.removedAt === undefined || now - record.removedAt <= SNAPSHOT_RETENTION_MS) {
@@ -1539,11 +1547,16 @@ export class ManagedWorktreeService {
       }
       try {
         if (record.snapshotRef && (await worktreePathExists(record.repoRoot))) {
-          await requireGit(record.repoRoot, ["update-ref", "-d", record.snapshotRef]);
+          assertWorktreeMutationCurrent(params);
+          await requireGit(record.repoRoot, ["update-ref", "-d", record.snapshotRef], {
+            signal: params.signal,
+          });
         }
+        assertWorktreeMutationCurrent(params);
         deleteRegistryWorktree(this.env, record.id);
         snapshotsPruned += 1;
       } catch (error) {
+        assertWorktreeMutationCurrent(params);
         log.warn(`snapshot retention failed for ${record.id}: ${String(error)}`);
       }
     }
@@ -1557,6 +1570,7 @@ export class ManagedWorktreeService {
   private async isProtectedFromAutoRemoval(
     record: ManagedWorktreeRecord,
     shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean,
+    guard: WorktreeMutationGuard = {},
   ): Promise<boolean> {
     if (
       record.ownerId !== undefined &&
@@ -1580,7 +1594,10 @@ export class ManagedWorktreeService {
       return true;
     }
     if (state.kind === "dead") {
-      await requireGit(record.repoRoot, ["worktree", "unlock", record.path]);
+      assertWorktreeMutationCurrent(guard);
+      await requireGit(record.repoRoot, ["worktree", "unlock", record.path], {
+        signal: guard.signal,
+      });
     }
     return await containsSnapshotGitMarker(record.path);
   }
@@ -1656,15 +1673,17 @@ export class ManagedWorktreeService {
         continue;
       }
       try {
-        if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner)) {
+        if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner, params)) {
           continue;
         }
         await this.remove({
           id: record.id,
           reason: "limit-gc",
+          signal: params.signal,
           commitGuard: () => this.assertOwnerAllowsCleanup(record, params),
         });
       } catch (error) {
+        assertWorktreeMutationCurrent(params);
         log.warn(`cleanup limit removal failed for ${record.id}: ${String(error)}`);
         continue;
       }
@@ -1684,6 +1703,7 @@ export class ManagedWorktreeService {
     params: ManagedWorktreeGcParams,
     retiredOwner = false,
   ) {
+    assertWorktreeMutationCurrent(params);
     if (
       record.ownerId !== undefined &&
       (params.shouldProtectOwner?.(record.ownerKind, record.ownerId) === true ||
@@ -1725,7 +1745,10 @@ export class ManagedWorktreeService {
     return { ...record, repoRoot: repository.repoRoot, repoFingerprint: repository.fingerprint };
   }
 
-  private async reconcileOrphans(records: ManagedWorktreeRecord[]): Promise<number> {
+  private async reconcileOrphans(
+    records: ManagedWorktreeRecord[],
+    guard: WorktreeMutationGuard = {},
+  ): Promise<number> {
     const managedPaths = new Set<string>();
     for (const record of records) {
       try {
@@ -1785,9 +1808,11 @@ export class ManagedWorktreeService {
         if (await shouldPreserveOrphanCandidate(candidate, managedPaths, customRoots)) {
           continue;
         }
+        assertWorktreeMutationCurrent(guard);
         await fs.rm(candidate, { recursive: true, force: true });
         deleted += 1;
       }
+      assertWorktreeMutationCurrent(guard);
       await fs.rmdir(fingerprintPath).catch(() => undefined);
     }
     return deleted;

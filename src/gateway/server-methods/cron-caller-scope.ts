@@ -14,6 +14,7 @@ import type {
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { getChannelAdministratorRequestAuthority } from "../channel-administrator-authority.js";
 import { getCronManagementAuthority } from "../cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import type { GatewayClient } from "./types.js";
@@ -44,7 +45,8 @@ export function readCronCallerScope(
       ? cronSelfManagementContext.jobId.trim() || undefined
       : undefined;
   const sourceChannel = identity.turnSourceChannel?.trim().toLowerCase();
-  const manageAll = getCronManagementAuthority(identity);
+  const manageAll =
+    getChannelAdministratorRequestAuthority(client) ?? getCronManagementAuthority(identity);
   const callerOrigin = sourceChannel
     ? ({ kind: "external", channel: sourceChannel } as const)
     : identity.turnSourceLocal === true
@@ -219,6 +221,10 @@ export function cronCreateMatchesCallerScope(params: {
   defaultAgentId?: string;
 }): boolean {
   if (!params.callerScope) {
+    return true;
+  }
+  if (params.callerScope.manageAll) {
+    params.callerScope.manageAll();
     return true;
   }
   const effectiveAgentId = resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);

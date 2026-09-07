@@ -15,6 +15,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { bindChannelAdministratorAuthority } from "./cron-creator-authority-context.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import {
@@ -655,7 +656,13 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
   const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(
     hookAgentId,
-    options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
+    options
+      ? {
+          ...options,
+          agentAccountId: gatewayCallerAccountId,
+          channelAdministrator: bindChannelAdministratorAuthority(options.runId),
+        }
+      : options,
   );
 
   if (options?.wrapBeforeToolCallHook === false) {

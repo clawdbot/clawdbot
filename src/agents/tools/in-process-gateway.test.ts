@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  createChannelAdministratorAuthority,
+  redeemChannelAdministratorGrant,
+} from "../../gateway/channel-administrator-authority.js";
 import { readInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   hasContext: true,
@@ -622,4 +631,69 @@ describe("built-in Gateway foreground authority", () => {
       "conversations.turn.cancel",
     ]);
   });
+});
+
+describe("trusted channel administrator in-process dispatch", () => {
+  it.each(["request", "method"])(
+    "projects a bound administrator grant through the %s caller",
+    async (kind) => {
+      const { operationalRunInstance } = createTestAdmittedRunContext("trusted-discord-in-process");
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const lifetime = new AbortController();
+      let allowed = true;
+      const capability = createChannelAdministratorAuthority(
+        operationalRunInstance.runId,
+        lifetime.signal,
+        () => {
+          if (!allowed) {
+            throw new Error("administrator revoked");
+          }
+        },
+      );
+      const gateway = {} as GatewayRequestContext;
+      mocks.dispatch.mockReset().mockImplementation(async (method, _params, options) => {
+        const identity = readInProcessAgentRuntimeIdentity(options)!;
+        expect(options.syntheticScopes).toEqual(["operator.admin"]);
+        expect(identity.turnSourceChannel).toBe("discord");
+        const commit = redeemChannelAdministratorGrant(
+          identity.channelAdministratorGrant!,
+          identity,
+          method,
+        );
+        commit();
+        allowed = false;
+        expect(commit).toThrow("revoked");
+        options.sessionMutationCommitGuard();
+      });
+      try {
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:discord:channel:234567890123456789",
+            operationalRunInstance,
+            approvalAuthority: authority,
+            receiptAuthority: () => true,
+            gatewayContextResolver: () => gateway,
+            channelAdministrator: capability,
+            turnSourceChannel: "discord",
+            turnSourceAccountId: "default",
+          },
+          async () => {
+            const dispatch = () =>
+              kind === "request"
+                ? callAgentToolGatewayRequest({
+                    method: "sessions.create",
+                    params: { agentId: "main" },
+                  })
+                : callInProcessGatewayTool("sessions.create", { agentId: "main" });
+            await expect(dispatch()).rejects.toThrow("revoked");
+            expect(mocks.dispatch).toHaveBeenCalledOnce();
+          },
+        );
+      } finally {
+        lifetime.abort();
+        releaseAgentRunDelegatedAuthority(authority);
+      }
+    },
+  );
 });

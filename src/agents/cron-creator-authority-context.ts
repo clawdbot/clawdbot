@@ -3,6 +3,10 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import {
+  assertChannelAdministratorAuthority,
+  type ChannelAdministratorAuthority,
+} from "../gateway/channel-administrator-authority.js";
+import {
   CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
@@ -33,10 +37,16 @@ export function createCronCreatorAuthorityCapability(
   runId: string,
   callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
   controlUiAdmin?: true,
+  channelAdministratorPolicy?: () => void,
 ): CronCreatorAuthorityCapability | undefined {
   const normalizedRunId = runId.trim();
   return normalizedRunId
-    ? createCronCreatorAuthorityRunScope(normalizedRunId, callerOrigin, controlUiAdmin)
+    ? createCronCreatorAuthorityRunScope(
+        normalizedRunId,
+        callerOrigin,
+        controlUiAdmin,
+        channelAdministratorPolicy,
+      )
     : undefined;
 }
 
@@ -44,12 +54,31 @@ const activeCronCreatorAuthority = new AsyncLocalStorage<CronCreatorAuthorityRun
 const activeCronCreatorAuthorityResolver =
   new AsyncLocalStorage<CronCreatorAuthorityResolverScope>();
 
+/** Capture the source capability, not ambient channel/owner labels, for the exact run. */
+export function bindChannelAdministratorAuthority(
+  runId: string | undefined,
+): ChannelAdministratorAuthority | undefined {
+  const scope = activeCronCreatorAuthority.getStore();
+  const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
+  if (
+    !scope?.active ||
+    scope.signal.aborted ||
+    scope.runId !== runId ||
+    !scope.channelAdministrator ||
+    !authority
+  ) {
+    return undefined;
+  }
+  assertChannelAdministratorAuthority(scope.channelAdministrator, authority);
+  return scope.channelAdministrator;
+}
+
 /** Bind at tool construction, never rediscover authority from model arguments or routes. */
 export function bindCronManagementGrant(runId: string | undefined) {
   const scope = activeCronCreatorAuthority.getStore();
   const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
   if (
-    !scope?.controlUiAdmin ||
+    (!scope?.controlUiAdmin && !scope?.channelAdministrator) ||
     !scope.active ||
     scope.signal.aborted ||
     scope.runId !== runId ||
@@ -63,6 +92,12 @@ export function bindCronManagementGrant(runId: string | undefined) {
   return {
     managementOnly,
     mint: (method: string, signal?: AbortSignal) => {
+      if (scope.channelAdministrator) {
+        signal?.throwIfAborted();
+        assertChannelAdministratorAuthority(scope.channelAdministrator, authority);
+        // The shared Gateway router redeems the method-bound administrator grant.
+        return undefined;
+      }
       if (!CRON_MANAGEMENT_METHODS.some((allowed) => allowed === method)) {
         if (managementOnly) {
           throw new Error(

@@ -156,6 +156,16 @@ export type ChannelIngressContextBinding = {
   nativeChannelId?: string;
   /** Final inbound event classification used by the host context. */
   inboundEventKind: InboundEventKind;
+  /**
+   * Owning adapter attestation of the original platform-authenticated human sender.
+   * Omit for bots, webhooks, relays, impersonation, or identity remapping. This is
+   * a source fact, not an administrator grant; the host applies explicit policy.
+   */
+  nativeHumanSource?: Readonly<{
+    senderId: string;
+    /** Original inbound conversation, before reply routing or auto-thread creation. */
+    conversationId: string;
+  }>;
 };
 
 /** Optional route gate, such as a room, thread, topic, guild, or group route. */

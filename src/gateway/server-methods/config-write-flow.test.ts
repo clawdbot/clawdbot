@@ -119,6 +119,35 @@ describe("commitGatewayConfigWrite", () => {
     await expect(result.application).resolves.toBe("applied");
   });
 
+  it("rechecks the request after an asynchronous publication prerequisite", async () => {
+    let active = true;
+    let persisted = false;
+    const beforeCommit = vi.fn(async () => {
+      await Promise.resolve();
+      active = false;
+    });
+    configMocks.replaceConfigFile.mockImplementationOnce(async (params) => {
+      await params.writeOptions.beforeCommit?.();
+      persisted = true;
+      return { nextConfig: params.nextConfig, persistedHash: "persisted-hash" };
+    });
+
+    await expect(
+      commitGatewayConfigWrite({
+        snapshot: { path: "/tmp/openclaw.json", hash: "base-hash" } as never,
+        writeOptions: { beforeCommit },
+        nextConfig: { hooks: { enabled: true } },
+        commitGuard: () => {
+          if (!active) {
+            throw new Error("channel administrator revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("channel administrator revoked");
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(persisted).toBe(false);
+  });
+
   it("returns an unclaimed required application when no managed reloader is installed", async () => {
     const result = await commitGatewayConfigWrite({
       snapshot: {

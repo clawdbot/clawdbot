@@ -156,6 +156,21 @@ export const MessagesSchema = z
   .strict()
   .optional();
 
+const ChannelAdministratorSchema = z
+  .object({
+    channel: z.literal("discord"),
+    accountId: z
+      .string()
+      .min(1)
+      .refine(
+        (value) => value === value.trim() && !/[*?]/.test(value),
+        "Use an exact account ID without wildcards or surrounding whitespace",
+      ),
+    senderId: z.string().regex(/^\d+$/, "Use a native numeric Discord user ID"),
+    conversationId: z.string().regex(/^\d+$/, "Use a native numeric Discord conversation ID"),
+  })
+  .strict();
+
 export const CommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional().default("auto"),
@@ -169,6 +184,7 @@ export const CommandsSchema = z
     debug: z.boolean().optional(),
     restart: z.boolean().optional().default(true),
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    channelAdministrators: z.array(ChannelAdministratorSchema).optional(),
     allowFrom: ElevatedAllowFromSchema.optional(),
   })
   .strict()

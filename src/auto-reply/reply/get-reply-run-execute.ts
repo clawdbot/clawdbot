@@ -28,6 +28,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { admitChannelAdministratorPolicy } from "../channel-administrator-policy.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
@@ -564,10 +565,15 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
   const createdCronCreatorAuthorityCapability =
     !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider
-      ? createCronCreatorAuthorityCapability(authorityRunId, {
-          kind: "external",
-          channel: messageProvider,
-        })
+      ? createCronCreatorAuthorityCapability(
+          authorityRunId,
+          {
+            kind: "external",
+            channel: messageProvider,
+          },
+          undefined,
+          admitChannelAdministratorPolicy(ctx, cfg),
+        )
       : undefined;
   const cronCreatorAuthorityCapability =
     inheritedCronCreatorAuthorityCapability ?? createdCronCreatorAuthorityCapability;

@@ -8,6 +8,10 @@ import {
 } from "../../gateway/agent-runtime-identity-token.js";
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import {
+  createChannelAdministratorAuthority,
+  redeemChannelAdministratorGrant,
+} from "../../gateway/channel-administrator-authority.js";
 import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import {
   mintMessageActionTurnCapability,
@@ -771,5 +775,117 @@ describe("gateway tool runtime identity", () => {
     );
     expect(verified).toMatchObject({ operationalRunInstance });
     expect(verified).not.toHaveProperty("executionIdentity");
+  });
+});
+
+describe("trusted channel administrator Gateway transport", () => {
+  it.each(["exec.approval.request", "plugin.approval.request"])(
+    "preserves the separate request-lifetime approval lease for %s",
+    async (method) => {
+      const operationalRunInstance = createOperationalRunInstanceRef("trusted-admin-approval");
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const lifetime = new AbortController();
+      const request = new AbortController();
+      const capability = createChannelAdministratorAuthority(
+        operationalRunInstance.runId,
+        lifetime.signal,
+        () => {},
+      );
+      const gateway = {} as GatewayRequestContext;
+      mocks.callGateway.mockReset().mockResolvedValue({ id: "pending-approval" });
+      try {
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:discord:channel:234567890123456789",
+            operationalRunInstance,
+            approvalAuthority: authority,
+            receiptAuthority: () => true,
+            gatewayContextResolver: () => gateway,
+            channelAdministrator: capability,
+            turnSourceChannel: "discord",
+          },
+          async () => {
+            await callGatewayTool(
+              method,
+              {},
+              { title: "Review action" },
+              { signal: request.signal },
+            );
+            const call = capturedGatewayCall();
+            const identity = await verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken);
+            expect(identity).toBeDefined();
+            expect(identity?.channelAdministratorGrant).toBeUndefined();
+            expect(identity?.delegatedAuthority.claimId).not.toBe(authority.claimId);
+            expect(call.scopes).not.toContain("operator.admin");
+            const validate = createAgentRuntimeApprovalAuthorityValidator();
+            expect(validate(identity!)).toBe(true);
+            request.abort();
+            expect(validate(identity!)).toBe(false);
+            expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+          },
+        );
+      } finally {
+        lifetime.abort();
+        releaseAgentRunDelegatedAuthority(authority);
+      }
+    },
+  );
+
+  it("carries a one-shot method grant in the signed identity without changing source attribution", async () => {
+    const operationalRunInstance = createOperationalRunInstanceRef("trusted-discord-transport");
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const lifetime = new AbortController();
+    let allowed = true;
+    const capability = createChannelAdministratorAuthority(
+      operationalRunInstance.runId,
+      lifetime.signal,
+      () => {
+        if (!allowed) {
+          throw new Error("administrator revoked");
+        }
+      },
+    );
+    const gateway = {} as GatewayRequestContext;
+    mocks.callGateway.mockReset().mockResolvedValue({ id: "other-session-job" });
+    try {
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel:234567890123456789",
+          operationalRunInstance,
+          approvalAuthority: authority,
+          receiptAuthority: () => true,
+          gatewayContextResolver: () => gateway,
+          channelAdministrator: capability,
+          turnSourceChannel: "discord",
+          turnSourceAccountId: "default",
+        },
+        async () => {
+          await callGatewayTool("cron.get", {}, { id: "other-session-job" });
+          const call = capturedGatewayCall();
+          expect(call.scopes).toEqual(["operator.admin"]);
+          const identity = await verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken);
+          expect(identity?.turnSourceChannel).toBe("discord");
+          expect(identity?.turnSourceLocal).toBeUndefined();
+          expect(identity?.channelAdministratorGrant).toBeDefined();
+          const guard = redeemChannelAdministratorGrant(
+            identity!.channelAdministratorGrant!,
+            identity!,
+            "cron.get",
+          );
+          guard();
+          allowed = false;
+          expect(guard).toThrow("revoked");
+          await expect(
+            callGatewayTool("cron.remove", {}, { id: "other-session-job" }),
+          ).rejects.toThrow("revoked");
+          expect(mocks.callGateway).toHaveBeenCalledOnce();
+        },
+      );
+    } finally {
+      lifetime.abort();
+      releaseAgentRunDelegatedAuthority(authority);
+    }
   });
 });

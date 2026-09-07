@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
+import { ManagedWorktreeService, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../../projects/project-registry.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -242,6 +242,96 @@ describe("worktrees gateway methods", () => {
     } finally {
       removeProjectRegistry(project.id);
     }
+  });
+
+  it("does not execute repository setup after request authority is revoked", async () => {
+    const root = tempDirs.make("openclaw-worktrees-authority-");
+    const repoRoot = await initializeRepository(root, "repo");
+    const marker = path.join(root, "setup-ran");
+    await fs.mkdir(path.join(repoRoot, ".openclaw"));
+    await fs.writeFile(
+      path.join(repoRoot, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\nprintf setup > '${marker}'\n`,
+      { mode: 0o755 },
+    );
+    const service = new ManagedWorktreeService({
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+    });
+    let active = true;
+    const handlers = createWorktreesHandlers({
+      create: (params: Parameters<ManagedWorktreeService["create"]>[0]) =>
+        service.create({
+          ...params,
+          onProgress: (phase) => {
+            if (phase === "setup") {
+              active = false;
+            }
+          },
+        }),
+    } as never);
+
+    await expect(
+      call(
+        handlers,
+        "worktrees.create",
+        { repoRoot, name: "revoked-setup", baseRef: "HEAD" },
+        {
+          client: adminClient,
+          context: emptyConfigContext,
+          sessionMutationCommitGuard: () => {
+            if (!active) {
+              throw new Error("channel administrator revoked");
+            }
+          },
+        },
+      ),
+    ).rejects.toThrow("channel administrator revoked");
+    expect(active).toBe(false);
+    await expect(fs.access(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await service.list()).toEqual([]);
+    const branches = await execFileAsync("git", [
+      "-C",
+      repoRoot,
+      "branch",
+      "--list",
+      "openclaw/revoked-setup",
+    ]);
+    expect(branches.stdout.trim()).toBe("");
+  });
+
+  it("preserves orphan files when authority closes during garbage-collection discovery", async () => {
+    const root = tempDirs.make("openclaw-worktrees-gc-authority-");
+    const stateDir = path.join(root, "state");
+    const orphan = path.join(stateDir, "worktrees", "orphan-repo", "orphan-tree");
+    await fs.mkdir(orphan, { recursive: true });
+    const marker = path.join(orphan, "keep.txt");
+    await fs.writeFile(marker, "preserve");
+    let active = true;
+    const service = new ManagedWorktreeService({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      getConfig: () => {
+        active = false;
+        return {};
+      },
+    });
+
+    await expect(
+      call(
+        createWorktreesHandlers(service),
+        "worktrees.gc",
+        {},
+        {
+          context: emptyConfigContext,
+          sessionMutationCommitGuard: () => {
+            if (!active) {
+              throw new Error("channel administrator revoked");
+            }
+          },
+        },
+      ),
+    ).rejects.toThrow("channel administrator revoked");
+    expect(active).toBe(false);
+    await expect(fs.readFile(marker, "utf8")).resolves.toBe("preserve");
   });
 
   it("uses the built-in cleanup policy for gc", async () => {

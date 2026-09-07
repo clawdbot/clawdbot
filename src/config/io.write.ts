@@ -432,7 +432,11 @@ export async function writeConfigFileFromContext(
             promises: {
               ...deps.fs.promises,
               rename: async (source, destination) => {
-                await beforeCommit();
+                // Synchronous authority checks must not yield before publication.
+                const pending = beforeCommit();
+                if (pending) {
+                  await pending;
+                }
                 options.assertConfigPathForWrite?.();
                 if (options.baseSnapshot) {
                   assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);

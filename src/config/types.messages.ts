@@ -139,6 +139,17 @@ export type NativeCommandsSetting = boolean | "auto";
  */
 export type CommandAllowFrom = Record<string, Array<string | number>>;
 
+/** Explicit administrator grant for one authenticated Discord owner in one conversation. */
+export type ChannelAdministratorConfig = {
+  channel: "discord";
+  /** Exact configured Discord account ID; no wildcard or surrounding whitespace. */
+  accountId: string;
+  /** Exact native Discord user ID, as a numeric string. */
+  senderId: string;
+  /** Exact native Discord channel, thread, or DM conversation ID, as a numeric string. */
+  conversationId: string;
+};
+
 export type CommandsConfig = {
   /** @deprecated Doctor-only legacy input. */
   ownerDisplay?: "raw" | "hash";
@@ -166,6 +177,12 @@ export type CommandsConfig = {
   restart?: boolean;
   /** Explicit owner allowlist for owner-scoped commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;
+  /**
+   * Opt-in administrator grants for available agent operations from exact Discord conversations.
+   * Senders must also remain in ownerAllowFrom. Omitted or empty disables these grants.
+   * Tool policy, sandboxing, execution approvals, and credential entry remain independent.
+   */
+  channelAdministrators?: ChannelAdministratorConfig[];
   /** How owner IDs are rendered in system prompts. */
   /**
    * Per-provider allowlist restricting who can use slash commands.

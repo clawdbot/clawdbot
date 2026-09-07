@@ -23,6 +23,10 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
+  admitChannelAdministratorRequest,
+  mintChannelAdministratorGrant,
+} from "../channel-administrator-authority.js";
+import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
@@ -625,76 +629,93 @@ function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void 
 }
 
 describe("cron method validation", () => {
-  it.each([
-    ["cron.list", false],
-    ["cron.get", false],
-    ["cron.update", false],
-    ["cron.run", false],
-    ["cron.remove", false],
-    ["cron.remove", true],
-  ] as const)(
-    "Control UI admin grant manages a different channel's automation through %s (close after commit: %s)",
-    async (method, closeAfterCommit) => {
-      const client = callerClient("main");
-      const identity = client.internal!.agentRuntimeIdentity!;
-      const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
-      identity.delegatedAuthority = { kind: "local", ...authority };
-      const scope = createCronCreatorAuthorityRunScope(
-        identity.operationalRunInstance.runId,
-        { kind: "local" },
-        true,
-      );
-      identity.cronManagementGrant = mintCronCreatorAuthorityGrant(scope, undefined, undefined, {
-        method,
-        authority,
-      });
-      const job = createCronJob({
-        agentId: "telegram-agent",
-        owner: {
-          agentId: "telegram-agent",
-          sessionKey: "agent:telegram-agent:telegram:dm:42",
-          accountId: "telegram",
-        },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:telegram-agent:telegram:dm:42",
-          ownerAccountId: "telegram",
-        },
-      });
-      const context = createCronContext(job);
-      if (method === "cron.update") {
-        job.payload = { kind: "agentTurn", message: "operator-created task without a cap" };
-        delete job.scheduledToolPolicy;
-      }
-      if (closeAfterCommit) {
-        context.cron.remove.mockImplementationOnce(async (_id, options) => {
-          options?.commitGuard?.();
-          revokeCronCreatorAuthorityRunScope(scope);
-          return { ok: true, removed: true };
-        });
-      }
-      try {
-        const { respond } = await invokeCron(
-          method,
-          {
-            ...(method === "cron.list" ? { compact: true } : { id: job.id }),
-            ...(method === "cron.update"
-              ? { patch: { payload: { kind: "agentTurn", message: "updated by admin" } } }
-              : {}),
-          },
-          { client, context },
+  describe.each(["Control UI", "trusted channel"] as const)("%s administrator", (source) => {
+    it.each([
+      ["cron.list", false],
+      ["cron.get", false],
+      ["cron.update", false],
+      ["cron.run", false],
+      ["cron.remove", false],
+      ["cron.remove", true],
+    ] as const)(
+      "admin grant manages a different channel's automation through %s (close after commit: %s)",
+      async (method, closeAfterCommit) => {
+        const client = callerClient("main");
+        const identity = client.internal!.agentRuntimeIdentity!;
+        const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
+        identity.delegatedAuthority = { kind: "local", ...authority };
+        const scope = createCronCreatorAuthorityRunScope(
+          identity.operationalRunInstance.runId,
+          source === "Control UI" ? { kind: "local" } : { kind: "external", channel: "discord" },
+          source === "Control UI" ? true : undefined,
+          source === "trusted channel" ? () => {} : undefined,
         );
-        expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
-        if (method === "cron.list") {
-          expect(respond.mock.calls[0]?.[1]).toMatchObject({ jobs: [{ id: job.id }], total: 1 });
+        let requestClient = client;
+        if (source === "Control UI") {
+          identity.cronManagementGrant = mintCronCreatorAuthorityGrant(
+            scope,
+            undefined,
+            undefined,
+            { method, authority },
+          );
+        } else {
+          client.connect.role = "operator";
+          identity.turnSourceChannel = "discord";
+          identity.channelAdministratorGrant = mintChannelAdministratorGrant(
+            scope.channelAdministrator!,
+            authority,
+            method,
+          );
+          requestClient = admitChannelAdministratorRequest(client, method)!.client;
         }
-      } finally {
-        revokeCronCreatorAuthorityRunScope(scope);
-        releaseAgentRunDelegatedAuthority(authority);
-      }
-    },
-  );
+        const job = createCronJob({
+          agentId: "telegram-agent",
+          owner: {
+            agentId: "telegram-agent",
+            sessionKey: "agent:telegram-agent:telegram:dm:42",
+            accountId: "telegram",
+          },
+          scheduledToolPolicy: {
+            version: 1,
+            mode: "account",
+            ownerSessionKey: "agent:telegram-agent:telegram:dm:42",
+            ownerAccountId: "telegram",
+          },
+        });
+        const context = createCronContext(job);
+        if (method === "cron.update") {
+          job.payload = { kind: "agentTurn", message: "operator-created task without a cap" };
+          delete job.scheduledToolPolicy;
+        }
+        if (closeAfterCommit) {
+          context.cron.remove.mockImplementationOnce(async (_id, options) => {
+            options?.commitGuard?.();
+            revokeCronCreatorAuthorityRunScope(scope);
+            return { ok: true, removed: true };
+          });
+        }
+        try {
+          const { respond } = await invokeCron(
+            method,
+            {
+              ...(method === "cron.list" ? { compact: true } : { id: job.id }),
+              ...(method === "cron.update"
+                ? { patch: { payload: { kind: "agentTurn", message: "updated by admin" } } }
+                : {}),
+            },
+            { client: requestClient, context },
+          );
+          expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+          if (method === "cron.list") {
+            expect(respond.mock.calls[0]?.[1]).toMatchObject({ jobs: [{ id: job.id }], total: 1 });
+          }
+        } finally {
+          revokeCronCreatorAuthorityRunScope(scope);
+          releaseAgentRunDelegatedAuthority(authority);
+        }
+      },
+    );
+  });
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
     cronTaskRunHistoryPageOverride.mockReset().mockReturnValue(undefined);

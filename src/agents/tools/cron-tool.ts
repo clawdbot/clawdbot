@@ -190,7 +190,7 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
 
 ACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
-Authenticated Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns have a restricted inventory; use a fresh admin Control UI turn or the Automations page for cross-session management.
+Authenticated Control UI administrator turns and explicitly configured trusted channel administrators can manage Gateway automations across sessions. Other turns have a restricted inventory; use an authorized administrator turn or the Automations page for cross-session management.
 
 ADD: ${addFields}. Required: schedule+payload.
 
@@ -383,7 +383,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 ...(!managementAuthority
                   ? {
                       scopeHint:
-                        "Restricted automation inventory. For Gateway-wide management, use a fresh authenticated Control UI administrator turn or the Automations page.",
+                        "Restricted automation inventory. For Gateway-wide management, use a fresh authorized administrator turn or the Automations page.",
                     }
                   : {}),
               });

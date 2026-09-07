@@ -207,6 +207,16 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Allow /restart, /update, and external SIGUSR1 restart requests (default: true).",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-scoped commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
+  "commands.channelAdministrators":
+    "Opt-in administrator grants for available agent operations from trusted Discord conversations. Each grant matches an exact channel, accountId, senderId, and conversationId; the sender must also remain in commands.ownerAllowFrom. Omitted or empty disables grants. Tool availability, sandboxing, execution approvals, and credential entry remain independent.",
+  "commands.channelAdministrators.*.channel":
+    'Channel provider for this administrator grant. Currently only "discord" is supported.',
+  "commands.channelAdministrators.*.accountId":
+    "Exact configured Discord account ID. Wildcards and surrounding whitespace are rejected.",
+  "commands.channelAdministrators.*.senderId":
+    "Exact native Discord user ID as a numeric string. Names, mentions, prefixes, and wildcards are rejected. The sender must also be an explicitly configured command owner.",
+  "commands.channelAdministrators.*.conversationId":
+    "Exact native Discord channel, thread, or DM conversation ID as a numeric string. A channel grant does not apply to its threads; configure each trusted conversation separately.",
   "commands.allowFrom":
     "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
   mcp: "Global MCP server definitions managed by OpenClaw. Embedded OpenClaw and other runtime adapters can consume these servers without storing them inside runtime-owned project settings.",

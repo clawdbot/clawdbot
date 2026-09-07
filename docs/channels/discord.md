@@ -1151,6 +1151,16 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
   </Accordion>
 </AccordionGroup>
 
+## Trusted administrators
+
+To administer OpenClaw from a trusted Discord conversation, configure
+[`commands.channelAdministrators`](/tools/slash-commands#trusted-discord-administrators)
+alongside `commands.ownerAllowFrom`. Grants match one exact OpenClaw Discord
+account, human sender, and native conversation ID; channel grants do not include
+threads. This is an OpenClaw administrator role, not a Discord server permission.
+Tool availability, sandbox policy, execution approvals, and secure credential
+entry remain separate controls.
+
 ## Tools and action gates
 
 Discord message actions cover messaging, channel admin, moderation, presence, and metadata.

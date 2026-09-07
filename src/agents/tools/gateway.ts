@@ -21,6 +21,7 @@ import {
 } from "../../gateway/agent-runtime-execution-lineage.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../gateway/call.js";
+import type { ChannelAdministratorGrant } from "../../gateway/channel-administrator-authority.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -38,6 +39,7 @@ import {
   type DeviceIdentity,
 } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { prepareChannelAdministratorRequest } from "./channel-administrator.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
@@ -357,6 +359,7 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
 }
 
 async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
+  channelAdministratorGrant?: ChannelAdministratorGrant;
   method: string;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
@@ -436,6 +439,9 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
           : undefined;
       return await mintAgentRuntimeIdentityToken({
         ...identity,
+        ...(params.channelAdministratorGrant
+          ? { channelAdministratorGrant: params.channelAdministratorGrant }
+          : {}),
         operationalRunInstance: identity.operationalRunInstance,
         approvalAuthority,
         ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
@@ -607,6 +613,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     dispatchAuthority?: { version: 2; kind: "run" | "source-bound"; assertCurrent: () => void };
   },
 ) {
+  const administrator = prepareChannelAdministratorRequest(method, extra?.signal);
   const dispatchAuthority = extra?.dispatchAuthority;
   if (
     dispatchAuthority &&
@@ -617,9 +624,11 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   const gateway = resolveGatewayOptions(opts);
   const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   const callParams = attachNodeInvokeTurnSource(method, params);
-  const scopes = Array.isArray(extra?.scopes)
-    ? extra.scopes
-    : resolveLeastPrivilegeOperatorScopesForMethod(method, callParams);
+  const scopes = administrator
+    ? ["operator.admin" as const]
+    : Array.isArray(extra?.scopes)
+      ? extra.scopes
+      : resolveLeastPrivilegeOperatorScopesForMethod(method, callParams);
   const approvalRuntimeToken = resolveApprovalRuntimeTokenForGatewayTool({
     method,
     opts,
@@ -629,7 +638,8 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     method,
     opts,
     target: gateway.target,
-    required: extra?.requireAgentRuntimeIdentity,
+    required: administrator ? true : extra?.requireAgentRuntimeIdentity,
+    channelAdministratorGrant: administrator?.identity.channelAdministratorGrant,
     signal: extra?.signal,
   });
   const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
@@ -646,7 +656,12 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     timeoutMs: gateway.timeoutMs,
     signal: extra?.signal,
     expectFinal: extra?.expectFinal,
-    assertDispatchCurrent: extra?.dispatchAuthority?.assertCurrent,
+    assertDispatchCurrent: administrator
+      ? () => {
+          administrator.assertCurrent();
+          extra?.dispatchAuthority?.assertCurrent();
+        }
+      : extra?.dispatchAuthority?.assertCurrent,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -660,11 +675,17 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     if (resolveGatewayContext && !resolveGatewayContext()) {
       throw new Error("The admitting Gateway is no longer available. Retry from a new agent run.");
     }
+    administrator?.assertCurrent();
     return callGateway<T>(options);
   };
   try {
     return await dispatch(callOptions);
   } catch (error) {
+    if (administrator) {
+      // Do not replay a one-shot admin grant or downgrade it to unsigned transport.
+      administrator.assertCurrent();
+      throw error;
+    }
     if (method === "node.invoke" && isStaleGatewayNodeInvokeTurnSourceRejection(error)) {
       return await dispatch({
         ...callOptions,

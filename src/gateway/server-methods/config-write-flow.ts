@@ -236,6 +236,7 @@ export async function commitGatewayConfigWrite(params: {
   writeOptions: ConfigWriteOptions;
   nextConfig: OpenClawConfig;
   context?: GatewayRequestContext;
+  commitGuard?: () => void;
   disconnectSharedAuthClients?: boolean;
   awaitRuntimeApplication?: boolean;
   respond?: RespondFn;
@@ -246,6 +247,7 @@ export async function commitGatewayConfigWrite(params: {
   application?: Promise<RuntimeConfigWriteApplicationStatus>;
   queueFollowUp: () => void;
 }> {
+  params.commitGuard?.();
   const application = params.awaitRuntimeApplication
     ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
     : undefined;
@@ -258,6 +260,17 @@ export async function commitGatewayConfigWrite(params: {
     writeOptions: attachRuntimeConfigWriteApplication<ConfigWriteOptions>(
       {
         ...params.writeOptions,
+        ...(params.commitGuard
+          ? {
+              beforeCommit: () => {
+                const pending = params.writeOptions.beforeCommit?.();
+                if (pending) {
+                  return pending.then(() => params.commitGuard?.());
+                }
+                return params.commitGuard?.();
+              },
+            }
+          : {}),
         auditOrigin: "config-rpc",
         runtimeRefresh: {
           ...params.writeOptions.runtimeRefresh,

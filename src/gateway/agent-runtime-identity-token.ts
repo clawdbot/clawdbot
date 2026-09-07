@@ -24,6 +24,7 @@ import {
   withAgentRuntimeExecutionLineageRedemption,
 } from "./agent-runtime-execution-lineage.js";
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
+import type { ChannelAdministratorGrant } from "./channel-administrator-authority.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 import {
   resolveMessageActionTurnCapability,
@@ -61,6 +62,7 @@ export type AgentRuntimeIdentity = {
   cronExecToolTarget?: { host: "gateway"; ask?: "always" };
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   cronManagementGrant?: CronCreatorAuthorityGrant;
+  channelAdministratorGrant?: ChannelAdministratorGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
 
@@ -212,6 +214,7 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
     .optional(),
   cronCreatorAuthorityGrant: cronCreatorAuthorityGrantSchema.optional(),
   cronManagementGrant: cronCreatorAuthorityGrantSchema.optional(),
+  channelAdministratorGrant: cronCreatorAuthorityGrantSchema.optional(),
   sessionSpawnContext: sessionSpawnContextSchema.optional(),
   executionLineageHandoffId: normalizedRequiredStringSchema.optional(),
 });
@@ -392,6 +395,9 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       ...(cronExecToolTarget ? { cronExecToolTarget } : {}),
       ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
       ...(raw.cronManagementGrant ? { cronManagementGrant: raw.cronManagementGrant } : {}),
+      ...(raw.channelAdministratorGrant
+        ? { channelAdministratorGrant: raw.channelAdministratorGrant }
+        : {}),
       ...(executionIdentity ? { executionIdentity } : {}),
     };
   } catch {
@@ -416,6 +422,7 @@ export type AgentRuntimeIdentityTokenParams = {
   cronExecToolTarget?: { host: "gateway"; ask?: "always" };
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   cronManagementGrant?: CronCreatorAuthorityGrant;
+  channelAdministratorGrant?: ChannelAdministratorGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   executionLineageHandoffId?: string;
   workerTurnClaim?: WorkerSessionTurnClaim;
@@ -534,6 +541,9 @@ function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTok
       ? { cronCreatorAuthorityGrant: params.cronCreatorAuthorityGrant }
       : {}),
     ...(params.cronManagementGrant ? { cronManagementGrant: params.cronManagementGrant } : {}),
+    ...(params.channelAdministratorGrant
+      ? { channelAdministratorGrant: params.channelAdministratorGrant }
+      : {}),
     ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
     ...(executionLineageHandoffId ? { executionLineageHandoffId } : {}),
     ...(params.executionIdentityToken?.runId === operationalRunId
@@ -622,6 +632,9 @@ export async function verifyAgentRuntimeIdentityToken(
       : {}),
     ...(payload.cronExecToolTarget ? { cronExecToolTarget: payload.cronExecToolTarget } : {}),
     ...(payload.cronManagementGrant ? { cronManagementGrant: payload.cronManagementGrant } : {}),
+    ...(payload.channelAdministratorGrant
+      ? { channelAdministratorGrant: payload.channelAdministratorGrant }
+      : {}),
     ...(payload.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: payload.cronCreatorAuthorityGrant }
       : {}),

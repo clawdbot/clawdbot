@@ -145,6 +145,13 @@ command handling is enabled for the surface.
   Doctor rewrites recognized channel entries and reports their list positions.
 </ParamField>
 
+<ParamField path="commands.channelAdministrators" type="object[]">
+  Explicit administrator grants for authenticated Discord owners in specific
+  conversations. Omitted or empty disables these grants. Each entry requires
+  `channel`, `accountId`, `senderId`, and `conversationId`. See
+  [Trusted Discord administrators](/tools/slash-commands#trusted-discord-administrators).
+</ParamField>
+
 Channel plugins can enforce owner-only command access through their
 `enforceOwnerForCommands` policy. This is plugin behavior, not an
 `openclaw.json` setting. A wildcard command allowlist does not bypass it.
@@ -173,6 +180,48 @@ commands show a permission denial. A denied command does not perform the
 requested reset or run its follow-up text; normal idle/daily rollover still
 applies. Ask your Gateway administrator to reset the session, or send your
 message without the command.
+
+### Trusted Discord administrators
+
+Use `commands.channelAdministrators` when you want a trusted owner to administer
+OpenClaw through a specific Discord conversation, including managing automations
+outside that conversation. Ordinary channel access and `commands.ownerAllowFrom`
+alone do not grant this administrator role.
+
+Add an explicit grant alongside the owner's existing entry:
+
+```json5
+{
+  commands: {
+    ownerAllowFrom: ["discord:123456789012345678"],
+    channelAdministrators: [
+      {
+        channel: "discord",
+        accountId: "default",
+        senderId: "123456789012345678",
+        conversationId: "234567890123456789",
+      },
+    ],
+  },
+}
+```
+
+Replace the example IDs with the owner's native Discord user ID and the native
+channel, thread, or DM conversation ID. `accountId` is the configured OpenClaw
+Discord account ID, not the user ID. All four fields must match exactly: names,
+mentions, and prefixes are not accepted for user or conversation IDs. Wildcard
+patterns and surrounding whitespace are rejected for every field. A grant for a
+channel does not include its threads; add each trusted conversation separately.
+
+Only fresh authenticated messages from the configured human owner qualify.
+Bots, webhooks, forwarded messages, and spawned or background runs do not inherit
+the grant. Removing either the grant or the owner entry revokes administrator
+authority for subsequent operations, including operations awaiting completion.
+
+The role applies to available agent operations. It does not enable disabled tools
+or commands, change sandbox policy, skip execution approvals, or replace secure
+credential entry. `/config`, `/mcp`, and `/plugins` still require their respective
+`commands.*` flags and any channel write restrictions.
 
 ## Command list
 

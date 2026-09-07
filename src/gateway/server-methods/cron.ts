@@ -65,6 +65,7 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { getChannelAdministratorRequestAuthority } from "../channel-administrator-authority.js";
 import {
   consumeCronCreatorAuthorityGrant,
   getCronManagementAuthority,
@@ -126,7 +127,9 @@ function resolveCronMutationCommitGuard(
   const validatesAuthority =
     client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority;
   const identity = client?.internal?.agentRuntimeIdentity;
-  const manageAll = identity ? getCronManagementAuthority(identity) : undefined;
+  const manageAll =
+    getChannelAdministratorRequestAuthority(client) ??
+    (identity ? getCronManagementAuthority(identity) : undefined);
   if (!validatesAuthority && !jobScope?.callerScope && !manageAll) {
     return undefined;
   }
@@ -434,7 +437,10 @@ function resolveCronSessionVisibility(
   cfg: OpenClawConfig,
 ): CronSessionVisibility | undefined {
   const identity = client?.internal?.agentRuntimeIdentity;
-  if (identity && getCronManagementAuthority(identity)) {
+  if (
+    getChannelAdministratorRequestAuthority(client) ||
+    (identity && getCronManagementAuthority(identity))
+  ) {
     return undefined;
   }
   if (operatorSessionCap(client, cfg) !== "none") {
@@ -1414,6 +1420,7 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
           // acknowledgement must not turn a committed effect into a retryable denial.
           if (method === "cron.list" || method === "cron.get") {
             assertActiveAgentRuntimeAuthority(args.client, args.context);
+            getChannelAdministratorRequestAuthority(args.client)?.();
             getCronManagementAuthority(identity)?.();
           }
           succeeded = response[0];

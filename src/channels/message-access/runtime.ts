@@ -560,9 +560,16 @@ export async function resolveChannelMessageIngress(
   const channelId = normalizeChannelId(params.channelId);
   const promptedAt = Date.now();
   const participantOwner = readChannelIngressHostOwner(channelId);
+  const ingressAccountId = params.accountId;
+  const ingressConversation = { ...params.conversation };
   const participant = params.identity.resolveParticipant?.(params.subject);
   const senderId = params.subject.stableId == null ? undefined : String(params.subject.stableId);
-  const participantBinding = params.contextBinding && { ...params.contextBinding };
+  const participantBinding = params.contextBinding && {
+    ...params.contextBinding,
+    ...(params.contextBinding.nativeHumanSource
+      ? { nativeHumanSource: { ...params.contextBinding.nativeHumanSource } }
+      : {}),
+  };
   const adapter = createIdentityAdapter(params.identity);
   const subject = createIdentitySubject(params.identity, params.subject);
   const routeFacts = [...routeFactsFromDescriptors(params.route), ...(params.routeFacts ?? [])];
@@ -709,16 +716,17 @@ export async function resolveChannelMessageIngress(
   return recordChannelIngressResolution({
     result,
     channelId,
-    accountId: params.accountId,
-    rawPrincipalRef: params.subject.stableId,
+    accountId: ingressAccountId,
+    rawPrincipalRef: senderId,
+    owner: participantOwner,
     scope: {
       conversation: {
-        kind: params.conversation.kind,
-        id: params.conversation.id,
-        parentId: params.conversation.parentId,
-        threadId: params.conversation.threadId,
+        kind: ingressConversation.kind,
+        id: ingressConversation.id,
+        parentId: ingressConversation.parentId,
+        threadId: ingressConversation.threadId,
       },
-      contextBinding: params.contextBinding,
+      contextBinding: participantBinding,
     },
     participantOutcomeAffecting:
       senderAccess.gate?.match?.matched === true &&

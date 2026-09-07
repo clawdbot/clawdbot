@@ -43,6 +43,7 @@ import type { DiscordMediaInfo } from "./message-media.js";
 import { resolveDiscordMessageText } from "./message-text.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { buildDiscordRoutePeer } from "./route-resolution.js";
+import { resolveDiscordWebhookId } from "./sender-identity.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -380,6 +381,12 @@ export async function buildDiscordMessageProcessContext(params: {
       sessionKey: effectiveSessionKey,
       messageId: canonicalMessageId ?? message.id,
       inboundEventKind: ctx.inboundEventKind,
+      ...(!author.bot &&
+      !resolveDiscordWebhookId(message) &&
+      !sender.isPluralKit &&
+      sender.id === author.id
+        ? { nativeHumanSource: { senderId: author.id, conversationId: messageChannelId } }
+        : {}),
     },
     {
       parentId: conversationParentId,
