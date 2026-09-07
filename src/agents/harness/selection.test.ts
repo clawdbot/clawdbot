@@ -20,6 +20,10 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import {
+  claimHeartbeatOutcomeForRun,
+  persistHeartbeatOutcome,
+} from "../../infra/heartbeat-outcome-store.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -53,6 +57,7 @@ import {
   publishCurrentModelGeneration,
   resetModelGenerationFixtureState,
 } from "../embedded-agent-runner/model.generation-scope.test-support.js";
+import { projectRuntimeContextFragments } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -574,6 +579,118 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it.each(["openclaw", "codex"])(
+    "carries silent heartbeat outcome into the %s host boundary exactly once per retry",
+    async (harnessId) => {
+      const root = trajectoryTempDirs.make("harness-heartbeat-outcome-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      const target = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: path.join(root, "agent.sqlite"),
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      persistHeartbeatOutcome({
+        ...target,
+        runSessionKey: "agent:main:main:heartbeat",
+        occurredAt: 1,
+        response: { outcome: "done", notify: false, summary: "ISOLATED_OUTCOME_731" },
+      });
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+        createAttemptResult("native"),
+      );
+      if (harnessId === "codex") {
+        registerAgentHarness(
+          {
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true, priority: 100 }),
+            runAttempt,
+          },
+          { ownerPluginId: "codex" },
+        );
+      }
+      const currentInboundContext = {
+        text: "Current quoted reply",
+        resumableText: "Current room delta",
+        promptJoiner: "\n" as const,
+        fragments: [{ kind: "conversation-data" as const, text: "Current quoted reply" }],
+      };
+      const params = {
+        ...createAttemptParams(),
+        ...target,
+        sessionTarget: target,
+        trigger: "user" as const,
+        agentHarnessId: harnessId,
+        currentInboundContext,
+      };
+      const captured = harnessId === "openclaw" ? agentRunAttempt : runAttempt;
+      for (let retry = 0; retry < 2; retry++) {
+        await runAgentHarnessAttempt(params);
+        const received = captured.mock.calls.at(-1)?.[0];
+        expect(received?.currentInboundContext?.text.match(/ISOLATED_OUTCOME_731/g)).toHaveLength(
+          1,
+        );
+        expect(
+          received?.currentInboundContext?.resumableText?.match(/ISOLATED_OUTCOME_731/g),
+        ).toHaveLength(1);
+        expect(received?.currentInboundContext?.promptJoiner).toBe("\n");
+        const fragments = received?.currentInboundContext?.fragments;
+        expect(fragments).toEqual([
+          ...currentInboundContext.fragments,
+          { kind: "heartbeat-outcome", text: expect.stringContaining("ISOLATED_OUTCOME_731") },
+        ]);
+        expect(projectRuntimeContextFragments(fragments ?? [])).toContain("ISOLATED_OUTCOME_731");
+        expect(received?.prompt).toBe("hello");
+        expect(params.currentInboundContext).toEqual(currentInboundContext);
+        expect(currentInboundContext.text).toBe("Current quoted reply");
+      }
+      expect(JSON.stringify(await loadTranscriptEvents(target))).not.toContain(
+        "ISOLATED_OUTCOME_731",
+      );
+      expect(claimHeartbeatOutcomeForRun({ ...target, runId: "later-user-run" })).toBeUndefined();
+    },
+  );
+
+  it.each(["heartbeat", "cron", "detached", "aborted"] as const)(
+    "does not consume silent heartbeat context for a %s host attempt",
+    async (kind) => {
+      const root = trajectoryTempDirs.make("harness-heartbeat-control-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      const target = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: path.join(root, "agent.sqlite"),
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      persistHeartbeatOutcome({
+        ...target,
+        runSessionKey: "agent:main:main:heartbeat",
+        occurredAt: 1,
+        response: { outcome: "done", notify: false, summary: "Retained outcome" },
+      });
+      const params = {
+        ...createAttemptParams(),
+        ...target,
+        sessionTarget: target,
+        trigger: kind === "heartbeat" || kind === "cron" ? kind : ("user" as const),
+        ...(kind === "detached" ? { sessionPersistence: "detached" as const } : {}),
+        ...(kind === "aborted" ? { abortSignal: AbortSignal.abort() } : {}),
+      };
+      if (kind === "aborted") {
+        await expect(runAgentHarnessAttempt(params)).rejects.toThrow();
+      } else {
+        await runAgentHarnessAttempt(params);
+        expect(agentRunAttempt.mock.calls.at(-1)?.[0].currentInboundContext).toBeUndefined();
+      }
+      expect(claimHeartbeatOutcomeForRun({ ...target, runId: "next-user" })?.summary).toBe(
+        "Retained outcome",
+      );
+    },
+  );
+
   it.each(["openclaw", "codex"])(
     "prepares direct tool authority before the %s harness executes",
     async (harnessId) => {

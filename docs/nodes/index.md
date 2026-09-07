@@ -739,6 +739,18 @@ rewritten by security sanitization, the text reports the omission rather than
 showing a partial or altered path. A listing that cannot display its first entry
 explicitly reports that pagination cannot advance.
 
+Directory fetch policy checks the source-tree descendants and then the archive
+member identities admitted by the same bounded parser and policy planner used
+for extraction. It does not use human-readable `tar` listings: admitted Unicode
+and newline names retain their exact spelling, and producer-added AppleDouble
+files are checked rather than hidden. Parent paths are checked even when the
+archive omits directory headers. The 5000-descendant cap includes those implicit
+directories, counting shared parents only once. A denied path rejects the whole transfer.
+Canonical source path/device/inode binding, byte-count and SHA-256 verification,
+link/traversal/collision checks, and extraction limits still apply. Malformed
+archive headers and destination-platform filename restrictions still reject;
+filenames are not truncated or repaired to make an archive pass.
+
 ## Invoking commands
 
 Low-level (raw RPC):

@@ -3096,6 +3096,8 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     );
     mkdirSync(join(fixture.root, "dependency-evidence"));
     writeFileSync(join(fixture.root, "dependency-evidence/report.json"), "{}");
+    writeFileSync(join(fixture.root, "dependency-evidence/npm-package-locks.json"), "{}");
+    writeFileSync(join(fixture.root, "dependency-evidence/npm-package-locks.md"), "# npm locks\n");
     writeFileSync(
       join(fixture.root, "release-postpublish-evidence.json"),
       JSON.stringify({
@@ -3118,7 +3120,11 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       stepEnv(workflowStep(publish, "Complete publish workflows")),
     );
     expect.soft(evidence.status, evidence.stderr).toBe(0);
-    expect.soft(fixture.events()).toContain("asset:dependency-evidence/report.json");
+    expect
+      .soft(fixture.events().join("\n"))
+      .toContain(
+        "asset:dependency-evidence/npm-package-locks.json\ndependency-evidence/npm-package-locks.md\ndependency-evidence/report.json",
+      );
 
     const core = workflowStep(publish, "Start core npm publication");
     const dispatched = fixture.run(core, stepEnv(core));
@@ -4139,16 +4145,30 @@ NODE
     const existingZip = `${tempDir}/existing.zip`;
     const symlinkZip = `${tempDir}/symlink.zip`;
     const corruptZip = `${tempDir}/corrupt.zip`;
+    const npmLocks = `${JSON.stringify({ packages: [{ lock: "x".repeat(3 * 1024 * 1024) }] })}\n`;
+    const evidenceNames = ["proof.json", "npm-package-locks.json", "npm-package-locks.md"].map(
+      (name) => `dependency-evidence/${name}`,
+    );
     for (const dir of [sourceDir, existingDir]) {
       mkdirSync(`${dir}/dependency-evidence`, { recursive: true });
       writeFileSync(`${dir}/dependency-evidence/proof.json`, '{"ok":true}\n');
+      writeFileSync(`${dir}/dependency-evidence/npm-package-locks.json`, npmLocks);
+      writeFileSync(`${dir}/dependency-evidence/npm-package-locks.md`, "# npm locks\n");
     }
-    execFileSync("touch", ["-t", "198001010000", `${sourceDir}/dependency-evidence/proof.json`]);
-    execFileSync("touch", ["-t", "202001010000", `${existingDir}/dependency-evidence/proof.json`]);
-    execFileSync("zip", ["-X", "-q", sourceZip, "dependency-evidence/proof.json"], {
+    execFileSync("touch", [
+      "-t",
+      "198001010000",
+      ...evidenceNames.map((name) => `${sourceDir}/${name}`),
+    ]);
+    execFileSync("touch", [
+      "-t",
+      "202001010000",
+      ...evidenceNames.map((name) => `${existingDir}/${name}`),
+    ]);
+    execFileSync("zip", ["-X", "-q", sourceZip, ...evidenceNames], {
       cwd: sourceDir,
     });
-    execFileSync("zip", ["-X", "-q", existingZip, "dependency-evidence/proof.json"], {
+    execFileSync("zip", ["-X", "-q", existingZip, ...evidenceNames], {
       cwd: existingDir,
     });
     symlinkSync("../../outside", `${existingDir}/dependency-evidence/link`);
@@ -4168,6 +4188,11 @@ NODE
     const corruptResult = compare(corruptZip, corruptZip);
 
     expect(result.status, result.stderr).toBe(0);
+    writeFileSync(`${existingDir}/dependency-evidence/npm-package-locks.json`, `${npmLocks} `);
+    execFileSync("zip", ["-X", "-q", existingZip, "dependency-evidence/npm-package-locks.json"], {
+      cwd: existingDir,
+    });
+    expect(compare(sourceZip, existingZip).status).toBe(1);
     expect(symlinkResult.status).toBe(1);
     expect(symlinkResult.stderr).toContain("unsupported dependency evidence archive entry");
     expect(corruptResult.status).toBe(1);

@@ -33,6 +33,7 @@
     "../../src/logging/**",
     "../../src/hooks/**",
     "../../src/daemon/**",
-    "../../src/plugin-state/**"
+    "../../src/plugin-state/**",
+    "../../src/state/**"
   ]
 }

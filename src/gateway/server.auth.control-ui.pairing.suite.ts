@@ -21,9 +21,126 @@ import {
   readConnectChallengeNonce,
   restoreGatewayToken,
   TEST_OPERATOR_CLIENT,
+  testState,
 } from "./server.auth.test-helpers.js";
 
 export function registerControlUiPairingSuite(): void {
+  test("keeps pending Control UI operator pairing reconnecting without enabling ordinary node retries", async () => {
+    const { mutateConfigFile } = await import("../config/config.js");
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { listDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
+    const origin = "https://control-ui.example.test";
+    testState.gatewayControlUi = { allowedOrigins: [origin] };
+    await mutateConfigFile({
+      mutate(config) {
+        config.gateway = {
+          ...config.gateway,
+          trustedProxies: ["127.0.0.1"],
+          controlUi: { ...config.gateway?.controlUi, allowedOrigins: [origin] },
+        };
+      },
+      afterWrite: { mode: "auto" },
+    });
+    await withControlUiServer(async ({ port }) => {
+      const connectBrowser = async (
+        identityPath: string,
+        role: "operator" | "node",
+        scopes: string[],
+      ) => {
+        const socket = await openWs(port, {
+          origin,
+          "x-forwarded-for": "203.0.113.50",
+        });
+        try {
+          return await connectReq(socket, {
+            token: "secret",
+            role,
+            scopes,
+            client: CONTROL_UI_CLIENT,
+            device: await buildSignedDeviceForIdentity({
+              identityPath,
+              client: CONTROL_UI_CLIENT,
+              role,
+              scopes,
+              nonce: await readConnectChallengeNonce(socket),
+            }),
+          });
+        } finally {
+          socket.close();
+        }
+      };
+
+      for (const reason of [
+        "not-paired",
+        "role-upgrade",
+        "scope-upgrade",
+        "metadata-upgrade",
+      ] as const) {
+        const { identityPath, identity } = await createOperatorIdentityFixture(
+          `openclaw-control-ui-retry-${reason}-`,
+        );
+        if (reason !== "not-paired") {
+          const seeded = await requestDevicePairing({
+            deviceId: identity.deviceId,
+            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+            role: reason === "role-upgrade" ? "node" : "operator",
+            scopes:
+              reason === "role-upgrade"
+                ? []
+                : reason === "scope-upgrade"
+                  ? ["operator.read"]
+                  : ["operator.admin"],
+            clientId: CONTROL_UI_CLIENT.id,
+            clientMode: CONTROL_UI_CLIENT.mode,
+            platform:
+              reason === "metadata-upgrade" ? "previous-platform" : CONTROL_UI_CLIENT.platform,
+          });
+          expect(
+            (
+              await approveDevicePairing(seeded.request.requestId, {
+                callerScopes: ["operator.admin"],
+              })
+            )?.status,
+          ).toBe("approved");
+        }
+
+        let requestId: string | undefined;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const response = await connectBrowser(identityPath, "operator", ["operator.admin"]);
+          expect(response.ok).toBe(false);
+          const pending = (await listDevicePairing()).pending.filter(
+            (entry) => entry.deviceId === identity.deviceId,
+          );
+          expect(pending).toHaveLength(1);
+          requestId ??= pending[0]?.requestId;
+          expect(pending[0]?.requestId).toBe(requestId);
+          expect(response.error?.details).toMatchObject({
+            code: "PAIRING_REQUIRED",
+            reason,
+            requestId,
+            recommendedNextStep: "wait_then_retry",
+            retryable: true,
+            pauseReconnect: false,
+          });
+        }
+      }
+      const { identityPath } = await createOperatorIdentityFixture(
+        "openclaw-control-ui-node-retry-",
+      );
+      const response = await connectBrowser(identityPath, "node", []);
+      expect(response.ok).toBe(false);
+      expect(response.error?.details).toMatchObject({
+        code: "PAIRING_REQUIRED",
+        reason: "not-paired",
+        requestId: expect.any(String),
+      });
+      expect(response.error?.details).not.toHaveProperty("recommendedNextStep");
+      expect(response.error?.details).not.toHaveProperty("retryable");
+      expect(response.error?.details).not.toHaveProperty("pauseReconnect");
+    });
+  });
+
   const tamperPairedMetadata = async (
     deviceId: string,
     mutate: (metadata: Record<string, unknown>) => void,

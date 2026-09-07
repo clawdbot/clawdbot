@@ -67,6 +67,7 @@ export type LoginFailureFeedback = {
 
 export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0] & {
   gatewayUrl?: string;
+  reconnectPending?: boolean;
 };
 
 export const PASSWORD_MODE_CODES = new Set<string>([
@@ -203,7 +204,7 @@ export function resolveLoginFailureFeedback(
       stepKeys: [
         ...(pairing.requestId ? [] : ["login.failure.pairing.stepLatest"]),
         { key: "login.failure.pairing.stepDashboard", commands: ["openclaw dashboard"] },
-        "login.failure.pairing.stepReconnect",
+        ...(params.reconnectPending ? [] : ["login.failure.pairing.stepReconnect"]),
       ],
       stepParams: { host },
     });
