@@ -1188,10 +1188,12 @@ describe("gateway session utils", () => {
         patch: { key: "agent:main:main", contextWindow: String(after) },
         defaultProvider: "ollama",
         defaultModel: "qwen3:8b",
-        loadModelCatalog: function* () {
+        *loadModelCatalog() {
+          yield;
           return catalog;
         },
       });
+      patch.next();
       expect(patch.next().value).toEqual({ ok: true });
       const row = buildGatewaySessionRow({
         cfg,
