@@ -2578,6 +2578,7 @@
     {"id":"native.apple.765aed5ec48a2d09","source":"Microphone input format unavailable","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/Sources/Voice/VoiceWakeManager.swift"}]},
     {"id":"native.apple.723530f14a4181f3","source":"Microphone muted","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/WatchApp/Sources/WatchRealtimeCallView.swift"}]},
     {"id":"native.apple.3093e9911d780028","source":"Microphone permission denied","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/Sources/Voice/TalkModeManager.swift"}]},
+    {"id":"native.apple.1b26941acb04dc80","source":"Microphone unavailable — reconnect it to resume Talk","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/TalkModeRuntime.swift"}]},
     {"id":"native.apple.89e5302cc420c198","source":"Minimal","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/StatusMenuSessions.swift"}]},
     {"id":"native.apple.7e8616e8b61e3ab7","source":"Missing %@","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/Sources/Voice/TalkGatewayPermissionState.swift"},{"kind":"ui-localized-call","path":"apps/ios/WatchApp/Sources/WatchInboxMessages.swift"}]},
     {"id":"native.apple.5db0676e2456f785","source":"Missing dependencies.","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ComposerCapabilities.swift"}]},

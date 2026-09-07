@@ -32,6 +32,7 @@ actor VoiceWakeRuntime {
     private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var captureInvalidationObserver: AudioCaptureInvalidationObserver?
     private var recognitionGeneration: Int = 0 // drop stale callbacks after restarts
     private var lastHeard: Date?
     private var noiseFloorRMS: Double = 1e-4
@@ -77,6 +78,7 @@ actor VoiceWakeRuntime {
     private func haltRecognitionPipeline() {
         // Bump generation first so any in-flight callbacks from the cancelled task get dropped.
         self.recognitionGeneration &+= 1
+        self.captureInvalidationObserver?.stop()
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.recognitionRequest?.endAudio()
@@ -105,7 +107,7 @@ actor VoiceWakeRuntime {
     }
 
     func refresh(state: AppState) async {
-        let snapshot = await MainActor.run { () -> (Bool, RuntimeConfig) in
+        let snapshot = await MainActor.run { () -> (Bool, RuntimeConfig, NotificationCenter) in
             let enabled = state.swabbleEnabled
             let config = RuntimeConfig(
                 triggers: sanitizeVoiceWakeTriggers(state.swabbleTriggerWords),
@@ -114,7 +116,7 @@ actor VoiceWakeRuntime {
                 triggerChime: state.voiceWakeTriggerChime,
                 sendChime: state.voiceWakeSendChime,
                 triggersTalkMode: state.voiceWakeTriggersTalkMode)
-            return (enabled, config)
+            return (enabled, config, NSWorkspace.shared.notificationCenter)
         }
 
         guard voiceWakeSupported, snapshot.0 else {
@@ -129,6 +131,9 @@ actor VoiceWakeRuntime {
         }
 
         let config = snapshot.1
+        if self.captureInvalidationObserver == nil {
+            self.captureInvalidationObserver = AudioCaptureInvalidationObserver(wakeCenter: snapshot.2)
+        }
 
         if self.isStarting { return }
 
@@ -151,6 +156,10 @@ actor VoiceWakeRuntime {
 
     private func start(with config: RuntimeConfig) async {
         if self.isStarting { return }
+        guard let captureInvalidationObserver else {
+            self.logger.error("voicewake runtime: invalidation observer unavailable")
+            return
+        }
         self.isStarting = true
         defer { self.isStarting = false }
         do {
@@ -202,8 +211,28 @@ actor VoiceWakeRuntime {
                 }
             }
 
-            audioEngine.prepare()
-            try audioEngine.start()
+            try captureInvalidationObserver.start(
+                engine: audioEngine,
+                onConfigurationChange: { [weak self] in
+                    Task {
+                        await self?.recoverInvalidatedCapture(
+                            generation: generation,
+                            config: config,
+                            reason: "audio configuration changed")
+                    }
+                },
+                onWake: { [weak self] in
+                    Task {
+                        await self?.recoverInvalidatedCapture(
+                            generation: generation,
+                            config: config,
+                            reason: "system woke")
+                    }
+                },
+                startEngine: {
+                    audioEngine.prepare()
+                    try audioEngine.start()
+                })
 
             self.currentConfig = config
             self.lastHeard = Date()
@@ -226,7 +255,6 @@ actor VoiceWakeRuntime {
                     generation: generation)
                 Task { await self.handleRecognition(update, config: config) }
             }
-
             let preferred = config.micID?.isEmpty == false ? config.micID! : "system-default"
             self.logger.info(
                 "voicewake runtime input preferred=\(preferred, privacy: .public) " +
@@ -386,6 +414,24 @@ actor VoiceWakeRuntime {
                     config: config)
             }
         }
+    }
+
+    private func recoverInvalidatedCapture(
+        generation: Int,
+        config: RuntimeConfig,
+        reason: String) async
+    {
+        guard generation == self.recognitionGeneration, config == self.currentConfig else { return }
+        if self.isCapturing {
+            // Invalidation must resolve through the active overlay: forwarding is visibly shown
+            // as sending, and an empty interrupted command is visibly dismissed rather than sent.
+            self.logger.warning("voicewake \(reason); finalizing interrupted capture")
+            await self.finalizeCapture(config: config)
+            return
+        }
+        self.logger.warning("voicewake \(reason); scheduling capture restart")
+        self.haltRecognitionPipeline()
+        self.scheduleRestartRecognizer()
     }
 
     private func maybeLogRecognition(

@@ -1,3 +1,4 @@
+import AppKit
 import AudioToolbox
 @preconcurrency import AVFoundation
 import CoreAudio
@@ -12,6 +13,8 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.realtime.capture")
     private let selectedInputUID: @MainActor () -> String?
     private let deliveryGate = TalkGenerationDeliveryGate()
+    private let captureInvalidationObserver = AudioCaptureInvalidationObserver(
+        wakeCenter: NSWorkspace.shared.notificationCenter)
 
     private var audioEngine: AVAudioEngine?
     private var inputNode: AVAudioInputNode?
@@ -25,6 +28,7 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private var suppressInputDuringOutput = true
     private var outputRouteDecisionState = MacRealtimeTalkOutputRouteDecisionState()
     private var outputRouteObservationGeneration: UInt64 = 0
+    private var captureGeneration: UInt64 = 0
     #if DEBUG
     private var testOutputRouteCallbackHandled: (@Sendable () -> Void)?
     #endif
@@ -150,8 +154,31 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
                 deliveryToken: deliveryToken,
                 onAudio: onAudio))
         self.tapInstalled = true
-        engine.prepare()
-        try engine.start()
+        self.captureGeneration &+= 1
+        let captureGeneration = self.captureGeneration
+        try self.captureInvalidationObserver.start(
+            engine: engine,
+            onConfigurationChange: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.audioCaptureDidInvalidate(generation: captureGeneration)
+                }
+            },
+            onWake: { [weak self] in
+                Task { @MainActor [weak self] in
+                    // Wake can precede external microphone re-enumeration; keep the existing
+                    // visible failure path, but do not spend it before the route can settle.
+                    do {
+                        try await Task.sleep(for: .milliseconds(700))
+                    } catch {
+                        return
+                    }
+                    self?.audioCaptureDidInvalidate(generation: captureGeneration)
+                }
+            },
+            startEngine: {
+                engine.prepare()
+                try engine.start()
+            })
         self.activeInputResolution = activeResolution
     }
 
@@ -251,7 +278,7 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     }
 
     private func audioInputDevicesDidChange() {
-        guard let targetSampleRate, let onAudio else { return }
+        guard self.targetSampleRate != nil, self.onAudio != nil else { return }
         let desiredResolution = AudioInputDeviceObserver.resolveSelection(self.selectedInputUID())
         guard desiredResolution != self.activeInputResolution ||
             self.activeInputResolution?.shouldRestart(
@@ -260,16 +287,15 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         else { return }
 
         self.logger.warning("realtime active/default input changed; restarting capture")
-        self.restartCaptureAfterInputChange {
-            try self.startCaptureEngine(targetSampleRate: targetSampleRate, onAudio: onAudio)
-        }
+        self.restartCapture()
     }
 
-    private func restartCaptureAfterInputChange(_ restart: () throws -> Void) {
+    private func restartCapture() {
+        guard let targetSampleRate, let onAudio else { return }
         self.deliveryGate.deactivate()
         self.teardownEngine()
         do {
-            try restart()
+            try self.startCaptureEngine(targetSampleRate: targetSampleRate, onAudio: onAudio)
         } catch {
             self.logger.error(
                 "realtime input restart failed: \(error.localizedDescription, privacy: .public)")
@@ -281,7 +307,15 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         }
     }
 
+    private func audioCaptureDidInvalidate(generation: UInt64) {
+        guard generation == self.captureGeneration else { return }
+        self.logger.warning("realtime audio capture invalidated; restarting")
+        self.restartCapture()
+    }
+
     private func teardownEngine() {
+        self.captureGeneration &+= 1
+        self.captureInvalidationObserver.stop()
         if self.tapInstalled, let inputNode {
             inputNode.removeTap(onBus: 0)
         }
