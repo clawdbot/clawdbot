@@ -152,12 +152,15 @@ async function prepareLaunchAgentProgramArguments(params: {
   // Publish atomically like the plist below: a torn env file drops the gateway
   // token and the service can no longer authenticate on its next start.
   const envTemporaryPath = `${envFilePath}.openclaw-${randomUUID()}.tmp`;
-  await fs.writeFile(envTemporaryPath, buildLaunchAgentEnvironmentFile(entries), {
-    encoding: "utf8",
-    flag: "wx",
-    mode: LAUNCH_AGENT_ENV_FILE_MODE,
-  });
   try {
+    // The write itself stays inside the cleanup scope: a partial write that
+    // rejects (ENOSPC/EFBIG) must not leave credential material behind on an
+    // already-full filesystem.
+    await fs.writeFile(envTemporaryPath, buildLaunchAgentEnvironmentFile(entries), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: LAUNCH_AGENT_ENV_FILE_MODE,
+    });
     await fs.rename(envTemporaryPath, envFilePath);
   } finally {
     await fs.unlink(envTemporaryPath).catch(() => undefined);

@@ -2064,6 +2064,30 @@ describe("launchd install", () => {
     expect([...state.files.keys()].filter((key) => key.includes(".tmp"))).toEqual([]);
   });
 
+  it("cleans up the temporary environment file when its write fails mid-write", async () => {
+    const env = createDefaultLaunchdEnv();
+    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const originalEnv = "export OPENCLAW_GATEWAY_TOKEN='original-token'\n";
+    state.files.set(envFilePath, originalEnv);
+    // Fail the temporary write itself after some bytes landed, as EFBIG would
+    // on a full filesystem; cleanup must still remove the partial temporary.
+    vi.mocked(fs.writeFile).mockImplementationOnce(async (p: string, data: string) => {
+      state.files.set(p, data.slice(0, 16));
+      throw Object.assign(new Error("EFBIG: file too large, write"), { code: "EFBIG" });
+    });
+
+    const error = await installLaunchAgent(
+      defaultLaunchAgentFixture(env, {
+        environment: { OPENCLAW_GATEWAY_PORT: "19000" },
+      }),
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("EFBIG");
+    expect(state.files.get(envFilePath)).toBe(originalEnv);
+    expect([...state.files.keys()].filter((key) => key.includes(".tmp"))).toEqual([]);
+  });
+
   it("fails closed when rollback cannot determine the replacement state", async () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
