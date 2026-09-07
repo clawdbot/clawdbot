@@ -171,10 +171,12 @@ function deriveGroupSessionPatch(params: {
   }
 
   const channel = resolution.channel;
-  const subject = params.ctx.GroupSubject?.trim();
+  const subject = [params.ctx.GroupSubject?.trim(), params.ctx.TopicName?.trim()]
+    .filter(Boolean)
+    .join(" / ");
   const space = params.ctx.GroupSpace?.trim();
   const explicitChannel = params.ctx.GroupChannel?.trim();
-  const subjectLooksChannel = Boolean(subject?.startsWith("#"));
+  const subjectLooksChannel = subject.startsWith("#");
   // Channel-looking subjects become `groupChannel` only for channel-capable providers; ordinary
   // group chats keep the subject as human-readable metadata.
   const normalizedChannel =
