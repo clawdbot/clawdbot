@@ -1,5 +1,6 @@
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { openSlot } from "../pages/chat/sidebar-layout.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -89,7 +90,7 @@ suite.define(() => {
       });
       const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
       await page.addInitScript(
-        ({ key, rawKey, storage }) => {
+        ({ key, rawKey, storage, dashboardLayout }) => {
           localStorage.setItem(
             storage,
             JSON.stringify({
@@ -97,6 +98,8 @@ suite.define(() => {
               ...(rawKey === key
                 ? {}
                 : {
+                    // Each split pane owns its presentation independently of the current route.
+                    sidebarSessionLayouts: { [rawKey]: dashboardLayout },
                     chatSplitLayout: {
                       activePaneId: "p1",
                       columns: [
@@ -109,7 +112,12 @@ suite.define(() => {
             }),
           );
         },
-        { key: sessionKey, rawKey: viewport.routeKey, storage: storageKey },
+        {
+          key: sessionKey,
+          rawKey: viewport.routeKey,
+          storage: storageKey,
+          dashboardLayout: openSlot({ columns: [] }, "dashboard"),
+        },
       );
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));

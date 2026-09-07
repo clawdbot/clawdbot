@@ -98,7 +98,6 @@ const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
 const ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = 1024;
 
 function getAnthropicCompat(model: Model<"anthropic-messages">) {
-  // Auto-detect session affinity and tool streaming support from provider.
   const isFireworks = model.provider === "fireworks";
   const isCloudflareAiGatewayAnthropic =
     model.provider === "cloudflare-ai-gateway" && model.baseUrl.includes("anthropic");

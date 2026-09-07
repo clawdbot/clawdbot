@@ -833,10 +833,11 @@ describe("resolveSessionAuthProfileOverride", () => {
         const sessionStore = { "agent:main:main": sessionEntry };
         const resolved = await resolveSession({ agentDir, sessionEntry, sessionStore });
 
-        expect(resolved).toBeUndefined();
-        expect(sessionEntry.authProfileOverride).toBeUndefined();
-        expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
-        expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+        const expectedProfile = profile ? undefined : "openai:missing";
+        expect(resolved).toBe(expectedProfile);
+        expect(sessionEntry.authProfileOverride).toBe(expectedProfile);
+        expect(sessionEntry.authProfileOverrideSource).toBe(profile ? undefined : "user");
+        expect(sessionEntry.authProfileOverrideCompactionCount).toBe(profile ? undefined : 2);
       });
     },
   );

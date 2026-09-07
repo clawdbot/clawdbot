@@ -28,9 +28,7 @@ function shorten(message: string, maxLen: number): string {
 function normalizeGwsLine(line: string): string {
   // Remove per-request ids so repeated gateway websocket errors group into one summary.
   return line
-    .replace(/\s+runId=[^\s]+/g, "")
-    .replace(/\s+conn=[^\s]+/g, "")
-    .replace(/\s+id=[^\s]+/g, "")
+    .replace(/\s+(?:runId|conn|id)=[^\s]+/g, "")
     .replace(/\s+error=Error:.*$/g, "")
     .trim();
 }
@@ -73,26 +71,14 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
     out.push(base);
   };
 
-  const addLine = (line: string) => {
-    const trimmed = line.trimEnd();
-    if (!trimmed) {
-      return;
-    }
-    out.push(trimmed);
-  };
-
   const lines = rawLines.map((line) => line.trimEnd()).filter(Boolean);
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const trimmedStart = line.trimStart();
     if (
-      (trimmedStart.startsWith('"') ||
-        trimmedStart === "}" ||
-        trimmedStart === "{" ||
-        trimmedStart.startsWith("}") ||
-        trimmedStart.startsWith("{")) &&
-      !trimmedStart.startsWith("[") &&
-      !trimmedStart.startsWith("#")
+      trimmedStart.startsWith('"') ||
+      trimmedStart.startsWith("}") ||
+      trimmedStart.startsWith("{")
     ) {
       // Tail can cut in the middle of a JSON blob; drop orphaned JSON fragments.
       continue;
@@ -143,7 +129,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       continue;
     }
 
-    addLine(line);
+    out.push(line);
   }
 
   for (const g of groups.values()) {

@@ -465,6 +465,7 @@ vi.mock("../flows/doctor-health-contributions.js", () => ({
 vi.mock("../flows/doctor-core-checks.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../flows/doctor-core-checks.runtime.js")>()),
   collectRuntimeToolSchemaFindings: vi.fn().mockResolvedValue([]),
+  collectProviderCatalogProjectionFindings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({

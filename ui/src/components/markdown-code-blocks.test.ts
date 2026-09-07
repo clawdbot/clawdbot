@@ -52,10 +52,9 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
       tableInteractions: "enabled",
     },
   );
-  const part = render(
-    html`<section class="chat-text" ${markdownBlocks()}>${unsafeHTML(content)}</section>`,
-    container,
-  );
+  const view = (active = true) =>
+    html`<section class="chat-text" ${markdownBlocks(active)}>${unsafeHTML(content)}</section>`;
+  const part = render(view(), container);
   const code = container.querySelector("code");
   const tableViewport = container.querySelector(".markdown-table__viewport");
 
@@ -79,6 +78,20 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     expect(container.querySelector(".markdown-table__viewport")).toBe(tableViewport);
     expect(observed.has(tableViewport!)).toBe(true);
     expect(observed.size).toBe(3);
+
+    render(view(false), container);
+    await Promise.resolve();
+    expect(observed.size).toBe(0);
+    expect(container.querySelector("code")).toBe(code);
+    render(view(true), container);
+    render(view(false), container);
+    await Promise.resolve();
+    expect(observed.size).toBe(0);
+    render(view(true), container);
+    await Promise.resolve();
+    expect(observed.size).toBe(3);
+    expect(observed.has(code!)).toBe(true);
+    expect(observed.has(tableViewport!)).toBe(true);
   } finally {
     render(nothing, container);
   }

@@ -1,3 +1,4 @@
+import type { BoardFace } from "../../lib/board/settings.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
@@ -19,6 +20,7 @@ export type ChatPaneElement = HTMLElement & {
   paneId?: string;
   prepareForEviction?: () => void;
   presented?: boolean;
+  routeFace?: BoardFace;
   sessionKey?: string;
   transcriptLoading?: boolean;
   transcriptReady?: boolean;

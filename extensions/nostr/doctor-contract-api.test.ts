@@ -87,8 +87,8 @@ describe("nostr doctor state migration", () => {
     expect(profileResult.warnings).toEqual([]);
     await expect(fs.access(busPath)).rejects.toThrow();
     await expect(fs.access(profilePath)).rejects.toThrow();
-    await expect(fs.access(`${busPath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${profilePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${busPath}.migrated`);
+    await fs.access(`${profilePath}.migrated`);
     await expect(
       context.openPluginStateKeyedStore({ namespace: "bus-state", maxEntries: 256 }).lookup("main"),
     ).resolves.toEqual({

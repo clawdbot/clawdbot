@@ -8,12 +8,20 @@ import type {
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import {
+  createOpenClawAgentDatabaseClaim,
+  registerOpenClawAgentDatabaseIdentity,
+  type OpenClawAgentDatabaseClaim,
+} from "./openclaw-agent-db-identity.js";
+import {
   assertCanonicalAgentPersistenceVersion,
   assertExistingAgentSchemaOwner,
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
-import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
+import {
+  borrowOpenClawAgentDatabase,
+  getOpenClawAgentDatabaseIfOpen,
+} from "./openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -87,6 +95,7 @@ export function openOpenClawAgentDatabaseReadOnly(
     db.close();
   };
   try {
+    registerOpenClawAgentDatabaseIdentity(db);
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const userVersion = assertSupportedAgentSchemaVersion(db, pathname);
     assertCanonicalAgentPersistenceVersion(db, pathname, userVersion);
@@ -101,6 +110,26 @@ export function openOpenClawAgentDatabaseReadOnly(
     close();
     throw error;
   }
+}
+
+/** Retain an existing store across awaits without materializing a writable database. */
+export function retainOpenClawAgentDatabaseReadOnly(
+  options: OpenClawAgentDatabaseOptions,
+):
+  | { found: true; claim: OpenClawAgentDatabaseClaim }
+  | { found: false; reason: "database-missing" | "schema-missing" } {
+  const opened = findOpenAgentDatabase(options);
+  if (opened && !opened.db.isTransaction) {
+    const borrowed = borrowOpenClawAgentDatabase(options);
+    return { found: true, claim: createOpenClawAgentDatabaseClaim(opened, borrowed.release) };
+  }
+  const fresh = openOpenClawAgentDatabaseReadOnly(options);
+  return fresh.found
+    ? {
+        found: true,
+        claim: createOpenClawAgentDatabaseClaim(fresh.database, fresh.database.close),
+      }
+    : fresh;
 }
 
 /** Read agent state without creating, registering, migrating, or joining its writable lifecycle. */

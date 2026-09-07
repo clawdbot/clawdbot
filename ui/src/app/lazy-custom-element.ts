@@ -326,6 +326,6 @@ export function isOptionalElementDefined(element: OptionalCustomElement): boolea
 
 export const LOGIN_GATE_ELEMENT = {
   tagName: "openclaw-login-gate",
-  label: t("login.subtitle"),
+  label: "login screen",
   loadModule: () => import("../components/login-gate.ts"),
 } satisfies OptionalCustomElement;

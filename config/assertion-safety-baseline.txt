@@ -710,7 +710,7 @@ extensions/mattermost/src/mattermost/interactions.ts	4
 extensions/mattermost/src/mattermost/model-picker.ts	1
 extensions/mattermost/src/mattermost/monitor-reactions.ts	2
 extensions/mattermost/src/mattermost/monitor-slash.ts	1
-extensions/mattermost/src/mattermost/monitor-websocket.ts	2
+extensions/mattermost/src/mattermost/monitor-websocket.ts	1
 extensions/mattermost/src/mattermost/monitor.ts	1
 extensions/mattermost/src/mattermost/slash-commands.ts	1
 extensions/mattermost/src/mattermost/slash-state.ts	5
@@ -2010,7 +2010,7 @@ src/agents/tools/gateway-tool.ts	5
 src/agents/tools/gateway.ts	1
 src/agents/tools/goal-tools.ts	4
 src/agents/tools/heartbeat-response-tool.ts	1
-src/agents/tools/image-generate-tool.ts	14
+src/agents/tools/image-generate-tool.ts	2
 src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	3
 src/agents/tools/in-process-gateway.ts	1
@@ -2141,7 +2141,6 @@ src/auto-reply/reply/reply-payload-sending-hook.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
 src/auto-reply/reply/reply-threading.ts	2
 src/auto-reply/reply/reply-timing-tracker.ts	2
-src/auto-reply/reply/reply-turn-admission.ts	1
 src/auto-reply/reply/restart-recovery-claim.ts	3
 src/auto-reply/reply/session-delivery.ts	1
 src/auto-reply/reply/session.ts	3
@@ -2205,7 +2204,7 @@ src/channels/plugins/message-action-dispatch.ts	5
 src/channels/plugins/meta-normalization.ts	1
 src/channels/plugins/package-state-probes.ts	2
 src/channels/plugins/read-only-command-defaults.ts	2
-src/channels/plugins/read-only.ts	6
+src/channels/plugins/read-only.ts	4
 src/channels/plugins/registry.ts	1
 src/channels/plugins/session-thread-info-loaded.ts	1
 src/channels/plugins/setup-contract.ts	3
@@ -2252,7 +2251,7 @@ src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	3
-src/cli/capability-cli/image.ts	17
+src/cli/capability-cli/image.ts	12
 src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/shared.ts	4
 src/cli/capability-cli/tts.ts	6
@@ -2974,7 +2973,7 @@ src/infra/delivery-queue-sqlite-bound.ts	2
 src/infra/delivery-queue-sqlite.ts	2
 src/infra/delivery-queue-sqlite.types.ts	1
 src/infra/delivery-recovery.shared.ts	4
-src/infra/device-pairing-store.ts	6
+src/infra/device-pairing-store.ts	5
 src/infra/diagnostic-event-listener-presence.ts	3
 src/infra/diagnostic-events.ts	13
 src/infra/diagnostic-model-request.ts	1
@@ -3007,7 +3006,6 @@ src/infra/git-commit.ts	1
 src/infra/heartbeat-outcome-store.ts	1
 src/infra/heartbeat-runner-config.ts	1
 src/infra/heartbeat-visibility.ts	1
-src/infra/heartbeat-wake.ts	1
 src/infra/install-package-dir.ts	2
 src/infra/install-source-utils.ts	2
 src/infra/json-file.ts	1
@@ -3784,7 +3782,7 @@ ui/src/components/github-link-hovercard.runtime.ts	2
 ui/src/components/hub-tabs.ts	1
 ui/src/components/input-dialog.ts	1
 ui/src/components/lobster-dex.ts	2
-ui/src/components/login-gate.ts	3
+ui/src/components/login-gate.ts	2
 ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	4

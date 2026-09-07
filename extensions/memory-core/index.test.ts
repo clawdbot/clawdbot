@@ -108,6 +108,31 @@ function captureMemoryModelContract(initialConfig: OpenClawConfig) {
 }
 
 describe("buildPromptSection", () => {
+  it("prepares explicitly owned memory tools without resolving unrelated legacy defaults", () => {
+    let unrelatedDefaultReads = 0;
+    const config: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main" },
+          {
+            id: "unrelated",
+            get default() {
+              unrelatedDefaultReads += 1;
+              return false;
+            },
+          },
+        ],
+      },
+    };
+    const { search, get, promptBuilder } = captureMemoryModelContract(config);
+    expect(search.description).toContain("MEMORY.md");
+    expect(get.description).toContain("MEMORY.md");
+    expect(
+      promptBuilder({ availableTools: new Set(["memory_search", "memory_get"]), agentId: "main" }),
+    ).toContain("## Memory Recall");
+    expect(unrelatedDefaultReads).toBe(0);
+  });
+
   it("returns empty when no memory tools are available", () => {
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
   });

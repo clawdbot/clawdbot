@@ -151,7 +151,7 @@ Reef runs a fail-closed classifier at both ends: outbound DLP before encryption,
 
 These review commands use the same explicit owner check described in [Adding a friend](#adding-a-friend). If no chat sender is configured as an owner, add the intended owner to `commands.ownerAllowFrom` before deciding a review.
 
-The recorded verdict owns the message until you decide: a parked inbound message waits at the relay without re-classification, an approval delivers it within about 30 seconds (after one final guard check), and a denial returns a rejection receipt to the peer. Parked outbound sends stay local; after approval, resend the identical message.
+The recorded verdict owns the message until you decide: a parked inbound message waits at the relay without re-classification, an approval delivers it within about 30 seconds (after one final guard check), and a denial returns a rejection receipt to the peer. Later messages and receipts continue processing without moving the recovery cursor past the parked message. It remains eligible for retry while retained by the relay, including after a socket reconnect. Parked outbound sends stay local; after approval, resend the identical message.
 
 Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
 

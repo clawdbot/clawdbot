@@ -6,8 +6,10 @@ import { createWorkerArtifactTest, workerProbe } from "./vitest-worker-artifacts
 
 const root = process.cwd();
 const it = createWorkerArtifactTest();
+// Each sequence rebuilds all workers; avoid contention on Windows CI runners.
+const concurrent = process.platform !== "win32";
 
-describe.concurrent("fresh compiled subprocess invocation", () => {
+describe("fresh compiled subprocess invocation", { concurrent }, () => {
   it.for(
     (["single", "projects"] as const).flatMap((layout) =>
       (["fresh generations", "source mode", "source and config edits"] as const).map(

@@ -428,7 +428,6 @@ describe("retired runtime config migrations", () => {
     "acp.stream.hiddenBoundarySeparator",
     "acp.maxConcurrentSessions",
     "acp.runtime.ttlMinutes",
-    "mcp.sessionIdleTtlMs",
     "worktrees",
     "transcripts.maxUtterances",
     "hooks.maxBodyBytes",
