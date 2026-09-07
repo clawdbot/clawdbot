@@ -204,6 +204,43 @@ function createPublicationPane(scope?: "global" | "per-sender") {
 }
 
 describe("chat pane pushed pull request state", () => {
+  it.each(["unavailable", "rate-limited"] as const)(
+    "applies retained and replaced repository snapshots during %s",
+    async (status) => {
+      const epoch = {};
+      const setPullRequestSummary = vi.fn();
+      const { pane, emitGatewayEvent } = createPullRequestPane({
+        capturePullRequestEpoch: vi.fn(() => epoch),
+        setPullRequestSummary,
+      } as unknown as SessionCapability);
+      const key = "agent:main:current";
+      const repository = { owner: "openclaw", repo: "openclaw" };
+      pane.refreshSessionPullRequests();
+      await Promise.resolve();
+      emitSnapshot(emitGatewayEvent, key, {
+        repository,
+        branch: { ...repository, branch: "feature/demo" },
+        pullRequests: [pullRequest(111532, "open")],
+        rateLimited: false,
+        status: "ready",
+      });
+      pane.refreshSessionPullRequests();
+      const failure = { pullRequests: [], rateLimited: status === "rate-limited", status };
+      emitSnapshot(emitGatewayEvent, key, { ...failure, repository });
+      pane.refreshSessionPullRequests();
+      expect(pane.sessionPullRequests).toHaveLength(1);
+      expect(pane.sessionPullRequestsBranch?.branch).toBe("feature/demo");
+
+      const replacement = { owner: "other", repo: "checkout" };
+      emitSnapshot(emitGatewayEvent, key, { ...failure, repository: replacement });
+      pane.refreshSessionPullRequests();
+      expect(pane.githubRepo).toEqual(replacement);
+      expect(pane.sessionPullRequests).toEqual([]);
+      expect(pane.sessionPullRequestsBranch).toBeUndefined();
+      expect(setPullRequestSummary).toHaveBeenLastCalledWith(key, undefined, epoch);
+    },
+  );
+
   it("passes repository-only session context to chat rendering and clears it on a session switch", async () => {
     const { pane, state, emitGatewayEvent } = createPublicationPane();
     pane.refreshSessionPullRequests();

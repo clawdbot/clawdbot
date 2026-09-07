@@ -136,11 +136,13 @@ export type ControlUiSessionPullRequests = {
   branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;
+  /** A failed PR lookup may still carry independently resolved repository facts. */
+  status?: "ready" | "rate-limited" | "unavailable";
 };
 
 /** Per-session pushed state; unavailable snapshots preserve prior UI state. */
 export type ControlUiSessionPullRequestSnapshot = ControlUiSessionPullRequests & {
-  status: "ready" | "rate-limited" | "unavailable";
+  status: NonNullable<ControlUiSessionPullRequests["status"]>;
 };
 
 /** Targeted delta event for sessions watched by one Control UI connection. */

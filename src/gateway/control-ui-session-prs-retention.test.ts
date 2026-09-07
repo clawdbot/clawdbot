@@ -245,7 +245,12 @@ describe("watched session PR retention", () => {
       root = "/retained/third";
       branch = "feature-c";
       fetchFailure = true;
-      await expect(load()).rejects.toMatchObject({ statusCode: 502 });
+      await expect(load()).resolves.toEqual({
+        pullRequests: [],
+        repository: { owner: "openclaw", repo: "openclaw" },
+        rateLimited: false,
+        status: "unavailable",
+      });
       // Preserve context and the GitHub failure's expiry, but drop obsolete branch facts.
       expect(pins()).toBe(2);
       fetchFailure = false;

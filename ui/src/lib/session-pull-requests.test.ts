@@ -157,6 +157,45 @@ describe("session pull request snapshot store", () => {
     },
   );
 
+  it.each([
+    { status: "unavailable", repository: { owner: "other", repo: "openclaw" } },
+    { status: "unavailable", repository: { owner: "openclaw", repo: "other" } },
+    { status: "rate-limited", repository: { owner: "other", repo: "openclaw" } },
+    { status: "rate-limited", repository: { owner: "openclaw", repo: "other" } },
+  ] as const)(
+    "drops stale PR facts when the repository changes during $status to $repository",
+    async ({ status, repository }) => {
+      const harness = createGatewayHarness();
+      const store = sessionPullRequestsForGateway(harness.gateway);
+      const key = "agent:main:demo";
+      const owner = {};
+      store.watch(owner, [key]);
+      await flushSync();
+      harness.emit({
+        sessions: {
+          [key]: {
+            pullRequests: [{ number: 1, state: "open" }],
+            repository: { owner: "openclaw", repo: "openclaw" },
+            branch: { owner: "openclaw", repo: "openclaw", branch: "feature/demo" },
+            rateLimited: false,
+            status: "ready",
+          },
+        },
+      });
+      const snapshot = {
+        repository,
+        pullRequests: [],
+        rateLimited: status === "rate-limited",
+        status,
+      };
+      harness.emit({ sessions: { [key]: snapshot } });
+      expect(store.get(key)).toEqual(snapshot);
+      expect(sessionGitHubRepository(store.get(key))).toEqual(repository);
+      store.unwatch(owner);
+      await flushSync();
+    },
+  );
+
   it("sends an empty replace-set while the tab is hidden", async () => {
     const harness = createGatewayHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);

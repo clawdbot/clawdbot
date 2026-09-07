@@ -652,14 +652,23 @@ export async function loadControlUiSessionPullRequests(
   }
   // Normal polling reuses local Git facts across a poll cycle; forced
   // structural refreshes observe the replacement checkout immediately.
-  const { mergedHeads, ...snapshot } = await cachedBranchPullRequests(
-    context,
-    deps,
-    params.refresh === true,
-  ).catch((error: unknown) => {
-    releaseSessionPullRequestBranchFacts(deps.cacheSignal);
-    throw error;
-  });
+  const result = await cachedBranchPullRequests(context, deps, params.refresh === true).catch(
+    () => {
+      releaseSessionPullRequestBranchFacts(deps.cacheSignal);
+      return null;
+    },
+  );
+  if (!result) {
+    // Local repository identity survives a cold PR lookup failure, but an
+    // unknown PR list must not enable a Create PR row.
+    return {
+      pullRequests: [],
+      repository: { owner: context.owner, repo: context.repo },
+      rateLimited: false,
+      status: "unavailable",
+    };
+  }
+  const { mergedHeads, ...snapshot } = result;
   const branch = await resolveSessionBranch(context, mergedHeads, deps, params.refresh === true);
   return branch ? { ...snapshot, branch } : snapshot;
 }

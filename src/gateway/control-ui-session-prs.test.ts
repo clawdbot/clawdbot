@@ -217,7 +217,12 @@ describe("loadControlUiSessionPullRequests", () => {
           { sessionKey: "agent:main:main" },
           { fetchImpl, resolveGitContext, cacheSignal: cacheLifetime.signal },
         ),
-      ).rejects.toMatchObject({ statusCode: 404 });
+      ).resolves.toEqual({
+        pullRequests: [],
+        repository: { owner: "openclaw", repo: "openclaw" },
+        rateLimited: false,
+        status: "unavailable",
+      });
 
       expect(first.pullRequests[0]?.title).toBe("private PR from token A");
       expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -579,7 +584,7 @@ describe("loadControlUiSessionPullRequests", () => {
     },
   );
 
-  it("caches git context through repeated GitHub failures, then expires it", async () => {
+  it("preserves repository context through cold GitHub failures without a branch row", async () => {
     const fetchImpl = routedFetch([
       {
         match: "/pulls?head=",
@@ -605,21 +610,26 @@ describe("loadControlUiSessionPullRequests", () => {
         },
       );
 
-    await expect(load()).rejects.toBeInstanceOf(Error);
-    await expect(load()).rejects.toBeInstanceOf(Error);
+    await expect(load()).resolves.toEqual({
+      pullRequests: [],
+      repository: { owner: "openclaw", repo: "openclaw" },
+      rateLimited: false,
+      status: "unavailable",
+    });
+    await expect(load()).resolves.toMatchObject({ status: "unavailable" });
     expect(gitOutputImpl).toHaveBeenCalledTimes(3);
     expect(fetchImpl.mock.calls).toHaveLength(1);
 
-    await expect(load("/repo/other-context")).rejects.toBeInstanceOf(Error);
+    await expect(load("/repo/other-context")).resolves.toMatchObject({ status: "unavailable" });
     expect(gitOutputImpl).toHaveBeenCalledTimes(6);
 
     vi.advanceTimersByTime(60_000);
-    await expect(load()).rejects.toBeInstanceOf(Error);
+    await expect(load()).resolves.toMatchObject({ status: "unavailable" });
     expect(gitOutputImpl).toHaveBeenCalledTimes(6);
     expect(fetchImpl.mock.calls).toHaveLength(2);
 
     vi.advanceTimersByTime(15_001);
-    await expect(load()).rejects.toBeInstanceOf(Error);
+    await expect(load()).resolves.toMatchObject({ status: "unavailable" });
     expect(gitOutputImpl).toHaveBeenCalledTimes(9);
     // GitHub's shorter failure backoff stays independent of local Git expiry.
     expect(fetchImpl.mock.calls).toHaveLength(2);

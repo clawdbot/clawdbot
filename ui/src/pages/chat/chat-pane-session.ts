@@ -104,13 +104,14 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       this.requestUpdate();
       return refreshAdmitted;
     }
-    this.githubRepo = sessionGitHubRepository(result);
-    if (result.status === "unavailable") {
-      this.requestUpdate();
-      return refreshAdmitted;
-    }
+    const repository = sessionGitHubRepository(result);
+    const repositoryChanged =
+      this.githubRepo != null &&
+      repository !== null &&
+      (this.githubRepo.owner !== repository.owner || this.githubRepo.repo !== repository.repo);
+    this.githubRepo = repository;
     this.sessionPullRequests = result.pullRequests;
-    if (!result.rateLimited || result.pullRequests.length > 0) {
+    if (!result.rateLimited || result.pullRequests.length > 0 || repositoryChanged) {
       const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
         sessionKey,

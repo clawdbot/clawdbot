@@ -223,8 +223,19 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         continue;
       }
       const current = snapshots.get(sessionKey);
+      const repository = sessionGitHubRepository(snapshot);
+      const currentRepository = sessionGitHubRepository(current);
+      const canRetainCurrent =
+        !repository ||
+        (repository.owner === currentRepository?.owner &&
+          repository.repo === currentRepository?.repo);
       let next = snapshot;
-      if (current && snapshot.status === "rate-limited" && snapshot.pullRequests.length === 0) {
+      if (
+        current &&
+        canRetainCurrent &&
+        snapshot.status === "rate-limited" &&
+        snapshot.pullRequests.length === 0
+      ) {
         next = {
           ...snapshot,
           pullRequests: current.pullRequests,
@@ -233,12 +244,17 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         };
       } else if (
         current &&
+        canRetainCurrent &&
         snapshot.status === "unavailable" &&
         (current.pullRequests.length > 0 ||
           current.branch !== undefined ||
           current.repository !== undefined)
       ) {
-        next = { ...current, status: "unavailable" };
+        next = {
+          ...current,
+          repository: snapshot.repository ?? current.repository,
+          status: "unavailable",
+        };
       }
       snapshots.set(sessionKey, next);
       settle(sessionKey, next);
