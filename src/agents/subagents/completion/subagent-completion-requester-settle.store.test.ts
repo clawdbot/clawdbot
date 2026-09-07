@@ -340,6 +340,7 @@ describe("atomic rejected requester-settle storage", () => {
     useDefaultDatabase();
     const input = failedRecords("failed", { status: "error" });
     armRequesterWake(input, [input.subagent.runId, "retired-run"]);
+    delete input.subagent.requesterSettleWake!.rearmGeneration;
     persistOwner(input);
     const driver = requesterWakeDriver([input]);
     try {
@@ -360,6 +361,42 @@ describe("atomic rejected requester-settle storage", () => {
     }
   });
 
+  it("settles an unnumbered frozen owner after another member cleared its wake", async () => {
+    useDefaultDatabase();
+    const first = failedRecords("failed", { status: "error" });
+    const second = failedRecords("timed_out", { status: "timeout" });
+    second.task.taskId = "task-completion-cleared";
+    second.task.runId = "task-run-cleared";
+    second.subagent.runId = "completion-run-cleared";
+    second.subagent.taskRunId = second.task.runId;
+    const batchRunIds = [first.subagent.runId, second.subagent.runId];
+    armRequesterWake(first, batchRunIds);
+    delete first.subagent.requesterSettleWake!.rearmGeneration;
+    second.subagent.requesterSettleWake = undefined;
+    persistOwner(first);
+    persistOwner(second);
+    subagentRuns.delete(second.subagent.runId);
+
+    const driver = requesterWakeDriver([first]);
+    try {
+      await driver.run();
+      expect(driver.warn).not.toHaveBeenCalledWith(
+        "failed to persist requester settle wake rejection",
+        expect.any(Object),
+      );
+      reopenOwners();
+      expect(subagentRuns.get(first.subagent.runId)?.requesterSettleWake).toBeUndefined();
+      expect(subagentRuns.get(second.subagent.runId)?.requesterSettleWake).toBeUndefined();
+      expect(getTaskById(first.task.taskId)).toMatchObject({
+        status: "failed",
+        deliveryStatus: "failed",
+        error: "original child failure",
+      });
+    } finally {
+      driver.controller.clearScheduledResumeTimers();
+    }
+  });
+
   it("rejects a frozen batch while an omitted member still owns its wake", async () => {
     useDefaultDatabase();
     const first = failedRecords("failed", { status: "error" });
@@ -371,6 +408,8 @@ describe("atomic rejected requester-settle storage", () => {
     const batchRunIds = [first.subagent.runId, second.subagent.runId];
     armRequesterWake(first, batchRunIds);
     armRequesterWake(second, batchRunIds);
+    delete first.subagent.requesterSettleWake!.rearmGeneration;
+    delete second.subagent.requesterSettleWake!.rearmGeneration;
     persistOwner(first);
     persistOwner(second);
     const firstBefore = structuredClone(first);

@@ -441,7 +441,8 @@ export function settleRejectedRequesterSettleWakeBatch(params: {
             continue;
           }
           const declaredMember = readSubagentRun(database, declaredRunId);
-          if (declaredMember?.requesterSettleWake?.rearmGeneration === firstWake?.rearmGeneration) {
+          const declaredWake = declaredMember?.requesterSettleWake;
+          if (declaredWake && declaredWake.rearmGeneration === firstWake?.rearmGeneration) {
             rejectedRunId = declaredRunId;
             throw ownershipChanged;
           }
