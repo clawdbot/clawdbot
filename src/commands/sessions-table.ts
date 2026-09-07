@@ -56,6 +56,8 @@ export type SessionDisplayRow = {
   modelOverride?: string;
   contextTokens?: number;
   runtimePolicySessionKey?: string;
+  archived?: boolean;
+  archivedAt?: number;
 };
 
 /** Converts a persisted session entry into the shared display row shape. */
@@ -103,6 +105,8 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
     contextTokens: entry?.contextTokens,
+    archived: entry?.archivedAt !== undefined,
+    archivedAt: entry?.archivedAt,
   };
 }
 
