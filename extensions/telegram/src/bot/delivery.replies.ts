@@ -4,6 +4,7 @@ import type { Message } from "grammy/types";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createOutboundPayloadPlan,
+  createMessageReceiptFromOutboundResults,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
@@ -36,6 +37,7 @@ import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
 } from "../interactive-fallback.js";
+import { planTelegramMediaBatches } from "../outbound-media-batches.js";
 import {
   prepareTelegramOutboundMedia,
   resolveTelegramOutboundMediaSenders,
@@ -47,9 +49,13 @@ import { TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
 import { isTelegramEmptyContentError } from "../rich-plain-fallback.js";
 import {
   isTelegramCaptionTooLongError,
+  isTelegramPhotoLimitError,
   isTelegramVoiceMessagesForbiddenError,
 } from "../send-error-predicates.js";
-import { reportTelegramProviderDelivery } from "../send-outbound.js";
+import {
+  buildTelegramProviderDeliveryResult,
+  reportTelegramProviderDelivery,
+} from "../send-outbound.js";
 import {
   createTelegramPreparedSender,
   createTelegramReplyRequest,
@@ -310,6 +316,28 @@ async function deliverMediaReply(params: {
     };
     await params.progress.promptContext?.accept(promptContextMessage);
   };
+  const observeMedia = async (
+    { result: message, messageId, plainText }: TelegramPreparedSender["parts"][number],
+    captionRemoved?: true,
+  ) => {
+    if (params.thread?.id !== undefined) {
+      await reportTelegramProviderDelivery({
+        message,
+        messageId,
+        fallbackChatId: params.chatId,
+        successfulSendThread: params.thread,
+        kind: "media",
+      });
+    }
+    firstDeliveredMessageId ??= messageId;
+    firstDeliveredCaption ??= plainText || undefined;
+    if (captionRemoved) {
+      visibleFallbackText = "";
+    }
+    params.recordMessageId(messageId);
+    await recordPromptContextMessage(message, plainText || undefined);
+    markDelivered(params.progress);
+  };
   const deliverAcceptedMedia = async (options: {
     sender: TelegramOutboundMediaSender<Message>;
     documentSender?: TelegramOutboundMediaSender<Message>;
@@ -318,25 +346,8 @@ async function deliverMediaReply(params: {
     plainCaption?: string;
   }) => {
     const delivery = await params.sender.sendMedia(options);
-    await params.sender.accept(delivery, async ({ result: message, messageId, plainText }) => {
-      mediaUrls.push(options.mediaUrl);
-      if (params.thread?.id !== undefined) {
-        await reportTelegramProviderDelivery({
-          message,
-          messageId,
-          fallbackChatId: params.chatId,
-          successfulSendThread: params.thread,
-        });
-      }
-      firstDeliveredMessageId ??= messageId;
-      firstDeliveredCaption ??= plainText || undefined;
-      if (delivery.captionRemoved) {
-        visibleFallbackText = "";
-      }
-      params.recordMessageId(messageId);
-      await recordPromptContextMessage(message, plainText || undefined);
-      markDelivered(params.progress);
-    });
+    mediaUrls.push(options.mediaUrl);
+    await params.sender.accept(delivery, (part) => observeMedia(part, delivery.captionRemoved));
   };
   const createVoiceFallbackProgress = (): DeliveryProgress => ({
     hasReplied: false,
@@ -344,7 +355,7 @@ async function deliverMediaReply(params: {
     deliveredCount: 0,
     ...(params.progress.promptContext ? { promptContext: params.progress.promptContext } : {}),
   });
-  for (const [index, mediaUrl] of params.mediaList.entries()) {
+  const prepareMedia = async (mediaUrl: string, index: number) => {
     const isFirstMedia = index === 0;
     const media = await params.mediaLoader(
       mediaUrl,
@@ -367,6 +378,12 @@ async function deliverMediaReply(params: {
       plan: mediaPlan,
       asVoice: params.reply.audioAsVoice,
     });
+    return { index, mediaUrl, media, mediaPlan, mediaSender, documentSender };
+  };
+  type PreparedMedia = Awaited<ReturnType<typeof prepareMedia>>;
+  const deliverMediaBatch = async (batch: [PreparedMedia, ...PreparedMedia[]]): Promise<void> => {
+    const { index, mediaUrl, media, mediaPlan, mediaSender, documentSender } = batch[0];
+    const isFirstMedia = index === 0;
     const { htmlCaption, plainCaption, followUpText } = mediaPlan;
     const replyToMessageId = resolveReplyToForSend({
       replyToId: params.replyToId,
@@ -391,7 +408,48 @@ async function deliverMediaReply(params: {
         silent: params.silent,
       }),
     };
-    if (mediaSender.label === "voice") {
+    if (batch.length > 1) {
+      let album: Awaited<ReturnType<TelegramPreparedSender["sendPhotoAlbum"]>>;
+      try {
+        album = await params.sender.sendPhotoAlbum({
+          files: batch.map((item) => item.mediaPlan.file),
+          requestParams: mediaParams,
+          plainCaption,
+        });
+      } catch (error) {
+        if (!isTelegramPhotoLimitError(error)) {
+          throw error;
+        }
+        // A rejected album accepted no messages. Singleton sends retain the
+        // existing photo-to-document recovery without retrying uncertain sends.
+        mediaPlan.followUpText = undefined;
+        batch.reduce((_previous, item) => item).mediaPlan.followUpText = followUpText;
+        for (const item of batch) {
+          await deliverMediaBatch([item]);
+        }
+        return;
+      }
+      mediaUrls.push(...batch.map((item) => item.mediaUrl));
+      await params.sender.acceptMany(
+        album.parts,
+        (part) => observeMedia(part, album.captionRemoved),
+        () => ({
+          receipt: createMessageReceiptFromOutboundResults({
+            results: album.parts.map((part) =>
+              buildTelegramProviderDeliveryResult({
+                message: part.result,
+                messageId: part.result.message_id,
+                fallbackChatId: params.chatId,
+                successfulSendThread: params.thread,
+                kind: "media",
+              }),
+            ),
+            kind: "media",
+          }),
+          visibleReplySent: true,
+        }),
+      );
+    } else if (mediaSender.label === "voice") {
       const sendVoiceMedia = async (requestParams: typeof mediaParams) => {
         const hasCaption = typeof requestParams.caption === "string";
         await deliverAcceptedMedia({
@@ -462,7 +520,7 @@ async function deliverMediaReply(params: {
           visibleFallbackText = fallbackText;
           markReplyApplied(params.progress, voiceFallbackReplyTo);
           markDelivered(params.progress);
-          continue;
+          return;
         }
         if (isTelegramCaptionTooLongError(voiceErr)) {
           logVerbose(
@@ -492,7 +550,7 @@ async function deliverMediaReply(params: {
             }
           }
           markReplyApplied(params.progress, replyToMessageId);
-          continue;
+          return;
         }
         throw voiceErr;
       }
@@ -541,6 +599,14 @@ async function deliverMediaReply(params: {
         }
       }
     }
+  };
+  for await (const batch of planTelegramMediaBatches({
+    mediaUrls: params.mediaList,
+    prepare: prepareMedia,
+    // Albums do not accept reply_markup; retain the existing control-bearing sends.
+    canGroup: (item) => item.mediaSender.label === "photo" && !params.replyMarkup,
+  })) {
+    await deliverMediaBatch(batch);
   }
   return { firstDeliveredMessageId, visibleFallbackText, mediaUrls };
 }
