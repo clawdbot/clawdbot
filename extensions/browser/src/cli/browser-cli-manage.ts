@@ -369,6 +369,7 @@ export function registerBrowserManageCommands(
             `transport: ${
               usesChromeMcpTransport(status) ? "chrome-mcp" : (status.transport ?? "cdp")
             }`,
+            `attachOnly: ${status.attachOnly}`,
             ...(!usesChromeMcpTransport(status)
               ? [
                   `cdpPort: ${status.cdpPort ?? "(unset)"}`,
