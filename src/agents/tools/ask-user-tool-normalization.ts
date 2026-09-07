@@ -4,6 +4,7 @@ import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol
 import { ToolInputError } from "./common.js";
 
 export const DEFAULT_ASK_USER_TIMEOUT_SECONDS = 900;
+export const QUESTION_RPC_GRACE_MS = 10_000;
 const MIN_ASK_USER_TIMEOUT_SECONDS = 30;
 const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
 const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]*$/;
@@ -109,6 +110,10 @@ export function normalizeQuestionTimeoutSeconds(rawTimeoutSeconds: unknown): num
     MAX_ASK_USER_TIMEOUT_SECONDS,
     Math.max(MIN_ASK_USER_TIMEOUT_SECONDS, rawTimeoutSeconds ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS),
   );
+}
+
+export function resolveQuestionTimeoutMs(rawTimeoutSeconds: unknown): number {
+  return normalizeQuestionTimeoutSeconds(rawTimeoutSeconds) * 1_000 + QUESTION_RPC_GRACE_MS;
 }
 
 export const AskUserToolSchema = Type.Object(

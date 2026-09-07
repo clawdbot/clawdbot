@@ -139,6 +139,9 @@ try {
       route.send(raw);
       const frame = JSON.parse(raw);
       if (frame.type === "res" && frame.id === sendRequest?.id) {
+        if (frame.ok !== true) {
+          protocolError = true;
+        }
         resolveSend?.();
       }
     });

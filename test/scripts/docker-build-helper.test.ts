@@ -1033,25 +1033,7 @@ grep -q '^build -t demo-image .$' "$TMPDIR/docker-seen"
 
   it("prints heartbeat progress for long successful centralized Docker builds", () => {
     const workDir = tempDirs.make("openclaw-docker-build-heartbeat-");
-    writeExecutables(join(workDir, "bin"), {
-      timeout: `#!/bin/bash
-set -euo pipefail
-if [[ "$1" = "--kill-after=1s" ]]; then
-  exit 0
-fi
-shift 2
-"$@"
-`,
-      docker: `#!/bin/sh
-printf "captured docker build log\\n"
-/bin/sleep 0.05
-`,
-    });
-
     const script = repoShell(workDir)`
-export PATH="$TMPDIR/bin:$PATH"
-export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=1
-
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
 printf "captured docker build log\\n" >"$TMPDIR/build.log"
@@ -6127,8 +6109,15 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     );
     expect(packageRunner.match(/verify-fs-safe-native\.mjs[^\n]+--mode require/gu)).toHaveLength(3);
     expect(packageRunner).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(packageRunner.match(/-e OPENCLAW_FS_SAFE_NATIVE_CONTRACT/g)).toHaveLength(4);
+    expectTextToIncludeAll(packageRunner, [
+      'MUSL_FS_SAFE_NATIVE_OUTCOME="passed"',
+      'MUSL_FS_SAFE_NATIVE_OUTCOME="not-applicable"',
+      '--detail "musl:fsSafeNative=$MUSL_FS_SAFE_NATIVE_OUTCOME"',
+    ]);
     expect(updateRunner).toContain('mv "$platform_package" "$platform_package.omitted"');
     expect(updateRunner).toContain("--mode fallback");
+    expect(updateRunner).toContain("-e OPENCLAW_FS_SAFE_NATIVE_CONTRACT");
   });
 
   it("verifies fs-safe through a pnpm-style linked package root", () => {

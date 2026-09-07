@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isBundledManifestOwner } from "./manifest-owner-policy.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import {
   loadPluginMetadataSnapshot,
@@ -49,17 +50,14 @@ export function applySlotSelectionForPlugin(
       config,
       env: process.env,
     });
-  const report: SlotSelectionRegistry = {
-    plugins: metadataSnapshot.plugins
-      .filter((plugin) => plugin.id === pluginId)
-      .map((plugin) => ({ id: plugin.id, kind: plugin.kind })),
-  };
-  const plugin = report.plugins.find((entry) => entry.id === pluginId);
+  const plugin = metadataSnapshot.plugins.find((entry) => entry.id === pluginId);
   if (!plugin) {
     return { config, warnings: [] };
   }
-  if (!plugin.kind) {
-    // Older manifests need runtime kind inspection against the same prepared candidate.
+  const report: SlotSelectionRegistry = { plugins: [plugin] };
+  if (!plugin.kind && !isBundledManifestOwner(plugin)) {
+    // Bundled manifests own slot declarations. Only legacy external plugins need
+    // runtime kind inspection; enabling a bundled non-slot plugin must not execute its module.
     const runtimeReport = buildPluginDiagnosticsReport({
       config,
       onlyPluginIds: [plugin.id],

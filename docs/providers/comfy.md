@@ -220,7 +220,7 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 | `headers`             | object                 | Extra request headers; each value accepts a string or SecretRef.                      |
 
 Use `headers.Authorization` for a ComfyUI instance behind HTTP authentication.
-Prefer a [secret reference](/gateway/configuration-reference#secrets) for credentials.
+Prefer a [secret reference](/gateway/config-secrets-env#secrets) for credentials.
 Headers apply to uploads, workflow submissions, polling, and downloads in both
 modes. They override default headers case-insensitively, except `Content-Type`
 on image uploads: the runtime sets the multipart boundary. An unavailable
@@ -253,7 +253,7 @@ The `image` and `video` sections also support a reference-image input node:
 | `inputImageNodeId`    | Yes (when passing a reference image) | --        | Node ID that receives the uploaded reference image. |
 | `inputImageInputName` | No                                   | `"image"` | Input name on the image node.                       |
 
-`apiKey` accepts either a literal string or a [secret reference](/gateway/configuration-reference#secrets) object.
+`apiKey` accepts either a literal string or a [secret reference](/gateway/config-secrets-env#secrets) object.
 
 ## Workflow details
 

@@ -61,6 +61,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     formatDeferredWorkStatus,
     formatTaskBlockers,
     getActiveCounts,
+    getDeferredChannelReloads,
     waitForActiveWorkBeforeChannelReload,
   } = createGatewayActiveWorkTracker({ params, myGeneration });
 
@@ -406,7 +407,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (targets.size === 0 || shouldSkipChannelRestart) {
           return;
         }
-        if (await waitForActiveWorkBeforeChannelReload(targets, isCurrent)) {
+        if (await waitForActiveWorkBeforeChannelReload(targets, isCurrent, !runtimeCommitted)) {
           params.logChannels.info(
             "channel reload before plugin replace cancelled by config supersession or restart",
           );
@@ -513,7 +514,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     // Newly activated channels can follow plugin services that already admitted agent work.
     // Recheck before their startup; existing channels were drained before registry replacement.
     if (!pluginReloadAborted && hasLiveChannelTargets && !shouldSkipChannelRestart) {
-      const waitCancelled = await waitForActiveWorkBeforeChannelReload(channelTargets, isCurrent);
+      const waitCancelled = await waitForActiveWorkBeforeChannelReload(
+        channelTargets,
+        isCurrent,
+        !runtimeCommitted,
+      );
       // A committed owner must finish its model/channel tail before the next config runs.
       // Supersession ends this wait: a newer writer may itself be awaiting that next reload.
       pluginReloadAborted =
@@ -650,6 +655,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
   return {
     applyHotReload,
+    getDeferredChannelReloads,
     acceptRestartConfig,
     publishAppliedConfigHash,
     publishDeferredAppliedConfigHash,

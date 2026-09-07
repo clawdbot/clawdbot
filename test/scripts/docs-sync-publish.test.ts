@@ -367,15 +367,18 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       "Release process",
       "Testing and CI",
     ]);
-    // Every release adds a releases/<version> page, so read the published versions from the
+    // Releases may have a version page or subpages, so read the published routes from the
     // navigation rather than pinning them here; only the index-first ordering and the version
     // route shape are invariant. Pinning the list makes this assertion fail on release PRs whose
     // change classification never selects this lane, so the break first lands on main.
     expect(releaseNotes[0]).toBe("releases/index");
     expect(releaseNotes.length).toBeGreaterThan(1);
+    const releaseRoutePattern = /^releases\/\d{4}\.\d{1,2}\.\d+(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
     for (const page of releaseNotes.slice(1)) {
-      expect(page).toMatch(/^releases\/\d{4}\.\d{1,2}\.\d+$/);
+      expect(page).toMatch(releaseRoutePattern);
     }
+    expect("releases/not-a-version").not.toMatch(releaseRoutePattern);
+    expect("releases/2026.8.1/memory/nested").not.toMatch(releaseRoutePattern);
     const releaseRoutes = [
       ...releaseNotes,
       "maturity/scorecard",
@@ -385,7 +388,18 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       "reference/release-performance-sweep",
       "reference/test",
       "ci",
+      "ci/pipeline",
+      "ci/watching-runs",
+      "ci/checkout",
+      "ci/scope-and-routing",
+      "ci/runners",
+      "ci/capacity",
+      "ci/release-validation",
+      "ci/scheduled-workflows",
+      "ci/local-proof",
       "help/scripts",
+      "concepts/qa-e2e-automation",
+      "concepts/personal-agent-benchmark-pack",
     ];
     expect(collectPages(releaseTab)).toEqual(releaseRoutes);
     expect(new Set(releaseRoutes)).toHaveLength(releaseRoutes.length);

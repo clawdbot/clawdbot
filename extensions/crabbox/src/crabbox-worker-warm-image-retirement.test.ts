@@ -120,7 +120,7 @@ describe("Crabbox checkpoint retirement", () => {
         if (argv[2] === "create") {
           const id = `chk_capture_${++captures}`;
           resources.add(id);
-          return checkpointResult(id, argv[argv.indexOf("--id") + 1]!, "pending");
+          return checkpointResult(id, argv[argv.indexOf("--id") + 1]!, "completed");
         }
         if (argv[2] === "delete") {
           if (failDeletion) {
@@ -315,6 +315,11 @@ describe("Crabbox checkpoint retirement", () => {
         }
       } else if (cleanup === "expiry") {
         vi.spyOn(Date, "now").mockReturnValue(now + 15 * DAY_MS);
+      } else {
+        store.update(image.key, () => ({
+          ...image.value,
+          image: { ...image.value.image!, state: "pending" },
+        }));
       }
       cleaning = true;
       await captureWarmImage(

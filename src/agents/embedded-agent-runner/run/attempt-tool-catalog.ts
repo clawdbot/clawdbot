@@ -186,6 +186,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     const toolSearchRunPlan = buildToolSearchRunPlan({
       visibleTools: effectiveTools,
       uncompactedTools: uncompactedEffectiveTools,
+      catalogCapabilityTools: toolSearch.catalogRegistered ? uncompactedEffectiveTools : undefined,
       clientTools,
       clientToolsCataloged:
         toolSearch.catalogRegistered &&

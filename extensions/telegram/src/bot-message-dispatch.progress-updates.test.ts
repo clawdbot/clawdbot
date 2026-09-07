@@ -977,6 +977,35 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("delivers authorized fast-mode progress once when no draft can accept it", async () => {
+    let rendered: boolean | void = undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      rendered = await replyOptions?.onToolResult?.({
+        text: "Fast mode enabled",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true },
+        },
+      },
+    });
+
+    expect(rendered).toBe(true);
+    expect(deliverReplies).toHaveBeenCalledOnce();
+    expectDeliveredReply(0, {
+      text: "Fast mode enabled",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    });
+  });
+
   it("keeps string tool-result progress beneath a Telegram preamble", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

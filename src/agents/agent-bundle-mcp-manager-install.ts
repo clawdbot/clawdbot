@@ -15,8 +15,8 @@ import type {
 } from "./agent-bundle-mcp-types.js";
 import { allowMcpAppModelContext, revokeMcpAppModelContext } from "./mcp-app-model-context.js";
 import {
+  MCP_CONNECTION_REVALIDATE_MS,
   hashMcpResolvedConnections,
-  resolveMcpConnectionRevalidateMs,
   resolveRequesterScopedMcpConnections,
   type McpServerConnectionResolved,
 } from "./mcp-connection-resolver.js";
@@ -189,12 +189,11 @@ export function createSessionMcpRuntimeManagerInstall(
     );
     const existing = store.runtimesBySessionId.get(params.runtimeKey);
     const meta = store.connectionMetaByRuntimeKey.get(params.runtimeKey);
-    const revalidateMs = resolveMcpConnectionRevalidateMs();
     // Full-set + within revalidation window: skip resolver I/O.
     // Revocation/rotation takes effect within MCP_CONNECTION_REVALIDATE_MS even for
     // continuously active requesters (markUsed does not extend this clock alone).
     const withinRevalidateWindow =
-      meta !== undefined && store.now() - meta.resolvedAt < revalidateMs;
+      meta !== undefined && store.now() - meta.resolvedAt < MCP_CONNECTION_REVALIDATE_MS;
     if (withinRevalidateWindow && existing && matchesRuntime(existing, params, scopedFingerprint)) {
       reconcileReusableRetirement(params.sessionId, existing);
       existing.markUsed();

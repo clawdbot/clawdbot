@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Client } from "../internal/discord.js";
+import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { decodeOpusStreamChunks } from "./audio.js";
 import {
   beginVoiceCapture,
@@ -56,6 +57,7 @@ export class DiscordVoiceReceive {
 
   constructor(
     private readonly params: {
+      readPolicy?: DiscordLivePolicyReader;
       accountId: string;
       admissionAllowFrom?: string[];
       botUserId: () => string | undefined;
@@ -177,6 +179,7 @@ export class DiscordVoiceReceive {
 
   private responseContext(entry: VoiceSessionEntry, userId: string) {
     return {
+      readPolicy: this.params.readPolicy,
       entry,
       userId,
       accountId: this.params.accountId,
@@ -523,6 +526,7 @@ export class DiscordVoiceReceive {
     userId: string,
   ): Promise<DiscordVoiceIngressContext | null> {
     return await resolveDiscordVoiceIngressContextWithParticipants({
+      readPolicy: this.params.readPolicy,
       client: this.params.client,
       entry,
       userId,

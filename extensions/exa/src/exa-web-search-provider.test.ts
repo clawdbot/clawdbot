@@ -1,56 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  cancelTrackedTextResponse,
+  createStreamingResponse,
+} from "../../test-support/streaming-error-response.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
-import { testing } from "./exa-web-search-provider.runtime.js";
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
-
-function streamingJsonResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-} {
-  // Streaming fixture proves an oversized success body stops being read before
-  // the whole payload is buffered into memory.
-  let reads = 0;
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
-    },
-  });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }),
-    getReadCount: () => reads,
-  };
-}
 
 type JsonRecord = Record<string, unknown>;
 
@@ -412,9 +366,17 @@ describe("exa web search provider", () => {
   });
 
   it("reports malformed Exa API JSON with a stable provider error", async () => {
-    await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
-      "Exa API returned malformed JSON",
-    );
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{ nope"));
+    const tool = requireExaTool({ apiKey: "exa-test-key" }, { cacheTtlMinutes: 0 });
+
+    try {
+      await expect(tool.execute({ query: "malformed Exa JSON" })).rejects.toThrow(
+        "Exa API returned malformed JSON",
+      );
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("rejects invalid UTF-8 in Exa search JSON", async () => {
@@ -426,10 +388,17 @@ describe("exa web search provider", () => {
     body.set(prefix);
     body[prefix.length] = 0xff;
     body.set(suffix, prefix.length + 1);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body));
+    const tool = requireExaTool({ apiKey: "exa-test-key" }, { cacheTtlMinutes: 0 });
 
-    await expect(testing.readExaSearchResults(new Response(body))).rejects.toThrow(
-      "Exa API returned malformed JSON",
-    );
+    try {
+      await expect(tool.execute({ query: "invalid UTF-8 Exa JSON" })).rejects.toThrow(
+        "Exa API returned malformed JSON",
+      );
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("parses well-formed Exa search JSON under the byte cap", async () => {
@@ -437,35 +406,72 @@ describe("exa web search provider", () => {
       JSON.stringify({ results: [{ url: "https://example.com", title: "Example" }] }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+    const tool = requireExaTool({ apiKey: "exa-test-key" }, { cacheTtlMinutes: 0 });
 
-    await expect(testing.readExaSearchResults(response)).resolves.toEqual([
-      { url: "https://example.com", title: "Example" },
-    ]);
+    try {
+      const result = await tool.execute({ query: "well-formed Exa JSON" });
+      const rows = result.results as Array<{ url: string; title: string }>;
+      expect(result.count).toBe(1);
+      expect(
+        rows.map((entry) => ({
+          url: entry.url,
+          title: entry.title.split("\n---\n")[1]?.split("\n<<<END")[0],
+        })),
+      ).toEqual([{ url: "https://example.com", title: "Example" }]);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("caps oversized Exa search JSON instead of buffering the whole body", async () => {
-    const streamed = streamingJsonResponse({ chunkCount: 64, chunkSize: 1024 });
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "a",
+      headers: { "content-type": "application/json" },
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(streamed.response);
+    const tool = requireExaTool({ apiKey: "exa-test-key" }, { cacheTtlMinutes: 0 });
 
-    await expect(
-      testing.readExaSearchResults(streamed.response, { maxBytes: 4096 }),
-    ).rejects.toThrow(/Exa API response exceeds 4096 bytes/);
-
-    expect(streamed.getReadCount()).toBeLessThan(64);
+    try {
+      await expect(tool.execute({ query: "oversized Exa JSON" })).rejects.toThrow(
+        "Exa API response exceeds 16777216 bytes",
+      );
+      expect(streamed.getReadCount()).toBeLessThan(32);
+      expect(streamed.wasCanceled()).toBe(true);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("bounds Exa API error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"exa upstream unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"exa upstream unavailable ".repeat(1024)}tail`, {
       status: 503,
       headers: { "content-type": "text/plain" },
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(tracked.response)
+      .mockResolvedValueOnce(new Response("short", { status: 503 }));
+    const tool = requireExaTool({ apiKey: "exa-test-key" }, { cacheTtlMinutes: 0 });
 
-    const detail = await testing.readExaErrorDetail(tracked.response);
-
-    expect(detail).toContain("exa upstream unavailable");
-    expect(detail).not.toContain("tail");
-    expect(await testing.readExaErrorDetail(new Response("short"))).toBe("short");
-    expect(tracked.wasCanceled()).toBe(true);
-    expect(textSpy).not.toHaveBeenCalled();
+    try {
+      const failure = tool.execute({ query: "bounded Exa error" });
+      await expect(failure).rejects.toThrow("exa upstream unavailable");
+      await expect(failure).rejects.not.toThrow("tail");
+      await expect(tool.execute({ query: "short Exa error" })).rejects.toEqual(
+        new Error("Exa API error (503): short"),
+      );
+      expect(tracked.wasCanceled()).toBe(true);
+      expect(textSpy).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchMock.mockRestore();
+      textSpy.mockRestore();
+    }
   });
 });

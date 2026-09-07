@@ -462,22 +462,18 @@ function resolveRemoteFileName(params: {
   finalUrl: string;
   filePathHint?: string;
 }): string | undefined {
-  let fileNameFromUrl: string | undefined;
+  const fileName =
+    parseContentDispositionFileName(params.res.headers.get("content-disposition")) ||
+    (params.filePathHint ? basenameFromAnyPath(params.filePathHint) : undefined);
+  if (fileName) {
+    return fileName;
+  }
   try {
     const parsed = new URL(params.finalUrl);
-    const base = basenameFromUrlPathname(parsed.pathname);
-    fileNameFromUrl = base || undefined;
+    return basenameFromUrlPathname(parsed.pathname) || undefined;
   } catch {
-    // ignore parse errors; leave undefined
+    return undefined;
   }
-  const headerFileName = parseContentDispositionFileName(
-    params.res.headers.get("content-disposition"),
-  );
-  return (
-    headerFileName ||
-    (params.filePathHint ? basenameFromAnyPath(params.filePathHint) : undefined) ||
-    fileNameFromUrl
-  );
 }
 
 function isGenericResponseContentType(value?: string | null): boolean {
@@ -743,14 +739,14 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       filePathHint: options.filePathHint,
     });
 
-    const filePathForMime =
-      fileName && extnameFromAnyPath(fileName) ? fileName : (options.filePathHint ?? finalUrl);
+    const fileNameExt = fileName ? extnameFromAnyPath(fileName) : undefined;
+    const filePathForMime = fileNameExt ? fileName : (options.filePathHint ?? finalUrl);
     const contentType = await detectMime({
       buffer,
       headerMime: res.headers.get("content-type"),
       filePath: filePathForMime,
     });
-    if (fileName && !extnameFromAnyPath(fileName) && contentType) {
+    if (fileName && !fileNameExt && contentType) {
       const ext = extensionForMime(contentType);
       if (ext) {
         fileName = `${fileName}${ext}`;

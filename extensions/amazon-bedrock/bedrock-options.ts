@@ -2,7 +2,23 @@
  * Stream option extensions and prompt-cache policy for Amazon Bedrock models.
  * Provider registration and runtime streaming share these contracts.
  */
-import type { ModelThinkingLevel, StreamOptions, ThinkingBudgets } from "openclaw/plugin-sdk/llm";
+import type {
+  Model,
+  ModelThinkingLevel,
+  StreamOptions,
+  ThinkingBudgets,
+} from "openclaw/plugin-sdk/llm";
+import { resolveClaudeModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
+
+/** Share resolved model eligibility between the runtime and profile fallback. */
+export function supportsBedrockModelPromptCaching(
+  model: Pick<Model, "id" | "params"> & { name?: string },
+): boolean {
+  return (
+    supportsBedrockPromptCaching(model.id, model.name) ||
+    supportsBedrockPromptCaching(resolveClaudeModelIdentity(model), model.name)
+  );
+}
 
 /** How Bedrock thinking output should be displayed to users. */
 type BedrockThinkingDisplay = "summarized" | "omitted";

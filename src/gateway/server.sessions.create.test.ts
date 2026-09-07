@@ -3957,8 +3957,9 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
     expect(created.ok).toBe(false);
     expect(created.error).toMatchObject({
       code: "INVALID_REQUEST",
-      message: "agent workspace is not a git checkout",
+      message: expect.stringContaining("git checkout has no commits"),
     });
+    expect(created.error?.message).toContain("Create an initial commit, then retry.");
   } finally {
     testState.agentConfig = undefined;
   }

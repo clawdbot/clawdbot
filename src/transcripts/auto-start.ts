@@ -170,7 +170,12 @@ export function createTranscriptsAutoStartService(
     index: number,
     params: Pick<
       Parameters<typeof startTranscripts>[0],
-      "store" | "rawParams" | "abortSignal" | "existingSession" | "onCaptureEnded"
+      | "store"
+      | "rawParams"
+      | "abortSignal"
+      | "existingSession"
+      | "onCaptureEnded"
+      | "sessionIdOrigin"
     >,
   ) => {
     diagnostics?.record(index, capture.lifecycleToken, "starting");
@@ -243,6 +248,7 @@ export function createTranscriptsAutoStartService(
         }
         await startCapture(capture, index, {
           store,
+          sessionIdOrigin: entry.sessionId ? "supplied" : "generated",
           abortSignal: controller.signal,
           rawParams: { ...entry, title: futureTitle(entry, index) },
         });
@@ -340,6 +346,7 @@ export function createTranscriptsAutoStartService(
             );
           const candidate =
             recent &&
+            recent.metadata?.sessionIdOrigin === "generated" &&
             (!(source.agentId ?? ctx.agentId) ||
               (recent.metadata?.agentId ?? "main") === (source.agentId ?? ctx.agentId)) &&
             !activeSessions.has(recent.sessionId) &&
@@ -355,6 +362,7 @@ export function createTranscriptsAutoStartService(
           capture = owned;
           const result = await startCapture(owned, index, {
             store,
+            sessionIdOrigin: "generated",
             abortSignal: controller.signal,
             existingSession: candidate,
             rawParams: {

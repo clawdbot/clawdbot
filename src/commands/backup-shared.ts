@@ -424,12 +424,6 @@ async function resolveBackupPlanFromPaths(params: {
   };
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.backupPlanTestApi")] = {
-    resolveBackupPlanFromPaths,
-  };
-}
-
 function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandidate): number {
   const depthDelta = left.canonicalPath.length - right.canonicalPath.length;
   if (depthDelta !== 0) {

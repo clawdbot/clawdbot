@@ -24,11 +24,6 @@ import { truncateUtf16Safe } from "../../../utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
-import {
-  buildActiveImageGenerationTaskPromptContextForSession,
-  buildActiveMusicGenerationTaskPromptContextForSession,
-  buildActiveVideoGenerationTaskPromptContextForSession,
-} from "../../media-generation-task-status.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
@@ -449,25 +444,6 @@ export function prependSystemPromptAddition(params: {
   return prependSystemPromptAdditionAfterCacheBoundary(params);
 }
 
-// Per-turn media-generation task hints depend on live session state, so they must
-// be routed BELOW the system-prompt cache boundary (via prependSystemPromptAddition)
-// rather than placed in the static prepend slot — keeping them above the boundary
-// shifted the cacheable prefix turn-to-turn and broke prompt caching (#85203).
-export function resolveAttemptMediaTaskSystemPromptAddition(params: {
-  sessionKey?: string;
-  agentId?: string;
-  trigger?: EmbeddedRunAttemptParams["trigger"];
-}): string | undefined {
-  if (params.trigger !== "user" && params.trigger !== "manual") {
-    return undefined;
-  }
-  return joinPresentTextSegments([
-    buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey, params.agentId),
-    buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey, params.agentId),
-    buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey, params.agentId),
-  ]);
-}
-
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "sessionTarget"
@@ -576,7 +552,7 @@ export function buildAfterTurnRuntimeContext(params: {
       ownerNumbers: params.attempt.ownerNumbers,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
-          sessionKey: params.attempt.sandboxSessionKey?.trim() || params.attempt.sessionKey,
+          sessionKey: params.attempt.sessionKey,
           sessionId: params.attempt.sessionId,
           agentId: params.activeAgentId,
         }),

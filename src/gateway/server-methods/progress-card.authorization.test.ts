@@ -3,6 +3,7 @@ import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
+  resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -205,3 +206,101 @@ describe("progress card request authorization", () => {
     },
   );
 });
+
+it.each([false, true])(
+  "rejects a pre-reset card write after a same-id reset (admin=%s)",
+  async (admin) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = {
+        ...rolePolicyConfig(),
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const target = { sessionKey: "global", agentId: "work" };
+      const client = { ...roleClient("view", "reset-card-owner"), connId: "reset-card-owner" };
+      if (admin) {
+        client.connect.scopes = ["operator.admin"];
+      }
+      await upsertSessionEntryCore(target, {
+        sessionId: "same-card-session",
+        lifecycleRevision: "before",
+        updatedAt: 1,
+        visibility: "draft",
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: client.authenticatedUserProfile!.profileId,
+        },
+      });
+      progressCardStore.put(target.sessionKey, { markdown: "previous card" }, target.agentId);
+      const broadcast = vi.fn();
+      const context = {
+        getRuntimeConfig: () => cfg,
+        broadcast,
+        logGateway: { warn: vi.fn() },
+        resolveGatewayContext: (): GatewayRequestContext => context,
+      } as unknown as GatewayRequestContext;
+      const loaded = createDeferredCore();
+      const release = createDeferredCore();
+      const handlers = createProgressCardHandlers();
+      const respond = vi.fn<RespondFn>();
+      const pending = handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "old-card-write",
+          method: "progressCard.put",
+          params: { ...target, markdown: "stale write" },
+        },
+        client,
+        context,
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: createLazyCoreHandlers({
+          methods: ["progressCard.put"],
+          loadHandlers: async () => {
+            loaded.resolve();
+            await release.promise;
+            return handlers;
+          },
+        }),
+      });
+      try {
+        await Promise.race([
+          loaded.promise,
+          pending.then(() => {
+            throw new Error("request finished before preparation");
+          }),
+        ]);
+        const resolved = resolveSessionSharingTarget({ cfg, ...target })!;
+        await resetSessionEntryLifecycle({
+          agentId: resolved.agentId,
+          storePath: resolved.storePath,
+          target: { canonicalKey: resolved.canonicalKey, storeKeys: resolved.storeKeys },
+          resetBoundary: { context: "clear", reason: "reset", cwd: "/workspace" },
+          buildNextEntry: ({ currentEntry }) => ({
+            ...currentEntry!,
+            lifecycleRevision: "after",
+            updatedAt: 2,
+          }),
+        });
+        progressCardStore.put(target.sessionKey, { markdown: "fresh card" }, target.agentId);
+        release.resolve();
+        await pending;
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            details: expect.objectContaining({ code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" }),
+          }),
+        );
+        expect(progressCardStore.get(target.sessionKey, target.agentId)?.markdown).toBe(
+          "fresh card",
+        );
+        expect(broadcast).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    });
+  },
+);

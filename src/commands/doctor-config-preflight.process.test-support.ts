@@ -116,7 +116,11 @@ export function createSourceRuntime(root: string): string {
   return runtimeRoot;
 }
 
-export function createBuiltRuntime(root: string, sourceDist = path.resolve("dist")): string {
+export function createBuiltRuntime(
+  root: string,
+  sourceDist = path.resolve("dist"),
+  options: { copyDirectories?: boolean } = {},
+): string {
   const runtimeRoot = createSourceRuntime(root);
   // The pretest owner supplies immutable built modules once; mutable package
   // metadata and Control UI assets remain private to each fixture.
@@ -126,7 +130,10 @@ export function createBuiltRuntime(root: string, sourceDist = path.resolve("dist
     }
     const source = path.join(sourceDist, entry.name);
     const target = path.join(runtimeRoot, "dist", entry.name);
-    if (entry.isDirectory()) {
+    if (entry.isDirectory() && options.copyDirectories) {
+      // Direct package entry invocations do not pass --preserve-symlinks.
+      fs.cpSync(source, target, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
+    } else if (entry.isDirectory()) {
       fs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
     } else {
       fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE);

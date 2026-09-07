@@ -105,6 +105,16 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+On Linux, the systemd unit must use `KillMode=mixed` so the initial stop signal
+reaches only the Gateway. Systemd still kills remaining child processes when the
+Gateway exits or its stop deadline expires. Older `KillMode=control-group` units
+signal child runtimes immediately, which can interrupt a turn before drain finishes.
+After upgrading, run `openclaw gateway install --force` for the same profile to
+rewrite and restart the managed unit. Ordinary updates leave existing Linux
+service definitions unchanged. Doctor reports incompatible effective settings;
+operator-owned drop-ins must be inspected and updated separately because reinstalling
+the base unit preserves them. See [Linux services](/platforms/linux).
+
 Replies to pending node commands remain accepted during the drain, including
 worker cleanup started by shutdown. Each reply must still match its live
 invocation, node connection, pairing generation, and owning lifecycle. This
@@ -181,11 +191,12 @@ core Gateway serves. A changed plugin snapshot requires a second measured
 activation window: full Doctor migrations under exclusive maintenance, then
 restart and verification. Unchanged plugins do not run another full Doctor pass.
 
-After activation, the updater verifies the managed service, the expected
-version/build identity, a 12-probe health settle, plugin activation, channels,
-and HTTP 200 from `/readyz`. A 15-second inference probe is advisory; provider
-unavailability alone records a warning and does not cause rollback. Verification
-facts and measured downtime are retained in the [update run report](/cli/update#run-history-and-reports).
+After activation, the updater verifies that the managed service is running and
+owns its port, the Gateway hello handshake matches the expected version/build
+identity, a 12-probe health settle passes, plugins and channels are healthy, and
+`/readyz` returns HTTP 200. Update verification does not use model inference.
+Verification facts and measured downtime are retained in the
+[update run report](/cli/update#run-history-and-reports).
 
 When a package fails verification, the updater compares the shared and affected
 per-agent SQLite `user_version` values and configuration content with their
@@ -261,7 +272,7 @@ generation across unchanged configuration and schemas and supplies a verified
 recovery decision, the helper starts and verifies it instead of leaving it
 stopped. Helper recovery verifies service liveness, version/build identity,
 plugin activation, and channel health. It does not repeat the separate `/readyz`
-or inference probes; those report fields remain unverified.
+probe; that report field remains unverified.
 The run then finishes `rolled-back` with the previous version and measured
 downtime. Missing recovery proof, migrated state, or failed restoration still
 requires repair before restart. A service that is observed stopped is recorded

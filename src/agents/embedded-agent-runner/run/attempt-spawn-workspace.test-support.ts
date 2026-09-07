@@ -70,6 +70,7 @@ function normalizeMockProviderId(providerId?: string): string {
 type SessionManagerMocks = {
   getSessionTarget: Mock<() => undefined>;
   getAppendParentId: Mock<() => string | null>;
+  getHeader: UnknownMock;
   getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
@@ -281,6 +282,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const sessionManager = {
     getSessionTarget: vi.fn(() => undefined),
     getAppendParentId: vi.fn<() => string | null>(() => null),
+    getHeader: vi.fn(() => ({ version: 3 })),
     getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
@@ -1144,6 +1146,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.getAppendParentId.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.getHeader.mockReset().mockReturnValue({ version: 3 });
   hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);

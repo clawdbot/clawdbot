@@ -12,8 +12,7 @@ import {
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingProgressSchema,
   ProviderCommandsSchema,
-  requireAllowlistAllowFrom,
-  requireOpenAllowFrom,
+  refineChannelDmPolicy,
   TtsConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
@@ -407,23 +406,7 @@ const DiscordConfigSchemaBase = DiscordAccountSchemaBase.safeExtend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  const dmPolicy = value.dmPolicy ?? "pairing";
-  const allowFrom = value.allowFrom;
-  requireOpenAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.discord.dmPolicy="open" requires channels.discord.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.discord.dmPolicy="allowlist" requires channels.discord.allowFrom to contain at least one sender ID',
-  });
+  refineChannelDmPolicy({ channelId: "discord", value, ctx });
 
   if (!value.accounts) {
     return;
@@ -432,24 +415,7 @@ const DiscordConfigSchemaBase = DiscordAccountSchemaBase.safeExtend({
     if (!account) {
       continue;
     }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy ?? "pairing";
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.discord.accounts.*.dmPolicy="open" requires channels.discord.accounts.*.allowFrom (or channels.discord.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.discord.accounts.*.dmPolicy="allowlist" requires channels.discord.accounts.*.allowFrom (or channels.discord.allowFrom) to contain at least one sender ID',
-    });
+    refineChannelDmPolicy({ channelId: "discord", value, accountId, ctx });
   }
 });
 

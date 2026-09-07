@@ -1,6 +1,7 @@
 /** Classifies service PATH entries that should not be frozen into daemons. */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 
 // Service PATH policy keeps managed services away from user shell package-manager paths.
 export function normalizeServicePathEntry(entry: string, platform: NodeJS.Platform): string {
@@ -20,15 +21,7 @@ export function isNonMinimalServicePathEntry(entry: string, platform: NodeJS.Pla
   // User shell package-manager paths are fragile in non-interactive services and
   // should be replaced by stable system/runtime paths.
   return (
-    normalized.includes("/.nvm/") ||
-    normalized.includes("/.fnm/") ||
-    normalized.includes("/.local/share/fnm/") ||
-    normalized.includes("/.volta/") ||
-    normalized.includes("/.asdf/") ||
-    normalized.includes("/.n/") ||
-    normalized.includes("/.nodenv/") ||
-    normalized.includes("/.nodebrew/") ||
-    normalized.includes("/nvs/") ||
+    matchesVersionManagerPath(normalized, "service-path") ||
     normalized.includes("/.local/share/pnpm/") ||
     normalized.includes("/pnpm/") ||
     normalized.endsWith("/pnpm")

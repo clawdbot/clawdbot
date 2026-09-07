@@ -97,7 +97,6 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => ({
 vi.mock("./update-command-convergence.js", () => ({
   convergeUpdatePlugins: mocks.converge,
 }));
-vi.mock("./update-command-inference.js", () => ({ runUpdateInferenceProbe: async () => true }));
 vi.mock("./update-command-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-result.js")>()),
   writeControlPlaneUpdateRestartSentinelBestEffort: async () => {},
@@ -106,6 +105,7 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
 import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -133,6 +133,7 @@ function fixture(): FinishUpdateParams {
   const env = { ...process.env };
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
   return {
+    mutationStarted: true,
     result: {
       status: "ok",
       mode: "npm",
@@ -421,7 +422,6 @@ describe("post-activation repair after rollback refusal or failure", () => {
               serviceRunning: true,
               versionMatch: true,
               readyz: true,
-              inferenceProbe: "passed",
             },
           }
         : {}),
@@ -503,7 +503,20 @@ describe("post-activation repair after rollback refusal or failure", () => {
           if (!mocks.healthy) {
             restart.onVerificationFailure?.("readyz-unhealthy");
           }
-          return mocks.healthy ? "ok" : "restart-health-failed";
+          const verification = await verifyUpdatedGateway({
+            result: restart.result,
+            opts: restart.opts,
+            serviceEnv: run.env,
+            gatewayPort: 19101,
+            expectedVersion: restart.result.after?.version ?? undefined,
+            expectedBuildId: restart.result.after?.buildId ?? undefined,
+            requireRunningService: true,
+            onVerified: restart.onVerified,
+          });
+          if (!verification.ok) {
+            restart.onVerificationFailure?.(verification.summary);
+          }
+          return verification.ok ? "ok" : "restart-health-failed";
         });
         mocks.restartCommand.mockImplementation(async () => {
           await startTask();

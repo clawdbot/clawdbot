@@ -1167,9 +1167,15 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call.followupRun.prompt).toContain("Earlier message in this thread");
-    expect(call.followupRun.prompt).toContain("[User sent media without caption]");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("[Thread history - for context]");
+    expect(context?.text).toContain("Earlier message in this thread");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "[Thread history - for context]\nEarlier message in this thread",
+    });
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("Earlier message in this thread");
   });
 
   it("carries source delivery provenance into the queue-owned run", async () => {
@@ -1310,8 +1316,15 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("[Thread history - for context]");
-    expect(call.followupRun.prompt).toContain("Earlier message in this thread");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("[Thread history - for context]");
+    expect(context?.text).toContain("Earlier message in this thread");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "[Thread history - for context]\nEarlier message in this thread",
+    });
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("Earlier message in this thread");
   });
 
   it("falls back to thread starter context on follow-up turns when history is absent", async () => {
@@ -1339,8 +1352,15 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("[Thread starter - for context]");
-    expect(call.followupRun.prompt).toContain("starter message");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("[Thread starter - for context]");
+    expect(context?.text).toContain("starter message");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "[Thread starter - for context]\nstarter message",
+    });
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("starter message");
   });
 
   it("prefers thread history over thread starter on follow-up turns", async () => {
@@ -1368,8 +1388,17 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("[Thread history - for context]");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("[Thread history - for context]");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "[Thread history - for context]\nEarlier message in this thread",
+    });
+    expect(context?.text).not.toContain("[Thread starter - for context]");
+    expect(JSON.stringify(context?.fragments)).not.toContain("[Thread starter - for context]");
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
     expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("Earlier message in this thread");
   });
 
   it("does not duplicate thread starter text with a plain-text prelude", async () => {
@@ -3226,9 +3255,15 @@ describe("runPreparedReply media-only handling", () => {
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     const call = requireLastRunReplyAgentCall();
-    expect(call?.commandBody).toContain("System event after active run");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("System event after active run");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: expect.stringContaining("System event after active run"),
+    });
+    expect(call.commandBody).toBe("[User sent media without caption]");
     expect(call?.transcriptCommandBody).not.toContain("System event after active run");
-    expect(call?.followupRun.prompt).toContain("System event after active run");
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
     expect(call?.followupRun.transcriptPrompt).not.toContain("System event after active run");
     expect(peekSystemEventEntries("session-key")).toStrictEqual([]);
   });
@@ -4681,13 +4716,21 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.suppressTyping).toBe(true);
   });
 
-  it("routes queued system events into user prompt text, not system prompt context", async () => {
+  it("routes queued system events as conversation data without changing system context", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
 
     await runPrepared();
 
     const call = requireRunReplyAgentCall();
-    expect(call.commandBody).toContain("System: [t] Model switched.");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("System: [t] Model switched.");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "System: [t] Model switched.",
+    });
+    expect(call.commandBody).toBe("[User sent media without caption]");
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.transcriptCommandBody).not.toContain("System: [t] Model switched.");
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
@@ -4737,12 +4780,27 @@ describe("runPreparedReply media-only handling", () => {
         sessionKey: runKey,
       });
 
-      const prompt = requireRunReplyAgentCall().followupRun.prompt;
-      expect(prompt.includes(generic.text)).toBe(selection === "live");
-      expect(prompt).not.toContain("Reminder: dedicated cron work");
-      expect(prompt).not.toContain("Gateway replacement notification");
-      expect(prompt).not.toContain("Notification queued after selection");
-      expect(prompt).not.toContain("Separate canonical queue notification");
+      const followupRun = requireRunReplyAgentCall().followupRun;
+      const context = followupRun.currentInboundContext;
+      expect(followupRun.prompt).toBe("A new session was started via /new or /reset.");
+      expect((context?.text ?? "").includes(generic.text)).toBe(selection === "live");
+      expect(
+        context?.fragments?.some(
+          (fragment) =>
+            fragment.kind === "conversation-data" && fragment.text.includes(generic.text),
+        ) ?? false,
+      ).toBe(selection === "live");
+      for (const text of [
+        followupRun.prompt,
+        context?.text ?? "",
+        ...(context?.fragments ?? []).map((fragment) => fragment.text),
+      ]) {
+        expect(text).not.toContain("Reminder: dedicated cron work");
+        expect(text).not.toContain("Gateway replacement notification");
+        expect(text).not.toContain("Notification queued after selection");
+        expect(text).not.toContain("Separate canonical queue notification");
+      }
+      expect(followupRun.transcriptPrompt).not.toContain(generic.text);
       expect(peekSystemEventEntries(queueKey).map((event) => event.text)).toEqual(
         selection === "live" ? before.filter((text) => text !== generic.text) : before,
       );
@@ -4776,9 +4834,20 @@ describe("runPreparedReply media-only handling", () => {
       sessionKey: "agent:main:slack:channel:c123:thread:123.456",
     });
 
-    const prompt = requireRunReplyAgentCall().followupRun.prompt;
-    expect(prompt).toContain("Slack reaction added: :eyes:");
-    expect(prompt).toContain("Slack message in #claw-test from Alice");
+    const followupRun = requireRunReplyAgentCall().followupRun;
+    const context = followupRun.currentInboundContext;
+    expect(followupRun.prompt).toBe("A new session was started via /new or /reset.");
+    for (const event of [
+      "Slack reaction added: :eyes:",
+      "Slack message in #claw-test from Alice",
+    ]) {
+      expect(context?.text).toContain(event);
+      expect(context?.fragments).toContainEqual({
+        kind: "conversation-data",
+        text: expect.stringContaining(event),
+      });
+      expect(followupRun.transcriptPrompt).not.toContain(event);
+    }
     expect(peekSystemEventEntries("agent:main:slack:channel:c123")).toStrictEqual([]);
     expect(peekSystemEventEntries("agent:main:slack:channel:c123:thread:123.456")).toStrictEqual(
       [],
@@ -4826,10 +4895,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(params.command.ownerList).toHaveLength(24);
   });
 
-  it("preserves first-token think hint when system events are prepended", async () => {
-    // drainFormattedSystemEvents returns the events block; the caller prepends it.
-    // The hint must be extracted from the user body BEFORE prepending, so "System:"
-    // does not shadow the low|medium|high shorthand.
+  it("preserves first-token think hint with separate system event context", async () => {
+    // Event context must not shadow the user's low|medium|high shorthand.
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
 
     const code = "Run  this:\r\n    if True:\r\n        print('a  b')";
@@ -4843,11 +4910,16 @@ describe("runPreparedReply media-only handling", () => {
     // Think hint extracted before events arrived — level must be "low", not the model default.
     expect(call.followupRun.run.thinkLevel).toBe("low");
     expect(call.followupRun.run.thinkLevelOverride).toBe("low");
-    // The stripped user text (no "low" token) must still appear after the event block.
-    expect(call.commandBody).toBe(`System: [t] Node connected.\n\n${code}`);
+    // Removing the think hint preserves every remaining user byte.
+    expect(call.commandBody).toBe(code);
     expect(call.commandBody).not.toMatch(/^low\b/);
-    // System events are still present in the body.
-    expect(call.commandBody).toContain("System: [t] Node connected.");
+    expect(call.followupRun.prompt).toBe(`low ${code}`);
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("System: [t] Node connected.");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "System: [t] Node connected.",
+    });
   });
 
   it.each([
@@ -4929,15 +5001,20 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.skillWorkshopProposalRevision).not.toBe(proposalRevision);
   });
 
-  it("carries system events into followupRun.prompt for deferred turns", async () => {
-    // drainFormattedSystemEvents returns the events block; the caller prepends it to
-    // effectiveBaseBody for the queue path so deferred turns see events.
+  it("carries system events as typed context for deferred turns", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
 
     await runPrepared();
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("System: [t] Node connected.");
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("System: [t] Node connected.");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: "System: [t] Node connected.",
+    });
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("System: [t] Node connected.");
   });
 
   it("admits only system events visible to the prepared agent", async () => {
@@ -4969,9 +5046,19 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("Alpha hook finished");
-    expect(call.followupRun.prompt).toContain("Legacy unowned event");
+    const context = call.followupRun.currentInboundContext;
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    for (const event of ["Alpha hook finished", "Legacy unowned event"]) {
+      expect(context?.text).toContain(event);
+      expect(context?.fragments).toContainEqual({
+        kind: "conversation-data",
+        text: expect.stringContaining(event),
+      });
+      expect(call.followupRun.transcriptPrompt).not.toContain(event);
+    }
     expect(call.followupRun.prompt).not.toContain("Beta hook finished");
+    expect(context?.text).not.toContain("Beta hook finished");
+    expect(JSON.stringify(context?.fragments)).not.toContain("Beta hook finished");
     expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
       "Beta hook finished",
     ]);

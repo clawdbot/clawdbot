@@ -1,26 +1,48 @@
-import type { CacheRetention, Model } from "../types.js";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
+import { isNativeOpenAIEndpoint } from "../transports/openai-completions-compat.js";
+import type { CacheRetention, Model, OpenAICompletionsCompat } from "../types.js";
 
-/** Selects the documented cache lifetime fields for a Responses request. */
-export function resolveOpenAIResponsesCacheParams(
-  model: Pick<Model, "id" | "api" | "baseUrl">,
+const EXTENDED_RETENTION_MODELS = new Set([
+  "gpt-5.5",
+  "gpt-5.5-pro",
+  "gpt-5.4",
+  "gpt-5.2",
+  "gpt-5.1-codex-max",
+  "gpt-5.1",
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-mini",
+  "gpt-5.1-chat-latest",
+  "gpt-5",
+  "gpt-5-codex",
+  "gpt-4.1",
+]);
+
+/** Selects documented lifetime fields shared by Responses and Chat Completions. */
+export function resolveOpenAIPromptCacheParams(
+  model: Pick<Model, "id" | "provider" | "baseUrl">,
   cacheRetention: CacheRetention,
-  supportsLongCacheRetention: boolean,
+  compat: Required<
+    Pick<OpenAICompletionsCompat, "supportsPromptCacheKey" | "supportsLongCacheRetention">
+  >,
 ): { prompt_cache_retention?: "24h"; prompt_cache_options?: { ttl: "30m" } } {
-  if (cacheRetention === "none") {
+  if (
+    cacheRetention !== "long" ||
+    !compat.supportsPromptCacheKey ||
+    !compat.supportsLongCacheRetention
+  ) {
     return {};
   }
-  if (model.id === "gpt-6-astra" && model.api === "openai-responses") {
-    const endpoint = URL.parse(model.baseUrl ?? "https://api.openai.com/v1");
-    if (
-      endpoint?.protocol === "https:" &&
-      (endpoint.hostname === "api.openai.com" || endpoint.hostname.endsWith(".api.openai.com"))
-    ) {
-      // Astra replaces legacy retention with a single supported 30-minute TTL.
-      // https://developers.openai.com/api/docs/guides/latest-model
-      return { prompt_cache_options: { ttl: "30m" } };
-    }
+  // GPT-5.6 and later replace legacy retention on both APIs.
+  // https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime
+  const version = /^gpt-(\d+)(?:\.(\d+))?(?:-|$)/.exec(model.id);
+  if (
+    version &&
+    (Number(version[1]) > 5 || (Number(version[1]) === 5 && Number(version[2]) >= 6))
+  ) {
+    return { prompt_cache_options: { ttl: "30m" } };
   }
-  return cacheRetention === "long" && supportsLongCacheRetention
+  const modelId = model.id.replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  return !isNativeOpenAIEndpoint(model) || EXTENDED_RETENTION_MODELS.has(modelId)
     ? { prompt_cache_retention: "24h" }
     : {};
 }
@@ -33,9 +55,5 @@ export function clampOpenAIPromptCacheKey(key: string | undefined): string | und
   if (key === undefined) {
     return undefined;
   }
-  const chars = Array.from(key);
-  if (chars.length <= OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH) {
-    return key;
-  }
-  return chars.slice(0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH).join("");
+  return truncateCodePoints(key, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH);
 }

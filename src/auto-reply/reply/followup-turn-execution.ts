@@ -2,6 +2,7 @@ import { settleProgressVisibilityCallbackResult } from "../../channels/progress-
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -263,6 +264,38 @@ export async function executeFollowupTurn(params: {
           return false;
         }
         const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
+        if (sourceOpts?.suppressToolProgressMessages && !requiresDurableToolResult) {
+          return false;
+        }
+        const fastModeAutoProgress = isFastModeAutoProgressPayload(payload);
+        if (fastModeAutoProgress && !requiresDurableToolResult) {
+          const verboseToolResult = shouldEmitVerboseToolResult();
+          const lifecycleToolResult = sourceOpts?.allowToolLifecycleWhenProgressHidden === true;
+          const sourceDeliverySuppressed =
+            turn.queued.run.sourceReplyDeliveryMode === "message_tool_only";
+          const callbackAllowedBySource =
+            !sourceDeliverySuppressed ||
+            sourceOpts?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+          const callbackAllowed =
+            callbackAllowedBySource &&
+            (forceToolResultProgress || verboseToolResult || lifecycleToolResult);
+          const callback = callbackAllowed ? sourceOpts?.onToolResult : undefined;
+          if (callback) {
+            const visible = (await settleProgressVisibilityCallbackResult(callback(payload)))
+              .visible;
+            if (visible) {
+              return true;
+            }
+            if (!forceToolResultProgress && !verboseToolResult) {
+              return false;
+            }
+          }
+          if (!forceToolResultProgress && !verboseToolResult) {
+            return false;
+          }
+          await params.onToolResult(payload, { runId: turn.runId });
+          return true;
+        }
         const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
         const transientToolResultProgress = requiresDurableToolResult
           ? undefined

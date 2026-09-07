@@ -147,7 +147,7 @@ describe("offline sessions cleanup harness ownership", () => {
         };
         setRuntimeConfigSnapshot(cfg, cfg);
         const storePath = path.join(state.sessionsDir(), "sessions.json");
-        const sessionKey = "agent:main:cleanup-owned";
+        const sessionKey = "agent:main:hook:cleanup-owned";
         const siblingKey = "agent:main:cleanup-kept";
         const sessionId = "shared-physical-id";
         const scope = { agentId: "main", sessionKey, storePath };

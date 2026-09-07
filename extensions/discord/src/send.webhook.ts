@@ -1,7 +1,7 @@
 // Discord plugin module implements send.webhook behavior.
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -19,7 +19,7 @@ import {
   readDiscordMessage,
   readRetryAfter,
 } from "./internal/rest-errors.js";
-import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { prepareDiscordOutboundText } from "./outbound-text.js";
 import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
 import { createDiscordRetryRunner, recordDiscordMessageCreateAmbiguity } from "./retry.js";
 import {
@@ -41,6 +41,7 @@ type DiscordWebhookSendOpts = {
   replyTo?: string;
   username?: string;
   avatarUrl?: string;
+  tableMode?: MarkdownTableMode;
   wait?: boolean;
   onPlatformSendDispatch?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
@@ -110,9 +111,10 @@ export async function sendWebhookMessageDiscord(
     cfg: opts.cfg,
     accountId: opts.accountId,
   });
-  const rewrittenText = rewriteDiscordKnownMentions(text, {
-    accountId: account.accountId,
-    mentionAliases: account.config.mentionAliases,
+  const { textWithMentions } = prepareDiscordOutboundText(text, {
+    cfg: opts.cfg,
+    account,
+    tableMode: opts.tableMode,
   });
   const flags = resolveDiscordMessageFlags({
     suppressEmbeds: resolveDiscordSuppressEmbeds({ configured: account.config.suppressEmbeds }),
@@ -143,7 +145,7 @@ export async function sendWebhookMessageDiscord(
   const request = createDiscordRetryRunner({ signal: deadline.signal });
   // Alias expansion happens after the outer delivery planner. Bound the actual
   // wire text here, retaining each accepted part before another can fail.
-  const chunks = chunkDiscordTextWithMode(rewrittenText, { maxLines: Number.MAX_SAFE_INTEGER });
+  const chunks = chunkDiscordTextWithMode(textWithMentions, { maxLines: Number.MAX_SAFE_INTEGER });
   const results: DiscordSendResult[] = [];
   try {
     for (const content of chunks.length ? chunks : [""]) {

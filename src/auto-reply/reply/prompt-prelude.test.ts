@@ -59,6 +59,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("what changed?");
     expect(envelope.currentInboundContext).toEqual({
       text: "Current message:\nchat_id=C123",
+      fragments: [{ kind: "conversation-data", text: "Current message:\nchat_id=C123" }],
       promptJoiner: " ",
     });
   });
@@ -151,6 +152,8 @@ describe("buildReplyPromptEnvelope", () => {
       startupAction: "new",
       inboundEventKind: "room_event",
       sourceReplyDeliveryMode: "message_tool_only",
+      threadContextNote: "Thread note",
+      systemEventBlocks: ["System event"],
     });
 
     // The active room-event prompt is the attributed transcript row itself, so
@@ -175,6 +178,8 @@ describe("buildReplyPromptEnvelope", () => {
           "#35675 User ->#35674: Are you fr fr",
         ].join("\n"),
         "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
+        "Thread note",
+        "System event",
       ].join("\n\n"),
     );
     // Each room-event fact appears exactly once per request: kind lives in the
@@ -192,7 +197,15 @@ describe("buildReplyPromptEnvelope", () => {
           "```",
         ].join("\n"),
         "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
+        "Thread note",
+        "System event",
       ].join("\n\n"),
+    );
+    expect(envelope.currentInboundContext?.fragments).toEqual(
+      expect.arrayContaining([
+        { kind: "conversation-data", text: "Thread note" },
+        { kind: "conversation-data", text: "System event" },
+      ]),
     );
     expect(envelope.currentInboundContext?.resumableText).not.toContain(
       "Conversation context (chronological, selected for current message):",

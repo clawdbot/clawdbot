@@ -143,6 +143,18 @@ including empty results without range metadata. Only an explicit
 missing files; registered-input normalization remains available through the
 next Plugin SDK major.
 
+### Config record migrations
+
+Use `mergeMissing(canonical, legacy)` from
+`openclaw/plugin-sdk/runtime-doctor-migrations` to fill undefined fields without
+replacing authored values. It fills existing nested records in place and keeps
+authored arrays, nulls, and scalars. Missing values are assigned by reference;
+callers own any cloning needed to isolate the migration from its input.
+
+The helper skips undefined source values and `__proto__`, `prototype`, and
+`constructor` keys at each level it merges. It does not recursively sanitize
+newly assigned subtrees.
+
 ### Plugin state migration declarations
 
 Bundled plugins should list every migration under
@@ -317,6 +329,11 @@ media fields, payload builders, hook metadata aliases, and media template
 names. Its approved `removeAfter` date is **2026-10-01** (two release trains
 after the facts-first replacements shipped). Removal additionally requires a
 clean published-plugin artifact sweep at that time; migrate before the date.
+
+The unused `buildChannelTurnMediaPayload` alias has been removed from
+`openclaw/plugin-sdk/channel-inbound`. Its canonical
+`buildChannelInboundMediaPayload` export remains available for the compatibility
+window above. New ingress code should pass ordered media facts directly.
 
 For channel ingress, replace singular/plural `MediaPath`, `MediaUrl`,
 `MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`,

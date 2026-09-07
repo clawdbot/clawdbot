@@ -246,7 +246,11 @@ async function readCompletionProvenance(sessionKey: string, agentId: string) {
   for (const message of messages) {
     const record = message as { role?: unknown; provenance?: unknown };
     const provenance = normalizeInputProvenance(record.provenance);
-    if (record.role === "user" && provenance?.sourceTool === "subagent_announce") {
+    if (
+      record.role === "user" &&
+      (provenance?.sourceTool === "subagent_announce" ||
+        provenance?.sourceTool === "subagent_settle")
+    ) {
       return provenance;
     }
   }
@@ -338,7 +342,7 @@ describeLive("subagent announce live", () => {
       expect(provenance).toMatchObject({
         kind: "inter_session",
         sourceChannel: "internal",
-        sourceTool: "subagent_announce",
+        sourceTool: expect.stringMatching(/^subagent_(?:announce|settle)$/),
       });
     },
     10 * 60_000,

@@ -214,7 +214,7 @@ function collectStableRootRuntimeAliasCandidates(distDir: string, fsImpl: typeof
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
   } catch {
-    return new Map();
+    return { entries: [], candidatesByAlias: new Map<string, string[]>() };
   }
 
   const candidatesByAlias = new Map<string, string[]>();
@@ -231,7 +231,8 @@ function collectStableRootRuntimeAliasCandidates(distDir: string, fsImpl: typeof
     candidates.push(entry.name);
     candidatesByAlias.set(aliasFileName, candidates);
   }
-  return candidatesByAlias;
+  // Importer rewrites retain directory order; only alias candidates are sorted.
+  return { entries, candidatesByAlias };
 }
 
 function resolveStableRootRuntimeAliasCandidate(
@@ -287,7 +288,7 @@ function listStableRootRuntimeAliasOutputs(params: RuntimeFsParams = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
-  return [...collectStableRootRuntimeAliasCandidates(distDir, fsImpl)]
+  return [...collectStableRootRuntimeAliasCandidates(distDir, fsImpl).candidatesByAlias]
     .filter(([aliasFileName, candidates]) =>
       resolveStableRootRuntimeAliasCandidate(aliasFileName, candidates, distDir, fsImpl),
     )
@@ -470,7 +471,7 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
   // Alias rewrites delete files under dist; fail closed on a symlinked root
   // so a stale alias removal cannot land inside the link target.
   assertRealOutputRoot(distDir, { fs: fsImpl });
-  const candidatesByAlias = collectStableRootRuntimeAliasCandidates(distDir, fsImpl);
+  const { candidatesByAlias } = collectStableRootRuntimeAliasCandidates(distDir, fsImpl);
 
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
@@ -496,26 +497,7 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
-  let entries;
-  try {
-    entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  const candidatesByAlias = new Map<string, string[]>();
-  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-    if (!entry.isFile()) {
-      continue;
-    }
-    const match = entry.name.match(ROOT_RUNTIME_ALIAS_PATTERN);
-    if (match?.groups?.base) {
-      const aliasFileName = `${match.groups.base}.js`;
-      const candidates = candidatesByAlias.get(aliasFileName) ?? [];
-      candidates.push(entry.name);
-      candidatesByAlias.set(aliasFileName, candidates);
-    }
-  }
+  const { entries, candidatesByAlias } = collectStableRootRuntimeAliasCandidates(distDir, fsImpl);
   const runtimeAliasFiles = new Map<string, string>();
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const candidate = resolveStableRootRuntimeAliasCandidate(

@@ -257,6 +257,28 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
   );
 
+  it.each([
+    ["direct", true],
+    ["direct", false],
+    ["public", true],
+    ["public", false],
+  ] as const)(
+    "keeps %s delivery when a rendered-empty chunk comes first=%s",
+    async (entry, first) => {
+      const empty = "Bad Request: text must be non-empty";
+      rejections.push(...(first ? [empty, empty, ""] : ["", empty, empty]));
+
+      await sendThrough(entry, `${"A".repeat(4000)}${"B".repeat(4000)}`, async () => {});
+
+      expect(requests.map(({ fields }) => fields.text)).toEqual(
+        (first ? ["A", "A", "B"] : ["A", "B", "B"]).map((text) => text.repeat(4000)),
+      );
+      expect(requests.map(({ fields }) => fields.parse_mode)).toEqual(
+        first ? ["HTML", undefined, "HTML"] : ["HTML", "HTML", undefined],
+      );
+    },
+  );
+
   it.each(["direct", "public"] as const)(
     "preserves %s accepted media after photo rejection falls back to a document",
     async (entry) => {
