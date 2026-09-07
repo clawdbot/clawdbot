@@ -511,6 +511,58 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     await expect(run).resolves.toMatchObject({ text: "The message was sent successfully." });
   });
 
+  it.each([60_000, -60_000])(
+    "keeps its elapsed timeout when the system clock moves by %s ms during startup",
+    async (clockStepMs) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const wallClock = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      const caller = new AbortController();
+      const fake = createClientFactory({ completeTurn: false });
+      let outcome: unknown;
+      const run = runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 1_000,
+        signal: caller.signal,
+        options: {
+          clientFactory: async (options) => {
+            wallClock.mockReturnValue(1_700_000_000_000 + clockStepMs);
+            return fake.factory(options);
+          },
+        },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "configured-transport",
+      }).then(
+        (value) => {
+          outcome = value;
+        },
+        (error) => {
+          outcome = error;
+        },
+      );
+      try {
+        await vi.waitFor(() => {
+          expect(fake.methods.includes("turn/start") || outcome !== undefined).toBe(true);
+        });
+        // A clock correction is not elapsed execution time.
+        expect(outcome).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(outcome).toMatchObject({
+          name: "TimeoutError",
+          message: "codex app-server hosted search turn timed out after 1s",
+        });
+      } finally {
+        caller.abort();
+        await vi.advanceTimersByTimeAsync(2_000);
+        await run;
+        wallClock.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("reports its own timeout with the configured bound", async () => {
     const fake = createClientFactory({ completeTurn: false });
 
