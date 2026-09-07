@@ -24,6 +24,7 @@ import {
   storeWith,
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
+import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore } from "./types.js";
@@ -71,6 +72,7 @@ describe("OAuth credential adoption is identity-gated", () => {
       formatProviderAuthProfileApiKeyWithPluginMock,
     });
     clearRuntimeAuthProfileStoreSnapshots();
+    resetOAuthRefreshQueuesForTest();
     caseIndex += 1;
     const caseRoot = path.join(tempRoot, `case-${caseIndex}`);
     mainAgentDir = await createOAuthMainAgentDir(caseRoot);
@@ -80,6 +82,7 @@ describe("OAuth credential adoption is identity-gated", () => {
     envSnapshot.restore();
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
+    resetOAuthRefreshQueuesForTest();
   });
 
   afterAll(async () => {

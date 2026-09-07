@@ -6,7 +6,13 @@ import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import "./oauth-external-auth-passthrough.test-support.js";
-import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-refresh-marker.js";
+import {
+  createFailedOAuthRefreshFence,
+  createOAuthRefreshFence,
+  isOAuthRefreshFence,
+  isPendingOAuthRefreshFence,
+} from "./oauth-refresh-marker.js";
+import { failOAuthRefreshPeerClaims } from "./oauth-refresh-peers.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
   createOAuthMainAgentDir,
@@ -17,9 +23,12 @@ import {
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { removeAuthProfilesWithLock } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
+import { upsertAuthProfileAfterLoginWithLockOrThrow } from "./upsert-with-lock.js";
 
 const {
   refreshProviderOAuthCredentialWithPluginMock,
@@ -27,9 +36,12 @@ const {
 } = getOAuthProviderRuntimeMocks();
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
+let resetOAuthRefreshQueuesForTest: typeof import("./oauth.test-support.js").resetOAuthRefreshQueuesForTest;
 
 async function loadOAuthModuleForTest() {
   ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+  ({ resetOAuthRefreshQueuesForTest } = await import("./oauth.test-support.js"));
+  resetOAuthRefreshQueuesForTest();
 }
 
 vi.mock("../../llm/oauth.js", () => ({
@@ -57,7 +69,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       const provider = "openai";
       const freshExpiry = Date.now() + 60 * 60 * 1000;
       const subAgents = await Promise.all(
-        Array.from({ length: 2 }, async (_, i) => {
+        Array.from({ length: 5 }, async (_, i) => {
           const dir = path.join(tempRoot, "agents", `sub-${i}`, "agent");
           await fs.mkdir(dir, { recursive: true });
           const local = createExpiredOauthStore({ profileId, provider });
@@ -66,7 +78,18 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
             // Access and expiry can drift while the single-use refresh generation stays shared.
             credential.access = `local-drifted-access-${i}`;
             credential.expires = Date.now() - 1_000;
+            if (i === 3) {
+              credential.refresh = "independent-refresh-generation";
+              credential.access = "independent-access";
+              credential.expires = freshExpiry;
+            } else if (i === 4) {
+              credential.copyToAgents = true;
+              credential.access = "portable-access";
+              credential.expires = freshExpiry;
+            }
           }
+          local.order = { openai: [profileId] };
+          local.usageStats = { [profileId]: { lastUsed: i + 1 } };
           saveAuthProfileStore(local, dir);
           return dir;
         }),
@@ -107,19 +130,13 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       await started;
       expect(
         resolvePersistedAuthProfileOwnerAgentDir({
-          agentDir: subAgents[1],
+          agentDir: subAgents[2],
           profileId,
         }),
       ).toBeUndefined();
-      const second = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-        store: ensureAuthProfileStore(subAgents[1]),
-        profileId,
-        agentDir: subAgents[1],
-      });
-      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(callCount).toBe(1);
       await vi.waitFor(() => {
-        for (const agentDir of subAgents) {
+        for (const agentDir of subAgents.slice(0, 3)) {
           const fenced = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
           expect(fenced?.type === "oauth" ? fenced.access : "").toMatch(
             /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:access:[a-f0-9]{64}$/,
@@ -129,26 +146,68 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
           );
         }
       });
+      expect(loadPersistedAuthProfileStore(subAgents[3])?.profiles[profileId]).toMatchObject({
+        refresh: "independent-refresh-generation",
+      });
+      expect(loadPersistedAuthProfileStore(subAgents[4])?.profiles[profileId]).toMatchObject({
+        copyToAgents: true,
+        refresh: "refresh-token",
+      });
 
       finishRefresh?.();
-      await expect(Promise.all([first, second])).resolves.toEqual([
+      await expect(first).resolves.toEqual(
         expect.objectContaining({
           apiKey: "cross-agent-refreshed-access",
           provider,
         }),
-        expect.objectContaining({
-          apiKey: "cross-agent-refreshed-access",
-          provider,
-        }),
-      ]);
+      );
       expect(callCount).toBe(1);
-      for (const agentDir of subAgents) {
-        expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toMatchObject({
-          access: "cross-agent-refreshed-access",
-          refresh: "cross-agent-refreshed-refresh",
-          expires: freshExpiry,
-        });
+      for (const [index, agentDir] of subAgents.slice(0, 3).entries()) {
+        const persisted = loadPersistedAuthProfileStore(agentDir);
+        expect(persisted?.profiles[profileId]).toBeUndefined();
+        expect(persisted?.order?.openai).toEqual([profileId]);
+        expect(persisted?.usageStats?.[profileId]?.lastUsed).toBe(index + 1);
       }
+      expect(loadPersistedAuthProfileStore(subAgents[3])?.profiles[profileId]).toMatchObject({
+        access: "independent-access",
+        refresh: "independent-refresh-generation",
+      });
+      expect(loadPersistedAuthProfileStore(subAgents[4])?.profiles[profileId]).toMatchObject({
+        access: "portable-access",
+        copyToAgents: true,
+      });
+
+      await removeAuthProfilesWithLock({ profileIds: [profileId], agentDir: mainAgentDir });
+      await expect(
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+          store: ensureAuthProfileStore(subAgents[2]),
+          profileId,
+          agentDir: subAgents[2],
+        }),
+      ).resolves.toBeNull();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await expect(
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+          store: ensureAuthProfileStore(subAgents[2]),
+          profileId,
+          agentDir: subAgents[2],
+        }),
+      ).resolves.toBeNull();
+      expect(callCount).toBe(1);
+      await expect(
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+          store: ensureAuthProfileStore(subAgents[3]),
+          profileId,
+          agentDir: subAgents[3],
+        }),
+      ).resolves.toEqual(expect.objectContaining({ apiKey: "independent-access" }));
+      await expect(
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+          store: ensureAuthProfileStore(subAgents[4]),
+          profileId,
+          agentDir: subAgents[4],
+        }),
+      ).resolves.toEqual(expect.objectContaining({ apiKey: "portable-access" }));
     } finally {
       envSnapshot.restore();
       resetFileLockStateForTest();
@@ -198,6 +257,404 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
       expect(loadPersistedAuthProfileStore(copiedAgentDir)?.profiles[profileId]).toEqual(
         failedFence,
+      );
+    } finally {
+      envSnapshot.restore();
+      resetFileLockStateForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
+
+  it("terminally fences every peer when the provider refresh fails", async () => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      resetFileLockStateForTest();
+      resetOAuthProviderRuntimeMocks({
+        refreshProviderOAuthCredentialWithPluginMock,
+        formatProviderAuthProfileApiKeyWithPluginMock,
+      });
+      clearRuntimeAuthProfileStoreSnapshots();
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-peer-failure-");
+      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+      await loadOAuthModuleForTest();
+      const profileId = "openai:default";
+      const provider = "openai";
+      const peers = await Promise.all(
+        Array.from({ length: 3 }, async (_, index) => {
+          const agentDir = path.join(tempRoot, "agents", `peer-${index}`, "agent");
+          await fs.mkdir(agentDir, { recursive: true });
+          saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
+          return agentDir;
+        }),
+      );
+      saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), mainAgentDir);
+      refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
+
+      await expect(
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+          store: ensureAuthProfileStore(peers[0]),
+          profileId,
+          agentDir: peers[0],
+        }),
+      ).resolves.toBeNull();
+
+      for (const agentDir of [mainAgentDir, ...peers]) {
+        const credential = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+        expect(credential?.type === "oauth" && isOAuthRefreshFence(credential)).toBe(true);
+        expect(credential?.type === "oauth" && isPendingOAuthRefreshFence(credential)).toBe(false);
+      }
+
+      saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), peers[0]);
+      await removeAuthProfilesWithLock({ profileIds: [profileId], agentDir: mainAgentDir });
+      for (const agentDir of [mainAgentDir, ...peers]) {
+        expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toBeUndefined();
+      }
+    } finally {
+      envSnapshot.restore();
+      resetFileLockStateForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
+
+  it("continues terminalizing peers after one candidate update fails", async () => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-peer-terminalize-");
+      await createOAuthMainAgentDir(tempRoot);
+      const profileId = "openai:default";
+      const provider = "openai";
+      const original = createExpiredOauthStore({ profileId, provider }).profiles[profileId];
+      if (original?.type !== "oauth") {
+        throw new Error("expected original OAuth credential");
+      }
+      const fence = createOAuthRefreshFence({ profileId, credential: original });
+      const unreadableAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
+      const readableAgentDir = path.join(tempRoot, "agents", "peer-b", "agent");
+      await fs.mkdir(unreadableAgentDir, { recursive: true });
+      await fs.mkdir(readableAgentDir, { recursive: true });
+      await fs.writeFile(
+        resolveAuthProfileDatabasePath(unreadableAgentDir),
+        "not a sqlite database",
+      );
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, readableAgentDir);
+      const persistedFence = loadPersistedAuthProfileStore(readableAgentDir)?.profiles[profileId];
+      if (persistedFence?.type !== "oauth") {
+        throw new Error("expected persisted OAuth fence");
+      }
+
+      expect(() =>
+        failOAuthRefreshPeerClaims({
+          profileId,
+          fence: persistedFence,
+          claims: [
+            {
+              candidate: {
+                agentId: "peer-a",
+                agentDir: unreadableAgentDir,
+                databasePath: resolveAuthProfileDatabasePath(unreadableAgentDir),
+                env: process.env,
+              },
+            },
+            {
+              candidate: {
+                agentId: "peer-b",
+                agentDir: readableAgentDir,
+                databasePath: resolveAuthProfileDatabasePath(readableAgentDir),
+                env: process.env,
+              },
+            },
+          ],
+        }),
+      ).toThrow();
+      const terminal = loadPersistedAuthProfileStore(readableAgentDir)?.profiles[profileId];
+      expect(terminal?.type === "oauth" && isOAuthRefreshFence(terminal)).toBe(true);
+      expect(terminal?.type === "oauth" && isPendingOAuthRefreshFence(terminal)).toBe(false);
+    } finally {
+      envSnapshot.restore();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
+
+  it("rejects a same-generation login write while refresh owns the generation", async () => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      resetFileLockStateForTest();
+      resetOAuthProviderRuntimeMocks({
+        refreshProviderOAuthCredentialWithPluginMock,
+        formatProviderAuthProfileApiKeyWithPluginMock,
+      });
+      clearRuntimeAuthProfileStoreSnapshots();
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-login-fence-");
+      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+      await loadOAuthModuleForTest();
+      const profileId = "openai:default";
+      const provider = "openai";
+      const original = createExpiredOauthStore({ profileId, provider });
+      saveAuthProfileStore(original, mainAgentDir);
+
+      let finishRefresh: (() => void) | undefined;
+      let markStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+        markStarted?.();
+        await new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        });
+        return {
+          type: "oauth",
+          provider,
+          access: "rotated-access",
+          refresh: "rotated-refresh",
+          expires: Date.now() + 60 * 60 * 1000,
+        } as never;
+      });
+
+      const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+        store: ensureAuthProfileStore(mainAgentDir),
+        profileId,
+        agentDir: mainAgentDir,
+      });
+      await started;
+      const originalCredential = original.profiles[profileId];
+      if (originalCredential?.type !== "oauth") {
+        throw new Error("expected original OAuth credential");
+      }
+      await expect(
+        upsertAuthProfileAfterLoginWithLockOrThrow({
+          profileId,
+          agentDir: mainAgentDir,
+          credential: originalCredential,
+        }),
+      ).rejects.toThrow("Failed to update auth profile store");
+      const ownerFence = loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId];
+      expect(ownerFence?.type === "oauth" && isOAuthRefreshFence(ownerFence)).toBe(true);
+
+      finishRefresh?.();
+      await expect(resolving).resolves.toEqual(
+        expect.objectContaining({ apiKey: "rotated-access" }),
+      );
+      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toMatchObject({
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+      });
+    } finally {
+      envSnapshot.restore();
+      resetFileLockStateForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
+
+  it("preserves the owner rotation when the settlement rescan finds an unreadable candidate", async () => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      resetFileLockStateForTest();
+      resetOAuthProviderRuntimeMocks({
+        refreshProviderOAuthCredentialWithPluginMock,
+        formatProviderAuthProfileApiKeyWithPluginMock,
+      });
+      clearRuntimeAuthProfileStoreSnapshots();
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-settlement-rescan-");
+      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+      await loadOAuthModuleForTest();
+      const profileId = "openai:default";
+      const provider = "openai";
+      const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
+      await fs.mkdir(peerAgentDir, { recursive: true });
+      saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), peerAgentDir);
+      saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), mainAgentDir);
+
+      let finishRefresh: (() => void) | undefined;
+      let markStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+        markStarted?.();
+        await new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        });
+        return {
+          type: "oauth",
+          provider,
+          access: "preserved-rotation-access",
+          refresh: "preserved-rotation-refresh",
+          expires: Date.now() + 60 * 60 * 1000,
+        } as never;
+      });
+
+      const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+        store: ensureAuthProfileStore(peerAgentDir),
+        profileId,
+        agentDir: peerAgentDir,
+      });
+      await started;
+      const unreadableAgentDir = path.join(tempRoot, "agents", "peer-z", "agent");
+      await fs.mkdir(unreadableAgentDir, { recursive: true });
+      await fs.writeFile(
+        resolveAuthProfileDatabasePath(unreadableAgentDir),
+        "not a sqlite database",
+      );
+      finishRefresh?.();
+
+      await expect(resolving).resolves.toEqual(
+        expect.objectContaining({ apiKey: "preserved-rotation-access" }),
+      );
+      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toMatchObject({
+        access: "preserved-rotation-access",
+        refresh: "preserved-rotation-refresh",
+      });
+      const terminalPeer = loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId];
+      expect(terminalPeer?.type === "oauth" && isOAuthRefreshFence(terminalPeer)).toBe(true);
+      expect(terminalPeer?.type === "oauth" && isPendingOAuthRefreshFence(terminalPeer)).toBe(
+        false,
+      );
+    } finally {
+      envSnapshot.restore();
+      resetFileLockStateForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
+
+  it("lets a completed re-login replace the owner while retiring consumed peers", async () => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      resetFileLockStateForTest();
+      resetOAuthProviderRuntimeMocks({
+        refreshProviderOAuthCredentialWithPluginMock,
+        formatProviderAuthProfileApiKeyWithPluginMock,
+      });
+      clearRuntimeAuthProfileStoreSnapshots();
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-relogin-race-");
+      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+      await loadOAuthModuleForTest();
+      const profileId = "openai:default";
+      const provider = "openai";
+      const peers = await Promise.all(
+        Array.from({ length: 2 }, async (_, index) => {
+          const agentDir = path.join(tempRoot, "agents", `peer-${index}`, "agent");
+          await fs.mkdir(agentDir, { recursive: true });
+          saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
+          return agentDir;
+        }),
+      );
+      saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), mainAgentDir);
+
+      let finishRefresh: (() => void) | undefined;
+      let markStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+        markStarted?.();
+        await new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        });
+        return {
+          type: "oauth",
+          provider,
+          access: "stale-rotation-access",
+          refresh: "stale-rotation-refresh",
+          expires: Date.now() + 60 * 60 * 1000,
+        } as never;
+      });
+
+      const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+        store: ensureAuthProfileStore(peers[0]),
+        profileId,
+        agentDir: peers[0],
+      });
+      await started;
+      await upsertAuthProfileAfterLoginWithLockOrThrow({
+        profileId,
+        agentDir: mainAgentDir,
+        credential: {
+          type: "oauth",
+          provider,
+          access: "relogin-access",
+          refresh: "relogin-refresh",
+          expires: Date.now() + 60 * 60 * 1000,
+        },
+      });
+      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toMatchObject({
+        access: "relogin-access",
+        refresh: "relogin-refresh",
+      });
+      finishRefresh?.();
+
+      await expect(resolving).resolves.toEqual(
+        expect.objectContaining({ apiKey: "relogin-access" }),
+      );
+      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toMatchObject({
+        access: "relogin-access",
+        refresh: "relogin-refresh",
+      });
+      for (const agentDir of peers) {
+        expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toBeUndefined();
+      }
+    } finally {
+      envSnapshot.restore();
+      resetFileLockStateForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
+
+  it("rolls back the owner and fenced peers when a candidate is unreadable", async () => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      resetFileLockStateForTest();
+      resetOAuthProviderRuntimeMocks({
+        refreshProviderOAuthCredentialWithPluginMock,
+        formatProviderAuthProfileApiKeyWithPluginMock,
+      });
+      clearRuntimeAuthProfileStoreSnapshots();
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-peer-rollback-");
+      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+      await loadOAuthModuleForTest();
+      const profileId = "openai:default";
+      const provider = "openai";
+      const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
+      const unreadableAgentDir = path.join(tempRoot, "agents", "peer-z", "agent");
+      await fs.mkdir(peerAgentDir, { recursive: true });
+      await fs.mkdir(unreadableAgentDir, { recursive: true });
+      const original = createExpiredOauthStore({ profileId, provider });
+      saveAuthProfileStore(original, peerAgentDir);
+      saveAuthProfileStore(original, mainAgentDir);
+      await fs.writeFile(
+        path.join(unreadableAgentDir, "openclaw-agent.sqlite"),
+        "not a sqlite database",
+      );
+      await expect(
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+          store: ensureAuthProfileStore(peerAgentDir),
+          profileId,
+          agentDir: peerAgentDir,
+        }),
+      ).rejects.toThrow();
+      expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toEqual(
+        original.profiles[profileId],
+      );
+      expect(loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId]).toEqual(
+        original.profiles[profileId],
       );
     } finally {
       envSnapshot.restore();

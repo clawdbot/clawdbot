@@ -21,6 +21,7 @@ import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreStateMutationToken,
 } from "./mutation-lineage.js";
+import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { reloadSharedAuthStoreOwnership, SHARED_AUTH_STORE_STATE_KEY } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
@@ -28,6 +29,7 @@ import {
   clearLastGoodProfileWithLock,
   markAuthProfileSuccess,
   promoteAuthProfileInOrder,
+  removeAuthProfilesWithLock,
   removeAuthProfilesAcrossOwnerStores,
   removeProviderAuthProfilesWithLock,
   setAuthProfileOrder,
@@ -1800,6 +1802,72 @@ describe("promoteAuthProfileInOrder", () => {
         loadAuthProfileStoreForRuntime(mainAgentDir).profiles["openai:shared"],
       ).toBeUndefined();
     });
+  });
+
+  it("retries removal when the OAuth generation changes while waiting for its lock", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-remove-generation-race-",
+      async ({ agentDirFor }) => {
+        const mainAgentDir = agentDirFor("main");
+        const peerAgentDir = agentDirFor("peer");
+        const profileId = "openai:default";
+        const original = {
+          type: "oauth" as const,
+          provider: "openai",
+          access: "original-access",
+          refresh: "original-refresh",
+          expires: Date.now() + 60_000,
+        };
+        const replacement = {
+          ...original,
+          access: "replacement-access",
+          refresh: "replacement-refresh",
+        };
+        saveAuthProfileStore(
+          { version: AUTH_STORE_VERSION, profiles: { [profileId]: original } },
+          mainAgentDir,
+        );
+        saveAuthProfileStore(
+          { version: AUTH_STORE_VERSION, profiles: { [profileId]: original } },
+          peerAgentDir,
+        );
+
+        let releaseLock: (() => void) | undefined;
+        let markLocked: (() => void) | undefined;
+        const locked = new Promise<void>((resolve) => {
+          markLocked = resolve;
+        });
+        const blocker = withOAuthProfileLock({ profileId, provider: "openai" }, async () => {
+          markLocked?.();
+          await new Promise<void>((resolve) => {
+            releaseLock = resolve;
+          });
+        });
+        await locked;
+
+        const removing = removeAuthProfilesWithLock({
+          agentDir: mainAgentDir,
+          profileIds: [profileId],
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        saveAuthProfileStore(
+          { version: AUTH_STORE_VERSION, profiles: { [profileId]: replacement } },
+          mainAgentDir,
+        );
+        saveAuthProfileStore(
+          { version: AUTH_STORE_VERSION, profiles: { [profileId]: replacement } },
+          peerAgentDir,
+        );
+        releaseLock?.();
+        await blocker;
+
+        await expect(removing).resolves.not.toBeNull();
+        expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toBeUndefined();
+        expect(loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId]).toBeUndefined();
+      },
+    );
   });
 
   it("does not clear lastGood when the failed profile is not the stored profile", async () => {

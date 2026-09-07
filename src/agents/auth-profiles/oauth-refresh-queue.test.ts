@@ -16,6 +16,7 @@ import {
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
+import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 
@@ -48,12 +49,14 @@ describe("OAuth refresh failure ownership", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
     agentDir = await createOAuthMainAgentDir(caseRoot);
+    resetOAuthRefreshQueuesForTest();
   });
 
   afterEach(async () => {
     envSnapshot.restore();
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
+    resetOAuthRefreshQueuesForTest();
   });
 
   afterAll(async () => {
@@ -97,5 +100,47 @@ describe("OAuth refresh failure ownership", () => {
     expect(first).toBeInstanceOf(Error);
     expect(callCount).toBe(1);
     expect(second).toBeNull();
+  });
+
+  it("serializes a 10-caller burst", async () => {
+    const profileId = "openai:default";
+    const provider = "openai";
+    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
+
+    const startOrder: number[] = [];
+    const endOrder: number[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let seq = 0;
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+      const n = ++seq;
+      startOrder.push(n);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      endOrder.push(n);
+      return {
+        type: "oauth",
+        provider,
+        access: `refreshed-${n}`,
+        refresh: `refresh-${n}`,
+        expires: Date.now() - 1_000,
+      } as never;
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+          store: ensureAuthProfileStore(agentDir),
+          profileId,
+          agentDir,
+        }).catch((e: unknown) => e),
+      ),
+    );
+
+    expect(results).toHaveLength(10);
+    expect(startOrder).toEqual(endOrder);
+    expect(maxInFlight).toBe(1);
   });
 });

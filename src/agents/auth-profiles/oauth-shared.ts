@@ -3,6 +3,7 @@
  * Used by manager, external CLI overlays, and persistence paths to decide when
  * incoming runtime credentials may replace or bootstrap stored profiles.
  */
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
@@ -40,6 +41,36 @@ export function areOAuthCredentialsEquivalent(
     a.accountId === b.accountId &&
     a.idToken === b.idToken
   );
+}
+
+// Keep newer usable stored credentials over incoming runtime imports to avoid
+// replacing a fresh access token with stale external CLI state.
+function hasNewerStoredOAuthCredential(
+  existing: OAuthCredential | undefined,
+  incoming: OAuthCredential,
+): boolean {
+  const existingExpires = asDateTimestampMs(existing?.expires);
+  const incomingExpires = asDateTimestampMs(incoming.expires);
+  return Boolean(
+    existing &&
+    existing.provider === incoming.provider &&
+    existingExpires !== undefined &&
+    (incomingExpires === undefined || existingExpires > incomingExpires),
+  );
+}
+
+/** Returns true when an incoming OAuth credential should replace stored state. */
+export function shouldReplaceStoredOAuthCredential(
+  existing: OAuthCredential | undefined,
+  incoming: OAuthCredential,
+): boolean {
+  if (!existing || existing.type !== "oauth") {
+    return true;
+  }
+  if (areOAuthCredentialsEquivalent(existing, incoming)) {
+    return false;
+  }
+  return !hasNewerStoredOAuthCredential(existing, incoming);
 }
 
 /** Returns true when an OAuth credential has account or email identity. */

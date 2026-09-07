@@ -2,6 +2,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
+import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
+import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   deletePersistedAuthProfileStoreRaw,
@@ -21,6 +23,25 @@ import { resetAuthProfileFailureState } from "./usage-state.js";
 function throwAuthProfileUpdateError(): never {
   throw new Error(
     "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+  );
+}
+
+function restoresFencedOAuthRefreshGeneration(params: {
+  profileId: string;
+  existing: AuthProfileCredential | undefined;
+  incoming: AuthProfileCredential;
+}): boolean {
+  return (
+    params.existing?.type === "oauth" &&
+    params.incoming.type === "oauth" &&
+    params.incoming.copyToAgents !== true &&
+    !isOAuthRefreshFence(params.incoming) &&
+    isOAuthRefreshFence(params.existing) &&
+    isSameOAuthRefreshGeneration({
+      profileId: params.profileId,
+      left: params.existing,
+      right: params.incoming,
+    })
   );
 }
 
@@ -52,125 +73,143 @@ export async function persistAuthProfileBatch(
     return { rollback() {} };
   }
 
-  const previousProfiles = new Map<string, AuthProfileCredential | undefined>();
-  const previousOrder = new Map<string, readonly string[] | undefined>();
-  const appliedProfiles = new Map<string, AuthProfileCredential>();
-  let storeWasAbsent = false;
-  let stateWasAbsent = false;
-  const preparedOwner = runAuthProfileWriteTransaction(
-    params.agentDir,
-    (database, owner) => {
-      storeWasAbsent =
-        inspectPersistedAuthProfileStoreRaw(params.agentDir, database).status === "missing";
-      stateWasAbsent =
-        inspectPersistedAuthProfileStateRaw(params.agentDir, database).status === "missing";
-      const next =
-        loadPersistedAuthProfileStore(params.agentDir, { database }) ??
-        ({ version: AUTH_STORE_VERSION, profiles: {} } satisfies AuthProfileStore);
-      for (const [profileId, entry] of profiles) {
-        if (!entry.replaceExisting && Object.hasOwn(next.profiles, profileId)) {
-          continue;
-        }
-        previousProfiles.set(profileId, next.profiles[profileId]);
-        next.profiles[profileId] = entry.credential;
-        appliedProfiles.set(profileId, entry.credential);
-      }
-      for (const [provider, profileIds] of Object.entries(params.order ?? {})) {
-        previousOrder.set(provider, next.order?.[provider]);
-        const existing = next.order?.[provider] ?? [];
-        const additions = [...new Set(profileIds)].filter(
-          (profileId) => appliedProfiles.has(profileId) && !existing.includes(profileId),
-        );
-        if (additions.length > 0) {
-          next.order = { ...next.order, [provider]: [...existing, ...additions] };
-        }
-      }
-      if (appliedProfiles.size > 0) {
-        saveAuthProfileStoreWithPreparedOwner(
-          next,
-          params.agentDir,
-          { filterExternalAuthProfiles: false, syncExternalCli: false },
-          database,
-          owner,
-        );
-      }
-      return owner;
-    },
-    { sharedStoreWrite: true, stateDir: params.stateDir },
-  );
-
-  let rolledBack = false;
-  return {
-    rollback: () => {
-      if (rolledBack) {
-        return;
-      }
-      runAuthProfileWriteTransaction(
+  return await withOAuthProfileLocks(
+    [...profiles.entries()].flatMap(([profileId, entry]) =>
+      entry.credential.type === "oauth" ? [{ profileId, provider: entry.credential.provider }] : [],
+    ),
+    async () => {
+      const previousProfiles = new Map<string, AuthProfileCredential | undefined>();
+      const previousOrder = new Map<string, readonly string[] | undefined>();
+      const appliedProfiles = new Map<string, AuthProfileCredential>();
+      let storeWasAbsent = false;
+      let stateWasAbsent = false;
+      const preparedOwner = runAuthProfileWriteTransaction(
         params.agentDir,
         (database, owner) => {
-          if (database.path !== preparedOwner.databasePath) {
-            throw new Error("auth profile batch rollback belongs to another owner");
-          }
-          const current = loadPersistedAuthProfileStore(params.agentDir, { database });
-          if (!current) {
-            return;
-          }
-          const ownedProfiles = new Set<string>();
-          for (const [profileId, credential] of appliedProfiles) {
-            if (!isDeepStrictEqual(current.profiles[profileId], credential)) {
+          storeWasAbsent =
+            inspectPersistedAuthProfileStoreRaw(params.agentDir, database).status === "missing";
+          stateWasAbsent =
+            inspectPersistedAuthProfileStateRaw(params.agentDir, database).status === "missing";
+          const next =
+            loadPersistedAuthProfileStore(params.agentDir, { database }) ??
+            ({ version: AUTH_STORE_VERSION, profiles: {} } satisfies AuthProfileStore);
+          for (const [profileId, entry] of profiles) {
+            if (!entry.replaceExisting && Object.hasOwn(next.profiles, profileId)) {
               continue;
             }
-            ownedProfiles.add(profileId);
-            const previous = previousProfiles.get(profileId);
-            if (previous) {
-              current.profiles[profileId] = previous;
-            } else {
-              delete current.profiles[profileId];
+            if (
+              restoresFencedOAuthRefreshGeneration({
+                profileId,
+                existing: next.profiles[profileId],
+                incoming: entry.credential,
+              })
+            ) {
+              throw new Error(
+                `Refused to restore fenced OAuth refresh generation for profile "${profileId}".`,
+              );
             }
+            previousProfiles.set(profileId, next.profiles[profileId]);
+            next.profiles[profileId] = entry.credential;
+            appliedProfiles.set(profileId, entry.credential);
           }
           for (const [provider, profileIds] of Object.entries(params.order ?? {})) {
-            const existing = current.order?.[provider];
-            if (!existing) {
-              continue;
-            }
-            const preexisting = new Set(previousOrder.get(provider) ?? []);
-            const introduced = new Set(
-              profileIds.filter((profileId) => !preexisting.has(profileId)),
+            previousOrder.set(provider, next.order?.[provider]);
+            const existing = next.order?.[provider] ?? [];
+            const additions = [...new Set(profileIds)].filter(
+              (profileId) => appliedProfiles.has(profileId) && !existing.includes(profileId),
             );
-            const remaining = existing.filter(
-              (profileId) => !introduced.has(profileId) || !ownedProfiles.has(profileId),
+            if (additions.length > 0) {
+              next.order = { ...next.order, [provider]: [...existing, ...additions] };
+            }
+          }
+          if (appliedProfiles.size > 0) {
+            saveAuthProfileStoreWithPreparedOwner(
+              next,
+              params.agentDir,
+              { filterExternalAuthProfiles: false, syncExternalCli: false },
+              database,
+              owner,
             );
-            if (remaining.length === existing.length) {
-              continue;
-            }
-            if (remaining.length > 0) {
-              current.order = { ...current.order, [provider]: remaining };
-            } else if (current.order) {
-              delete current.order[provider];
-              if (Object.keys(current.order).length === 0) {
-                delete current.order;
-              }
-            }
           }
-          saveAuthProfileStoreWithPreparedOwner(
-            current,
-            params.agentDir,
-            { filterExternalAuthProfiles: false, syncExternalCli: false },
-            database,
-            owner,
-          );
-          if (storeWasAbsent && Object.keys(current.profiles).length === 0) {
-            deletePersistedAuthProfileStoreRaw(params.agentDir, database);
-          }
-          if (stateWasAbsent && buildPersistedAuthProfileState(current) === null) {
-            writePersistedAuthProfileStateRaw(null, params.agentDir, database);
-          }
+          return owner;
         },
-        { sharedStoreWrite: true, env: preparedOwner.env },
+        { sharedStoreWrite: true, stateDir: params.stateDir },
       );
-      rolledBack = true;
+
+      let rolledBack = false;
+      return {
+        rollback: () => {
+          if (rolledBack) {
+            return;
+          }
+          runAuthProfileWriteTransaction(
+            params.agentDir,
+            (database, owner) => {
+              if (database.path !== preparedOwner.databasePath) {
+                throw new Error("auth profile batch rollback belongs to another owner");
+              }
+              const current = loadPersistedAuthProfileStore(params.agentDir, { database });
+              if (!current) {
+                return;
+              }
+              const ownedProfiles = new Set<string>();
+              for (const [profileId, credential] of appliedProfiles) {
+                if (!isDeepStrictEqual(current.profiles[profileId], credential)) {
+                  continue;
+                }
+                ownedProfiles.add(profileId);
+                const previous = previousProfiles.get(profileId);
+                if (previous) {
+                  current.profiles[profileId] = previous;
+                } else {
+                  delete current.profiles[profileId];
+                }
+              }
+              for (const [provider, profileIds] of Object.entries(params.order ?? {})) {
+                const existing = current.order?.[provider];
+                if (!existing) {
+                  continue;
+                }
+                const preexisting = new Set(previousOrder.get(provider) ?? []);
+                const introduced = new Set(
+                  profileIds.filter((profileId) => !preexisting.has(profileId)),
+                );
+                const remaining = existing.filter(
+                  (profileId) => !introduced.has(profileId) || !ownedProfiles.has(profileId),
+                );
+                if (remaining.length === existing.length) {
+                  continue;
+                }
+                if (remaining.length > 0) {
+                  current.order = { ...current.order, [provider]: remaining };
+                } else if (current.order) {
+                  delete current.order[provider];
+                  if (Object.keys(current.order).length === 0) {
+                    delete current.order;
+                  }
+                }
+              }
+              saveAuthProfileStoreWithPreparedOwner(
+                current,
+                params.agentDir,
+                { filterExternalAuthProfiles: false, syncExternalCli: false },
+                database,
+                owner,
+              );
+              if (storeWasAbsent && Object.keys(current.profiles).length === 0) {
+                deletePersistedAuthProfileStoreRaw(params.agentDir, database);
+              }
+              if (stateWasAbsent && buildPersistedAuthProfileState(current) === null) {
+                writePersistedAuthProfileStateRaw(null, params.agentDir, database);
+              }
+            },
+            { sharedStoreWrite: true, env: preparedOwner.env },
+          );
+          rolledBack = true;
+        },
+      };
     },
-  };
+  );
 }
 
 type AuthProfileUpsertParams = {
@@ -185,23 +224,43 @@ async function upsertAuthProfileWithLockCore(
   resetFailureState: boolean,
 ): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
-  return await updateAuthProfileStoreWithLock({
-    agentDir: params.agentDir,
-    sharedStoreWrite: true,
-    stateDir: params.stateDir,
-    saveOptions: {
-      filterExternalAuthProfiles: false,
-      syncExternalCli: false,
-    },
-    updater: (store) => {
-      store.profiles[params.profileId] = credential;
-      const existingStats = store.usageStats?.[params.profileId];
-      if (resetFailureState && existingStats) {
-        store.usageStats![params.profileId] = resetAuthProfileFailureState(existingStats);
-      }
-      return true;
-    },
-  });
+  let rejectedFencedGeneration = false;
+  const update = async () =>
+    await updateAuthProfileStoreWithLock({
+      agentDir: params.agentDir,
+      sharedStoreWrite: true,
+      stateDir: params.stateDir,
+      saveOptions: {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      },
+      updater: (store) => {
+        if (
+          restoresFencedOAuthRefreshGeneration({
+            profileId: params.profileId,
+            existing: store.profiles[params.profileId],
+            incoming: credential,
+          })
+        ) {
+          rejectedFencedGeneration = true;
+          return false;
+        }
+        store.profiles[params.profileId] = credential;
+        const existingStats = store.usageStats?.[params.profileId];
+        if (resetFailureState && existingStats) {
+          store.usageStats![params.profileId] = resetAuthProfileFailureState(existingStats);
+        }
+        return true;
+      },
+    });
+  const updated =
+    credential.type === "oauth"
+      ? await withOAuthProfileLock(
+          { profileId: params.profileId, provider: credential.provider },
+          update,
+        )
+      : await update();
+  return rejectedFencedGeneration ? null : updated;
 }
 
 /** Upserts an auth profile under the store lock, returning null on store write failure. */

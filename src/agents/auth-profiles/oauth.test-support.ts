@@ -2,6 +2,7 @@ import "./oauth.js";
 
 type OAuthTestApi = {
   isRefreshTokenReusedError(error: unknown): boolean;
+  resetOAuthRefreshQueuesForTest(): void;
 };
 
 function getTestApi(): OAuthTestApi {
@@ -12,3 +13,6 @@ function getTestApi(): OAuthTestApi {
 
 export const isRefreshTokenReusedError = (error: unknown): boolean =>
   getTestApi().isRefreshTokenReusedError(error);
+
+export const resetOAuthRefreshQueuesForTest = (): void =>
+  getTestApi().resetOAuthRefreshQueuesForTest();

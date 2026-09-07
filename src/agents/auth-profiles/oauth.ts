@@ -261,9 +261,15 @@ const oauthManager = createOAuthManager({
     }),
 });
 
+/** Clear in-process OAuth refresh queues between isolated tests. */
+function resetOAuthRefreshQueuesForTest(): void {
+  oauthManager.resetRefreshQueuesForTest();
+}
+
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.oauthTestApi")] = {
     isRefreshTokenReusedError,
+    resetOAuthRefreshQueuesForTest,
   };
 }
 

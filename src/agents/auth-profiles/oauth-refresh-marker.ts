@@ -69,6 +69,7 @@ export function createOAuthRefreshFence(params: {
     expires: _expires,
     idToken: _idToken,
     oauthRef: _oauthRef,
+    copyToAgents: _copyToAgents,
     ...rest
   } = params.credential;
   const claimId = randomBytes(16).toString("hex");

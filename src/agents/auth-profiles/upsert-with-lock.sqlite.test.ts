@@ -9,6 +9,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
+import { createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   inspectPersistedAuthProfileStateRaw,
@@ -16,7 +17,7 @@ import {
   resolveAuthProfileDatabasePath,
 } from "./sqlite.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store-runtime.js";
-import type { ApiKeyCredential } from "./types.js";
+import type { ApiKeyCredential, OAuthCredential } from "./types.js";
 import {
   persistAuthProfileBatch,
   upsertAuthProfileAfterLoginWithLockOrThrow,
@@ -50,6 +51,59 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
 }
 
 describe("auth profile batch persistence", () => {
+  it("does not restore a fenced OAuth refresh generation", async () => {
+    await withAgentDir(async (agentDir) => {
+      const profileId = "openai:default";
+      const credential = {
+        type: "oauth",
+        provider: "openai",
+        access: "expired-access",
+        refresh: "single-use-refresh",
+        expires: Date.now() - 60_000,
+      } satisfies OAuthCredential;
+      const fence = createOAuthRefreshFence({ profileId, credential });
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, agentDir);
+
+      await expect(
+        persistAuthProfileBatch({
+          agentDir,
+          profiles: [{ profileId, credential }],
+        }),
+      ).rejects.toThrow("Refused to restore fenced OAuth refresh generation");
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toEqual(fence);
+    });
+  });
+
+  it("allows portable copies and distinct generations to replace an OAuth fence", async () => {
+    await withAgentDir(async (agentDir) => {
+      const profileId = "openai:default";
+      const credential = {
+        type: "oauth",
+        provider: "openai",
+        access: "expired-access",
+        refresh: "single-use-refresh",
+        expires: Date.now() - 60_000,
+      } satisfies OAuthCredential;
+      const fence = createOAuthRefreshFence({ profileId, credential });
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, agentDir);
+
+      const portable = { ...credential, copyToAgents: true } satisfies OAuthCredential;
+      await persistAuthProfileBatch({
+        agentDir,
+        profiles: [{ profileId, credential: portable }],
+      });
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toEqual(portable);
+
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, agentDir);
+      const distinct = { ...credential, refresh: "distinct-refresh" } satisfies OAuthCredential;
+      await persistAuthProfileBatch({
+        agentDir,
+        profiles: [{ profileId, credential: distinct }],
+      });
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toEqual(distinct);
+    });
+  });
+
   it("conditionally rolls a portable profile batch and its order back to absence", async () => {
     await withAgentDir(async (agentDir) => {
       const noOp = await persistAuthProfileBatch({ agentDir, profiles: [] });
