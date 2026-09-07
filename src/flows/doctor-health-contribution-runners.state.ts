@@ -72,14 +72,14 @@ export async function runReleaseConfiguredPluginInstallsHealth(
   writeConfigMachineState("config.lastTouchedAt", new Date().toISOString());
 }
 
-export async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+export async function runDiskSpaceHealth(): Promise<void> {
   const { noteDiskSpace } = await import("../commands/doctor-disk-space.js");
-  noteDiskSpace(ctx.cfg);
+  noteDiskSpace();
 }
 
-export async function runDatabaseBloatHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+export async function runDatabaseBloatHealth(): Promise<void> {
   const { noteSqliteDatabaseBloat } = await import("../commands/doctor-db-bloat.js");
-  noteSqliteDatabaseBloat(ctx.cfg);
+  noteSqliteDatabaseBloat();
 }
 
 export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): Promise<void> {

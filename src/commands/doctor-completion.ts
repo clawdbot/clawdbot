@@ -19,7 +19,6 @@ import {
 } from "../cli/completion-runtime.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
@@ -196,7 +195,6 @@ type DoctorCompletionOptions = {
  * cache regenerate it; missing completion prompts unless non-interactive mode is active.
  */
 export async function doctorShellCompletion(
-  _runtime: RuntimeEnv,
   prompter: DoctorPrompter,
   options: DoctorCompletionOptions = {},
 ): Promise<void> {
