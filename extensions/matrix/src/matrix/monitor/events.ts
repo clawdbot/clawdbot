@@ -446,12 +446,21 @@ export function registerMatrixMonitorEvents(params: {
       logVerboseMessage(
         `matrix: encrypted raw event room=${roomId} id=${event?.event_id ?? "unknown"}`,
       );
-      if (auth.encryption !== true && !warnedEncryptedRooms.has(roomId)) {
+      if (
+        auth.encryption !== true &&
+        !warnedEncryptedRooms.has(roomId) &&
+        warnedEncryptedRooms.size < MAX_WARNED_ENCRYPTED_ROOMS
+      ) {
         warnedEncryptedRooms.add(roomId);
         const warning = formatMatrixEncryptedEventDisabledWarning(cfg, auth.accountId);
         logger.warn(warning, { roomId });
       }
-      if (auth.encryption === true && !client.crypto && !warnedCryptoMissingRooms.has(roomId)) {
+      if (
+        auth.encryption === true &&
+        !client.crypto &&
+        !warnedCryptoMissingRooms.has(roomId) &&
+        warnedCryptoMissingRooms.size < MAX_WARNED_CRYPTO_MISSING_ROOMS
+      ) {
         warnedCryptoMissingRooms.add(roomId);
         const hint = formatNativeDependencyHint({
           packageName: "@matrix-org/matrix-sdk-crypto-nodejs",

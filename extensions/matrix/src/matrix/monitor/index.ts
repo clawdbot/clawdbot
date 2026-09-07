@@ -277,6 +277,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const startupGraceMs = 0;
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
+  const MAX_WARNED_ENCRYPTED_ROOMS = 256;
+  const MAX_WARNED_CRYPTO_MISSING_ROOMS = 256;
   let healthySyncSinceMs: number | undefined;
   const noteSyncHealthState = (state: MatrixSyncState, at = Date.now()) => {
     if (isMatrixReadySyncState(state)) {
