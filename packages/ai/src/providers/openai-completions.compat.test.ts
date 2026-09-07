@@ -5,7 +5,7 @@ import {
   type AiProviderRequestCapabilities,
   type AiProviderRequestPolicyInput,
 } from "../host.js";
-import type { AssistantMessage, Context, Model, OpenAICompletionsCompat } from "../types.js";
+import type { AssistantMessage, Context, Model } from "../types.js";
 
 const mockOpenAI = vi.hoisted(() => ({
   chunks: [] as unknown[],
@@ -72,11 +72,7 @@ const userMessage = { role: "user", content: "hello", timestamp: 1 } as const;
 const context: Context = { messages: [userMessage] };
 let previousAiTransportHost: ReturnType<typeof getAiTransportHost>;
 
-function createModel(
-  overrides: Partial<Model<"openai-completions">> & {
-    compat?: OpenAICompletionsCompat;
-  } = {},
-): Model<"openai-completions"> {
+function createModel(overrides: Partial<Model<"openai-completions">> = {}) {
   return { ...baseModel, ...overrides };
 }
 

@@ -19,6 +19,7 @@ import {
 } from "../providers/openai-tool-projection.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
+import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
@@ -34,7 +35,7 @@ import {
   buildResponsesInputMessage,
   convertResponsesMessages,
 } from "./openai-responses-replay-internal.js";
-import { getCompat, usesNativeOpenAICodexResponsesBackend } from "./openai-transport-params.js";
+import { getCompat } from "./openai-transport-params.js";
 import { resolvePromptCacheKey, type OpenAIModeModel } from "./openai-transport-shared.js";
 import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
@@ -96,6 +97,7 @@ const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "max_output_tokens",
   "metadata",
   "prompt_cache_retention",
+  "prompt_cache_options",
   "service_tier",
   "temperature",
   "top_p",

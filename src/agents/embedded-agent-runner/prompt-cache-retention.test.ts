@@ -41,6 +41,22 @@ describe("prompt cache retention", () => {
     },
   );
 
+  it.each(["none", "short", "long"] as const)(
+    "forwards native ChatGPT retention %s",
+    (cacheRetention) => {
+      expect(
+        resolveCacheRetention(
+          { cacheRetention },
+          "openai",
+          "openai-chatgpt-responses",
+          "gpt-5.6-sol",
+          undefined,
+          "https://chatgpt.com/backend-api/codex",
+        ),
+      ).toBe(cacheRetention);
+    },
+  );
+
   it.each([undefined, "none", "short", "long"] as const)(
     "honors explicit retention %s for Anthropic-marker completions without cache keys",
     (cacheRetention) => {

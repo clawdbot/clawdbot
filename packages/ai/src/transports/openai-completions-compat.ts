@@ -75,7 +75,54 @@ export function isNativeOpenAIEndpoint(model: { provider?: string; baseUrl?: str
   );
 }
 
+export function isOpenAICodexResponsesModel(model: {
+  provider?: string;
+  api?: string;
+  baseUrl?: string;
+}): boolean {
+  return (
+    model.provider === "openai" &&
+    (model.api === "openai-chatgpt-responses" ||
+      model.api === "openclaw-openai-chatgpt-responses-transport")
+  );
+}
+
+function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {
+  const trimmed = typeof baseUrl === "string" ? baseUrl.trim() : "";
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return false;
+    }
+    if (url.hostname.toLowerCase() !== "chatgpt.com") {
+      return false;
+    }
+    const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
+    return [
+      "/backend-api",
+      "/backend-api/v1",
+      "/backend-api/codex",
+      "/backend-api/codex/v1",
+      "/backend-api/codex/responses",
+    ].includes(pathname);
+  } catch {
+    return false;
+  }
+}
+
+export function usesNativeOpenAICodexResponsesBackend(model: {
+  provider?: string;
+  api?: string;
+  baseUrl?: string;
+}): boolean {
+  return isOpenAICodexResponsesModel(model) && isNativeOpenAICodexResponsesBaseUrl(model.baseUrl);
+}
+
 export function resolveOpenAIPromptCacheKeySupport(model: {
+  api?: string;
   provider?: string;
   baseUrl?: string;
   compat?: Pick<
@@ -83,7 +130,10 @@ export function resolveOpenAIPromptCacheKeySupport(model: {
     "supportsPromptCacheKey" | "supportsLongCacheRetention"
   > | null;
 }): boolean {
-  return model.compat?.supportsPromptCacheKey ?? isNativeOpenAIEndpoint(model);
+  return (
+    model.compat?.supportsPromptCacheKey ??
+    (isNativeOpenAIEndpoint(model) || usesNativeOpenAICodexResponsesBackend(model))
+  );
 }
 
 /** Resolves default request flags for an OpenAI-compatible completions endpoint. */
@@ -303,7 +353,8 @@ export function resolveOpenAICompletionsCompat(
     sessionAffinity: resolveSessionAffinity(model, defaults.sessionAffinityFormat),
     supportsPromptCacheKey: resolveOpenAIPromptCacheKeySupport(model),
     supportsLongCacheRetention:
-      configured?.supportsLongCacheRetention ?? defaults.supportsLongCacheRetention,
+      configured?.supportsLongCacheRetention ??
+      (usesNativeOpenAICodexResponsesBackend(model) ? false : defaults.supportsLongCacheRetention),
     configuredSupportsLongCacheRetention: configured?.supportsLongCacheRetention,
     visibleReasoningDetailTypes:
       configured && "visibleReasoningDetailTypes" in configured

@@ -43,7 +43,7 @@ export function resolveCacheRetention(
     (modelApi === "openai-responses" ||
       modelApi === "openai-chatgpt-responses" ||
       modelApi === "openai-completions") &&
-    resolveOpenAIPromptCacheKeySupport({ provider, baseUrl, compat });
+    resolveOpenAIPromptCacheKeySupport({ provider, api: modelApi, baseUrl, compat });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
   // Marker-based caches accept retention without accepting OpenAI cache-key fields.
   // Keep these capabilities independent so explicit "none" can suppress markers.
