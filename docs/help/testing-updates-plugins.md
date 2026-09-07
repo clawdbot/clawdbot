@@ -168,6 +168,20 @@ the candidate plugin artifact, the candidate state schema, an idempotent update,
 and Gateway health. Assertions run before a standalone Doctor can conceal an
 incomplete update migration.
 
+The ownerless cron job is created before adding the second agent because newer
+baselines reject ambiguous new jobs. Approval snapshots are written back through
+the baseline CLI before comparison: JSON-era reads can assign IDs without
+persisting them. The final seeded state still has both agents, both jobs, and no
+explicit `systemAgent`.
+
+The PR/main gate uses `OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth`.
+For this scenario, the baseline updater must replace its running managed Gateway;
+the harness checks process replacement and configured authentication. Cron owners
+are queried immediately after that first update, before any consent repair can
+conceal an incomplete migration. The default local `manual` mode passes
+`--no-restart` and starts the candidate for probes, so it does not prove an
+updater-owned restart. Both modes require a clean `doctor --lint --json` report.
+
 In `legacy-operator-state`, the `2026.9.2` updater line is a temporary exception
 when the packed candidate needs a database migration. That line introduced the update ledger without the
 transaction fence added in [#138839](https://github.com/openclaw/openclaw/pull/138839).

@@ -1103,6 +1103,16 @@ function readInstalledPluginIndex() {
   return index;
 }
 
+function assertBaselinePlugin([expectedVersion]) {
+  const record = readInstalledPluginIndex().installRecords.discord;
+  assert(record?.source === "npm", "baseline Discord plugin was not installed from npm");
+  assert(record.spec === "@openclaw/discord@latest", "baseline plugin selector became pinned");
+  const installed = readJson(path.join(resolveHomePath(record.installPath), "package.json"));
+  assert(installed.name === "@openclaw/discord", "baseline plugin package identity changed");
+  assert(installed.version === expectedVersion, "baseline plugin is not the baseline version");
+  console.log(`Baseline npm plugin: @openclaw/discord@${expectedVersion}, selector=latest.`);
+}
+
 function assertExternalPluginInstall(records, pluginId, packageName) {
   const record = records[pluginId];
   assert(record, `configured external ${pluginId} plugin install record missing`);
@@ -1756,6 +1766,12 @@ if (command === "list-scenarios") {
   seedState();
 } else if (command === "seed-legacy-operator") {
   legacyOperator.seedLegacyOperatorState();
+} else if (command === "assert-baseline-plugin") {
+  assertBaselinePlugin(process.argv.slice(3));
+} else if (command === "seed-legacy-operator-default-cron") {
+  legacyOperator.seedLegacyOperatorDefaultCron();
+} else if (command === "seed-legacy-operator-agent") {
+  legacyOperator.seedLegacyOperatorAgent();
 } else if (command === "seed-legacy-operator-gateway") {
   legacyOperator.seedLegacyOperatorGatewayState();
 } else if (command === "assert-legacy-operator-gateway") {

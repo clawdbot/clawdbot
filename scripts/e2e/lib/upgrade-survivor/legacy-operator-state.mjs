@@ -64,11 +64,15 @@ function cli(args, label, { json = false, privateOutput = false, env = process.e
 }
 
 function authoredPolicy(value) {
-  const policy = structuredClone({
+  return {
     version: value?.version,
     defaults: value?.defaults,
     agents: value?.agents,
-  });
+  };
+}
+
+function baselinePolicy(value) {
+  const policy = structuredClone(authoredPolicy(value));
   // JSON-era CLIs wrote unused usage fields as null. Doctor removes those
   // placeholders; the complete authored policy and real usage must survive.
   for (const agent of Object.values(policy.agents ?? {})) {
@@ -105,12 +109,15 @@ export function seedLegacyOperatorState() {
     port: 18789,
     bind: "loopback",
     reload: { mode: "off" },
-    auth: { mode: "token", token: requiredEnv("GATEWAY_AUTH_TOKEN_REF") },
+    auth: {
+      mode: "token",
+      token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
+    },
   });
   set("models.providers.survivor", {
     baseUrl: `http://127.0.0.1:${mockPort}/v1`,
     api: "openai-completions",
-    apiKey: "survivor-synthetic-key",
+    apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
     models: [
       {
         id: "gpt-5.6-luna",
@@ -134,24 +141,23 @@ export function seedLegacyOperatorState() {
     "legacy-operator-setup",
   );
   set("agents.defaults.model.primary", MODEL);
-  cli(
-    [
-      "agents",
-      "add",
-      "ops",
-      "--workspace",
-      path.join(workspace, "ops"),
-      "--non-interactive",
-      "--model",
-      MODEL,
-      "--json",
-    ],
-    "legacy-operator-add-ops",
+  // Every fixture client shares this container's loopback network namespace.
+  set("plugins.entries.device-pair", {
+    enabled: true,
+    config: { publicUrl: "ws://127.0.0.1:18789" },
+  });
+  unsetSystemAgent();
+  writeJson(artifact("legacy-operator-baseline.json"), {});
+  const skillPath = path.join(workspace, "skills", "survivor-workspace", "SKILL.md");
+  fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+  fs.writeFileSync(skillPath, SKILL);
+  fs.writeFileSync(
+    path.join(workspace, "IDENTITY.md"),
+    "# Upgrade Survivor\n\nSynthetic operator workspace.\n",
   );
-  const config = readJson(requiredEnv("OPENCLAW_CONFIG_PATH"));
-  if (config.agents?.defaults?.systemAgent !== undefined) {
-    cli(["config", "unset", "agents.defaults.systemAgent"], "legacy-operator-unset-system-agent");
-  }
+}
+
+function seedLegacyOperatorApprovals() {
   const approvals = approvalsCommand();
   const policyInput = artifact("legacy-operator-policy-input.json");
   writeJson(policyInput, {
@@ -173,7 +179,18 @@ export function seedLegacyOperatorState() {
       { privateOutput: true },
     );
   }
-  const snapshot = cli([approvals, "get", "--json"], "legacy-operator-approvals-get", {
+  const initialSnapshot = cli([approvals, "get", "--json"], "legacy-operator-approvals-get", {
+    json: true,
+    privateOutput: true,
+  });
+  // JSON-era get synthesizes missing entry IDs without saving them. Persist
+  // that baseline-authored policy before recording the durable migration input.
+  writeJson(policyInput, authoredPolicy(initialSnapshot.file));
+  cli([approvals, "set", "--file", policyInput, "--json"], "legacy-operator-approvals-persist", {
+    privateOutput: true,
+  });
+  fs.rmSync(policyInput);
+  const snapshot = cli([approvals, "get", "--json"], "legacy-operator-approvals-capture", {
     json: true,
     privateOutput: true,
   });
@@ -182,54 +199,94 @@ export function seedLegacyOperatorState() {
     "allowlist",
     "baseline approvals policy was not set",
   );
-  const policy = authoredPolicy(snapshot.file);
+  const policy = baselinePolicy(snapshot.file);
   assert.equal(policy.agents?.main?.allowlist?.[0]?.pattern, "/usr/bin/uname");
   assert.equal(policy.agents?.ops?.allowlist?.[0]?.pattern, "/usr/bin/date");
   writeJson(artifact("legacy-operator-baseline.json"), {
+    ...readJson(artifact("legacy-operator-baseline.json")),
     approvals: policy,
     approvalsJsonEra: fs.existsSync(
       path.join(requiredEnv("OPENCLAW_STATE_DIR"), "exec-approvals.json"),
     ),
   });
-  const skillPath = path.join(workspace, "skills", "survivor-workspace", "SKILL.md");
-  fs.mkdirSync(path.dirname(skillPath), { recursive: true });
-  fs.writeFileSync(skillPath, SKILL);
-  fs.writeFileSync(
-    path.join(workspace, "IDENTITY.md"),
-    "# Upgrade Survivor\n\nSynthetic operator workspace.\n",
+}
+
+function unsetSystemAgent() {
+  const config = readJson(requiredEnv("OPENCLAW_CONFIG_PATH"));
+  if (config.agents?.defaults?.systemAgent !== undefined) {
+    cli(["config", "unset", "agents.defaults.systemAgent"], "legacy-operator-unset-system-agent");
+  }
+}
+
+function seedCronJob(job) {
+  const created = cli(
+    [
+      "cron",
+      "add",
+      "--name",
+      job.name,
+      "--every",
+      "24h",
+      "--command",
+      "printf survivor-cron",
+      "--disabled",
+      ...(job.agentId === "ops" ? ["--agent", "ops"] : []),
+      "--json",
+    ],
+    `legacy-operator-add-${job.name}`,
+    { json: true },
   );
+  assert.equal(created.name, job.name, "baseline cron add returned the wrong job");
+  assert(
+    typeof created.id === "string" && created.id.length > 0,
+    "baseline cron add omitted its job id",
+  );
+  assert.equal(
+    created.agentId,
+    job.agentId === "ops" ? "ops" : undefined,
+    "baseline CLI changed the authored cron owner",
+  );
+  return { id: created.id, name: created.name, agentId: created.agentId };
+}
+
+export function seedLegacyOperatorDefaultCron() {
+  const seeded = readJson(artifact("legacy-operator-baseline.json"));
+  assert.equal(seeded.jobs, undefined, "baseline cron seed was already started");
+  // 2026.9.2 refuses new ownerless jobs once the roster is ambiguous. Create
+  // this ordinary operator job while main is still the sole configured agent.
+  seeded.jobs = [seedCronJob(JOBS[0])];
+  writeJson(artifact("legacy-operator-baseline.json"), seeded);
+}
+
+export function seedLegacyOperatorAgent() {
+  const seeded = readJson(artifact("legacy-operator-baseline.json"));
+  assert.equal(seeded.jobs?.length, 1, "create the default-owner cron job before adding ops");
+  cli(
+    [
+      "agents",
+      "add",
+      "ops",
+      "--workspace",
+      path.join(requiredEnv("OPENCLAW_TEST_WORKSPACE_DIR"), "ops"),
+      "--non-interactive",
+      "--model",
+      MODEL,
+      "--json",
+    ],
+    "legacy-operator-add-ops",
+  );
+  unsetSystemAgent();
+  // The approvals CLI validates named agents against the current roster.
+  seedLegacyOperatorApprovals();
   assertLegacyOperatorConfig("baseline");
 }
 
 export function seedLegacyOperatorGatewayState() {
-  for (const job of JOBS) {
-    cli(
-      [
-        "cron",
-        "add",
-        "--name",
-        job.name,
-        "--every",
-        "24h",
-        "--command",
-        "printf survivor-cron",
-        "--disabled",
-        ...(job.agentId === "ops" ? ["--agent", "ops"] : []),
-        "--json",
-      ],
-      `legacy-operator-add-${job.name}`,
-      { json: true },
-    );
-  }
-  const listing = cli(["cron", "list", "--all", "--json"], "legacy-operator-baseline-cron", {
-    json: true,
-  });
-  assert.equal(listing.jobs?.length, 2, "baseline cron did not contain both authored jobs");
-  const defaultJob = listing.jobs.find((job) => job.name === JOBS[0].name);
-  assert(defaultJob, "baseline default-owner cron job missing");
-  assert(!defaultJob.agentId, "baseline CLI unexpectedly pinned the ownerless cron job");
   const seeded = readJson(artifact("legacy-operator-baseline.json"));
-  seeded.jobs = listing.jobs.map(({ id, name, agentId }) => ({ id, name, agentId }));
+  assert.equal(seeded.jobs?.length, 1, "baseline default-owner cron seed missing");
+  seeded.jobs.push(seedCronJob(JOBS[1]));
+  // Capture the baseline's own creation receipts. Its global list can reject
+  // the now-ownerless first job; only the candidate must resolve both owners.
   writeJson(artifact("legacy-operator-baseline.json"), seeded);
   console.log(
     "Legacy operator baseline: two CLI-authored cron jobs; default owner remains unpinned.",
@@ -286,10 +343,9 @@ export function assertLegacyOperatorApprovals(stage) {
       db.close();
     }
   }
-  assert(
-    isDeepStrictEqual(authoredPolicy(policy), baseline.approvals),
-    "legacy operator exec approvals changed",
-  );
+  const observed = stage === "baseline" ? baselinePolicy(policy) : authoredPolicy(policy);
+  writeJson(artifact(`legacy-operator-${stage}-approvals.json`), observed);
+  assert(isDeepStrictEqual(observed, baseline.approvals), "legacy operator exec approvals changed");
   if (stage !== "baseline") {
     assert(!fs.existsSync(legacyPath), "legacy exec approvals file was not retired");
   }
@@ -304,10 +360,11 @@ export function assertLegacyOperatorGatewayState(stage) {
 }
 
 export function assertLegacyOperatorCronOwners(listing, baseline) {
-  assert.equal(listing.jobs?.length, 2, "legacy operator cron job count changed");
+  const seededJobs = listing.jobs?.filter((job) => JOBS.some(({ name }) => job.name === name));
+  assert.equal(seededJobs?.length, 2, "legacy operator cron job count changed");
   for (const expected of JOBS) {
     const before = baseline.jobs?.find((job) => job.name === expected.name);
-    const after = listing.jobs.find((job) => job.id === before?.id && job.name === expected.name);
+    const after = seededJobs.find((job) => job.id === before?.id && job.name === expected.name);
     assert(after, `legacy operator cron job missing: ${expected.name}`);
     assert.equal(
       after.effectiveAgentId,
@@ -325,15 +382,12 @@ export function assertLegacyOperatorCronOwners(listing, baseline) {
 export function runLegacyOperatorTurn(stage) {
   assert(["baseline", "candidate"].includes(stage), "unknown legacy operator turn stage");
   const marker = `OPENCLAW_E2E_LEGACY_OPERATOR_${stage.toUpperCase()}`;
-  const env = { ...process.env };
-  delete env.OPENCLAW_SKIP_PROVIDERS;
   const label = `legacy-operator-${stage}-turn`;
   const log = artifact("legacy-operator-requests.jsonl");
   const priorBytes = fs.existsSync(log) ? fs.statSync(log).size : 0;
   cli(
     [
       "agent",
-      "--local",
       "--agent",
       "main",
       "--session-id",
@@ -347,7 +401,6 @@ export function runLegacyOperatorTurn(stage) {
       "--json",
     ],
     label,
-    { env },
   );
   assertAgentReplyContainsMarker(marker, artifact(`${label}.out`));
   const requests = fs
