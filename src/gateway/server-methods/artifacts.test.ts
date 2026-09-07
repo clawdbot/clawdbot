@@ -158,6 +158,38 @@ describe("artifacts RPC handlers", () => {
     });
   }
 
+  it("gets and downloads a transcript artifact when artifactId has clipboard padding", async () => {
+    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+    const artifact = expectFirstArtifact(listed.calls);
+    const artifactId = requireNonEmptyString(artifact?.id, "expected artifact id");
+    const paddedId = ` ${artifactId} `;
+
+    // Negative control: exact id compare misses padding before handler normalize.
+    expect(artifactId === paddedId).toBe(false);
+
+    const get = await getArtifact({ sessionKey: "agent:main:main", artifactId: paddedId });
+    expect(get.calls[0]?.ok).toBe(true);
+    expectFields((expectOkPayload(get.calls) as { artifact?: Record<string, unknown> }).artifact, {
+      id: artifactId,
+      type: "image",
+      title: "result.png",
+    });
+
+    const download = await downloadArtifact({
+      sessionKey: "agent:main:main",
+      artifactId: paddedId,
+    });
+    expect(download.calls[0]?.ok).toBe(true);
+    const payload = expectOkPayload(download.calls) as {
+      artifact?: Record<string, unknown>;
+      encoding?: string;
+      data?: string;
+    };
+    expectFields(payload.artifact, { id: artifactId, type: "image" });
+    expect(payload.encoding).toBe("base64");
+    expect(typeof payload.data).toBe("string");
+  });
+
   it("lists stable transcript artifact summaries by sessionKey", async () => {
     const { calls } = await listArtifacts({ sessionKey: "agent:main:main" }, { id: "1" });
 

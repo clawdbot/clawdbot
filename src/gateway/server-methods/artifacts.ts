@@ -400,6 +400,12 @@ async function runArtifactSessionOperation<T>(
   }
 }
 
+function withNormalizedArtifactId<T extends { artifactId: string }>(params: T): T | null {
+  // Exact transcript/managed id match; clipboard/RPC padding must not invent a miss.
+  const artifactId = asNonEmptyString(params.artifactId);
+  return artifactId ? { ...params, artifactId } : null;
+}
+
 async function findArtifact(
   params: ArtifactsGetParams,
   cfg?: OpenClawConfig,
@@ -459,8 +465,13 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
+    const normalized = withNormalizedArtifactId(params);
+    if (!normalized) {
+      respondArtifactNotFound(respond, params.artifactId);
+      return;
+    }
     const cfg = context.getRuntimeConfig?.();
-    const admittedQuery = admitArtifactQuery(params, cfg, respond);
+    const admittedQuery = admitArtifactQuery(normalized, cfg, respond);
     if (!admittedQuery) {
       return;
     }
@@ -472,7 +483,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     const { artifact } = found.value;
     if (!artifact) {
-      respondArtifactNotFound(respond, params.artifactId);
+      respondArtifactNotFound(respond, normalized.artifactId);
       return;
     }
     respond(true, { artifact: toSummary(artifact) });
@@ -486,8 +497,13 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
+    const normalized = withNormalizedArtifactId(params);
+    if (!normalized) {
+      respondArtifactNotFound(respond, params.artifactId);
+      return;
+    }
     const cfg = context.getRuntimeConfig?.();
-    const admittedQuery = admitArtifactQuery(params, cfg, respond);
+    const admittedQuery = admitArtifactQuery(normalized, cfg, respond);
     if (!admittedQuery) {
       return;
     }
@@ -495,7 +511,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       admittedQuery.sessionKey &&
       !admittedQuery.runId &&
       !admittedQuery.taskId &&
-      parseManagedOutgoingArtifactId(params.artifactId)
+      parseManagedOutgoingArtifactId(normalized.artifactId)
     ) {
       const resolvedResult = await runArtifactSessionOperation(respond, () =>
         resolveAuthorizedArtifactSession(admittedQuery, cfg, client),
@@ -512,7 +528,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
             sessionKey: resolved.sessionKey,
             ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
             ...(defaultAgentId ? { defaultAgentId } : {}),
-            artifactId: params.artifactId,
+            artifactId: normalized.artifactId,
           })
         : null;
       if (managed) {
@@ -532,18 +548,18 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         });
         return;
       }
-      respondArtifactNotFound(respond, params.artifactId);
+      respondArtifactNotFound(respond, normalized.artifactId);
       return;
     }
     const found = await runArtifactSessionOperation(respond, () =>
-      findArtifact(admittedQuery, cfg, { downloadArtifactId: params.artifactId }, client),
+      findArtifact(admittedQuery, cfg, { downloadArtifactId: normalized.artifactId }, client),
     );
     if (!found.ok) {
       return;
     }
     const { artifact } = found.value;
     if (!artifact) {
-      respondArtifactNotFound(respond, params.artifactId);
+      respondArtifactNotFound(respond, normalized.artifactId);
       return;
     }
     if (artifact.download.mode === "unsupported") {
