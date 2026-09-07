@@ -22,4 +22,5 @@ export type Locale =
   | "vi"
   | "nl"
   | "fa"
-  | "ru";
+  | "ru"
+  | "ca";

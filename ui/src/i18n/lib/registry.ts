@@ -27,6 +27,7 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, () => Promise<LocaleModule>> = {
   nl: () => import("../locales/nl.ts"),
   fa: () => import("../locales/fa.ts"),
   ru: () => import("../locales/ru.ts"),
+  ca: () => import("../locales/ca.ts"),
 };
 // SAFETY: The record contract guarantees every own key is a LazyLocale.
 const LAZY_LOCALES = Object.keys(LAZY_LOCALE_REGISTRY) as LazyLocale[];
