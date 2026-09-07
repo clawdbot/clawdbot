@@ -1,5 +1,6 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -179,6 +180,9 @@ export class AgentsHomePage extends OpenClawLightDomElement {
     });
   }
 }
+
+export const header = true;
+export const render = () => html`<openclaw-agents-home-page></openclaw-agents-home-page>`;
 
 if (!customElements.get("openclaw-agents-home-page")) {
   customElements.define("openclaw-agents-home-page", AgentsHomePage);

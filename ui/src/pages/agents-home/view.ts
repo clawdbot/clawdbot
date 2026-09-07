@@ -5,9 +5,12 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
 import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import "../../styles/agents-home.css";
+
+registerAgentsHomeEnglish();
 
 type AgentCard = {
   id: string;
