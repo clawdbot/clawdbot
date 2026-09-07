@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { cleanupTalkConnection, registerTalkConnectionCleanup } from "./talk-session-registry.js";
+import {
+  cleanupTalkConnection,
+  forgetUnifiedTalkSession,
+  getUnifiedTalkSession,
+  registerTalkConnectionCleanup,
+  rememberUnifiedTalkSession,
+} from "./talk-session-registry.js";
 
 describe("Talk connection cleanup registry", () => {
   it("keeps one cleanup per relay kind and forgets the connection before running them", () => {
@@ -39,5 +45,42 @@ describe("Talk connection cleanup registry", () => {
       "failed to run realtime-relay Talk cleanup after connection disconnect: realtime cleanup failed",
     );
     expect(transcriptionCleanup).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Talk session id lookup trim", () => {
+  it("resolves and forgets padded session ids against exact Map keys", () => {
+    rememberUnifiedTalkSession("talk-trim-1", {
+      kind: "managed-room",
+      handoffId: "h1",
+      token: "t",
+      roomId: "r",
+    });
+    expect(getUnifiedTalkSession(" talk-trim-1 ").kind).toBe("managed-room");
+    forgetUnifiedTalkSession(" talk-trim-1 ");
+    expect(() => getUnifiedTalkSession("talk-trim-1")).toThrow(/Unknown Talk session/);
+  });
+
+  it("talk.session.close lookup path resolves a padded realtime relay id then forgets it", () => {
+    // Mirrors talk.session.close: getUnifiedTalkSession → stop → forgetUnifiedTalkSession
+    rememberUnifiedTalkSession("relay-close-pad", {
+      kind: "realtime-relay",
+      connId: "conn-1",
+      relaySessionId: "relay-close-pad",
+      sessionTarget: {
+        agentId: "main",
+        canonicalKey: "agent:main:main",
+        storeKey: "agent:main:main",
+        storePath: "/tmp/unused",
+      } as never,
+    });
+    const session = getUnifiedTalkSession(" relay-close-pad ");
+    expect(session.kind).toBe("realtime-relay");
+    if (session.kind === "realtime-relay") {
+      expect(session.relaySessionId).toBe("relay-close-pad");
+      expect(session.connId).toBe("conn-1");
+    }
+    forgetUnifiedTalkSession(" relay-close-pad ");
+    expect(() => getUnifiedTalkSession("relay-close-pad")).toThrow(/Unknown Talk session/);
   });
 });

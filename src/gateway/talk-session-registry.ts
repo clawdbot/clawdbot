@@ -81,9 +81,14 @@ export function rememberUnifiedTalkSession(
   unifiedTalkSessions.set(sessionId, session);
 }
 
+/** Clipboard/RPC padding must not miss exact Map keys stored at create time. */
+function normalizeTalkSessionLookupId(sessionId: string): string {
+  return sessionId.trim();
+}
+
 /** Resolves a Talk session id or throws the protocol-facing unknown-session error. */
 export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionRecord {
-  const session = unifiedTalkSessions.get(sessionId);
+  const session = unifiedTalkSessions.get(normalizeTalkSessionLookupId(sessionId));
   if (!session) {
     throw new Error("Unknown Talk session");
   }
@@ -92,7 +97,8 @@ export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionReco
 
 /** Retains the realtime relay's admitted target without reinterpreting current defaults. */
 export function resolveUnifiedTalkSessionTarget(sessionId: string, connId: string | undefined) {
-  const session = unifiedTalkSessions.get(sessionId);
+  const key = normalizeTalkSessionLookupId(sessionId);
+  const session = unifiedTalkSessions.get(key);
   if (session?.kind !== "realtime-relay") {
     return undefined;
   }
@@ -101,7 +107,7 @@ export function resolveUnifiedTalkSessionTarget(sessionId: string, connId: strin
   return {
     target,
     isCurrent: () =>
-      unifiedTalkSessions.get(sessionId) === session &&
+      unifiedTalkSessions.get(key) === session &&
       session.connId === connId &&
       session.sessionTarget === target,
   };
@@ -109,7 +115,7 @@ export function resolveUnifiedTalkSessionTarget(sessionId: string, connId: strin
 
 /** Removes a Talk session id after the concrete backend closes. */
 export function forgetUnifiedTalkSession(sessionId: string): void {
-  unifiedTalkSessions.delete(sessionId);
+  unifiedTalkSessions.delete(normalizeTalkSessionLookupId(sessionId));
 }
 
 /** Enforces that a relay-backed Talk session is controlled by its owner socket. */
