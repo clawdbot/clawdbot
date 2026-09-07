@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
@@ -557,9 +557,7 @@ describe("worker placement restart recovery", () => {
     });
     const harness = createHarness(placements);
     const provisioning = harness.placements.seedProvisioning();
-    if (provisioning.state !== "provisioning") {
-      throw new Error("recovery fixture did not produce a provisioning placement");
-    }
+    assert(provisioning.state === "provisioning");
     vi.mocked(harness.environments.attachSession).mockImplementation(async (request) => {
       harness.requestEnvironmentDestroy();
       request.authorize?.();
@@ -931,9 +929,7 @@ describe("worker placement restart recovery", () => {
     });
     const originalHarness = createHarness(placements);
     const active = originalHarness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
+    assert(active.state === "active");
     const claim = placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,

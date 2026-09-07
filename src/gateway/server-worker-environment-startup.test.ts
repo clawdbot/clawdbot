@@ -216,7 +216,8 @@ describe("gateway worker environment startup", () => {
               placements: second.startup.placementStore,
               environments: second.service,
             }),
-            runRecoveryBarrier: async ({ run }) => run("/unused-workspace"),
+            runRecoveryBarrier: async ({ run }) =>
+              run({ kind: "local", path: "/unused-workspace" }),
             runActivationBarrier: async ({ activate }) => activate(),
             reportTransition: (observer, value) => observer?.(value),
           });

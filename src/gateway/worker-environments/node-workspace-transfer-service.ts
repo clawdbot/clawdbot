@@ -56,6 +56,7 @@ type UploadOperation = {
   baseManifestRef: string;
   expiresAtMs: number;
   state: "ready" | "receiving" | "completed";
+  isAuthorized?: () => boolean;
   uploaded?: NodeWorkspaceTransferUpload;
 };
 
@@ -204,6 +205,7 @@ export function createNodeWorkspaceTransferService(options: {
           !capability.signal?.aborted &&
           capability.isAuthorized?.() !== false
       : context.upload === capability &&
+          capability.isAuthorized?.() !== false &&
           (capability.state === "receiving" || capability.state === "completed");
   };
 
@@ -275,17 +277,26 @@ export function createNodeWorkspaceTransferService(options: {
       baseManifestRef: string;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
+      authorize?: () => void;
     }): Promise<void> {
+      const { authorize, ...owner } = params;
+      const { assertCurrent } = createNodeWorkspaceSyncAuthorization(
+        owner,
+        authorize,
+        options.getOwner,
+      );
       await contextOperations.enqueue(params.environmentId, async () => {
+        assertCurrent();
         const previous = contexts.get(params.environmentId);
         if (previous) {
           await closeContext(previous);
+          assertCurrent();
         }
         await ensureTemporaryRoot();
-        params.signal?.throwIfAborted();
+        assertCurrent();
         const abortController = new AbortController();
         const context: TransferContext = {
-          ...params,
+          ...owner,
           temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
           currentManifestRef: params.baseManifestRef,
           snapshots: new Map(),
@@ -301,10 +312,12 @@ export function createNodeWorkspaceTransferService(options: {
             abort();
           }
         }
-        contexts.set(params.environmentId, context);
-        if (!isCurrentContext(context)) {
+        try {
+          assertCurrent();
+          contexts.set(params.environmentId, context);
+        } catch (error) {
           await closeContext(context);
-          throw new Error("Node repository workspace authority closed");
+          throw error;
         }
       });
     },
@@ -382,7 +395,8 @@ export function createNodeWorkspaceTransferService(options: {
       });
     },
 
-    prepareUpload(environmentId: string, baseManifestRef: string): string {
+    prepareUpload(environmentId: string, baseManifestRef: string, authorize?: () => void): string {
+      authorize?.();
       const context = contexts.get(environmentId);
       if (!context || !MANIFEST_REF_PATTERN.test(baseManifestRef) || !isCurrentContext(context)) {
         throw new Error("Node workspace transfer context is unavailable");
@@ -391,6 +405,11 @@ export function createNodeWorkspaceTransferService(options: {
         throw new Error("Node workspace transfer upload is already active");
       }
       const token = mintNodeWorkspaceTransferToken();
+      const { isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
+        context,
+        authorize,
+        options.getOwner,
+      );
       context.upload = {
         direction: "upload",
         token,
@@ -401,6 +420,7 @@ export function createNodeWorkspaceTransferService(options: {
         baseManifestRef,
         expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
         state: "ready",
+        isAuthorized: isOperationAuthorized,
       };
       return token;
     },
@@ -412,6 +432,7 @@ export function createNodeWorkspaceTransferService(options: {
         !context ||
         !operation ||
         operation.state !== "completed" ||
+        operation.isAuthorized?.() === false ||
         operation.baseManifestRef !== baseManifestRef ||
         !operation.uploaded ||
         !isCurrentContext(context)
@@ -429,7 +450,12 @@ export function createNodeWorkspaceTransferService(options: {
       return contexts.get(environmentId)?.snapshots.get(manifestRef);
     },
 
-    publishSnapshot(environmentId: string, snapshot: NodeWorkspaceTransferSnapshot): string {
+    publishSnapshot(
+      environmentId: string,
+      snapshot: NodeWorkspaceTransferSnapshot,
+      authorize?: () => void,
+    ): string {
+      authorize?.();
       const context = contexts.get(environmentId);
       if (!context || !isCurrentContext(context)) {
         throw new Error("Node workspace transfer context is unavailable");
@@ -437,17 +463,26 @@ export function createNodeWorkspaceTransferService(options: {
       context.snapshots.set(snapshot.manifestRef, snapshot);
       context.currentManifestRef = snapshot.manifestRef;
       pruneSnapshots(context);
-      return mintDownload(context, snapshot.manifestRef);
+      const { isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
+        context,
+        authorize,
+        options.getOwner,
+      );
+      return mintDownload(context, snapshot.manifestRef, isOperationAuthorized);
     },
 
-    revoke(environmentId: string, token: string): void {
+    async revoke(environmentId: string, token: string): Promise<void> {
       const context = contexts.get(environmentId);
       context?.downloads.delete(token);
       if (context) {
         pruneSnapshots(context);
       }
-      if (context?.upload?.token === token && context.upload.state === "ready") {
+      const upload = context?.upload;
+      if (context && upload?.token === token && upload.state !== "receiving") {
         context.upload = undefined;
+        if (upload.uploaded) {
+          await fsp.rm(upload.uploaded.stagingRoot, { recursive: true, force: true });
+        }
       }
     },
 
@@ -476,6 +511,7 @@ export function createNodeWorkspaceTransferService(options: {
         !isCurrentContext(context) ||
         upload.token !== params.token ||
         upload.state !== "ready" ||
+        upload.isAuthorized?.() === false ||
         upload.expiresAtMs <= now() ||
         !capabilityMatchesContext(upload, context) ||
         params.route.kind !== "reconcile" ||

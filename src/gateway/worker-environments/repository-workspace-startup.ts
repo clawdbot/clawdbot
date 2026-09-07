@@ -62,6 +62,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       generation: params.generation,
       gitAuthor: params.gitAuthor,
       source: { ...source, ...(checkpoint ? { checkpoint } : {}) },
+      authorize: params.assertCurrent,
     });
   };
   const synced = repository.checkpointRef
@@ -94,7 +95,10 @@ export async function syncSessionRepositoryWorkspace(params: {
     }
     return synced;
   }
-  const quiescence = await params.tunnel.quiesceWorkspace(synced.remoteWorkspaceDir);
+  const quiescence = await params.tunnel.quiesceWorkspace(
+    synced.remoteWorkspaceDir,
+    params.assertCurrent,
+  );
   let reconciliation: Awaited<ReturnType<WorkerTunnelHandle["reconcileWorkspace"]>> | undefined;
   try {
     params.assertCurrent();
@@ -103,6 +107,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       baseManifestRef: synced.baseManifestRef,
       source: {
         kind: "repository",
+        authorize: params.assertCurrent,
         referenceManifestRef: synced.manifestRef,
         prepareCheckpoint: (payload) =>
           stageSessionRepositoryCheckpoint({

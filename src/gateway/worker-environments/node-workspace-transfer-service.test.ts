@@ -222,7 +222,7 @@ describe("node workspace transfer service", () => {
       const wrongDirection = await fetch(`${httpOrigin}${manifestPath}`, {
         headers: { authorization: `Bearer ${uploadTokenForGet}` },
       });
-      service.revoke("environment-1", uploadTokenForGet);
+      await service.revoke("environment-1", uploadTokenForGet);
       for (const response of [crossEnvironment, wrongDirection]) {
         expect(response.status).toBe(404);
         expect(response.headers.get("cache-control")).toBe("no-store");
@@ -336,7 +336,7 @@ describe("node workspace transfer service", () => {
       await expect(runtime.exec(attachmentInput, undefined, { url: gatewayUrl })).rejects.toThrow(
         "workspace-transfer-failed",
       );
-      service.revoke("environment-1", attachments.token);
+      await service.revoke("environment-1", attachments.token);
       expect(service.getSnapshot("environment-1", prepared.snapshot.manifestRef)).toBeDefined();
       const writeFaults = injectUploadWriteFaults();
       const persistenceRetry = writeFaults.blockNextRetry();
@@ -404,7 +404,7 @@ describe("node workspace transfer service", () => {
         "environment-1",
         prepared.snapshot.manifestRef,
       );
-      service.revoke("environment-1", replacementUploadToken);
+      await service.revoke("environment-1", replacementUploadToken);
       writeFaults.failNextWrite(new Error("injected terminal upload write failure"));
       const failedUploadToken = service.prepareUpload(
         "environment-1",
@@ -421,7 +421,7 @@ describe("node workspace transfer service", () => {
         "environment-1",
         prepared.snapshot.manifestRef,
       );
-      service.revoke("environment-1", resetUploadToken);
+      await service.revoke("environment-1", resetUploadToken);
       const acceptedToken = service.publishSnapshot("environment-1", {
         manifest: uploaded.current,
         manifestRef: uploaded.currentManifestRef,
@@ -429,10 +429,10 @@ describe("node workspace transfer service", () => {
         root: localPath,
       });
       expect(service.getSnapshot("environment-1", prepared.snapshot.manifestRef)).toBeDefined();
-      service.revoke("environment-1", prepared.token);
+      await service.revoke("environment-1", prepared.token);
       expect(service.getSnapshot("environment-1", prepared.snapshot.manifestRef)).toBeUndefined();
       expect(service.getSnapshot("environment-1", uploaded.currentManifestRef)).toBeDefined();
-      service.revoke("environment-1", acceptedToken);
+      await service.revoke("environment-1", acceptedToken);
 
       const authorityRetry = writeFaults.blockNextRetry();
       const retiredUploadToken = service.prepareUpload(

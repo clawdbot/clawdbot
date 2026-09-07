@@ -1,4 +1,3 @@
-import { deriveEnvironmentIntent } from "./service-contract.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import {
@@ -34,6 +33,7 @@ import {
   type WorkerPlacementReclaimOptions,
 } from "./placement-reclaim.js";
 import { reportPlacementTransition } from "./placement-record.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,

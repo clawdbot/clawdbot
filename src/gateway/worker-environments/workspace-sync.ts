@@ -728,6 +728,7 @@ export function createWorkerWorkspaceActions(
           gitAuthor: request.gitAuthor,
           localPath: request.source.path,
           projectKey: request.source.projectKey,
+          authorize: request.authorize,
         }),
       );
     },

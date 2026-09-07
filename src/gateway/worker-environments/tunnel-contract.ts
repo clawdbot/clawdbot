@@ -128,6 +128,8 @@ type WorkerRepositoryWorkspaceSource = {
 };
 
 export type WorkerWorkspaceSyncRequest = {
+  /** Live initiating operation; retained workspace custody uses its independent owner. */
+  authorize?: () => void;
   sessionId: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
@@ -171,6 +173,7 @@ export type WorkerWorkspaceReconcileRequest = {
       }
     | {
         kind: "repository";
+        authorize?: () => void;
         referenceManifestRef: string;
         prepareCheckpoint(
           payload: WorkerRepositoryCheckpointPayload,
@@ -223,7 +226,10 @@ export type WorkerWorkspaceTunnelHandle = {
     isAuthorized: () => boolean;
     signal: AbortSignal;
   }): Promise<void>;
-  quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
+  quiesceWorkspace(
+    remoteWorkspaceDir: string,
+    authorize?: () => void,
+  ): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
   reconcileWorkspace(
     request: WorkerWorkspaceReconcileRequest,

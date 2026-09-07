@@ -36,7 +36,9 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     const { artifact } = params;
     const isAuthorized = () => {
       params.authorize?.();
-      return !params.signal?.aborted && options.getTransport() === transport && transport.isCurrent(node);
+      return (
+        !params.signal?.aborted && options.getTransport() === transport && transport.isCurrent(node)
+      );
     };
     if (!isAuthorized()) {
       throw new Error("Device worker installation connection is no longer current");

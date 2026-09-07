@@ -62,11 +62,11 @@ async function workspaceFixture(beforeDownload?: () => Promise<void>) {
   return {
     actions,
     transfer,
+    localPath,
     request: {
-      localPath,
+      source: { kind: "local" as const, path: localPath, projectKey: "a".repeat(64) },
       sessionId: "session-1",
       generation: 1,
-      projectKey: "a".repeat(64),
     },
     close: async () => {
       owner.abort();
@@ -76,16 +76,20 @@ async function workspaceFixture(beforeDownload?: () => Promise<void>) {
 }
 
 describe("node workspace operation authority", () => {
-  it.each(["turn", "owner", "signal"] as const)(
-    "rejects a queued sync with closed %s authority without replacing its predecessor",
-    async (boundary) => {
+  it.each(
+    (["local", "repository"] as const).flatMap((source) =>
+      (["turn", "owner", "signal"] as const).map((boundary) => ({ source, boundary })),
+    ),
+  )(
+    "rejects a queued $source sync with closed $boundary authority without replacing its predecessor",
+    async ({ source, boundary }) => {
       const fixture = await workspaceFixture();
       const preparing = createDeferred();
       const releasePreparation = createDeferred();
       const originalRealpath = fs.realpath.bind(fs);
       let blocked = false;
       const realpath = vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
-        if (!blocked && args[0] === fixture.request.localPath) {
+        if (!blocked && args[0] === fixture.localPath) {
           blocked = true;
           preparing.resolve();
           await releasePreparation.promise;
@@ -95,7 +99,9 @@ describe("node workspace operation authority", () => {
       let authorized = true;
       const signal = new AbortController();
       const request = {
-        ...fixture.request,
+        localPath: fixture.localPath,
+        sessionId: fixture.request.sessionId,
+        generation: fixture.request.generation,
         environmentId: "environment-1",
         ownerEpoch: 2,
         isAuthorized: () => true,
@@ -103,7 +109,7 @@ describe("node workspace operation authority", () => {
       try {
         const first = fixture.transfer.prepareSync(request);
         await preparing.promise;
-        const second = fixture.transfer.prepareSync({
+        const pending = {
           ...request,
           signal: signal.signal,
           isAuthorized: () => boundary !== "owner" || authorized,
@@ -112,7 +118,15 @@ describe("node workspace operation authority", () => {
               throw new Error("Initiating dispatch turn closed");
             }
           },
-        });
+        };
+        const second =
+          source === "local"
+            ? fixture.transfer.prepareSync(pending)
+            : fixture.transfer.prepareRepository({
+                ...pending,
+                baseCommit: "a".repeat(40),
+                baseManifestRef: `sha256:${"b".repeat(64)}`,
+              });
         const rejected = expect(second).rejects.toThrow();
         authorized = false;
         if (boundary === "signal") {
@@ -158,12 +172,12 @@ describe("node workspace operation authority", () => {
         if (operation === "reconciliation") {
           const token = fixture.transfer.prepareUpload("environment-1", synced.manifestRef);
           expect(token).toBeTruthy();
-          fixture.transfer.revoke("environment-1", token);
+          await fixture.transfer.revoke("environment-1", token);
         } else {
           assert.isDefined(fixture.actions.stageAttachments);
           await expect(
             fixture.actions.stageAttachments({
-              localPath: fixture.request.localPath,
+              localPath: fixture.localPath,
               isAuthorized: () => true,
               signal: new AbortController().signal,
             }),
@@ -204,7 +218,7 @@ describe("node workspace operation authority", () => {
       });
       const token = fixture.transfer.prepareUpload("environment-1", synced.manifestRef);
       expect(token).toBeTruthy();
-      fixture.transfer.revoke("environment-1", token);
+      await fixture.transfer.revoke("environment-1", token);
     } finally {
       releaseDownload.resolve();
       await fixture.close();

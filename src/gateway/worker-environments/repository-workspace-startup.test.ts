@@ -216,6 +216,7 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     assertCurrent: expect.any(Function),
   });
   expect(f.syncWorkspace).toHaveBeenCalledWith({
+    authorize: expect.any(Function),
     sessionId: session.sessionId,
     generation: session.generation,
     gitAuthor,

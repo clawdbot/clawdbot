@@ -180,7 +180,11 @@ export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec
       if (inspection.kind === "fallback") {
         return inspection;
       }
-      const prepared = await repository.prepareRepository(inspection.identity, expectedManifestRef);
+      const preparation = createNodeWorkerRepositoryPreparation(exec, request.authorize);
+      const prepared = await preparation.prepareRepository(
+        inspection.identity,
+        expectedManifestRef,
+      );
       return prepared.kind === "prepared"
         ? {
             kind: "synced",
@@ -203,7 +207,10 @@ export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec
       const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
         runCommandWithTimeout(argv, { timeoutMs: GIT_TIMEOUT_MS, maxOutputBytes: 1024 }),
       );
-      await repository.configureAuthor(result.remoteWorkspaceDir, author);
+      await createNodeWorkerRepositoryPreparation(exec, request.authorize).configureAuthor(
+        result.remoteWorkspaceDir,
+        author,
+      );
       return result;
     },
   };

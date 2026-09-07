@@ -72,7 +72,7 @@ describe("worker tunnel manager", () => {
       try {
         await expect(
           handle.syncWorkspace({
-            localPath,
+            source: { kind: "local", path: localPath },
             sessionId: "session:revoked-sync",
             generation: 1,
             authorize: () => {

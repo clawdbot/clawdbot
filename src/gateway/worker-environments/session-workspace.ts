@@ -49,6 +49,7 @@ export function createWorkerWorkspaceReconcileRequest(params: {
     baseManifestRef: workspace.repository.baseManifestHash,
     source: {
       kind: "repository",
+      authorize: params.assertCurrent,
       referenceManifestRef: workspace.repository.manifestHash,
       prepareCheckpoint: async (payload) => {
         const prepared = await stageSessionRepositoryCheckpoint({
