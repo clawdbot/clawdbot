@@ -11,7 +11,11 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
+import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
+import {
+  prunePublishedSessionArchivesByRetention,
+  publishSessionStateArchives,
+} from "./session-accessor.sqlite-archive-store.js";
 import {
   materializeSessionStateDeletePlans,
   type SessionStateDeletePlan,
@@ -71,6 +75,19 @@ const SESSION_TRANSCRIPT_BYTE_QUERY_BATCH = MAX_SESSION_MAINTENANCE_BATCH_ENTRIE
 const SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES = MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
 const SESSION_PLANNER_ANALYSIS_LIMIT = 1_000;
 const plannerMaintenanceByStore = new Map<string, Promise<void>>();
+
+function resolveArchiveRetentionRules(
+  maintenance: ReturnType<typeof resolveMaintenanceConfig>,
+): SessionArchivedTranscriptCleanupRule[] {
+  return [
+    ...(maintenance.deletedArchiveRetentionMs == null
+      ? []
+      : [{ reason: "deleted" as const, olderThanMs: maintenance.deletedArchiveRetentionMs }]),
+    ...(maintenance.resetArchiveRetentionMs == null
+      ? []
+      : [{ reason: "reset" as const, olderThanMs: maintenance.resetArchiveRetentionMs }]),
+  ];
+}
 
 /** Coalesce bounded planner-statistics refreshes behind the per-store writer lane. */
 export async function refreshSqliteSessionPlannerStatisticsBestEffort(
@@ -356,6 +373,11 @@ export function applySessionEntryMaintenance(
       capped: 0,
     };
   }
+  const archiveRetentionRules = resolveArchiveRetentionRules(maintenance);
+  const archiveRetention =
+    archiveRetentionRules.length > 0
+      ? { archiveDirectory: params.archiveDirectory, rules: archiveRetentionRules }
+      : undefined;
 
   // Key projections and indexed age candidates keep unrelated entry payloads out
   // of automatic maintenance. Exact full entries load only for rows selected to change.
@@ -427,6 +449,7 @@ export function applySessionEntryMaintenance(
   });
   if (removals.length === 0) {
     return {
+      ...(archiveRetention ? { archiveRetention } : {}),
       ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
       entryRemovals: [],
       stateDeletePlans: [],
@@ -468,6 +491,7 @@ export function applySessionEntryMaintenance(
     }
   }
   return {
+    ...(archiveRetention ? { archiveRetention } : {}),
     ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
     entryRemovals: removals,
     stateDeletePlans: deletePlans,
@@ -526,10 +550,51 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
       sessionIds: uniqueStrings(warnedStateDeletePlans.map((plan) => plan.sessionId)),
     });
   };
+  const cleanupArchiveRetention = async (): Promise<void> => {
+    if (!isCurrent()) {
+      return;
+    }
+    const retentionPlans = [
+      ...new Map(
+        plans
+          .flatMap((plan) => (plan.archiveRetention ? [plan.archiveRetention] : []))
+          .map(
+            (retention) =>
+              [
+                `${retention.archiveDirectory}\u0000${JSON.stringify(retention.rules)}`,
+                retention,
+              ] as const,
+          ),
+      ).values(),
+    ];
+    if (retentionPlans.length === 0) {
+      return;
+    }
+    try {
+      const { cleanupArchivedSessionTranscripts } =
+        await import("../../gateway/session-archive.runtime.js");
+      for (const retention of retentionPlans) {
+        if (!isCurrent()) {
+          break;
+        }
+        await cleanupArchivedSessionTranscripts({
+          directories: [retention.archiveDirectory],
+          rules: retention.rules,
+        });
+        await prunePublishedSessionArchivesByRetention({ scope, rules: retention.rules });
+      }
+    } catch (error) {
+      getChildLogger({ subsystem: "session-sqlite" }).warn(
+        "SQLite session transcript archive retention cleanup failed",
+        { agentId: scope.agentId, error, path: scope.path },
+      );
+    }
+  };
   if (!isCurrent()) {
     return emptyResult();
   }
   if (entryRemovals.length === 0 && stateDeletePlans.length === 0) {
+    await cleanupArchiveRetention();
     await refreshSqliteSessionPlannerStatisticsBestEffort(
       scope,
       options.deletedEntriesBeforeMaintenance ?? 0,
@@ -641,6 +706,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
       warn("SQLite session maintenance archive publication failed", error, batch.stateDeletePlans);
     }
   }
+  await cleanupArchiveRetention();
   if (isCurrent()) {
     await refreshSqliteSessionPlannerStatisticsBestEffort(scope, deletedEntries, { isCurrent });
   }
