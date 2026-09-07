@@ -11,6 +11,8 @@ import {
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
   type ScopeNode,
+  type ScopePath,
+  type ScopeTree,
 } from "./group-scope-tree.js";
 import type { GroupToolPolicySender } from "./tools-by-sender.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -147,7 +149,7 @@ export function resolveChannelGroupPolicy(params: {
 function buildSelectedGroupScope(
   groupConfig: ChannelGroupConfig | undefined,
   defaultConfig: ChannelGroupConfig | undefined,
-) {
+): { tree: ScopeTree; path: ScopePath } {
   // Flat lookup selects one whole entry, including an explicitly requested "*".
   // Preserve its boolean/truthy fallback rules without changing native scope callers.
   const project = (node: ChannelGroupConfig): ScopeNode => ({
