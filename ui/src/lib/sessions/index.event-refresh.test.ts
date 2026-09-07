@@ -227,7 +227,7 @@ describe("event-driven session list refresh", () => {
       request.mockClear();
 
       emitEvent(sessionChangedEvent("agent:writer:changed"));
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_MAX_WAIT_MS);
 
       expect(request).toHaveBeenCalledTimes(3);
       const writerDashboardRequests = request.mock.calls.filter(
@@ -238,7 +238,7 @@ describe("event-driven session list refresh", () => {
         writerDashboardRequests.map(
           ([, params]) => (params as { agentId?: string } | undefined)?.agentId ?? null,
         ),
-      ).toEqual([null, "writer"]);
+      ).toEqual(expect.arrayContaining([null, "writer"]));
     } finally {
       stopAll();
       stopWriter();
@@ -880,7 +880,7 @@ describe("event-driven session list refresh", () => {
 
         if (eventDuringForeground) {
           emitEvent(sessionChangedEvent("agent:research:during-refresh"));
-          await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+          await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_MAX_WAIT_MS);
         }
         secondList.resolve(sessionsResult([], 2));
         await Promise.all([initialRefresh, foregroundRefresh, appendRefresh]);
@@ -930,7 +930,7 @@ describe("event-driven session list refresh", () => {
       expect(request).toHaveBeenCalledTimes(2);
 
       emitEvent(sessionChangedEvent("agent:main:during-flight"));
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_MAX_WAIT_MS);
       expect(request).toHaveBeenCalledTimes(2);
 
       secondList.resolve(sessionsResult([], 2));

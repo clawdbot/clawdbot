@@ -21,6 +21,7 @@ import { normalizeAgentId } from "./session-key.ts";
 import {
   completeSessionRefreshWaiters,
   findPublishedSession,
+  isForegroundReplacement,
   isPrimarySessionListQuery,
   isSameSessionListQuery,
   prepareSessionRefreshOptions,
@@ -84,10 +85,6 @@ type ManagedSessionList = {
   pending: Promise<void> | null;
   queued: ManagedSessionListRefresh | null;
 };
-
-function isForegroundReplacement(options: SessionRefreshOptions): boolean {
-  return options.append !== true && options.backgroundHydrate !== true;
-}
 
 function sessionListAgentMatcher(agentId?: string | null) {
   const normalized = agentId ? normalizeAgentId(agentId) : null;
@@ -217,6 +214,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         publishManagedList(entry, { ...entry.snapshot, loading: true, error: null });
         try {
           const issuedRevision = ++requestRevision;
+          entry.coordinator.requestStarted();
           const response = await requestSessionListParams(scope.client, requestParams);
           if (!isCurrent()) {
             return;
@@ -343,6 +341,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         if (bootstrap) {
           issuedRevision = ++requestRevision;
         }
+        eventRefreshCoordinator.requestStarted();
         result = await requestSessionListParams(scope.client, listParams);
       }
       if (!isCurrent()) {
