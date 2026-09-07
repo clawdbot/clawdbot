@@ -3821,7 +3821,6 @@ ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
-ui/src/components/terminal/terminal-panel-session-controller.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-panel.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
