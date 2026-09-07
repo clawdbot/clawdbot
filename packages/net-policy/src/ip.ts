@@ -279,6 +279,11 @@ export function isBlockedSpecialUseIpv6Address(
     // will use. Block the allocation instead of guessing a public decoy.
     return true;
   }
+  if (isCloudMetadataIpAddress(address.toString())) {
+    // Metadata endpoints stay blocked even when operators opt into the wider
+    // ULA range for fake-ip proxy compatibility.
+    return true;
+  }
   if (range === "uniqueLocal" && options.allowUniqueLocalRange === true) {
     // Operators running fake-ip proxy stacks (sing-box, Clash, Surge) opt in
     // to fc00::/7 reaching the network — same intent as

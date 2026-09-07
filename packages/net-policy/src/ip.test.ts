@@ -202,8 +202,10 @@ describe("shared ip helpers", () => {
     // benchmark range. Operators using those proxies need both ranges
     // exempted to keep web_fetch working.
     const ula = parseCanonicalIpAddress("fc00::1");
+    const metadata = parseCanonicalIpAddress("fd00:ec2::254");
     expect(ula?.kind()).toBe("ipv6");
-    if (!ula || !isIpv6Address(ula)) {
+    expect(metadata?.kind()).toBe("ipv6");
+    if (!ula || !isIpv6Address(ula) || !metadata || !isIpv6Address(metadata)) {
       throw new Error("expected ipv6 fixture");
     }
 
@@ -215,6 +217,7 @@ describe("shared ip helpers", () => {
     // Opt-in flag — the only path the SSRF policy uses to thread fake-ip
     // proxy intent through to the address classifier.
     expect(isBlockedSpecialUseIpv6Address(ula, { allowUniqueLocalRange: true })).toBe(false);
+    expect(isBlockedSpecialUseIpv6Address(metadata, { allowUniqueLocalRange: true })).toBe(true);
   });
 
   it("opt-in unique-local exemption does NOT bleed into other special-use IPv6 ranges (#74351)", () => {

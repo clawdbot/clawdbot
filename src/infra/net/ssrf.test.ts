@@ -322,6 +322,7 @@ describe("isBlockedHostnameOrIp", () => {
     ["fc00::1", undefined, true],
     ["fc00::1", { allowIpv6UniqueLocalRange: true }, false],
     ["fdff::dead:beef", { allowIpv6UniqueLocalRange: true }, false],
+    ["fd00:ec2::254", { allowIpv6UniqueLocalRange: true }, true],
     // Other reserved IPv6 ranges stay blocked even with the new flag set —
     // the exemption is scoped to ULA, not "any reserved IPv6".
     ["::1", { allowIpv6UniqueLocalRange: true }, true],
