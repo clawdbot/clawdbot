@@ -35,6 +35,8 @@ const CITATION_DIRECTIVE = buildCitationDirective();
 const withoutCitation = (message: string): string =>
   message.startsWith(CITATION_DIRECTIVE) ? message.slice(CITATION_DIRECTIVE.length) : message;
 const SESSION_KEY = `agent:rabbitmq-${USER_ID}:rabbitmq:${USER_ID}:${SESSION_ID}`;
+const snapshotMocks = vi.hoisted(() => ({ prepare: vi.fn(async () => "snapshot.jsonl") }));
+vi.mock("./session-snapshot.js", () => ({ prepareHistorySessionSnapshot: snapshotMocks.prepare }));
 
 function createChatMessage(): ChatMessage {
   return {
@@ -166,6 +168,44 @@ describe("processChatMessage", () => {
     );
     expect(captured?.toolsAllow).not.toContain("schedule_create");
     expect(captured?.extraSystemPrompt).toContain("已知事实、分析推断、处置建议");
+    expect(snapshotMocks.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        history: expect.objectContaining({ id: 1, sessionId: SESSION_ID, userId: USER_ID }),
+        sessionKey: SESSION_KEY,
+        agentId: "rabbitmq-42",
+      }),
+    );
+  });
+
+  it("does not start a turn when preparing its history snapshot fails", async () => {
+    snapshotMocks.prepare.mockRejectedValueOnce(new Error("snapshot unavailable"));
+    const onRun = vi.fn();
+    const runtime = createRuntimeMock({ workspaceDir, onRun });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+
+    expect(onRun).not.toHaveBeenCalled();
+  });
+
+  it("waits for the complete snapshot before starting the next turn", async () => {
+    const order: string[] = [];
+    snapshotMocks.prepare.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      order.push("snapshot");
+      return "snapshot.jsonl";
+    });
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {
+        order.push("run");
+      },
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+
+    expect(order).toEqual(["snapshot", "run"]);
   });
 
   it("aborts the active OpenClaw run when the chat turn is cancelled", async () => {

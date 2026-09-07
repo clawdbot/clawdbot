@@ -26,6 +26,7 @@ import { computeDateScope, type ReportPeriod } from "./report-period.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ResolvedTemplate, ReportTemplateLookup } from "./report-template-lookup.js";
 import { normalizeChineseProseQuotes, sanitizeInternalRefs } from "./sanitize-output.js";
+import { prepareHistorySessionSnapshot } from "./session-snapshot.js";
 import type { ResolvedSkill, SkillLookup } from "./skill-lookup.js";
 import { buildSuhengDesignContext } from "./suheng-design-context.js";
 import { SUHENG_RUNTIME_SYSTEM_PROMPT } from "./suheng-runtime-context.js";
@@ -1136,9 +1137,16 @@ export async function processChatMessage(
         builtinSkillName,
       });
 
-      // Open the accounting window BEFORE the run: every assistant message the
-      // agent appends from here on (one per tool-loop iteration) belongs to this
-      // turn, and anything older belongs to a previous turn in the same session.
+      // Continue in this history row's full snapshot before the agent appends.
+      await prepareHistorySessionSnapshot({
+        history: record,
+        userId,
+        sessionKey,
+        agentId,
+        config: attachmentConfig ?? undefined,
+        sessions: runtime.agent.session,
+      });
+      // Open accounting after the copy so inherited messages stay in past turns.
       usageContext = { sessionKey, agentId, sinceMs: Date.now() };
 
       const runResult = await runtime.subagent.run({
