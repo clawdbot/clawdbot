@@ -5,6 +5,7 @@
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   readConfiguredProviderCatalogEntries,
+  resolveMergedModelProviderConfig,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -30,6 +31,13 @@ const ARCEE_WIZARD_GROUP = {
 } as const;
 
 async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
+  const configuredBaseUrl = resolveMergedModelProviderConfig(ctx.config, PROVIDER_ID)?.baseUrl;
+  if (normalizeArceeOpenRouterBaseUrl(configuredBaseUrl)) {
+    const openRouterKey = ctx.resolveProviderApiKey("openrouter").apiKey;
+    return openRouterKey
+      ? { provider: { ...buildArceeOpenRouterProvider(), apiKey: openRouterKey } }
+      : null;
+  }
   const directAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
   if (directAuth.apiKey) {
     return await buildOpenAICompatibleLiveProviderCatalog({
@@ -42,6 +50,9 @@ async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
     });
   }
 
+  if (configuredBaseUrl) {
+    return null;
+  }
   const openRouterKey = ctx.resolveProviderApiKey("openrouter").apiKey;
   if (openRouterKey) {
     return { provider: { ...buildArceeOpenRouterProvider(), apiKey: openRouterKey } };

@@ -536,7 +536,8 @@ function resolveConfiguredAuthSelectionForProvider(
   const profileIds = Object.entries(cfg.auth?.profiles ?? {})
     .filter(
       ([, profile]) =>
-        resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
+        resolveProviderIdForAuth(profile.provider, { config: cfg, storedCredential: true }) ===
+        providerAuthKey,
     )
     .map(([profileId]) => profileId);
   return profileIds.length > 0

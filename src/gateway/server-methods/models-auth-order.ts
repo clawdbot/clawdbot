@@ -71,7 +71,10 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
       const availableProfileIds = Object.entries(preparedSnapshot.authStore.profiles)
         .filter(
           ([, credential]) =>
-            resolveProviderIdForAuth(credential.provider, authAliasLookupParams) === authProvider,
+            resolveProviderIdForAuth(credential.provider, {
+              ...authAliasLookupParams,
+              storedCredential: true,
+            }) === authProvider,
         )
         .map(([profileId]) => profileId);
       const configBoundProfileIds = resolveConfigBoundProfileIds(
@@ -92,7 +95,10 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
         const credential = preparedSnapshot.authStore.profiles[profileId];
         return (
           !credential ||
-          resolveProviderIdForAuth(credential.provider, authAliasLookupParams) !== authProvider
+          resolveProviderIdForAuth(credential.provider, {
+            ...authAliasLookupParams,
+            storedCredential: true,
+          }) !== authProvider
         );
       });
       if (invalidProfile) {

@@ -12,7 +12,10 @@ export function listSetupProviderIds(record: SetupDescriptorRecord): readonly st
   const providerIds = record.setup?.providers?.map((entry) => entry.id) ?? record.providers;
   const normalizedProviderIds = new Set(providerIds.map(normalizeProviderId));
   const aliases = Object.entries(record.providerAuthAliases ?? {})
-    .filter(([, target]) => normalizedProviderIds.has(normalizeProviderId(target)))
+    .filter(
+      ([, target]) =>
+        typeof target === "string" && normalizedProviderIds.has(normalizeProviderId(target)),
+    )
     .map(([alias]) => alias);
   return [...providerIds, ...aliases];
 }

@@ -18,6 +18,8 @@ export type {
   ProviderCatalogResult,
 } from "../plugins/types.js";
 
+export { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+
 export {
   buildManifestModelProviderConfig,
   buildManifestProviderCatalogFamily,

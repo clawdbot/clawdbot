@@ -703,7 +703,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const configBoundAuthProviders = new Set(
         Object.entries(store.profiles)
           .filter(([profileId]) => configBoundProfileIds.has(profileId))
-          .map(([, profile]) => resolveProviderIdForAuth(profile.provider, authAliasLookupParams)),
+          .map(([, profile]) =>
+            resolveProviderIdForAuth(profile.provider, {
+              ...authAliasLookupParams,
+              storedCredential: true,
+            }),
+          ),
       );
       const providers = authHealth.providers.map((prov) =>
         mapProvider(

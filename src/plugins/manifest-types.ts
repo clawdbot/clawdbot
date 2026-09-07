@@ -442,7 +442,7 @@ export type PluginManifest = {
   /** Usage/billing credentials excluded from inference auth but included in secret scrubbing. */
   providerUsageAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
-  providerAuthAliases?: Record<string, string>;
+  providerAuthAliases?: Record<string, string | { provider: string; baseUrls: string[] }>;
   /**
    * Cheap onboarding/auth-choice metadata used by config validation, CLI help,
    * and non-runtime auth-choice routing before provider runtime loads.

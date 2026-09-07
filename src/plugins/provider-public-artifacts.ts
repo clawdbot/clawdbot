@@ -64,6 +64,9 @@ function pluginOwnsProviderPolicyRef(
 
   for (const [rawAlias, rawTarget] of Object.entries(plugin.providerAuthAliases ?? {})) {
     const alias = normalizeProviderId(rawAlias);
+    if (typeof rawTarget !== "string") {
+      continue;
+    }
     const target = normalizeProviderId(rawTarget);
     if (alias === normalizedProviderId && ownedProviders.has(target)) {
       return true;

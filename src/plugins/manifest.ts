@@ -281,7 +281,7 @@ export function loadPluginManifest(
     providerUsageAuthEnvVars: capabilityNormalizers.normalizeStringListRecord(
       raw.providerUsageAuthEnvVars,
     ),
-    providerAuthAliases: capabilityNormalizers.normalizeManifestStringRecord(
+    providerAuthAliases: capabilityNormalizers.normalizeManifestProviderAuthAliases(
       raw.providerAuthAliases,
     ),
     providerAuthChoices: setupNormalizers.normalizeProviderAuthChoices(raw.providerAuthChoices),

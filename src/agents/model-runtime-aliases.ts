@@ -183,9 +183,14 @@ type RuntimeAuthAliasParams = {
   metadataSnapshot?: ProviderAuthAliasLookupParams["metadataSnapshot"];
 };
 
-function resolveRuntimeAuthProvider(provider: string, params: RuntimeAuthAliasParams): string {
+function resolveRuntimeAuthProvider(
+  provider: string,
+  params: RuntimeAuthAliasParams,
+  storedCredential = false,
+): string {
   return resolveProviderIdForAuth(provider, {
     config: params.cfg,
+    storedCredential,
     ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
   });
 }
@@ -202,7 +207,7 @@ function resolveProfileRuntimeAlias(
     return undefined;
   }
   const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
-  const profileAuthKey = resolveRuntimeAuthProvider(profileProvider, params);
+  const profileAuthKey = resolveRuntimeAuthProvider(profileProvider, params, true);
   if (providerAuthKey !== profileAuthKey) {
     return undefined;
   }
@@ -252,7 +257,7 @@ function resolveCliRuntimeFromAuthProfile(
     if (!profile?.provider) {
       continue;
     }
-    const profileAuthKey = resolveRuntimeAuthProvider(profile.provider, params);
+    const profileAuthKey = resolveRuntimeAuthProvider(profile.provider, params, true);
     if (profileAuthKey !== providerAuthKey) {
       continue;
     }

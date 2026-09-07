@@ -39,6 +39,39 @@ const entry = {
 } satisfies SessionEntry;
 
 describe("shouldPreserveSessionAuthProfileOverride", () => {
+  it.each([
+    { credentialProvider: "arcee", expected: false },
+    { credentialProvider: "openrouter", expected: true },
+  ])(
+    "checks a pin's stored $credentialProvider realm against the configured endpoint",
+    ({ credentialProvider, expected }) => {
+      const plugin: PluginManifestRecord = {
+        ...workspaceAliasPlugin,
+        id: "arcee",
+        origin: "bundled",
+        providers: ["arcee"],
+        providerAuthAliases: {
+          arcee: { provider: "openrouter", baseUrls: ["https://openrouter.ai/api/v1"] },
+        },
+      };
+      expect(
+        shouldPreserveSessionAuthProfileOverride({
+          cfg: {
+            models: {
+              providers: { arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] } },
+            },
+            auth: { profiles: { "team:prod": { provider: credentialProvider, mode: "api_key" } } },
+          },
+          agentDir: tempDirs.make("openclaw-endpoint-profile-pin-"),
+          entry: { ...entry, authProfileOverride: "team:prod" },
+          currentProvider: "arcee",
+          provider: "arcee",
+          metadataSnapshot: { plugins: [plugin] },
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it("uses config trust when resolving workspace provider aliases", () => {
     const allowedConfig = {
       plugins: { entries: { "fixture-provider": { enabled: true } } },

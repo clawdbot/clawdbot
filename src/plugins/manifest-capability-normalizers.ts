@@ -4,6 +4,7 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
+  PluginManifest,
   PluginManifestCapabilityProviderAuthSignal,
   PluginManifestCapabilityProviderConfigSignal,
   PluginManifestCapabilityProviderMetadata,
@@ -23,6 +24,35 @@ import type {
   PluginManifestToolProfile,
   PluginManifestTranscriptSource,
 } from "./manifest-types.js";
+
+/** Endpoint restrictions constrain a provider alias without changing stored credential identity. */
+export function normalizeManifestProviderAuthAliases(
+  value: unknown,
+): PluginManifest["providerAuthAliases"] {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const aliases: NonNullable<PluginManifest["providerAuthAliases"]> = Object.create(null);
+  for (const [key, entry] of Object.entries(value)) {
+    const alias = normalizeOptionalString(key);
+    if (!alias || isBlockedObjectKey(alias)) {
+      continue;
+    }
+    if (typeof entry === "string") {
+      const provider = normalizeOptionalString(entry);
+      if (provider) {
+        aliases[alias] = provider;
+      }
+    } else if (isRecord(entry)) {
+      const provider = normalizeOptionalString(entry.provider);
+      const baseUrls = normalizeTrimmedStringList(entry.baseUrls);
+      if (provider && baseUrls.length > 0) {
+        aliases[alias] = { provider, baseUrls };
+      }
+    }
+  }
+  return Object.keys(aliases).length > 0 ? aliases : undefined;
+}
 
 function isPluginToolProfile(profile: string): profile is PluginManifestToolProfile {
   return (

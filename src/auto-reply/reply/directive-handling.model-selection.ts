@@ -105,6 +105,7 @@ export function resolveModelSelectionFromDirective(params: {
     }) ===
       resolveProviderIdForAuth(storedNumericProfile?.profileProvider ?? "", {
         config: params.cfg,
+        storedCredential: true,
       });
   const modelRaw =
     useStoredNumericProfile && storedNumericProfile ? storedNumericProfile.modelRaw : raw;

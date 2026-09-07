@@ -346,6 +346,7 @@ export function buildAuthHealthSummary(params: {
     const authProvider = resolveProviderIdForAuth(provider, {
       config: params.cfg,
       ...params.authAliasLookupParams,
+      storedCredential: true,
     });
     return (
       findNormalizedProviderValue(params.store.order, authProvider) ??

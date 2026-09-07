@@ -103,6 +103,9 @@ function pluginOwnsProviderRef(plugin: PluginManifestRecord, normalizedProvider:
     return true;
   }
   for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+    if (typeof target !== "string") {
+      continue;
+    }
     const alias = normalizeProviderId(rawAlias);
     const targetProvider = normalizeProviderId(target);
     if (

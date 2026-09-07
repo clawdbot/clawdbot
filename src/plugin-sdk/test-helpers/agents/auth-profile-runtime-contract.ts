@@ -66,7 +66,10 @@ export function expectedForwardedAuthProfile(params: {
   sessionAuthProfileId: string | undefined;
 }): string | undefined {
   return resolveProviderIdForAuth(params.provider, params.aliasLookupParams) ===
-    resolveProviderIdForAuth(params.authProfileProvider, params.aliasLookupParams)
+    resolveProviderIdForAuth(params.authProfileProvider, {
+      ...params.aliasLookupParams,
+      storedCredential: true,
+    })
     ? params.sessionAuthProfileId
     : undefined;
 }

@@ -44,6 +44,20 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 
 describe("buildAgentRuntimeAuthPlan", () => {
+  it.each([
+    { provider: undefined, forwarded: "arcee:default" },
+    { provider: "", forwarded: undefined },
+  ])("distinguishes an omitted credential provider from '$provider'", ({ provider, forwarded }) => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: "arcee",
+      authProfileProvider: provider,
+      sessionAuthProfileId: "arcee:default",
+      sessionAuthProfileSource: "user",
+      providerAuthAliasesEnabled: false,
+    });
+    expect(plan.forwardedAuthProfileId).toBe(forwarded);
+  });
+
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();

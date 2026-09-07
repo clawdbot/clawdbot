@@ -191,7 +191,10 @@ export function resolveStrictSetupAuthProfileError(params: {
     };
     try {
       const runProvider = resolveProviderIdForAuth(params.plan.provider, aliasContext);
-      const profileProvider = resolveProviderIdForAuth(credential.provider, aliasContext);
+      const profileProvider = resolveProviderIdForAuth(credential.provider, {
+        ...aliasContext,
+        storedCredential: true,
+      });
       if (runProvider === profileProvider) {
         return undefined;
       }
