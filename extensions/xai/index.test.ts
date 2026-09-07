@@ -288,36 +288,26 @@ describe("xai provider plugin", () => {
       route: "Grok proxy",
       baseUrl: "https://cli-chat-proxy.grok.com/v1",
       subscription: true,
-      resolves: true,
-      prepared: true,
     },
     {
       route: "Grok proxy with trailing slash",
       baseUrl: "https://cli-chat-proxy.grok.com/v1/",
       subscription: true,
-      resolves: true,
-      prepared: true,
     },
     {
       route: "equivalent Grok proxy URL",
       baseUrl: "https://CLI-CHAT-PROXY.GROK.COM:443/v1/",
       subscription: true,
-      resolves: true,
-      prepared: true,
     },
     {
       route: "native API",
       baseUrl: "https://api.x.ai/v1",
       subscription: false,
-      resolves: true,
-      prepared: true,
     },
     {
       route: "default API",
       baseUrl: undefined,
       subscription: false,
-      resolves: true,
-      prepared: true,
     },
     {
       route: "unavailable Grok token",
@@ -338,18 +328,16 @@ describe("xai provider plugin", () => {
       baseUrl: "https://cli-chat-proxy.grok.com/v1",
       subscription: true,
       resolves: false,
-      prepared: true,
     },
     {
       route: "runtime-materialized Grok token",
       baseUrl: "https://cli-chat-proxy.grok.com/v1",
       subscription: true,
-      resolves: true,
       prepared: false,
     },
   ])(
     "keeps token catalog discovery on the $route",
-    async ({ baseUrl, subscription, resolves, prepared }) => {
+    async ({ baseUrl, subscription, resolves = true, prepared = true }) => {
       const apiKey = "selected-xai-token";
       const profileId = "xai:selected-token";
       providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
