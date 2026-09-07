@@ -575,6 +575,9 @@ export function markSlackStreamFallbackDelivered(session: SlackStreamSession): v
   if (recoveryBySession.get(session)?.updating) {
     return;
   }
+  // Ordinary delivery now owns the tail. Native cleanup may still stop the
+  // stream, but must not project that text back onto the original message.
+  recoveryBySession.delete(session);
   const nativeStreamWasStarted = session.delivered || Boolean(session.streamer.ts);
   session.pendingText = "";
   // @slack/web-api 7.16.0 retains its private buffer after a failed flush.

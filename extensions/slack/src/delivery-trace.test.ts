@@ -17,13 +17,17 @@ import {
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
   type DeliveryTraceStep,
-  type TraceEvent,
-  type TraceNormalizer,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildSlackDeliveryProofVerdict,
+  collectSlackWireTexts,
+  createSlackTsNormalizer,
+  EXEC_FAILED_PROSE,
+} from "./delivery-trace-proof.test-helpers.js";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
 import { setSlackSessionStatus } from "./session-status.js";
@@ -220,7 +224,6 @@ const PREVIEW_PARTIAL_ONE = "Compiling the changelog";
 const PREVIEW_PARTIAL_TWO = "Compiling the changelog for 2026.1.0.";
 const PREVIEW_FINAL_TEXT = "Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.";
 const EXEC_FAILED_TRACE = "⚠️ 🛠️ Exec failed: ";
-const EXEC_FAILED_PROSE = "The directory is missing.";
 const COMPACT_COMMENTARY_TEXT = "Checking the current Slack behavior.";
 const COMPACT_COMMENTARY_TEXT_UPDATED =
   "Checking the current Slack behavior and preparing the focused fix.";
@@ -335,36 +338,6 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "idle" },
   ],
 };
-
-/** Canonicalizes Slack `sec.micro` timestamps to `ts#N` in first-seen order. */
-function createSlackTsNormalizer(): TraceNormalizer {
-  const seen = new Map<string, string>();
-  const canonicalize = (value: string) =>
-    value.replace(/\b\d{10}\.\d{6}\b/g, (ts) => {
-      let mapped = seen.get(ts);
-      if (!mapped) {
-        mapped = `ts#${seen.size + 1}`;
-        seen.set(ts, mapped);
-      }
-      return mapped;
-    });
-  const walk = (value: unknown): unknown => {
-    if (typeof value === "string") {
-      return canonicalize(value);
-    }
-    if (Array.isArray(value)) {
-      return value.map(walk);
-    }
-    if (value && typeof value === "object") {
-      return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, walk(entry)]),
-      );
-    }
-    return value;
-  };
-  return (event: TraceEvent) =>
-    event.data === undefined ? event : { ...event, data: walk(event.data) };
-}
 
 function nextSlackTs(): string {
   traceState.tsCounter += 1;
@@ -749,65 +722,6 @@ async function setupSlackTrace(
   };
 }
 
-function collectSlackWireTexts(events: readonly TraceEvent[]): string[] {
-  const texts: string[] = [];
-  const pushText = (value: unknown) => {
-    if (typeof value === "string" && value.length > 0) {
-      texts.push(value);
-    }
-  };
-  for (const event of events) {
-    if (event.dir !== "out" || !event.data || typeof event.data !== "object") {
-      continue;
-    }
-    const payload = (event.data as { payload?: unknown }).payload;
-    if (!payload || typeof payload !== "object") {
-      continue;
-    }
-    const record = payload as Record<string, unknown>;
-    pushText(record.text);
-    pushText(record.markdown_text);
-    if (Array.isArray(record.chunks)) {
-      for (const chunk of record.chunks) {
-        if (chunk && typeof chunk === "object") {
-          pushText((chunk as { text?: unknown }).text);
-        }
-      }
-    }
-  }
-  return texts;
-}
-
-function buildSlackDeliveryProofVerdict(params: {
-  scenario: SlackTraceScenarioName;
-  events: readonly TraceEvent[];
-  headSha: string;
-}): Record<string, unknown> {
-  const wireTexts = collectSlackWireTexts(params.events);
-  return {
-    kind: "mock-gateway",
-    liveSlack: false,
-    harness: "extensions/slack/src/delivery-trace.test.ts",
-    channel: "slack",
-    scenario: params.scenario,
-    headSha: params.headSha,
-    environment: {
-      node: process.version,
-      platform: process.platform,
-      slackApi: "recording WebClient",
-      provider: "scripted agent turn",
-      delivery: "real dispatchPreparedSlackMessage + ChatStreamer/draft preview",
-    },
-    inboundPayloads: params.events
-      .filter((event) => event.dir === "in" && (event.kind === "final" || event.kind === "partial"))
-      .map((event) => event.data),
-    deliveredWireTexts: wireTexts,
-    execFailedDelivered: wireTexts.some((text) => text.includes("Exec failed")),
-    proseDelivered: wireTexts.some((text) => text.includes(EXEC_FAILED_PROSE)),
-    outMethods: params.events.filter((event) => event.dir === "out").map((event) => event.kind),
-  };
-}
-
 describe("slack delivery trace goldens", () => {
   const headSha = process.env.OPENCLAW_DELIVERY_PROOF_SHA ?? "";
   for (const scenarioName of Object.keys(slackTraceScenarios) as SlackTraceScenarioName[]) {
@@ -964,6 +878,98 @@ describe("slack delivery trace goldens", () => {
       expect(traceState.counts.final).toBe(2);
       expect(events.some((event) => event.kind === "chat.stopStream")).toBe(false);
       expect(traceRuntimeError).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["success", "message_not_in_streaming_state", "internal_error", "post_response_lost"])(
+    "does not replay ordinary fallback text during native cleanup (%s)",
+    async (cleanup) => {
+      const acknowledgedPrefix = "The acknowledged answer prefix.";
+      const finalText = "The fallback answer tail.";
+      const postResponseLost = cleanup === "post_response_lost";
+      const postError = new Error("socket reset after accepted post");
+      const events = await runDeliveryTraceScenario({
+        scenario: {
+          name: "ordinary-fallback-native-cleanup",
+          steps: [
+            { kind: "reply-start" },
+            { kind: "final", text: acknowledgedPrefix },
+            { kind: "final", text: finalText },
+            { kind: "idle" },
+          ],
+        },
+        setup: async (recorder) => {
+          const dispatch = await setupSlackTrace(recorder, "streaming-happy-native");
+          traceState.rejectAppendStreamCode = "team_not_found";
+          const client = traceState.client as unknown as {
+            chat: {
+              stopStream: (args: Record<string, unknown>) => Promise<unknown>;
+              postMessage: (args: Record<string, unknown>) => Promise<unknown>;
+            };
+          };
+          const stop = client.chat.stopStream;
+          let stopAttempts = 0;
+          client.chat.stopStream = async (args) => {
+            stopAttempts += 1;
+            if (stopAttempts > 1 && cleanup === "success") {
+              return await stop(args);
+            }
+            const code =
+              stopAttempts === 1
+                ? "team_not_found"
+                : postResponseLost
+                  ? "message_not_in_streaming_state"
+                  : cleanup;
+            recorder.recordWireCall({
+              method: "chat.stopStream",
+              target: asWireString(args.ts),
+              payload: stripToken(args),
+              result: { ok: false, error: code },
+            });
+            const error = new Error(`An API error occurred: ${code}`);
+            Object.assign(error, { data: { ok: false, error: code } });
+            throw error;
+          };
+          if (postResponseLost) {
+            const post = client.chat.postMessage;
+            client.chat.postMessage = async (args) => {
+              await post(args);
+              throw postError;
+            };
+          }
+          return async (step) => {
+            if (postResponseLost && step.kind === "idle") {
+              await expect(dispatch(step)).rejects.toBe(postError);
+            } else {
+              await dispatch(step);
+            }
+          };
+        },
+        normalize: createSlackTsNormalizer(),
+      });
+      const chatEvents = events.filter(
+        (event) => event.dir === "out" && event.kind.startsWith("chat."),
+      );
+      expect(chatEvents.map((event) => event.kind)).toEqual([
+        "chat.startStream",
+        "chat.appendStream",
+        "chat.stopStream",
+        "chat.postMessage",
+        ...(postResponseLost ? [] : ["chat.stopStream"]),
+      ]);
+      const posted = chatEvents.filter((event) => event.kind === "chat.postMessage");
+      expect(posted).toHaveLength(1);
+      expect(collectSlackWireTexts(posted)).toEqual([finalText]);
+      expect(
+        collectSlackWireTexts(chatEvents.filter((event) => event.kind === "chat.startStream")),
+      ).toEqual([acknowledgedPrefix]);
+      if (!postResponseLost) {
+        expect(chatEvents.at(-1)?.data).toMatchObject({ payload: { chunks: [] } });
+      }
+      expect(traceState.counts.final).toBe(postResponseLost ? 1 : 2);
+      expect(traceRuntimeError).toHaveBeenCalledTimes(
+        cleanup === "internal_error" || postResponseLost ? 1 : 0,
+      );
     },
   );
 
