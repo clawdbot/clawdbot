@@ -34,7 +34,14 @@ import {
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
 
 export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
-export type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
+export type WorkboardWorktreeRuntime = Pick<
+  PluginRuntime["worktrees"],
+  | "resolveCheckoutRoot"
+  | "hasSelfContainedCheckoutMetadata"
+  | "create"
+  | "release"
+  | "removeIfLossless"
+>;
 
 export type WorkboardDispatchStartOptions = {
   cardId?: string;

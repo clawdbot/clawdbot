@@ -30,6 +30,12 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  WORKBOARD_ARTIFACT_RETENTION_SCHEMA,
+  WorkboardArtifactRetention,
+  type WorkboardArtifactRetentionStore,
+  type WorktreeRetentionRuntime,
+} from "./artifact-retention.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -47,7 +53,7 @@ const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
 type Row = Record<string, unknown>;
 type WorkboardSqliteStores = {
-  cards: WorkboardCardStore;
+  cards: WorkboardCardStore & WorkboardArtifactRetentionStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
   subscriptions: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
@@ -365,6 +371,7 @@ const WORKBOARD_SCHEMA_SQL = `
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     ) STRICT;
+    ${WORKBOARD_ARTIFACT_RETENTION_SCHEMA}
   `;
 
 function ensureWorkboardSchema(db: DatabaseSync): void {
@@ -1208,7 +1215,62 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
 }
 
 class WorkboardSqliteCardStore implements WorkboardCardStore {
-  constructor(private readonly db: DatabaseSync) {}
+  private readonly retention?: WorkboardArtifactRetention;
+  private retentionReady?: Promise<void>;
+
+  constructor(
+    private readonly db: DatabaseSync,
+    worktrees?: WorktreeRetentionRuntime,
+  ) {
+    if (worktrees) {
+      this.retention = new WorkboardArtifactRetention(db, worktrees);
+    }
+  }
+
+  private initializeRetention(): Promise<void> {
+    const retention = this.retention;
+    if (!retention) {
+      return Promise.resolve();
+    }
+    this.retentionReady ??= (async () => {
+      retention.cancelPrepared();
+      // Doctor imports and pre-retention cards are enrolled once per owner startup.
+      // Revalidate the row after async path/claim work; never publish a stale snapshot.
+      for (const { key, value } of this.readEntries()) {
+        await retention.mutate(
+          key,
+          value.card,
+          () => {
+            return this.matchesUpdatedAt(key, value.card.updatedAt);
+          },
+          (unchanged) => unchanged,
+          true,
+        );
+      }
+    })().catch((error: unknown) => {
+      this.retentionReady = undefined;
+      throw error;
+    });
+    return this.retentionReady;
+  }
+
+  async reconcileArtifactRetention(): Promise<void> {
+    await this.initializeRetention();
+    this.retention?.cancelPrepared();
+    await this.retention?.drainReleases();
+  }
+
+  private async mutate<T>(
+    key: string,
+    next: WorkboardCard | undefined,
+    commit: () => T,
+    applied: (result: T) => boolean,
+  ): Promise<T> {
+    await this.initializeRetention();
+    return this.retention
+      ? await this.retention.mutate(key, next, commit, applied)
+      : runSqliteImmediateTransactionSync(this.db, commit);
+  }
 
   private matchesUpdatedAt(key: string, expectedUpdatedAt: number): boolean {
     const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
@@ -1233,18 +1295,28 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
 
   async register(key: string, value: PersistedWorkboardCard): Promise<void> {
     this.validatePayload(key, value);
-    runSqliteImmediateTransactionSync(this.db, () => insertCard(this.db, value.card));
+    await this.mutate(
+      key,
+      value.card,
+      () => insertCard(this.db, value.card),
+      () => true,
+    );
   }
 
   async registerIfAbsent(key: string, value: PersistedWorkboardCard): Promise<boolean> {
     this.validatePayload(key, value);
-    return runSqliteImmediateTransactionSync(this.db, () => {
-      if (this.db.prepare("SELECT 1 FROM workboard_cards WHERE id = ?").get(key)) {
-        return false;
-      }
-      insertCard(this.db, value.card);
-      return true;
-    });
+    return await this.mutate(
+      key,
+      value.card,
+      () => {
+        if (this.db.prepare("SELECT 1 FROM workboard_cards WHERE id = ?").get(key)) {
+          return false;
+        }
+        insertCard(this.db, value.card);
+        return true;
+      },
+      (applied) => applied,
+    );
   }
 
   async registerIfUpdatedAt(
@@ -1253,13 +1325,18 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
     expectedUpdatedAt: number,
   ): Promise<boolean> {
     this.validatePayload(key, value);
-    return runSqliteImmediateTransactionSync(this.db, () => {
-      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
-        return false;
-      }
-      insertCard(this.db, value.card);
-      return true;
-    });
+    return await this.mutate(
+      key,
+      value.card,
+      () => {
+        if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
+          return false;
+        }
+        insertCard(this.db, value.card);
+        return true;
+      },
+      (applied) => applied,
+    );
   }
 
   async claimIfOwnerAvailable(
@@ -1270,34 +1347,48 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
     now: number,
   ): Promise<WorkboardOwnerClaimResult> {
     this.validatePayload(key, value);
-    return runSqliteImmediateTransactionSync(this.db, () => {
-      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
-        return "conflict";
-      }
-      const rows: Row[] = this.db.prepare("SELECT * FROM workboard_cards WHERE id <> ?").all(key);
-      const preloaded = loadCardChildRows(this.db);
-      for (const row of rows) {
-        const card = readCard(this.db, row, preloaded);
-        if (workboardCardConsumesOwnerSlot(card, now) && workboardCardSlotOwner(card) === ownerId) {
-          return "owner_busy";
+    return await this.mutate(
+      key,
+      value.card,
+      () => {
+        if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
+          return "conflict";
         }
-      }
-      insertCard(this.db, value.card);
-      return "updated";
-    });
+        const rows: Row[] = this.db.prepare("SELECT * FROM workboard_cards WHERE id <> ?").all(key);
+        const preloaded = loadCardChildRows(this.db);
+        for (const row of rows) {
+          const card = readCard(this.db, row, preloaded);
+          if (
+            workboardCardConsumesOwnerSlot(card, now) &&
+            workboardCardSlotOwner(card) === ownerId
+          ) {
+            return "owner_busy";
+          }
+        }
+        insertCard(this.db, value.card);
+        return "updated";
+      },
+      (result) => result === "updated",
+    );
   }
 
   async deleteIfUpdatedAt(key: string, expectedUpdatedAt: number): Promise<boolean> {
-    return runSqliteImmediateTransactionSync(this.db, () => {
-      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
-        return false;
-      }
-      this.deleteCard(key);
-      return true;
-    });
+    return await this.mutate(
+      key,
+      undefined,
+      () => {
+        if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
+          return false;
+        }
+        this.deleteCard(key);
+        return true;
+      },
+      (deleted) => deleted,
+    );
   }
 
   async lookup(key: string): Promise<PersistedWorkboardCard | undefined> {
+    await this.initializeRetention();
     const row = this.db.prepare("SELECT * FROM workboard_cards WHERE id = ?").get(key) as
       | Row
       | undefined;
@@ -1305,7 +1396,12 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
   }
 
   async delete(key: string): Promise<boolean> {
-    const result = runSqliteImmediateTransactionSync(this.db, () => this.deleteCard(key));
+    const result = await this.mutate(
+      key,
+      undefined,
+      () => this.deleteCard(key),
+      (deleted) => deleted.changes > 0,
+    );
     return result.changes > 0;
   }
 
@@ -1324,6 +1420,11 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
   }
 
   async entries(): Promise<Array<{ key: string; value: PersistedWorkboardCard }>> {
+    await this.initializeRetention();
+    return this.readEntries();
+  }
+
+  private readEntries(): Array<{ key: string; value: PersistedWorkboardCard }> {
     const rows = this.db
       .prepare("SELECT * FROM workboard_cards ORDER BY created_at ASC, id ASC")
       .all() as Row[];
@@ -1645,13 +1746,14 @@ export function createWorkboardSqliteStores(
   options: {
     dbPath?: string;
     env?: NodeJS.ProcessEnv;
+    worktrees?: WorktreeRetentionRuntime;
   } = {},
 ): WorkboardSqliteStores {
   const { db, maintenance } = createDatabase(
     options.dbPath ?? resolveWorkboardSqlitePath(options.env),
   );
   return {
-    cards: new WorkboardSqliteCardStore(db),
+    cards: new WorkboardSqliteCardStore(db, options.worktrees),
     boards: new WorkboardSqliteBoardStore(db),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),

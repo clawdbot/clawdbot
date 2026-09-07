@@ -149,6 +149,7 @@ export {
   type CapturedPluginRegistration,
 } from "../plugins/captured-registration.js";
 export { createRuntimeTaskFlow } from "../plugins/runtime/runtime-taskflow.js";
+export { IDLE_GC_MS, ManagedWorktreeService } from "../agents/worktrees/service.js";
 export {
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,

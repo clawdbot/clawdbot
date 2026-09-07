@@ -164,6 +164,55 @@ Checkpoint Git artifacts live under `state/repository-workspaces/<workspace-id>.
 
 Accepted checkpoint history and publication source artifacts remain until explicit session deletion, including after Stop, archive, reset, or Gateway restart. There is no timed checkpoint expiry. Deletion retires publication requests and source ownership before removing their artifact repository; failed cleanup is reported. The managed-worktree idle cleanup and snapshot retention rules do not apply to these checkpoints.
 
+### Workboard artifact retention
+
+Workboard keeps artifact-reference decisions in
+`~/.openclaw/plugins/workboard/workboard.sqlite`. The managed-worktree service
+enforces them through `worktree_retention_claims` in the shared
+`state/openclaw.sqlite` database. Core does not read Workboard cards.
+
+The Workboard-owned `workboard_artifact_retention` table records a unique
+`claim_id`, `card_id`, immutable `worktree_id`, and one lifecycle state:
+
+- `prepared`: intent persisted before acquiring protection in the shared database.
+- `active`: protection published with the card reference in the same Workboard transaction.
+- `release_pending`: an obsolete or cancelled generation awaiting terminal release.
+
+Card update or deletion and its cleanup obligation commit together. The journal
+deliberately has no cascading card foreign key: deleting the card must not erase
+unfinished cleanup. Only one generation per card can be active. Startup cancels
+unfinished preparations, enrolls existing cards, and retries pending releases;
+normal mutations also retry cleanup, and the running Workboard service retries
+on its 60-second maintenance cadence. A cleanup outage retains its obligation
+without reporting an already committed card write as failed. A concurrent
+cancellation prevents that prepared generation from
+publishing; the caller must retry the mutation.
+
+Shared claims use `(worktree_id, claim_id)` as their key. `released_at IS NULL`
+means active protection. Release records a terminal timestamp even when it
+arrives before acquisition, so delayed work cannot resurrect a cancelled claim.
+Released generations do not block collection. Their records remain until the
+immutable worktree registry row is deleted, including across explicit checkout
+removal and restore. There is no timer-based expiry for an active claim or its
+terminal receipt. See [Worktree runtime helpers](/plugins/sdk-runtime/state-and-system#api-runtime-worktrees)
+for the API.
+
+Both retention tables are same-version additive surfaces: the Workboard schema
+ensures its journal when opened, and the shared service lazily ensures its claim
+table on first use. Existing cards can acquire protection during enrollment, but
+enrollment cannot restore files that an older build already deleted. Stable
+builds predating retention do not enforce these claims; unchanged numeric schema
+versions do not make rollback artifact-safe. Preserve needed artifacts outside
+managed worktrees before running such a build.
+
+Earlier unmerged previews used fixed claim IDs and a different claim-table shape.
+Automatic migration or adoption of those preview records is not implemented.
+Operators with preview state must preserve their artifacts and arrange an
+explicit migration or a disposable-state reset before switching; do not delete
+the shared state database to repair one feature. The
+[contributor design discussion](https://github.com/openclaw/openclaw/pull/111497#issuecomment-5575236708)
+records this proposal's boundaries, not maintainer approval or release availability.
+
 ## Versioning contract
 
 Each database records its published schema in two places:

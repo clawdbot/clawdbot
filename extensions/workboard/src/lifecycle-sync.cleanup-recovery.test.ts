@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { WorkboardExecution } from "@openclaw/workboard-contract";
 import { describe, expect, it, vi } from "vitest";
+import type { WorkboardWorktreeCleanupRuntime } from "./dispatcher-workspace.js";
 import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
@@ -80,6 +81,15 @@ function doneSessionSnapshot(updatedAt: number) {
 
 const context = { logger: { warn: vi.fn() } } as never;
 
+function cleanupWorktrees(
+  removeIfLossless: WorkboardWorktreeCleanupRuntime["removeIfLossless"],
+): WorkboardWorktreeCleanupRuntime {
+  return {
+    release: vi.fn().mockResolvedValue(undefined),
+    removeIfLossless,
+  };
+}
+
 describe("Workboard managed-worktree cleanup recovery", () => {
   it("retries cleanup after a hook failure and process restart", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-cleanup-recovery-"));
@@ -90,7 +100,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
       .fn()
       .mockRejectedValueOnce(new Error("worktree registry unavailable"))
       .mockResolvedValueOnce(true);
-    const worktrees = { removeIfLossless };
+    const worktrees = cleanupWorktrees(removeIfLossless);
 
     await expect(
       syncWorkboardSubagentEnded({
@@ -150,7 +160,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
     const service = createWorkboardLifecycleService({
       store: restarted.store,
       readSessions: doneSessionSnapshot(card.updatedAt + 1),
-      worktrees: { removeIfLossless },
+      worktrees: cleanupWorktrees(removeIfLossless),
     });
 
     try {
@@ -191,7 +201,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
     const firstService = createWorkboardLifecycleService({
       store: retained.store,
       readSessions: doneSessionSnapshot(card.updatedAt),
-      worktrees: { removeIfLossless },
+      worktrees: cleanupWorktrees(removeIfLossless),
     });
     await firstService.start(context);
     firstService.onGatewayStart();
@@ -208,7 +218,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
     const secondService = createWorkboardLifecycleService({
       store: restarted.store,
       readSessions: doneSessionSnapshot(card.updatedAt),
-      worktrees: { removeIfLossless },
+      worktrees: cleanupWorktrees(removeIfLossless),
     });
     try {
       await secondService.start(context);
@@ -243,7 +253,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
     const service = createWorkboardLifecycleService({
       store: restarted.store,
       readSessions,
-      worktrees: { removeIfLossless },
+      worktrees: cleanupWorktrees(removeIfLossless),
     });
     try {
       await service.start(context);
@@ -285,7 +295,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
       await expect(
         syncWorkboardSubagentEnded({
           store: initial.store,
-          worktrees: { removeIfLossless },
+          worktrees: cleanupWorktrees(removeIfLossless),
           event: {
             targetSessionKey: SESSION_KEY,
             runId: RUN_ID,

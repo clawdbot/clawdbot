@@ -30,7 +30,10 @@ export function managedWorktreeName(cardId: string): string {
   return `wb-${suffix}`.slice(0, 64).replace(/-$/, "");
 }
 
-export type WorkboardWorktreeCleanupRuntime = Pick<PluginRuntime["worktrees"], "removeIfLossless">;
+export type WorkboardWorktreeCleanupRuntime = Pick<
+  PluginRuntime["worktrees"],
+  "release" | "removeIfLossless"
+>;
 
 type WorkboardWorkspaceMutation = {
   before: WorkboardCard;
@@ -58,6 +61,7 @@ export async function cleanupWorkboardCardWorktree(params: {
   card: WorkboardCard;
   workspaceMutation?: WorkboardWorkspaceMutation;
 }): Promise<void> {
+  await params.store.reconcileArtifactRetention();
   const current = await params.store.get(params.card.id);
   const workspace = (params.workspaceMutation?.after ?? current)?.metadata?.automation?.workspace;
   if (
@@ -69,6 +73,7 @@ export async function cleanupWorkboardCardWorktree(params: {
   ) {
     return;
   }
+  await params.worktrees.release({ path: workspace.path });
   const removed = await params.worktrees.removeIfLossless({
     path: workspace.path,
     ownerKind: "workboard",

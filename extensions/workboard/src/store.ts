@@ -11,6 +11,16 @@ import type {
   WorkboardStaleState,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
+import type {
+  WorkboardArtifactRetentionStore,
+  WorktreeRetentionRuntime,
+} from "./artifact-retention.js";
+import type {
+  PersistedWorkboardAttachment,
+  PersistedWorkboardBoard,
+  PersistedWorkboardNotificationSubscription,
+  WorkboardKeyedStore,
+} from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   buildWorkerContext,
@@ -189,6 +199,35 @@ function lifecycleExecution(params: {
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
+  private readonly reconcileArtifactRetentionStore?: () => Promise<void>;
+
+  constructor(
+    store: WorkboardKeyedStore,
+    stores: {
+      boards?: WorkboardKeyedStore<PersistedWorkboardBoard>;
+      subscriptions?: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
+      attachments?: WorkboardKeyedStore<PersistedWorkboardAttachment>;
+      dataVersion?: () => number;
+      close?: () => void;
+    } = {},
+  ) {
+    super(store, stores);
+    // SAFETY: internal injected stores may omit managed-worktree retention.
+    const retentionStore = store as Partial<WorkboardArtifactRetentionStore>;
+    if (typeof retentionStore.reconcileArtifactRetention === "function") {
+      this.reconcileArtifactRetentionStore =
+        retentionStore.reconcileArtifactRetention.bind(retentionStore);
+    }
+  }
+
+  async reconcileArtifactRetention(): Promise<void> {
+    if (!this.reconcileArtifactRetentionStore) {
+      return;
+    }
+    // Keep upgrade reconciliation ordered with card mutations before GC can observe claims.
+    await this.enqueueMutation(this.reconcileArtifactRetentionStore);
+  }
+
   async prepareExecutionLaunch(
     id: string,
     input: {
@@ -637,8 +676,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return buildWorkerContext(card, await this.list());
   }
 
-  static openSqlite() {
-    const stores = createWorkboardSqliteStores();
+  static openSqlite(options: { worktrees?: WorktreeRetentionRuntime } = {}) {
+    const stores = createWorkboardSqliteStores(options);
     return new WorkboardStore(stores.cards, stores);
   }
 }

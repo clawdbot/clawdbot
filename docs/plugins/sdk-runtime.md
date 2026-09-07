@@ -36,7 +36,7 @@ register(api) {
 - [Background work](/plugins/sdk-runtime/background-work) — hook agent turns, subagent runs, and Task Flow record binding.
 - [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, paired node invocation, and Gateway service events.
 - [Media helpers](/plugins/sdk-runtime/media) — speech, media understanding, image/video/music generation, web search, and media utilities.
-- [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, SQLite-backed plugin state, system utilities, events, and logging.
+- [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, SQLite-backed plugin state, worktree retention, system utilities, events, and logging.
 - [Channel helpers](/plugins/sdk-runtime/channel) — channel-specific runtime helper groups for chunking, routing, pairing, media, and mentions.
 
 ## Runtime namespaces
@@ -68,6 +68,7 @@ Every `api.runtime` namespace and the page that documents it.
 | `api.runtime.modelConfig`        | [Model helpers](/plugins/sdk-runtime/models#api-runtime-modelconfig)            |
 | `api.runtime.modelAuth`          | [Model helpers](/plugins/sdk-runtime/models#api-runtime-modelauth)              |
 | `api.runtime.state`              | [State and system](/plugins/sdk-runtime/state-and-system#api-runtime-state)     |
+| `api.runtime.worktrees`          | [State and system](/plugins/sdk-runtime/state-and-system#api-runtime-worktrees) |
 | `api.runtime.channel`            | [Channel helpers](/plugins/sdk-runtime/channel#api-runtime-channel)             |
 
 ## Storing runtime references

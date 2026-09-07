@@ -5,7 +5,12 @@ import { isLockOwnerDefinitelyStale } from "../../infra/stale-lock-file.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 
 type WorktreeLeaseDatabase = Pick<DB, "worktrees" | "state_leases">;
+const WORKTREE_RUN_LEASE_SCOPE_PREFIX = "worktree-run:";
 export const WORKTREE_REMOVING_LEASE_KEY = "__removing__";
+
+export function worktreeRunLeaseScope(worktreeId: string): string {
+  return `${WORKTREE_RUN_LEASE_SCOPE_PREFIX}${worktreeId}`;
+}
 
 export type RunLeaseOwnerChecks = {
   isPidDefinitelyDead?: (pid: number) => boolean;
