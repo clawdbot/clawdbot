@@ -175,6 +175,25 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+const probeMocks = vi.hoisted(() => ({
+  runAuthProbes: vi.fn().mockResolvedValue({
+    startedAt: 0,
+    finishedAt: 1,
+    durationMs: 1,
+    totalTargets: 0,
+    options: {
+      timeoutMs: 8000,
+      concurrency: 2,
+      maxTokens: 8,
+    },
+    results: [],
+  }),
+}));
+
+vi.mock("./list.probe.js", () => ({
+  runAuthProbes: probeMocks.runAuthProbes,
+}));
+
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
@@ -735,9 +754,60 @@ describe("modelsStatusCommand auth overview", () => {
     [{ probeConcurrency: "2.5" }, "--probe-concurrency"],
     [{ probeMaxTokens: "64x" }, "--probe-max-tokens"],
   ])("rejects partial probe numeric option %s", async (opts, label) => {
+    probeMocks.runAuthProbes.mockClear();
     await expect(
-      modelsStatusCommand({ json: true, ...opts }, createRuntime() as never),
+      modelsStatusCommand({ json: true, probe: true, ...opts }, createRuntime() as never),
     ).rejects.toThrow(label);
+    expect(probeMocks.runAuthProbes).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ probeTimeout: "" }, "--probe-timeout"],
+    [{ probeTimeout: "   " }, "--probe-timeout"],
+    [{ probeConcurrency: "" }, "--probe-concurrency"],
+    [{ probeConcurrency: "   " }, "--probe-concurrency"],
+    [{ probeMaxTokens: "" }, "--probe-max-tokens"],
+    [{ probeMaxTokens: "   " }, "--probe-max-tokens"],
+  ])("rejects blank probe numeric option %s before starting auth probes", async (opts, label) => {
+    probeMocks.runAuthProbes.mockClear();
+    await expect(
+      modelsStatusCommand({ json: true, probe: true, ...opts }, createRuntime() as never),
+    ).rejects.toThrow(label);
+    expect(probeMocks.runAuthProbes).not.toHaveBeenCalled();
+  });
+
+  it("preserves omitted defaults and forwards legal probe numeric values", async () => {
+    probeMocks.runAuthProbes.mockClear();
+    await modelsStatusCommand(
+      {
+        json: true,
+        probe: true,
+        probeTimeout: "1.5",
+        probeConcurrency: "1",
+        probeMaxTokens: "1",
+      },
+      createRuntime() as never,
+    );
+    expect(probeMocks.runAuthProbes).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          timeoutMs: 1.5,
+          concurrency: 1,
+          maxTokens: 1,
+        }),
+      }),
+    );
+
+    await modelsStatusCommand({ json: true, probe: true }, createRuntime() as never);
+    expect(probeMocks.runAuthProbes).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          timeoutMs: 8000,
+          concurrency: 2,
+          maxTokens: 8,
+        }),
+      }),
+    );
   });
 
   it("includes masked auth sources in JSON output", async () => {

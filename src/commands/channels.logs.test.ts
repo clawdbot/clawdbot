@@ -214,6 +214,28 @@ describe("channelsLogsCommand", () => {
     expect(payload.lines.map((line) => line.message)).toEqual(["second", "third"]);
   });
 
+  it("preserves the omitted default and a legal explicit line limit", async () => {
+    await fs.writeFile(
+      logPath,
+      [
+        logLine({ module: "gateway/channels/slack/send", message: "first" }),
+        logLine({ module: "gateway/channels/external-chat/send", message: "second" }),
+        logLine({ module: "gateway/channels/slack/send", message: "third" }),
+      ].join(""),
+    );
+
+    await channelsLogsCommand({ channel: "all", json: true }, runtime);
+    expect(readJsonPayload().lines.map((line) => line.message)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+
+    runtime.log.mockClear();
+    await channelsLogsCommand({ channel: "all", lines: 1, json: true }, runtime);
+    expect(readJsonPayload().lines.map((line) => line.message)).toEqual(["third"]);
+  });
+
   it("finds sparse channel records beyond the shared 5000-line cap", async () => {
     const filler = logLine({ module: "gateway/health", message: "ok" });
     const lines = [
@@ -338,5 +360,12 @@ describe("channelsLogsCommand", () => {
     await expect(channelsLogsCommand({ lines: "2x", json: true }, runtime)).rejects.toThrow(
       "--lines must be a positive integer.",
     );
+  });
+
+  it.each(["", "   "])("rejects an explicit blank line limit (%j)", async (lines) => {
+    await expect(channelsLogsCommand({ lines, json: true }, runtime)).rejects.toThrow(
+      "--lines must be a positive integer.",
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 });
