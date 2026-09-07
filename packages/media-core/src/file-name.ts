@@ -1,4 +1,3 @@
-// Media Core module implements file name behavior.
 import path from "node:path";
 
 /** Returns the final filename segment for either POSIX or Windows-style paths. */

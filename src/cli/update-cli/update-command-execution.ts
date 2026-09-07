@@ -206,6 +206,9 @@ export async function executeMutableUpdate(params: {
           phase,
           expectedService: admission?.services.get(mutationRoot),
           updateRun: params.opts.run,
+          onStopped: (state) => {
+            preManagedServiceStop = state;
+          },
           handoffFromGateway: (state) =>
             handoffUpdateFromGateway({
               state,
@@ -257,9 +260,11 @@ export async function executeMutableUpdate(params: {
         throw new UpdatePreMutationError("managed-service-preflight", err.message);
       }
       params.stop();
-      throw new Error(`Failed to stop managed gateway service before update: ${String(err)}`, {
-        cause: err,
-      });
+      throw new UpdatePreMutationError(
+        "managed-service-stop-failed",
+        `Failed to stop managed gateway service before update: ${String(err)}`,
+        { cause: err },
+      );
     }
 
     if (phase === "inspect" && preManagedServiceStop?.serviceUpdateVerdict?.kind === "foreign") {

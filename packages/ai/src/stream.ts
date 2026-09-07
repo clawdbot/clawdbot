@@ -1,4 +1,3 @@
-// LLM Runtime module implements stream behavior.
 import type {
   Api,
   AssistantMessage,

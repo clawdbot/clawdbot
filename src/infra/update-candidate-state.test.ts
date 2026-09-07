@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
@@ -16,6 +16,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { projectUpdateCandidatePlugins } from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import {
   readUpdateStateSchemaVersions,
@@ -748,3 +749,269 @@ it.skipIf(process.platform === "win32")(
     }
   },
 );
+
+it.each([
+  { alias: false, shadow: false, linkedModules: false, sharedOrder: "none" },
+  { alias: true, shadow: false, linkedModules: false, sharedOrder: "none" },
+  { alias: false, shadow: true, linkedModules: false, sharedOrder: "none" },
+  { alias: false, shadow: false, linkedModules: true, sharedOrder: "none" },
+  { alias: false, shadow: false, linkedModules: false, sharedOrder: "owner-first" },
+  { alias: false, shadow: false, linkedModules: false, sharedOrder: "owner-last" },
+])(
+  "preserves declared workspace hoists without copying repository files (alias=$alias, shadow=$shadow, linkedModules=$linkedModules, sharedOrder=$sharedOrder)",
+  async ({ alias, shadow, linkedModules, sharedOrder }) => {
+    const repo = path.join(root, "workspace");
+    const plugin = path.join(repo, "packages", "demo");
+    const shared = sharedOrder !== "none";
+    const sharedOwner = path.join(repo, "packages", "owner");
+    const modules = shared
+      ? path.join(sharedOwner, "cache")
+      : linkedModules
+        ? path.join(root, "external-modules")
+        : path.join(repo, "node_modules");
+    const dependency = path.join(modules, "@demo", "dependency");
+    const liveHost = shared ? path.join(modules, "openclaw") : path.join(root, "live-host");
+    const sourceHostLink = path.join(shared ? plugin : repo, "node_modules", "openclaw");
+    const candidateHost = path.join(root, "candidate-host");
+    const expected = shadow ? "nearest" : "hoisted";
+    await fs.mkdir(plugin, { recursive: true });
+    await fs.mkdir(dependency, { recursive: true });
+    if (shared) {
+      await fs.symlink(modules, path.join(plugin, "node_modules"), "junction");
+      await fs.writeFile(
+        path.join(sharedOwner, "package.json"),
+        '{"name":"owner","type":"module"}',
+      );
+      await fs.writeFile(
+        path.join(sharedOwner, "index.js"),
+        'console.log(JSON.stringify({value:"owner",host:"owner",dependency:import.meta.url}));',
+      );
+    } else if (linkedModules) {
+      await fs.symlink(modules, path.join(repo, "node_modules"), "junction");
+    }
+    for (const [directory, value] of [
+      [liveHost, "serving"],
+      [candidateHost, "candidate"],
+    ] as const) {
+      await fs.mkdir(directory);
+      await fs.writeFile(
+        path.join(directory, "package.json"),
+        JSON.stringify({ name: "openclaw", type: "module", exports: "./index.js" }),
+      );
+      await fs.writeFile(
+        path.join(directory, "index.js"),
+        `export default ${JSON.stringify(value)};`,
+      );
+    }
+    if (!shared) {
+      await fs.symlink(liveHost, sourceHostLink, "junction");
+    }
+    await fs.writeFile(
+      path.join(repo, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+    );
+    await fs.writeFile(path.join(repo, "unrelated.txt"), "do not copy repository files");
+    await fs.writeFile(
+      path.join(plugin, "package.json"),
+      JSON.stringify({
+        name: "demo",
+        version: "1.0.0",
+        type: "module",
+        dependencies: { "@demo/dependency": "1.0.0" },
+        optionalDependencies: { absent: "1.0.0" },
+        peerDependencies: { openclaw: "*" },
+      }),
+    );
+    await fs.writeFile(
+      path.join(plugin, "index.js"),
+      'import value from "@demo/dependency"; import host from "openclaw"; console.log(JSON.stringify({value, host, dependency: import.meta.resolve("@demo/dependency")}));',
+    );
+    await fs.writeFile(
+      path.join(dependency, "package.json"),
+      JSON.stringify({
+        name: "@demo/dependency",
+        version: "1.0.0",
+        type: "module",
+        exports: "./index.js",
+      }),
+    );
+    await fs.writeFile(path.join(dependency, "index.js"), 'export default "hoisted";');
+    if (shadow) {
+      const nearest = path.join(plugin, "node_modules", "@demo", "dependency");
+      await fs.cp(dependency, nearest, { recursive: true });
+      await fs.writeFile(path.join(nearest, "index.js"), 'export default "nearest";');
+    }
+    const locator = alias ? path.join(root, "linked-demo") : plugin;
+    if (alias) {
+      await fs.symlink(plugin, locator, "junction");
+    }
+    const readPlugin = async (directory: string) => {
+      const result = await runCommandBuffered(
+        [process.execPath, path.join(directory, "index.js")],
+        { timeoutMs: 10_000 },
+      );
+      expect(result.code, result.stderr.toString()).toBe(0);
+      return JSON.parse(result.stdout.toString()) as {
+        value: string;
+        dependency: string;
+        host: string;
+      };
+    };
+    expect(await readPlugin(locator)).toMatchObject({ value: expected, host: "serving" });
+    const paths = !shared
+      ? [locator]
+      : sharedOrder === "owner-first"
+        ? [sharedOwner, locator]
+        : [locator, sharedOwner];
+    if (shared) {
+      expect((await readPlugin(sharedOwner)).value).toBe("owner");
+    }
+    const rehearsal = await prepareUpdateCandidateRehearsal({
+      config: { plugins: { load: { paths } } },
+      stateDir: path.join(root, "source-state"),
+      candidateRoot: candidateHost,
+    });
+    try {
+      const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+      const copied = config.plugins!.load!.paths![paths.indexOf(locator)]!;
+      if (shared) {
+        expect(
+          (await readPlugin(config.plugins!.load!.paths![paths.indexOf(sharedOwner)]!)).value,
+        ).toBe("owner");
+      }
+      expect(path.basename(copied)).toBe(path.basename(locator));
+      const result = await readPlugin(copied);
+      expect(result).toMatchObject({ value: expected, host: "candidate" });
+      const copiedDependency = await fs.realpath(fileURLToPath(result.dependency));
+      expect(copiedDependency.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
+      expect(
+        (await fs.readdir(rehearsal.stateDir, { recursive: true })).some(
+          (entry) => path.basename(entry) === "unrelated.txt",
+        ),
+      ).toBe(false);
+      await fs.writeFile(copiedDependency, 'export default "private";');
+      expect((await readPlugin(copied)).value).toBe("private");
+      expect((await readPlugin(locator)).value).toBe(expected);
+      expect(await fs.realpath(sourceHostLink)).toBe(liveHost);
+      if (alias) {
+        expect(await fs.realpath(locator)).toBe(plugin);
+      }
+    } finally {
+      await rehearsal.cleanup();
+    }
+  },
+);
+
+it("projects through an aliased temporary state directory without changing source links", async () => {
+  const source = path.join(root, "source");
+  const plugin = path.join(source, "extensions", "demo");
+  const dependency = path.join(root, "dependency");
+  const physical = path.join(root, "physical-state");
+  const alias = path.join(root, "state-alias");
+  await fs.mkdir(path.join(plugin, "node_modules"), { recursive: true });
+  await fs.mkdir(dependency);
+  await fs.mkdir(physical);
+  await fs.symlink(physical, alias, "junction");
+  await fs.writeFile(path.join(plugin, "package.json"), '{"name":"demo"}');
+  await fs.writeFile(path.join(dependency, "package.json"), '{"name":"dependency"}');
+  await fs.writeFile(path.join(dependency, "value.txt"), "source");
+  await fs.symlink(dependency, path.join(plugin, "node_modules", "dependency"), "junction");
+  const paths = await projectUpdateCandidatePlugins({
+    config: { plugins: { load: { paths: [plugin] } } },
+    stateDir: source,
+    targetStateDir: path.join(alias, "candidate"),
+    candidateRoot: root,
+  });
+  const copied = path.join(paths[plugin]!, "node_modules", "dependency", "value.txt");
+  expect((await fs.realpath(copied)).startsWith(physical + path.sep)).toBe(true);
+  await fs.writeFile(copied, "private");
+  expect(await fs.readFile(path.join(dependency, "value.txt"), "utf8")).toBe("source");
+  expect(await fs.realpath(path.join(plugin, "node_modules", "dependency"))).toBe(dependency);
+});
+
+it("keeps an optional-only linked node_modules copy bounded to its module owner", async () => {
+  const repo = path.join(root, "repository");
+  const plugin = path.join(repo, "plugin");
+  const modules = path.join(repo, "external-modules");
+  await fs.mkdir(plugin, { recursive: true });
+  await fs.mkdir(modules);
+  await fs.writeFile(path.join(repo, "package.json"), '{"private":true}');
+  await fs.writeFile(path.join(repo, "unrelated.txt"), "repository data");
+  await fs.writeFile(
+    path.join(plugin, "package.json"),
+    JSON.stringify({ name: "demo", type: "module", optionalDependencies: { missing: "1.0.0" } }),
+  );
+  await fs.writeFile(path.join(plugin, "index.js"), 'console.log("optional plugin ready");');
+  await fs.writeFile(path.join(modules, "marker.txt"), "source");
+  await fs.symlink(modules, path.join(plugin, "node_modules"), "junction");
+  const readEntry = async (directory: string) => {
+    const result = await runCommandBuffered([process.execPath, path.join(directory, "index.js")], {
+      timeoutMs: 10_000,
+    });
+    expect(result.code, result.stderr.toString()).toBe(0);
+    return result.stdout.toString().trim();
+  };
+  expect(await readEntry(plugin)).toBe("optional plugin ready");
+  const rehearsal = await prepareUpdateCandidateRehearsal({
+    config: { plugins: { load: { paths: [plugin] } } },
+    stateDir: path.join(root, "source-state"),
+    candidateRoot: root,
+  });
+  try {
+    const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+    const copied = config.plugins!.load!.paths![0]!;
+    expect(await readEntry(copied)).toBe("optional plugin ready");
+    expect(
+      (await fs.readdir(rehearsal.stateDir, { recursive: true })).some(
+        (entry) => path.basename(entry) === "unrelated.txt",
+      ),
+    ).toBe(false);
+    const marker = path.join(copied, "node_modules", "marker.txt");
+    expect((await fs.realpath(marker)).startsWith(rehearsal.stateDir + path.sep)).toBe(true);
+    await fs.writeFile(marker, "private");
+    expect(await fs.readFile(path.join(modules, "marker.txt"), "utf8")).toBe("source");
+    expect(await fs.realpath(path.join(plugin, "node_modules"))).toBe(modules);
+  } finally {
+    await rehearsal.cleanup();
+  }
+});
+
+it("rejects an ordinary link that would repeatedly copy an immutable host package", async () => {
+  const plugin = path.join(root, "plugin");
+  const host = path.join(root, "live-host");
+  const candidate = path.join(root, "candidate-host");
+  await fs.mkdir(path.join(plugin, "node_modules"), { recursive: true });
+  await fs.mkdir(path.join(host, "docs"), { recursive: true });
+  await fs.mkdir(candidate);
+  await fs.writeFile(
+    path.join(plugin, "package.json"),
+    JSON.stringify({ name: "demo", type: "module", peerDependencies: { openclaw: "*" } }),
+  );
+  await fs.writeFile(
+    path.join(host, "package.json"),
+    JSON.stringify({ name: "openclaw", type: "module", exports: "./index.js" }),
+  );
+  await fs.writeFile(path.join(host, "index.js"), 'export default "serving";');
+  await fs.writeFile(
+    path.join(plugin, "index.js"),
+    'import host from "openclaw"; console.log(host);',
+  );
+  await fs.writeFile(path.join(host, "docs", "marker.txt"), "source");
+  await fs.symlink(host, path.join(plugin, "node_modules", "openclaw"), "junction");
+  await fs.symlink(path.join(host, "docs"), path.join(plugin, "manual"), "junction");
+  const source = await runCommandBuffered([process.execPath, path.join(plugin, "index.js")], {
+    timeoutMs: 10_000,
+  });
+  expect(source.code, source.stderr.toString()).toBe(0);
+  expect(source.stdout.toString().trim()).toBe("serving");
+  await expect(
+    prepareUpdateCandidateRehearsal({
+      config: { plugins: { load: { paths: [plugin] } } },
+      stateDir: path.join(root, "source-state"),
+      candidateRoot: candidate,
+      timeoutMs: 10_000,
+    }),
+  ).rejects.toThrow("Cannot privately copy host-owned plugin link");
+  expect(await fs.readFile(path.join(host, "docs", "marker.txt"), "utf8")).toBe("source");
+  expect(await fs.realpath(path.join(plugin, "node_modules", "openclaw"))).toBe(host);
+}, 20_000);

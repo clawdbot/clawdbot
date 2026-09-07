@@ -1,4 +1,3 @@
-// ACP Core module implements error text behavior.
 import { type AcpRuntimeErrorCode, AcpRuntimeError, toAcpRuntimeError } from "./errors.js";
 
 function resolveAcpRuntimeErrorNextStep(error: AcpRuntimeError): string | undefined {

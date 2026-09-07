@@ -279,6 +279,12 @@ openclaw-session-owner-chip {
   pointer-events: none;
 }
 
+/* With no artwork to wrap, the ring collapses to the 12px spinner the trailing
+   slot used to draw; a full-size empty circle reads as a missing icon. */
+.session-glyph--bare .session-glyph__ring {
+  inset: 4px;
+}
+
 .session-glyph__badge {
   position: absolute;
   z-index: 1;
@@ -841,6 +847,139 @@ openclaw-session-owner-chip {
   (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .login-gate {
     padding: 16px 12px;
+  }
+}
+
+/* ===========================================
+   Gateway switch confirmation
+   A link pointed this browser at another Gateway. Show where it goes and what
+   travels with it; the guard is honest, not alarmed.
+   =========================================== */
+
+.gateway-switch {
+  display: grid;
+  gap: 18px;
+  width: min(520px, 100%);
+  padding: 22px 24px 24px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.gateway-switch__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.gateway-switch__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.gateway-switch__icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.gateway-switch__text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gateway-switch__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.gateway-switch__summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.gateway-switch__hosts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.gateway-switch__host {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+}
+
+.gateway-switch__host--next {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+
+.gateway-switch__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.gateway-switch__host code {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.gateway-switch__arrow {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.gateway-switch__arrow svg {
+  width: 18px;
+  height: 18px;
+}
+
+.gateway-switch__note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.gateway-switch__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 560px) {
+  .gateway-switch__hosts {
+    grid-template-columns: 1fr;
+  }
+
+  .gateway-switch__arrow {
+    justify-self: center;
+    transform: rotate(90deg);
   }
 }
 
@@ -3983,80 +4122,6 @@ td.data-table-key-col {
 .workspace-link:hover {
   opacity: 0.75;
   text-decoration: underline;
-}
-
-.agent-chip-input {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg-accent);
-  min-height: 38px;
-  cursor: text;
-  transition: border-color var(--duration-fast) ease;
-}
-
-.agent-chip-input:focus-within {
-  border-color: var(--accent);
-}
-
-.agent-chip-input input,
-.agent-chip-input input:focus-visible {
-  flex: 1;
-  min-width: 120px;
-  border: none;
-  background: transparent;
-  outline: none;
-  box-shadow: none;
-  font-size: 13px;
-  padding: 0;
-}
-
-.agent-chip-input .chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-}
-
-.agent-chip-input .chip-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  margin: 0;
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--muted);
-  line-height: 1;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    opacity var(--duration-fast) var(--ease-out);
-}
-
-.agent-chip-input .chip-remove:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-}
-
-.agent-chip-input .chip-remove:focus-visible:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.agent-chip-input .chip-remove:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 .agent-file-field {

@@ -3,6 +3,41 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  connection: {
+    access: {
+      title: "Connection",
+      descriptionOffline: "Not connected.",
+      connectedTo: "Connected to {host}",
+      tick: "{tick} tick",
+      auth: {
+        none: "no auth",
+        token: "token auth",
+        password: "password auth",
+        trustedProxy: "proxy auth",
+      },
+      status: {
+        connected: "Connected",
+        offline: "Offline",
+      },
+      gatewayUrl: "Gateway URL",
+      gatewayUrlHint: "Use wss:// when the Gateway sits behind HTTPS or Tailscale Serve.",
+      credential: "Credential",
+      tokenHint: "Paste the token from openclaw gateway auth-token --show on the Gateway host.",
+      passwordHint: "Passwords are never stored in this browser.",
+      trustedProxy: "Authenticated via trusted proxy.",
+      trustedProxyStatus: "Trusted proxy",
+      sessionKey: "Default session",
+      sessionKeyHint: "Session opened after connecting.",
+      unsavedHint: "Unsaved changes apply when you connect.",
+      lastError: "Last error",
+      showToken: "Show token",
+      hideToken: "Hide token",
+      toggleTokenVisibility: "Toggle token visibility",
+      showPassword: "Show password",
+      hidePassword: "Hide password",
+      togglePasswordVisibility: "Toggle password visibility",
+    },
+  },
   cloudWorkersPage: {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
     sectionTitle: "Profiles",
@@ -774,6 +809,7 @@ export const registerSettingsEnglish = Object.assign(
     en.modelProviders = enSettings.modelProviders;
     // Extend the shared objects: eager save/update copy and existing readers survive.
     en.cloudWorkersPage = enSettings.cloudWorkersPage;
+    Object.assign(en.connection, enSettings.connection);
     Object.assign(en.configPage, enSettings.configPage);
     Object.assign(en.configView, enSettings.configView);
     Object.assign(en.updates, enSettings.updates);

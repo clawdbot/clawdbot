@@ -140,7 +140,9 @@ export async function prepareUpdateCandidateRehearsal(params: {
     }
     return milliseconds;
   };
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-canary-"));
+  const tempDir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-canary-")),
+  );
   const sourceEnv = params.env ?? process.env;
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");

@@ -7,12 +7,13 @@ ClawHub package.
   reachable stable/beta release tag. For every newly publishable package
   (`openclaw.release.publishToNpm: true` or `publishToClawHub: true`) whose
   package name did not exist in the base tag, verify the target registry package
-  already exists in npm/ClawHub or stop and help the owner mint/prepublish the
-  package first. Do not hide or disable release surfaces just to unblock a
+  already exists in npm/ClawHub or prepare the supported first-publication
+  route with the owner before dispatch. Do not hide or disable release surfaces just to unblock a
   train unless the owner explicitly decides the plugin should not ship in that
   release; first-package registry ownership is release prep, not product
   rollback. The mint/prepublish path must either be the real release publish
-  path for the auto-bumped beta version, or a deliberately non-consuming
+  path for the auto-bumped beta version, the exact approved regular stable
+  version described below, or a deliberately non-consuming
   registry-prep step that cannot occupy the next beta version/tag. Confirm
   registry owner, npm scope/package-creation permission, provenance path, and
   first-package publish plan before the full release publish continues. Useful
@@ -20,6 +21,18 @@ ClawHub package.
   `npm view <package-name> version dist-tags --json --prefer-online`; a 404 for
   a package newly added to the release is a release-prep blocker, not something
   to discover from the publish job.
+- For a new regular stable npm package, the protected Release Publish parent
+  requires complete stable/full validation, `npm_dist_tag=latest`, and an exact
+  final release tag. It attests the selected publishable package set, target,
+  tooling, parent attempt, and validation tuple. Plugin NPM Release consumes
+  that approval and its independently verified immutable tarball through the
+  protected `NPM_TOKEN` bootstrap route. Confirm scope/package-creation access
+  first; do not create placeholder versions or a fake beta. Alpha,
+  extended-stable, unselected packages, and direct stable bootstrap without the
+  attested parent remain unsupported. Configure the package's GitHub trusted
+  publisher for `plugin-npm-release.yml` / `npm-release` after first publication,
+  then run its read-only OIDC preflight before the next release. Same-byte
+  retries do not republish; a selector mismatch needs selector recovery.
 - Bootstrap a new ClawHub package only from the trusted workflow source:
   `gh workflow run plugin-clawhub-new.yml --ref main -f plugins=@openclaw/name -f ref=<full-release-sha> -f pretag_validation=true -f dry_run=true`.
   The workflow source stays on `main`; `ref` is the exact release target. A

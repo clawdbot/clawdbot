@@ -167,7 +167,7 @@ the field and retry. Invalid questions do not prompt the user. If the user
 skips a valid question, Claude instead continues with its best judgment.
 
 When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays
-native or extension tool requests as interactive approvals to the session's
+native or extension tool requests that need approval to the session's
 channel: **Allow once** permits the single call, **Allow always** permits that
 tool name for the same warm live session while each subsequent turn's policy
 and available tools still allow it, and **Deny**, a timeout, an unreachable
@@ -175,6 +175,37 @@ approval route, or a closed turn all deny the call. Grants stay in memory, end
 when that exact live session is replaced, and never apply to Bash. Policies
 that never prompt keep their existing behavior: `security: "deny"` rejects
 every request, and ask `off` with less than full security denies without asking.
+
+### Native Bash and the exec allowlist
+
+With `ask: "on-miss"`, the `claude-cli` backend checks native `Bash` commands
+against the agent's [exec allowlist](/tools/exec-approvals). For example:
+
+```bash
+openclaw approvals allowlist add --agent main /usr/local/bin/gog
+```
+
+OpenClaw reuses its exec shell evaluator and allows a call without prompting
+only when every command segment resolves to an explicitly allowlisted binary
+and can be fully classified and bound. Executables may be absolute paths or
+resolved through the CLI launch PATH with the agent's configured exec PATH
+prepends; approved input pins the
+resolved executable paths. Successful matches update allowlist usage metadata.
+Bindable misses prompt with the first unmatched segment or classification
+reason. Commands the approval binding guard cannot bind, including pipelines,
+command substitutions, subshells, write redirections, and unparsable syntax,
+remain denied before a prompt. Environment-prefix overrides, shell expansions,
+and `eval`/`exec`/`source` wrappers do not auto-allow.
+
+`ask: "always"` still prompts for allowlisted commands. `security: "deny"`
+still denies, and `ask: "off"` keeps the behavior described above. **Allow
+always** remains unavailable for Bash, and truncated Bash approval descriptions
+still fail closed.
+
+This is argument-level policy applied to the command Claude Code will run,
+not sandboxed execution by OpenClaw. Claude Code owns cwd, PATH, environment,
+and sandboxing. Use a [paired node](/nodes) or the embedded runtime with
+[sandboxing](/gateway/sandboxing) when sandboxed execution is required.
 
 ### Claude browser tools and 1Password sign-in
 

@@ -405,16 +405,16 @@ run_update_smoke() {
   print_install_audit "baseline install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
 
-  # The shipped baseline cannot distinguish absent service managers from failed inspection.
-  # Its documented manual path is safe only in this verified idle container; the candidate
-  # then repeats the update with default restart policy so regressions remain visible.
   assert_update_smoke_offline
+  # The idle container owns no Gateway service; exercise the baseline updater
+  # before checking the candidate's default restart policy independently.
   run_update_candidate "$UPDATE_BASELINE_VERSION" --no-restart
   echo "==> Verify candidate default update without a Gateway service"
   run_update_candidate "$UPDATE_EXPECT_VERSION"
   verify_candidate_ai_runtime
   echo "OK"
 }
+
 
 run_update_candidate() {
   local UPDATE_BASELINE_VERSION="$1"
