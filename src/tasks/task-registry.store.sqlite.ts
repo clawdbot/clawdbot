@@ -9,7 +9,6 @@ import {
 import {
   bindExecutionOwnerLifecycleMetadata,
   deleteExecutionOwnerLifecycleMetadata,
-  pruneOrphanedExecutionOwnerLifecycleMetadata,
 } from "../audit/execution-owner-lifecycle-binding-store.js";
 import {
   executeSqliteQuerySync,
@@ -226,29 +225,6 @@ function getTaskRegistryKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<TaskRegistryStoreDatabase>(db);
 }
 
-function pruneRowsNotInSnapshot(params: {
-  db: DatabaseSync;
-  tableName: "task_delivery_state" | "task_runs";
-  columnName: "task_id";
-  tempTableName: string;
-  ids: readonly string[];
-}) {
-  params.db.exec(`CREATE TEMP TABLE IF NOT EXISTS ${params.tempTableName} (id TEXT PRIMARY KEY)`);
-  params.db.exec(`DELETE FROM ${params.tempTableName}`);
-  const insert = params.db.prepare(`INSERT OR IGNORE INTO ${params.tempTableName} (id) VALUES (?)`);
-  for (const id of params.ids) {
-    insert.run(id);
-  }
-  params.db.exec(`
-    DELETE FROM ${params.tableName}
-    WHERE NOT EXISTS (
-      SELECT 1 FROM ${params.tempTableName}
-      WHERE ${params.tempTableName}.id = ${params.tableName}.${params.columnName}
-    )
-  `);
-  params.db.exec(`DELETE FROM ${params.tempTableName}`);
-}
-
 function selectTaskRows(db: DatabaseSync): TaskRegistryRow[] {
   const query = getTaskRegistryKysely(db)
     .selectFrom("task_runs")
@@ -456,52 +432,6 @@ export function listTaskRegistryRecordsByRuntimeSourceIdFromSqlite(params: {
   );
 }
 
-export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapshot) {
-  withWriteTransaction((database) => {
-    const { db } = database;
-    const kysely = getTaskRegistryKysely(db);
-    const taskIds = [...snapshot.tasks.keys()];
-    if (taskIds.length === 0) {
-      executeSqliteQuerySync(db, kysely.deleteFrom("task_delivery_state"));
-      executeSqliteQuerySync(db, kysely.deleteFrom("task_runs"));
-      pruneOrphanedExecutionOwnerLifecycleMetadata(db, "task");
-      return;
-    }
-    pruneRowsNotInSnapshot({
-      db,
-      tableName: "task_runs",
-      columnName: "task_id",
-      tempTableName: "openclaw_live_task_run_ids",
-      ids: taskIds,
-    });
-    const deliveryTaskIds = [...snapshot.deliveryStates.keys()];
-    if (deliveryTaskIds.length === 0) {
-      executeSqliteQuerySync(db, kysely.deleteFrom("task_delivery_state"));
-    } else {
-      pruneRowsNotInSnapshot({
-        db,
-        tableName: "task_delivery_state",
-        columnName: "task_id",
-        tempTableName: "openclaw_live_task_delivery_ids",
-        ids: deliveryTaskIds,
-      });
-    }
-    for (const task of snapshot.tasks.values()) {
-      upsertTaskRunRowInDatabase(database, bindTaskRecord(task));
-    }
-    for (const state of snapshot.deliveryStates.values()) {
-      replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(state));
-    }
-    pruneOrphanedExecutionOwnerLifecycleMetadata(db, "task");
-  });
-}
-
-export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
-  withWriteTransaction((database) => {
-    upsertTaskRunRowInDatabase(database, bindTaskRecord(task));
-  });
-}
-
 /** Binds only the exact task row selected before admission; runId is never a join key. */
 export function bindTaskRunExecution(params: {
   admitted: AdmittedRunContext;
@@ -558,12 +488,6 @@ export function upsertTaskWithDeliveryStateToSqlite(params: {
   });
 }
 
-export function deleteTaskRegistryRecordFromSqlite(taskId: string) {
-  withWriteTransaction(({ db }) => {
-    deleteTaskRowsWithDeliveryState(db, taskId);
-  });
-}
-
 export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
   withWriteTransaction(({ db }) => {
     deleteTaskRowsWithDeliveryState(db, taskId);
@@ -573,15 +497,6 @@ export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
 export function upsertTaskDeliveryStateToSqlite(state: TaskDeliveryState) {
   withWriteTransaction(({ db }) => {
     replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(state));
-  });
-}
-
-export function deleteTaskDeliveryStateFromSqlite(taskId: string) {
-  withWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getTaskRegistryKysely(db).deleteFrom("task_delivery_state").where("task_id", "=", taskId),
-    );
   });
 }
 

@@ -228,20 +228,15 @@ async function configureSpawnRuntime(
     taskStore.configureTaskRegistryRuntime({
       store: {
         loadSnapshot: () => ({ tasks: new Map(), deliveryStates: new Map() }),
-        saveSnapshot: () => {},
         upsertTaskWithDeliveryState: () => {},
-        upsertTask: () => {},
         deleteTaskWithDeliveryState: () => {},
-        deleteTask: () => {},
         upsertDeliveryState: () => {},
-        deleteDeliveryState: () => {},
         close: () => {},
       },
     });
     flowStore.configureTaskFlowRegistryRuntime({
       store: {
         loadSnapshot: () => ({ flows: new Map() }),
-        saveSnapshot: () => {},
         upsertFlow: () => {},
         deleteFlow: () => {},
         close: () => {},
