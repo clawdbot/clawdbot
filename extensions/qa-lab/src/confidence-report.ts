@@ -4,7 +4,6 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asBoolean as readBoolean,
-  asFiniteNumber as readNumber,
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -577,48 +576,44 @@ function evaluateTokenEfficiencySummary(
 }
 
 function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluation {
+  const unknownReplay = (details: string): QaConfidenceLaneEvaluation => ({
+    passed: false,
+    status: "unknown",
+    details,
+  });
   if (!isRecord(payload) || !Array.isArray(payload.transcripts)) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "jsonl replay summary missing transcripts array",
-    };
+    return unknownReplay("jsonl replay summary missing transcripts array");
   }
   if (payload.transcripts.length === 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "jsonl replay summary has no transcripts",
-    };
+    return unknownReplay("jsonl replay summary has no transcripts");
   }
   let drifted = 0;
   let replayedUserTurns = 0;
   for (const transcript of payload.transcripts) {
     if (!isRecord(transcript)) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: "jsonl replay summary has an invalid transcript row",
-      };
+      return unknownReplay("jsonl replay summary has an invalid transcript row");
     }
-    const userTurnCount = readNumber(transcript.userTurnCount);
-    if (userTurnCount !== undefined && userTurnCount > 0) {
-      replayedUserTurns += userTurnCount;
+    const userTurnCount = readCount(transcript.userTurnCount);
+    if (userTurnCount === undefined) {
+      return unknownReplay("jsonl replay transcript has invalid userTurnCount");
     }
+    replayedUserTurns += userTurnCount;
     const hasFirstDrift = transcript.firstDriftAtTurn !== undefined;
     if (!Array.isArray(transcript.drift)) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: "jsonl replay transcript missing drift array",
-      };
+      return unknownReplay("jsonl replay transcript missing drift array");
     }
-    if (userTurnCount !== undefined && transcript.drift.length !== userTurnCount) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: "jsonl replay transcript drift count does not match userTurnCount",
-      };
+    if (transcript.drift.length !== userTurnCount) {
+      return unknownReplay("jsonl replay transcript drift count does not match userTurnCount");
+    }
+    const runtimeCells = isRecord(transcript.cells) ? transcript.cells : undefined;
+    if (
+      [runtimeCells?.openclaw, runtimeCells?.codex].some(
+        (cells) => !Array.isArray(cells) || cells.length !== userTurnCount,
+      )
+    ) {
+      return unknownReplay(
+        "jsonl replay transcript runtime cell counts do not match userTurnCount",
+      );
     }
     const drift = transcript.drift;
     const hasDrift = drift.some((entry) => entry !== "none");
@@ -627,11 +622,7 @@ function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluatio
     }
   }
   if (replayedUserTurns === 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "jsonl replay summary has no replayed user turns",
-    };
+    return unknownReplay("jsonl replay summary has no replayed user turns");
   }
   return {
     passed: drifted === 0,
@@ -1092,16 +1083,18 @@ function detectTokenEfficiencyRegression(): boolean {
 }
 
 function detectJsonlReplayDrift(): boolean {
-  return !evaluateJsonlReplaySummary({
+  const evaluation = evaluateJsonlReplaySummary({
     transcripts: [
       {
         transcriptPath: "synthetic.jsonl",
         userTurnCount: 2,
+        cells: { openclaw: [{}, {}], codex: [{}, {}] },
         drift: ["none", "tool-result-shape"],
         firstDriftAtTurn: 2,
       },
     ],
-  }).passed;
+  });
+  return !evaluation.passed && evaluation.status !== "unknown";
 }
 
 async function buildQaConfidenceSelfTestSummary(
