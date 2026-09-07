@@ -1,7 +1,11 @@
 // Provider registry tests cover runtime provider loading, normalization aliases,
 // manifest-only hook hydration, and config-derived image providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
+import {
+  describeImageWithModel,
+  describeImagesWithModel,
+  extractStructuredWithImageModel,
+} from "./image-runtime.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -71,6 +75,50 @@ describe("media-understanding provider registry", () => {
     expect(provider.defaultModels?.image).toBe("glm-4.6v");
     expect(provider.describeImage).toBe(describeImageWithModel);
     expect(provider.describeImages).toBe(describeImagesWithModel);
+    expect(provider.extractStructured).toBe(extractStructuredWithImageModel);
+  });
+
+  it("hydrates structured extraction from the shared runtime, never a provider's own describeImages", () => {
+    // Shared extraction pins its instructions to the system channel inside the
+    // shared completion; routing it through a bespoke describeImages would lose
+    // that guarantee.
+    const describeImage = vi.fn();
+    const describeImages = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({
+        id: "anthropic",
+        capabilities: ["image"],
+        describeImage,
+        describeImages,
+      }),
+    ]);
+
+    const provider = requireMediaProvider(buildMediaUnderstandingRegistry(), "anthropic");
+
+    expect(provider.describeImage).toBe(describeImage);
+    expect(provider.describeImages).toBe(describeImages);
+    expect(provider.extractStructured).toBe(extractStructuredWithImageModel);
+  });
+
+  it("keeps a provider's bespoke structured extraction implementation", () => {
+    const extractStructured = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "codex", capabilities: ["image"], extractStructured }),
+    ]);
+
+    const provider = requireMediaProvider(buildMediaUnderstandingRegistry(), "codex");
+
+    expect(provider.extractStructured).toBe(extractStructured);
+  });
+
+  it("does not hydrate structured extraction for providers without image capability", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "deepgram", capabilities: ["audio"] }),
+    ]);
+
+    const provider = requireMediaProvider(buildMediaUnderstandingRegistry(), "deepgram");
+
+    expect(provider.extractStructured).toBeUndefined();
   });
 
   it("resets earlier custom hooks when a prepared owner explicitly requests generic hooks", () => {

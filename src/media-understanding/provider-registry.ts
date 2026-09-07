@@ -2,7 +2,11 @@ import { normalizeMediaProviderId } from "../../packages/media-understanding-com
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
-import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
+import {
+  describeImageWithModel,
+  describeImagesWithModel,
+  extractStructuredWithImageModel,
+} from "./image-runtime.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 function mergeProviderIntoRegistry(
@@ -36,13 +40,16 @@ function hydrateModelBackedMediaProvider(
   if (!provider.capabilities?.includes("image")) {
     return provider;
   }
-  if (provider.describeImage && provider.describeImages) {
+  if (provider.describeImage && provider.describeImages && provider.extractStructured) {
     return provider;
   }
   return {
     ...provider,
     describeImage: provider.describeImage ?? describeImageWithModel,
     describeImages: provider.describeImages ?? describeImagesWithModel,
+    // Shared extraction runs its own completion with the instructions pinned to
+    // the system channel, so it never rides a provider's bespoke describeImages.
+    extractStructured: provider.extractStructured ?? extractStructuredWithImageModel,
   };
 }
 
