@@ -46,17 +46,12 @@ describe("agent delete cleanup identity (137416)", () => {
     // a rounded fallback), and this comparison must NOT match regardless.
     const prepared = cleanupPathIdentity({ dev: 1n, ino: 9007199254740993n });
     expect(prepared).not.toBeNull();
-    expect(
-      cleanupIdentityEquals(prepared!, { dev: 1, ino: 9007199254740992 }),
-    ).toBe(false);
+    expect(cleanupIdentityEquals(prepared!, { dev: 1, ino: 9007199254740992 })).toBe(false);
   });
 
   it("compares safe ids across number/bigint journal forms", () => {
     expect(
-      cleanupIdentityEquals(
-        { dev: 1, ino: 7 },
-        cleanupPathIdentity({ dev: 1n, ino: 7n })!,
-      ),
+      cleanupIdentityEquals({ dev: 1, ino: 7 }, cleanupPathIdentity({ dev: 1n, ino: 7n })!),
     ).toBe(true);
     expect(cleanupIdentityEquals({ dev: 1, ino: 100 }, { dev: 1, ino: 200 })).toBe(false);
   });
