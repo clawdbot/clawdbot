@@ -71,18 +71,24 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions,
   pathname: string,
-  location = pathname,
 ): T {
   const env = options.env ?? process.env;
   openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
-  const db = openNodeSqliteDatabase(location, { readOnly: true });
+  // Even read-only SQLite opens can create a missing WAL. The existing worker
+  // snapshots committed WAL pages without touching source sidecars or caller-held locks.
+  const prepared = prepareSqliteReadOnlyLocationSync(pathname);
   try {
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedStateSchemaVersion(db, pathname);
-    return operation({ db, path: pathname });
+    const db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+    try {
+      db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+      assertSupportedStateSchemaVersion(db, pathname);
+      return operation({ db, path: pathname });
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      db.close();
+    }
   } finally {
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
+    prepared.cleanup();
   }
 }
 
@@ -124,31 +130,4 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
     : withFreshOpenClawStateDatabaseReadOnly(operation, options, existingPath);
 }
 
-/** Read existing shared state without creating or updating its SQLite sidecars. */
-export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
-  operation: (database: OpenClawStateReadOnlyDatabase) => T,
-  options: OpenClawStateDatabaseOptions = {},
-): T | undefined {
-  const pathname = resolveReadOnlyPath(options);
-  const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
-  if (reused.reused) {
-    return reused.value;
-  }
-  const existingPath = existingPathOrUndefined(pathname);
-  if (existingPath === undefined) {
-    return undefined;
-  }
-  // Cache absence cannot rule out caller-owned SQLite handles. Copy in a child
-  // so closing a source descriptor cannot release this process's POSIX locks.
-  const prepared = prepareSqliteReadOnlyLocationSync(existingPath);
-  try {
-    return withFreshOpenClawStateDatabaseReadOnly(
-      operation,
-      options,
-      existingPath,
-      prepared.location,
-    );
-  } finally {
-    prepared.cleanup();
-  }
-}
+export { withExistingOpenClawStateDatabaseReadOnly as withExistingOpenClawStateDatabaseArtifactPreservingReadOnly };

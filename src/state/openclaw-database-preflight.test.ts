@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import packageJson from "../../package.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -7,6 +9,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -17,7 +20,9 @@ import {
   preflightOpenClawStateDatabasePath,
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
+import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -77,6 +82,107 @@ describe("OpenClaw database schema preflight", () => {
     }
     return databasePath;
   }
+
+  function sourceManifest(stateDir: string) {
+    // Coordinator tmp/ files are lifecycle scratch; persistent artifacts must not change.
+    return fs
+      .readdirSync(stateDir, { recursive: true, encoding: "utf8" })
+      .filter((entry) => !entry.startsWith(`tmp${path.sep}`))
+      .filter((entry) => fs.statSync(path.join(stateDir, entry)).isFile())
+      .toSorted()
+      .map((entry) => [
+        entry,
+        createHash("sha256")
+          .update(fs.readFileSync(path.join(stateDir, entry)))
+          .digest("hex"),
+      ]);
+  }
+
+  function createReleasedStateDatabase() {
+    const stateDir = tempDirs.make("openclaw-startup-database-admission-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const statePath = resolveOpenClawStateSqlitePath(env);
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(
+      statePath,
+      gunzipSync(
+        fs.readFileSync(
+          new URL(
+            "../../test/fixtures/sqlite/openclaw-state-v2026.7.1-2.sqlite.gz",
+            import.meta.url,
+          ),
+        ),
+      ),
+    );
+    fs.writeFileSync(path.join(stateDir, "openclaw.json"), "{}\n");
+    return { env, stateDir, statePath };
+  }
+
+  it("refuses released legacy audit state before changing any persistent artifact", async () => {
+    const { env, stateDir, statePath } = createReleasedStateDatabase();
+    const before = sourceManifest(stateDir);
+    await expect(
+      assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: {} }),
+    ).rejects.toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
+    expect(sourceManifest(stateDir)).toEqual(before);
+    await expect(preflightOpenClawStateDatabasePath(statePath)).resolves.toMatchObject({
+      foundVersion: 1,
+    });
+  });
+
+  it.each(["configured", "registered"] as const)(
+    "refuses a %s legacy agent database without mutating its WAL or creating stores",
+    async (layout) => {
+      const stateDir = tempDirs.make("openclaw-agent-startup-admission-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const agentPath =
+        layout === "configured"
+          ? path.join(stateDir, "custom", "sessions.sqlite")
+          : path.join(stateDir, "agents", "retired", "agent", "openclaw-agent.sqlite");
+      const agentId = layout === "configured" ? "main" : "retired";
+      openOpenClawAgentDatabase({ agentId, path: agentPath, env });
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      const { DatabaseSync } = requireNodeSqlite();
+      const writer = new DatabaseSync(agentPath);
+      try {
+        writer.exec(
+          "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; PRAGMA user_version = 15; UPDATE schema_meta SET schema_version = 15;",
+        );
+        const config =
+          layout === "configured"
+            ? { session: { store: path.join(stateDir, "custom", "sessions.json") } }
+            : {};
+        const before = sourceManifest(stateDir);
+        await expect(
+          assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
+        ).rejects.toBeInstanceOf(OpenClawAgentDatabaseMediaMigrationRequiredError);
+        expect(sourceManifest(stateDir)).toEqual(before);
+      } finally {
+        writer.close();
+      }
+    },
+  );
+
+  it("admits supported forward state migration after the Doctor-owned audit repair", async () => {
+    const { env, stateDir, statePath } = createReleasedStateDatabase();
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(statePath);
+    try {
+      expect(repairAuditEventsSchema(database)).toBe(true);
+    } finally {
+      database.close();
+    }
+    const before = sourceManifest(stateDir);
+    await expect(
+      assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: {} }),
+    ).resolves.toBeUndefined();
+    expect(sourceManifest(stateDir)).toEqual(before);
+    const migrated = openOpenClawStateDatabase({ env });
+    expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+  });
 
   it("reports an exact current schema for one explicit copied database", async () => {
     const stateDir = tempDirs.make("openclaw-runtime-state-preflight-");

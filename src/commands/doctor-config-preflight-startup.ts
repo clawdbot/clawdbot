@@ -1,15 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
-import type { ConfigSnapshotReadMeasure } from "../config/io.js";
+import { readConfigFileSnapshot, type ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
 import {
   DoctorStateMigrationRefusalError,
-  formatStartupMigrationFailure,
   recordStartupMigrationWarnings,
   throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
@@ -30,10 +30,80 @@ import {
   runStartupUpgradeConvergence,
 } from "./doctor-config-preflight-plugin-verification.js";
 import {
+  refuseStartupMigrationsForLiveGatewayOwner,
   throwStartupMigrationGuardRejected,
   throwStartupMigrationIdentityChanged,
   throwStartupMigrationRefusal,
 } from "./doctor-startup-migration-refusal.js";
+import {
+  type planAutomaticConfigRepair,
+  resolveStartupConfigSnapshot,
+} from "./doctor/shared/automatic-startup-config-repair.js";
+
+/** Admit the same config and state before the lease and again before migration writes. */
+export async function readStartupMigrationSnapshot(params: {
+  env: NodeJS.ProcessEnv;
+  readSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
+  planRepair: (
+    read: DoctorConfigPreflightPluginSnapshotRead,
+  ) => ReturnType<typeof planAutomaticConfigRepair>;
+  validateConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
+}): Promise<DoctorConfigPreflightPluginSnapshotRead> {
+  await refuseStartupMigrationsForLiveGatewayOwner(params.env);
+  try {
+    const selected = await readConfigFileSnapshot({
+      observe: false,
+      pluginValidation: "core-only",
+    });
+    await assertStartupStateMigrationReady({
+      cfg: selected.sourceConfig ?? selected.config,
+      env: params.env,
+    });
+    // Core readiness must be decided before plugin metadata opens shared state.
+    const startupConfig = resolveStartupConfigSnapshot(selected);
+    if (startupConfig) {
+      await params.validateConfig?.(startupConfig);
+    }
+    const read = await params.readSnapshot();
+    const repair = read.snapshot.valid ? null : params.planRepair(read);
+    if (!read.snapshot.valid && !repair) {
+      throw new Error('OpenClaw config is invalid; run "openclaw doctor --fix" before startup.');
+    }
+    await params.validateConfig?.(repair?.snapshot ?? read.snapshot);
+    return read;
+  } catch (error) {
+    return throwStartupMigrationRefusal(formatErrorMessage(error), error);
+  }
+}
+
+/** Admission runs before lease acquisition: even acquiring a lease commits SQLite writes. */
+async function assertStartupStateMigrationReady(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const { assertOpenClawDatabasesReady } = await import("../state/openclaw-database-preflight.js");
+  await assertOpenClawDatabasesReady({
+    env: params.env,
+    config: params.cfg,
+    operation: "gateway-startup",
+  });
+  const { assertSessionStoreMigrationComplete } =
+    await import("../config/sessions/startup-migration.js");
+  const { resolveAllAgentSessionStoreCandidateTargetsSync } =
+    await import("../config/sessions/targets.js");
+  const { inspectOpenClawRegisteredAgentDatabases } =
+    await import("../state/openclaw-agent-db-registry.js");
+  const targets = resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, {
+    env: params.env,
+    registeredDatabases: inspectOpenClawRegisteredAgentDatabases({
+      env: params.env,
+      includeIncompatibleSchemaVersions: true,
+    }),
+  });
+  assertSessionStoreMigrationComplete({ ...params, targets });
+  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
+  assertConfiguredWorkspaceStateReady(params);
+}
 
 type MigrationCheckpoint = {
   recordSuccessfulStateMigrations: (params?: {
@@ -147,13 +217,6 @@ export async function completeStartupMigrationPreflight(params: {
     });
   }
   if (params.gatewayStartupCheckpointRequired) {
-    if (params.shouldRecordStartupCheckpoint && !snapshot.valid) {
-      throwStartupMigrationRefusal(
-        formatStartupMigrationFailure([
-          'OpenClaw config is invalid; run "openclaw doctor --fix" before startup.',
-        ]),
-      );
-    }
     if (snapshot.valid && params.shouldRecordStartupCheckpoint) {
       const convergedSnapshotRead = await params.readConfigSnapshotForPreflight(false);
       const convergedBaseConfig =

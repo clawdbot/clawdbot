@@ -205,10 +205,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
       const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
       allowInvalid ||= resolvedOptions.allowUnconfigured === true;
-      const opts = {
-        force: resolvedOptions.force === true,
-        reset: resolvedOptions.reset === true,
-      };
+      const opts = resolvedOptions;
       const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (!shouldBootstrap) {
         return;
