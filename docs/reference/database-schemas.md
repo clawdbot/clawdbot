@@ -415,6 +415,10 @@ The original lock-admission deadline is retained. After granting approval,
 the parent synchronously joins transaction settlement before allowing owner retirement;
 that mandatory join cannot be abandoned at the append deadline.
 
+Periodic incremental vacuum uses the same write-admission boundary, so it can
+service reclamation approval before taking the writer lock. Its 512-page limit
+is unchanged; passive checkpoints remain outside the write transaction.
+
 Reclamation page maintenance uses a PASSIVE checkpoint and at most 512 pages of
 incremental vacuum per pass. PASSIVE does not wait for readers, but does not cap
 the number of WAL frames copied. Before pruning retained archives, disk-budget

@@ -525,7 +525,19 @@ struct RootTabs: View {
                 // Stable container so the toast's move/opacity transition animates
                 // when the gateway problem appears or clears outside withAnimation.
                 ZStack(alignment: .top) {
-                    if let gatewayRetryFailure {
+                    if let liveVoiceStartError = self.appModel.liveVoiceStartError {
+                        // A banner survives onboarding dismissal without racing another modal.
+                        OpenClawNoticeBanner(
+                            icon: "mic.slash",
+                            title: "Unable to Start Live Voice",
+                            message: .verbatim(liveVoiceStartError),
+                            ownerLabel: "Needs attention",
+                            tint: OpenClawBrand.warn,
+                            secondaryActionTitle: "Dismiss",
+                            onSecondaryAction: { self.appModel.liveVoiceStartError = nil })
+                            .padding(.horizontal, 12)
+                            .safeAreaPadding(.top, 10)
+                    } else if let gatewayRetryFailure {
                         OpenClawNoticeBanner(
                             icon: "wifi.exclamationmark",
                             title: "Gateway reconnect failed",
@@ -550,7 +562,8 @@ struct RootTabs: View {
                         .padding(.leading, 10)
                         .safeAreaPadding(
                             .top,
-                            self.activeGatewayProblemToast == nil && self.gatewayRetryFailure == nil ? 58 : 132)
+                            self.activeGatewayProblemToast == nil && self.gatewayRetryFailure == nil
+                                && self.appModel.liveVoiceStartError == nil ? 58 : 132)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
@@ -644,12 +657,16 @@ struct RootTabs: View {
 
     private func rootAppearLifecycle(_ content: some View) -> some View {
         content
-            .onAppear { self.updateIdleTimer() }
-            .onAppear { self.evaluateOnboardingPresentation(force: false) }
-            .onAppear { self.maybeAutoOpenSettings() }
-            .onAppear { self.maybeOpenSettingsForGatewaySetup() }
-            .onAppear { self.maybeShowQuickSetup() }
-            .onAppear { self.applyInitialChatSessionIfNeeded() }
+            .onAppear {
+                self.updateIdleTimer()
+                self.evaluateOnboardingPresentation(force: false)
+                self.maybeAutoOpenSettings()
+                self.maybeOpenSettingsForGatewaySetup()
+                self.maybeShowQuickSetup()
+                self.applyInitialChatSessionIfNeeded()
+                self.handleLiveVoiceStartRequest()
+                self.handleOpenChatRequest(self.appModel.openChatRequestID)
+            }
             .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.scenePhase) { _, newValue in
@@ -658,6 +675,7 @@ struct RootTabs: View {
                     self.clearVoiceWakeToast()
                     return
                 }
+                self.handleLiveVoiceStartRequest()
                 self.maybeRequestLocalNetworkAccess(reason: "scene_active")
                 Task {
                     await self.appModel.refreshGatewayOverviewIfConnected()
@@ -711,6 +729,9 @@ struct RootTabs: View {
             .onChange(of: self.showOnboarding) { _, newValue in
                 guard !newValue else { return }
                 self.maybeRequestLocalNetworkAccess(reason: "onboarding_dismissed")
+            }
+            .onChange(of: self.appModel.pendingLiveVoiceStart) { _, _ in
+                self.handleLiveVoiceStartRequest()
             }
             .onChange(of: self.appModel.openChatRequestID) { _, newValue in
                 self.handleOpenChatRequest(newValue)
@@ -826,8 +847,23 @@ extension RootTabs {
         }
     }
 
-    private func handleOpenChatRequest(_: Int) {
+    private func handleOpenChatRequest(_ requestID: Int) {
+        guard self.appModel.consumeOpenChatRequest(requestID) else { return }
         self.selectSidebarDestination(.chat)
+    }
+
+    private func handleLiveVoiceStartRequest() {
+        guard self.didApplyInitialChatSession, self.didEvaluateOnboarding,
+              self.scenePhase == .active, self.appModel.pendingLiveVoiceStart
+        else { return }
+        if !self.showOnboarding {
+            self.presentedSheet = nil
+            self.showGatewayProblemDetails = false
+        }
+        self.appModel.consumeLiveVoiceStartRequest(
+            isSceneActive: true,
+            isOnboardingPresented: self.showOnboarding,
+            hasGatewayConfiguration: self.hasExistingGatewayConfig() || self.appModel.gatewayServerName != nil)
     }
 
     private func selectSettingsRoute(_ route: SettingsRoute) {
