@@ -319,7 +319,9 @@ suite.define(() => {
       await expect.poll(rowNames).toEqual(["Data migration", "Research notes"]);
       const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
-        .poll(() => sidebarMigration.locator(".session-run-spinner").isVisible())
+        .poll(() =>
+          sidebarMigration.locator(".sidebar-session-indicator .session-glyph__ring").isVisible(),
+        )
         .toBe(true);
 
       // Hover-revealed management actions on sidebar rows.
