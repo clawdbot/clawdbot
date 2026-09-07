@@ -1065,6 +1065,17 @@
   overflow-y: auto;
 }
 
+/* One scroll boundary per expanded activity group: descendant tool/message
+   boxes render at natural height so nested max-height scrollers never stack
+   independent scrollbars inside the group's own scroller (see #138663).
+   Horizontal scrolling on wide content is preserved; only vertical caps lift. */
+.chat-activity-group__body .chat-tool-msg-body,
+.chat-activity-group__body .chat-tool-term__out,
+.chat-activity-group__body .chat-tool-card__block-content,
+.chat-activity-group__body .chat-diff {
+  max-height: none;
+}
+
 /* Completed-turn work rollup: slim "Worked for X" disclosure standing in for
    the turn's intermediate tool/commentary groups. Keep it equally separated
    from the prompt and final reply. */
