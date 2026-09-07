@@ -26,10 +26,11 @@ CLIENT_PATH="test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts"
 CLIENT_MOUNT_ARGS=()
 if [ "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" = "legacy" ]; then
   # The selected release's client imports sibling E2E helpers and ../../dist.
-  # Materialize its committed source tree outside the trusted read-only harness
-  # and link the package-owned dependencies.
+  # Materialize its committed source tree outside the trusted read-only harness.
   LEGACY_CLIENT_SOURCE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-frozen-agent-bundle-mcp-tools.XXXXXX")"
-  git -C "$SOURCE_ROOT" archive "$OPENCLAW_SELECTED_SHA" -- scripts/e2e |
+  # Preserve its root package.json so tsx retains the selected release's ESM scope,
+  # then link the package-owned dependencies.
+  git -C "$SOURCE_ROOT" archive "$OPENCLAW_SELECTED_SHA" -- package.json scripts/e2e |
     tar -x -C "$LEGACY_CLIENT_SOURCE_ROOT"
   LEGACY_CLIENT_ROOT="/tmp/openclaw-frozen-agent-bundle-mcp-tools"
   CLIENT_PATH="$LEGACY_CLIENT_ROOT/scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"
