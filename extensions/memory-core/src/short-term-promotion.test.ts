@@ -2712,7 +2712,7 @@ describe("short-term promotion", () => {
     vi.spyOn(process, "kill").mockImplementation(() => true);
     vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath) => {
       if (String(filePath) === `/proc/${ownerPid}/status`) {
-        return `Name:\tmemory worker\nState:\tZ (zombie)\nPid:\t${ownerPid}\n`;
+        return `Name:\tmemory worker\nState:\tZ (zombie)\nPid:\t${ownerPid}\nThreads:\t1\n`;
       }
       throw new Error(`unexpected read: ${String(filePath)}`);
     });

@@ -14,6 +14,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
+import { deleteCronSessionViaGateway } from "./isolated-agent/session-cleanup.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { Logger } from "./service/state.js";
 
@@ -73,6 +74,15 @@ export async function removeCronJobBaseSession(params: {
   })?.entry;
   if (!existing) {
     return false;
+  }
+  const sessionId = existing.sessionId.trim();
+  if (sessionId) {
+    return await deleteCronSessionViaGateway({
+      agentSessionKey: sessionKey,
+      sessionId,
+      lifecycleRevision: existing.lifecycleRevision,
+      sessionUpdatedAt: existing.updatedAt,
+    });
   }
   const result = await applySessionEntryLifecycleMutation({
     agentId: params.agentId,

@@ -32,6 +32,7 @@ import {
   loadTranscriptEvents,
   onSessionIdentityMutation,
   replaceSessionEntrySync,
+  resolveSessionEntryAccessTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -1056,7 +1057,15 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
   const { storePath } = await createSessionStoreDir();
   try {
     const durableParentKey = "main";
-    await writeSessionStore({ entries: { main: sessionStoreEntry("durable-parent") } });
+    const savedPrompt = "unrelated durable prompt for incognito existence checks";
+    await writeSessionStore({
+      entries: {
+        main: {
+          ...sessionStoreEntry("durable-parent"),
+          skillsSnapshot: { prompt: savedPrompt, skills: [] },
+        },
+      },
+    });
     const created = await directSessionReq<{
       key: string;
       entry: {
@@ -1267,18 +1276,24 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
         "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('durable-collision', ?, 'conversation', ?, ?)",
       )
       .run(durableCollisionKey, durableCollisionUpdatedAt, durableCollisionUpdatedAt);
-    const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
-      agentId: "main",
-      key: durableCollisionKey,
-      incognito: true,
-    });
-    expect(rejectedExplicitDashboard).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "incognito is immutable and requires a new session key",
-      },
-    });
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
+        agentId: "main",
+        key: durableCollisionKey,
+        incognito: true,
+      });
+      expect(parse.mock.calls.some(([json]) => json.includes(savedPrompt))).toBe(false);
+      expect(rejectedExplicitDashboard).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "incognito is immutable and requires a new session key",
+        },
+      });
+    } finally {
+      parse.mockRestore();
+    }
   } finally {
     closeOpenClawAgentDatabasesForTest();
   }
@@ -2160,7 +2175,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
     const successorWorktree = successor.payload!.worktree;
     successorWorktreeId = successorWorktree.id;
     expect(successorWorktree.id).not.toBe(failedWorktreeId);
-    await expect(fs.access(successorWorktree.path)).resolves.toBeUndefined();
+    await fs.access(successorWorktree.path);
     expect(loadSessionEntry({ sessionKey: key, storePath })?.worktree).toEqual({
       id: successorWorktree.id,
       branch: successorWorktree.branch,
@@ -3748,7 +3763,7 @@ test.each([
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("retained-dirty"));
       } else if (outcome === "failed") {
         expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-        await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+        await fs.access(worktree.path);
         expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
           "failed to finalize session worktree lifecycle: simulated cleanup failure",
         );
@@ -3900,7 +3915,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     const successorWorktree = successor.payload!.worktree;
     expect(successorWorktree.id).not.toBe(worktree?.id);
     worktreeId = successorWorktree.id;
-    await expect(fs.access(successorWorktree.path)).resolves.toBeUndefined();
+    await fs.access(successorWorktree.path);
     expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
       spawnedCwd: successorWorktree.path,
       worktree: {
@@ -4030,9 +4045,9 @@ test.each([undefined, "main"])(
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-    // Auto-parented operator sessions must stay spawn-capable roots: without the
-    // explicit depth, spawn admission derives depth 1 from parentSessionKey and
-    // rejects all sessions_spawn calls at the default maxSpawnDepth of 1.
+    // Auto-parented operator sessions must stay depth-zero roots. This preserves
+    // their operator identity and makes explicit finite spawn-depth caps apply
+    // from the correct origin.
     expect(created.payload?.entry?.spawnDepth).toBe(0);
   },
 );
@@ -6104,6 +6119,59 @@ test("sessions.get reads selected global messages from the requested agent store
     const renderedMessages = JSON.stringify(result.payload?.messages ?? []);
     expect(renderedMessages).toContain("work global");
     expect(renderedMessages).not.toContain("main global");
+  } finally {
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    testState.agentsConfig = undefined;
+  }
+});
+
+test("sessions.create checks selected global initialization in the requested agent store", async () => {
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
+  try {
+    await writeSessionStore({
+      storePath: mainStorePath,
+      entries: {
+        global: sessionStoreEntry("sess-main-initializing", { initializationPending: true }),
+      },
+    });
+
+    const created = await directSessionReq<{ key?: string }>("sessions.create", {
+      key: "global",
+      agentId: "work",
+    });
+
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    expect(created.payload).toMatchObject({ key: "global" });
+    expect(
+      loadSessionEntry({ agentId: "work", sessionKey: "global", storePath: workStorePath }),
+    ).toBeDefined();
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "global", storePath: mainStorePath }),
+    ).toMatchObject({ sessionId: "sess-main-initializing", initializationPending: true });
+
+    await writeSessionStore({
+      storePath: workStorePath,
+      agentId: "work",
+      entries: {
+        global: sessionStoreEntry("sess-work-initializing", { initializationPending: true }),
+      },
+    });
+    expect(
+      resolveSessionEntryAccessTarget({
+        cfg: getRuntimeConfig(),
+        sessionKey: "global",
+        agentId: "work",
+      }).entry,
+    ).toMatchObject({ sessionId: "sess-work-initializing", initializationPending: true });
+    const blocked = await directSessionReq("sessions.create", { key: "global", agentId: "work" });
+    expect(blocked).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Session global is still initializing; retry creation later.",
+      },
+    });
   } finally {
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;

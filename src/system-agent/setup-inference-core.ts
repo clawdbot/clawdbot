@@ -6,7 +6,7 @@ import type { loadPersistedAuthProfileStore } from "../agents/auth-profiles/pers
 import type {
   loadAuthProfileStoreForRuntime,
   updateAuthProfileStoreWithLock,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/store-runtime.js";
 import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
@@ -35,6 +35,7 @@ import type {
   SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
 import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
+import type { SetupNativeSessionCatalogOption } from "./setup-native-session-catalogs.js";
 import type {
   captureSystemAgentOwnerPluginArtifacts,
   createSystemAgentVerifiedInferenceBinding,
@@ -56,9 +57,6 @@ export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 export const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
 
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
-
-export const AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT =
-  "I enabled the lean tool surface for this local runtime.";
 
 export type ProviderAutoSetupInferenceKind = `provider-auto:${string}`;
 
@@ -105,6 +103,10 @@ export type SetupInferenceDetection = {
   prepareOptions?: SetupInferencePrepareOption[];
   /** Curated tools clients can offer when no existing AI access is detected. */
   recommendedInstalls: SetupRecommendedInstall[];
+  /** Native conversation catalogs available on this Gateway host. */
+  nativeSessionCatalogs?: SetupNativeSessionCatalogOption[];
+  /** True only while the Gateway still needs its first inference route. */
+  nativeSessionCatalogPreferenceRequired?: boolean;
   /** Resolved workspace the setup apply would use (display + default). */
   workspace: string;
   configuredModel?: string;
@@ -190,6 +192,10 @@ export type ActivateSetupInferenceParams = {
   apiKey?: string;
   workspace?: string;
   surface: "cli" | "gateway";
+  /** Whether interactive provider secrets would be entered away from the Gateway host. */
+  isRemoteProviderAuth?: boolean;
+  /** Fresh-install opt-in for discovering existing native provider conversations. */
+  nativeSessionCatalogsEnabled?: boolean;
   /** False when an enclosing persistent-operation boundary owns the setup audit. */
   recordSetupAudit?: boolean;
   runtime: RuntimeEnv;
@@ -201,6 +207,8 @@ export type ActivateSetupInferenceParams = {
   isCancelled?: () => boolean;
   /** Lock the caller's cancellation boundary before the first durable setup effect. */
   beforePersistentEffect?: () => void | Promise<void>;
+  /** Preparation effects are complete; the selected route is ready for its live test. */
+  onPreparationComplete?: () => void;
   /** Observe the authored config held by the inference writer before it commits. */
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
   /** Gateway callers await application only after releasing the setup queue and lane. */
@@ -270,7 +278,7 @@ export type ActivateSetupInferenceDeps = {
   updateAuthProfileStoreWithLock?: typeof updateAuthProfileStoreWithLock;
   loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
   loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
-  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
+  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;

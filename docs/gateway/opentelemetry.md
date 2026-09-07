@@ -549,7 +549,7 @@ Only `session.stuck` emits the `openclaw.session.stuck` counter, the
 span. Repeated `session.stuck` diagnostics back off while the session remains
 unchanged, so dashboards should alert on sustained increases rather than
 every heartbeat tick. For the config knob and defaults, see
-[Configuration reference](/gateway/configuration-reference#diagnostics).
+[Configuration reference](/gateway/config-observability#diagnostics).
 
 Liveness warnings also emit:
 
@@ -602,6 +602,15 @@ see [Prometheus event-loop windows](/gateway/prometheus#event-loop-observation-w
 - `openclaw.exec.duration_ms` (histogram, attrs: `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`)
 
 ### Diagnostics internals (memory, payloads, exporter health)
+
+- `openclaw.gc.duration_ms` (histogram, no attrs; elapsed GC duration for the hosting JavaScript isolate)
+
+GC duration uses Node.js performance entries and is exported only when metrics
+are enabled. It is not CPU time or a guaranteed stop-the-world pause. Observation
+starts when the existing diagnostics heartbeat sees an interested consumer;
+registration after startup can wait until its next 30-second tick, with no
+backfill. Diagnostics disable/shutdown disconnects immediately. See
+[GC duration coverage and correlation limits](/gateway/prometheus#garbage-collection-duration).
 
 - `openclaw.payload.large` (counter, attrs: `openclaw.payload.surface`, `openclaw.payload.action`, `openclaw.channel`, `openclaw.plugin`, `openclaw.reason`)
 - `openclaw.payload.large_bytes` (histogram, attrs: same as `openclaw.payload.large`)
@@ -859,4 +868,4 @@ OTEL_SDK_DISABLED=true openclaw gateway
 - [Gateway logging internals](/gateway/logging) - WS log styles, subsystem prefixes, and console capture
 - [Diagnostics flags](/diagnostics/flags) - targeted debug-log flags
 - [Diagnostics export](/gateway/diagnostics) - operator support-bundle tool (separate from OTEL export)
-- [Configuration reference](/gateway/configuration-reference#diagnostics) - full `diagnostics.*` field reference
+- [Configuration reference](/gateway/config-observability#diagnostics) - full `diagnostics.*` field reference

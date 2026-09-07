@@ -1,4 +1,6 @@
+import type { Command } from "commander";
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
+import { hasCommanderOptionToken } from "./program/commander-parse-facts.js";
 
 export type MachineOutputResolverParams = {
   argv: readonly string[];
@@ -22,8 +24,15 @@ export function getMachineOutputCommandPath(argv: readonly string[], depth: numb
   return getRootOptionAwareCommandPath(argv, depth);
 }
 
-/** Match a boolean or value option before the argv terminator, including `--flag=value`. */
-export function hasMachineOutputOption(argv: readonly string[], flag: string): boolean {
+/** Prefer registered option roles; early discovery falls back to literal option spellings. */
+export function hasMachineOutputOption(
+  argv: readonly string[],
+  flag: string,
+  command?: Command,
+): boolean {
+  if (command) {
+    return hasCommanderOptionToken(command, argv, new Set([flag]), "flag");
+  }
   for (const arg of argv.slice(2)) {
     if (arg === "--") {
       return false;

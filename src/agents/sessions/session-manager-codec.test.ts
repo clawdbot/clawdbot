@@ -98,9 +98,11 @@ describe("session manager codec compatibility", () => {
         parentId: "invalid-model",
         message: { role: "user", content: "valid descendant" },
       },
+      { type: "session_info", id: "invalid-name", parentId: "after", name: 42 },
     ]);
 
     expect(manager.getEntries().map((entry) => entry.type)).toEqual(["message", "message"]);
+    expect(manager.getSessionName()).toBeUndefined();
     expect(manager.buildSessionContext()).toEqual({
       messages: [{ role: "user", content: "valid descendant" }],
       thinkingLevel: "off",
@@ -121,6 +123,31 @@ describe("session manager codec compatibility", () => {
       parseOpaqueLeafEntry({ type: "leaf", id: "leaf1", parentId: null, targetId: null }),
     ).toEqual({ id: "leaf1", parentId: null, targetId: null });
     expect(parseOpaqueLeafEntry({ type: "leaf", id: "leaf1", parentId: null })).toBeUndefined();
+  });
+
+  it("preserves the original parent fallback for an opaque compaction keep marker", () => {
+    const manager = SessionManager.fromEntries([
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: "self-parent-compaction",
+        cwd: "/tmp",
+      },
+      { type: "future", id: "opaque-root", parentId: null },
+      {
+        type: "compaction",
+        id: "compaction",
+        parentId: "compaction",
+        summary: "summary",
+        firstKeptEntryId: "opaque-root",
+        tokensBefore: 1,
+      },
+    ]);
+
+    expect(manager.getEntry("compaction")).toMatchObject({
+      parentId: null,
+      firstKeptEntryId: "compaction",
+    });
   });
 });
 

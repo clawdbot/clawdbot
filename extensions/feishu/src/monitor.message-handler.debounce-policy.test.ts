@@ -39,8 +39,8 @@ it("changes Feishu batching timing on the running receive handler", async () => 
     }).channel,
     accountId: "default",
     chatHistories: new Map(),
-    handleMessage: async ({ event }) => {
-      dispatched.push(event.message.content);
+    handleMessage: async ({ event, preparedContent }) => {
+      dispatched.push(preparedContent ?? event.message.content);
     },
     resolveDebounceText: ({ event }) => event.message.content,
     hasProcessedMessage: async () => false,
@@ -68,9 +68,7 @@ it("changes Feishu batching timing on the running receive handler", async () => 
     await enqueue("first");
     await enqueue("second");
     expect(dispatched).toEqual(["immediate"]);
-    await vi.waitFor(() =>
-      expect(dispatched).toEqual(["immediate", JSON.stringify({ text: "first\nsecond" })]),
-    );
+    await vi.waitFor(() => expect(dispatched).toEqual(["immediate", "first\nsecond"]));
     const delayedElapsedMs = performance.now() - started;
     publish(0);
     await enqueue("after disable");

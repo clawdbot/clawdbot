@@ -1,6 +1,7 @@
 // Synthetic plugin fixtures for Gateway instance and channel lifecycle tests.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 
@@ -34,6 +35,7 @@ export type InstanceBindingProbeCoordinator = {
   runtimes: PluginRuntime[];
   serviceStarts: number;
   serviceStops: number;
+  onServiceStop?: () => void;
   serviceStopCompletion: ReturnType<typeof createDeferred<void>>;
   serviceStopFailure?: "rejection" | "timeout";
   channelProof?: ChannelBindingProof;
@@ -41,6 +43,39 @@ export type InstanceBindingProbeCoordinator = {
   channelStops?: Array<Pick<ChannelBindingMonitor, "channelId" | "runtimeId" | "abortSignal">>;
   channelCleanup?: Map<ChannelBindingMonitor, { release: () => void; finished: Promise<void> }>;
 };
+
+export async function withPluginServiceStopDeadline<T>(
+  coordinator: InstanceBindingProbeCoordinator,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (coordinator.serviceStopFailure !== "timeout") {
+    return await run();
+  }
+  const started = createDeferred();
+  coordinator.onServiceStop = () => {
+    // Keep startup and request admission on real clocks.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout"],
+      shouldClearNativeTimers: true,
+    });
+    started.resolve();
+  };
+  const result = run();
+  try {
+    await Promise.race([
+      started.promise,
+      result.then(() => {
+        throw new Error("config.patch settled before plugin cleanup started");
+      }),
+    ]);
+    // The deadline only rejects; restore native timers before recovery continuations run.
+    vi.advanceTimersByTime(5_000);
+  } finally {
+    coordinator.onServiceStop = undefined;
+    vi.useRealTimers();
+  }
+  return await result;
+}
 
 export function installInstanceBindingProbeCoordinator(options?: {
   serviceStopFailure?: InstanceBindingProbeCoordinator["serviceStopFailure"];
@@ -108,6 +143,7 @@ export async function writeInstanceBindingProbePlugin(bundledRoot: string): Prom
         },
         stop() {
           coordinator.serviceStops += 1;
+          coordinator.onServiceStop?.();
           if (coordinator.serviceStopFailure === "rejection") {
             return Promise.reject(new Error("instance-binding service cleanup rejected"));
           }

@@ -29,7 +29,24 @@ function appendNode(target: DetailsNode[], node: DetailsNode): void {
 }
 
 function trimMarkdownBlankLines(value: string): string {
-  return value.replace(/^(?:[ \t]*\r?\n)+/, "").replace(/(?:\r?\n[ \t]*)+$/, "");
+  const body = value.replace(/^(?:[ \t]*\r?\n)+/, "");
+  let end = body.length;
+  // Scan backward: an unanchored repeated suffix regex retries internal blank
+  // lines quadratically and blocks unrelated sessions on the same event loop.
+  for (let cursor = end; cursor > 0;) {
+    while (body[cursor - 1] === " " || body[cursor - 1] === "\t") {
+      cursor -= 1;
+    }
+    if (body[cursor - 1] !== "\n") {
+      break;
+    }
+    cursor -= 1;
+    if (body[cursor - 1] === "\r") {
+      cursor -= 1;
+    }
+    end = cursor;
+  }
+  return body.slice(0, end);
 }
 
 type MarkdownContainerLayout = { blankPrefix: string; continuationPrefix: string };

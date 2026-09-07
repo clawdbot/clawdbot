@@ -6,6 +6,7 @@ import {
   registerAgentHarness,
 } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
+import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const { readAcpSessionMeta, readAcpSessionMetaForEntry } = vi.hoisted(() => ({
@@ -19,7 +20,10 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionMetaForEntry,
 }));
 
-import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
+import {
+  resolveGatewayModelThinkingProfile,
+  resolveGatewaySessionThinkingProjectionInternal,
+} from "./session-utils-model.js";
 
 describe("resolveGatewaySessionThinkingProjectionInternal", () => {
   const registeredHarnesses = listRegisteredAgentHarnesses();
@@ -29,6 +33,74 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
     readAcpSessionMetaForEntry.mockReset();
   });
   afterAll(() => restoreRegisteredAgentHarnesses(registeredHarnesses));
+
+  it.each([
+    { api: true, baseUrl: true, levels: ["Off", "High"] },
+    { api: false, baseUrl: true, levels: ["Off"] },
+    { api: true, baseUrl: false, levels: ["Off"] },
+    { api: false, baseUrl: false, levels: ["Off"] },
+  ])("uses catalog-only runtime route facts (api=$api, baseUrl=$baseUrl)", (scenario) => {
+    const api = "openai-responses" as const;
+    const baseUrl = "https://catalog-route.example.test/v1";
+    registerAgentHarness({
+      id: "catalog-route",
+      label: "Catalog route",
+      supports: ({ modelProvider }) =>
+        modelProvider?.api === api && modelProvider.baseUrl === baseUrl
+          ? { supported: true }
+          : { supported: false, fallbackRuntime: "openclaw" },
+      runAttempt: async () => {
+        throw new Error("projection must not execute");
+      },
+    });
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          thinkingDefault: "off",
+          models: { "route-provider/route-model": { agentRuntime: { id: "catalog-route" } } },
+        },
+      },
+    };
+    const profile = vi.spyOn(thinking, "resolveThinkingProfile").mockImplementation((params) => ({
+      levels: [
+        { id: "off", label: "Off", rank: 0 },
+        ...(params.agentRuntime === "catalog-route"
+          ? [{ id: "high" as const, label: "High", rank: 3 }]
+          : []),
+      ],
+      defaultLevel: "off",
+    }));
+    const params = {
+      cfg,
+      agentId: "main",
+      provider: "route-provider",
+      model: "route-model",
+      sessionKey: "agent:main:catalog-route",
+      modelCatalog: [
+        {
+          provider: "route-provider",
+          id: "route-model",
+          name: "Route model",
+          reasoning: true,
+          ...(scenario.api ? { api } : {}),
+          ...(scenario.baseUrl ? { baseUrl } : {}),
+        },
+      ],
+    };
+    try {
+      expect(
+        resolveGatewayModelThinkingProfile(params).thinkingLevels.map(({ label }) => label),
+      ).toEqual(scenario.levels);
+      expect(
+        resolveGatewaySessionThinkingProjectionInternal({
+          ...params,
+          entry: { sessionId: "catalog-route", updatedAt: 1 },
+        }).thinkingOptions,
+      ).toEqual(scenario.levels);
+    } finally {
+      profile.mockRestore();
+    }
+  });
 
   it.each([false, true])(
     "projects the effective model runtime with authored transport=%s",

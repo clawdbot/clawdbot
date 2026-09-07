@@ -4,6 +4,7 @@ import path from "node:path";
 import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SKILL_LIBRARY_MAX_FILE_BYTES } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -539,11 +540,23 @@ describe("library admission and imports", () => {
       await expect(
         uploadSkillLibrary(bob, { action: "commit", uploadId: begun.uploadId }, options),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      const archiveReads = trackSqliteStatementExecutions(
+        openOpenClawStateDatabase(options).db,
+        ["archive"],
+        (sql) =>
+          sql.startsWith("select ") &&
+          sql.includes('from "skill_library_uploads"') &&
+          /\*|"archive_blob"/u.test(sql)
+            ? "archive"
+            : null,
+      );
       const saved = await uploadSkillLibrary(
         alice,
         { action: "commit", uploadId: begun.uploadId },
         options,
-      );
+      ).finally(archiveReads.restore);
+      // Publication guards must not reload the archive after the extraction snapshot.
+      expect(archiveReads.rowCounts.archive).toBe(1);
       if (!("entry" in saved)) {
         throw new Error("Expected publication receipt");
       }

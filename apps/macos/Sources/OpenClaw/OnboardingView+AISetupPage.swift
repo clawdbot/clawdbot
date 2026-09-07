@@ -9,10 +9,8 @@ struct GatewayAuthenticationReturnDecision: Equatable {
 }
 
 extension OnboardingView {
-    /// Structured AI setup: detect what's already available on the Gateway, test the
-    /// best option live, fall through automatically, offer an API-key form
-    /// when nothing works. OpenClaw becomes available only after inference
-    /// has completed a live round-trip.
+    /// Detect available AI access, then wait for the user to select a connection.
+    /// OpenClaw becomes available after that choice completes a live round-trip.
     func aiSetupPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
             Group {
@@ -54,9 +52,9 @@ extension OnboardingView {
 
     func maybeStartAISetup(for pageIndex: Int) {
         guard pageIndex == aiPageIndex else { return }
-        // Local mode reaches this page only after the CLI/gateway install page,
-        // so the gateway is up before the first RPC.
-        guard state.connectionMode != .local || cliInstalled else { return }
+        // Only app-managed local installs need CLI activation; external attachments
+        // proceed through the existing route-bound Gateway probe.
+        guard !requiresLocalCLI || cliInstalled else { return }
         self.prepareSystemAgentHandoff()
         // A selected/reconnected Gateway may already have a configured default
         // agent. Check that route before setup tries to author inference.

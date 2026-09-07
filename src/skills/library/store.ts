@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import type { SelectQueryBuilder } from "kysely";
 import type { SkillLibraryEntry } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { authorizeOperatorScopesForRequiredScope } from "../../gateway/method-scopes.js";
@@ -129,19 +130,16 @@ export function requireSkillLibraryProfile(
   return actor.profileId;
 }
 
-export function requireSkillLibraryUpload(
+function requireSelectedSkillLibraryUpload<
+  T extends Pick<SkillLibraryDatabase["skill_library_uploads"], "owner_profile_id" | "expires_at">,
+>(
   db: DatabaseSync,
   uploadId: string,
   authority: SkillLibraryAuthority,
+  query: SelectQueryBuilder<SkillLibraryDatabase, "skill_library_uploads", T>,
 ) {
   const actor = requireSkillLibraryProfile(db, authority);
-  const upload = executeSqliteQueryTakeFirstSync(
-    db,
-    skillLibraryDb(db)
-      .selectFrom("skill_library_uploads")
-      .selectAll()
-      .where("upload_id", "=", uploadId),
-  );
+  const upload = executeSqliteQueryTakeFirstSync(db, query.where("upload_id", "=", uploadId));
   if (
     !upload ||
     upload.expires_at <= Date.now() ||
@@ -153,6 +151,34 @@ export function requireSkillLibraryUpload(
     );
   }
   return upload;
+}
+
+export function requireSkillLibraryUpload(
+  db: DatabaseSync,
+  uploadId: string,
+  authority: SkillLibraryAuthority,
+) {
+  return requireSelectedSkillLibraryUpload(
+    db,
+    uploadId,
+    authority,
+    skillLibraryDb(db).selectFrom("skill_library_uploads").selectAll(),
+  );
+}
+
+export function requireSkillLibraryUploadMetadata(
+  db: DatabaseSync,
+  uploadId: string,
+  authority: SkillLibraryAuthority,
+) {
+  return requireSelectedSkillLibraryUpload(
+    db,
+    uploadId,
+    authority,
+    skillLibraryDb(db)
+      .selectFrom("skill_library_uploads")
+      .select(["owner_profile_id", "expires_at", "slug", "published_skill_id"]),
+  );
 }
 
 export function selectSkillLibraryRow(

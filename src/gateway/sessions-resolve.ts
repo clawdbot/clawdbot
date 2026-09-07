@@ -25,7 +25,7 @@ import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { prepareSessionSharing } from "./session-sharing.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { resolveGatewaySessionDisplayName } from "./session-utils-display.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
@@ -217,7 +217,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     const exactKey = sameAgent
       ? resolveSessionStoreKey({ cfg, sessionKey: referenceKey, storeAgentId: p.agentId })
       : referenceKey;
-    const { store, agentIdBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
+    const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
       agentId: p.agentId,
       configuredAgentsOnly: true,
       projection: "list",
@@ -238,7 +238,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       sessionResolveCandidate(
         candidateKey,
         entry,
-        expectDefined(agentIdBySessionKey.get(candidateKey), "reference session agent"),
+        expectDefined(targetsBySessionKey.get(candidateKey), "reference session agent").agentId,
       );
     const exact = entries.find(
       ([candidateKey]) => normalizeSessionKeyPreservingOpaquePeerIds(candidateKey) === exactKey,
@@ -277,6 +277,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       cfg,
       key,
       clone: false,
+      projection: "list",
       ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
     });
     const store = target.store;
@@ -311,7 +312,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
         { agentId: string; entry: SessionEntry; key: string }
       >();
       for (const agentId of listAgentIds(cfg)) {
-        const loaded = loadCombinedSessionStoreForGatewayCore(cfg, { agentId });
+        const loaded = loadCombinedSessionStoreForGatewayCore(cfg, {
+          agentId,
+          projection: "list",
+        });
         const agentMatches = findVisibleSessionIdMatches({
           cfg,
           store: loaded.store,
@@ -370,7 +374,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
         );
       }
     }
-    const { store } = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: p.agentId });
+    const { store } = loadCombinedSessionStoreForGatewayCore(cfg, {
+      agentId: p.agentId,
+      projection: "list",
+    });
     const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId, entryFilter });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
@@ -452,7 +459,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { store } = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: p.agentId });
+  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
+    agentId: p.agentId,
+    projection: "list",
+  });
   const now = Date.now();
   // Keep list-discovery snapshot semantics without hydrating display rows.
   let rowContext: SessionListRowContext | undefined;
@@ -493,10 +503,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
   return {
     ok: true,
     key: labelKey,
-    agentId: normalizeAgentId(
-      parseAgentSessionKey(labelKey)?.agentId ??
-        p.agentId ??
-        resolveSessionStoreAgentId(cfg, labelKey),
-    ),
+    agentId: expectDefined(targetsBySessionKey.get(labelKey), "label session agent").agentId,
   };
 }

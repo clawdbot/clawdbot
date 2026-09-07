@@ -217,6 +217,67 @@ describe("browser panel route handoff", () => {
     expect(pageTitle(panel)).toBe("work");
   });
 
+  it("leaves a stopped browser on its Start affordance instead of focusing a historical tab", async () => {
+    let running = false;
+    const routedRefresh = createDeferred();
+    let pauseRefresh = false;
+    const gateway = createBrowserClient(async (request) => {
+      if (request.path === "/tabs") {
+        if (pauseRefresh) {
+          await routedRefresh.promise;
+        }
+        return running
+          ? {
+              running: true,
+              tabs: [createBrowserPanelTestTab("t1", "https://managed.example/", "managed")],
+            }
+          : { running: false, tabs: [] };
+      }
+      if (request.path === "/start") {
+        running = true;
+        return { ok: true };
+      }
+      if (request.path === "/screenshot") {
+        return { path: "/fresh.png", targetId: "raw-t1", url: "https://managed.example/" };
+      }
+      if (request.path === "/act") {
+        return createBrowserPanelTestMetrics("https://managed.example/", "managed");
+      }
+      return { ok: true };
+    });
+    const panel = await mountPanel(gateway.client, false);
+    panel.preferredTab = { tab: { ...hostTab, targetId: "dead-target" }, revision: "stale" };
+    panel.presented = true;
+    await waitForFast(() => expect(controllerFor(panel).running).toBe(false));
+    await panel.updateComplete;
+
+    const paths = () =>
+      gateway.request.mock.calls.map(([, value]) => (value as BrowserRequestEnvelope).path);
+    expect(paths()).toEqual(["/tabs"]);
+    expect(controllerFor(panel).errorText).toBeNull();
+    const start = panel.shadowRoot?.querySelector<HTMLButtonElement>(".bp-btn");
+    expect(start?.textContent?.trim()).toBe("Start browser");
+    const reload = panel.shadowRoot?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Reload"]',
+    );
+    expect(reload?.disabled).toBe(true);
+
+    pauseRefresh = true;
+    chooseCard(panel, { ...hostTab, targetId: "dead-target" });
+    try {
+      await panel.updateComplete;
+      expect(reload?.disabled).toBe(true);
+    } finally {
+      routedRefresh.resolve();
+    }
+    await flushBrowserResponses();
+
+    start?.click();
+    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    expect(paths()).toEqual(expect.arrayContaining(["/start", "/screenshot"]));
+    expect(paths()).not.toContain("/tabs/focus");
+  });
+
   it("keeps a raw target selection when its stable tab alias is not the first tab", async () => {
     const gateway = browserGateway();
     const panel = await mountPanel(gateway.client, false);

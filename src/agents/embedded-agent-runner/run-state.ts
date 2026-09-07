@@ -105,6 +105,8 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
 };
 
 export type EmbeddedRunRegistration = {
+  /** Registration-owned presentation fact; retained cleanup must not reappear after context release. */
+  projectSessionActive?: boolean;
   toolAuthority?: ReturnType<EmbeddedRunToolAuthorityBinding>;
   sessionId: string;
   sessionKey?: string;

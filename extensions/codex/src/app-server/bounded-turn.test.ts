@@ -74,6 +74,7 @@ function createClientFactory(
     beforeRequest?: (method: string) => Promise<void>;
     modelProvider?: string;
     responseCompletions?: Array<{ responseId: string; usage: JsonValue }>;
+    preBindDeltaCount?: number;
   } = {},
 ) {
   const methods: string[] = [];
@@ -139,6 +140,17 @@ function createClientFactory(
       }
       queueMicrotask(() => {
         for (const handler of fixture.notifications) {
+          for (let index = 0; index < (options.preBindDeltaCount ?? 0); index += 1) {
+            void handler({
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-finalizer",
+                turnId: "turn-finalizer",
+                itemId: "answer",
+                delta: ".",
+              },
+            });
+          }
           if (options.errorBeforeCompletion) {
             void handler({
               method: "error",
@@ -215,10 +227,142 @@ function createClientFactory(
     handleServerRequest: (serverRequest: Parameters<typeof fixture.handleServerRequest>[0]) =>
       fixture.handleServerRequest(serverRequest),
     notify: (notification: Parameters<typeof fixture.notify>[0]) => fixture.notify(notification),
+    close: fixture.close,
   };
 }
 
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
+  it.each(["bound notification", "queued notification", "terminal response"] as const)(
+    "keeps an accepted %s when the transport closes immediately afterward",
+    async (receipt) => {
+      const started = createDeferred<void>();
+      const declined = createDeferred<void>();
+      const sendCompletion = () => {
+        harness.send({
+          method: "item/completed",
+          params: {
+            threadId: "thread-finalizer",
+            turnId: "turn-finalizer",
+            item: { id: "first", type: "agentMessage", text: "First answer." },
+          },
+        });
+        harness.send({
+          method: "turn/completed",
+          params: { threadId: "thread-finalizer", ...completedTurnResult() },
+        });
+        harness.emitExit();
+      };
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line) as { id: number | string; method?: string };
+          if (request.id === "binding-fence") {
+            declined.resolve();
+            return;
+          }
+          const results: Record<string, unknown> = {
+            "model/list": { data: [codexModel()], nextCursor: null },
+            "config/read": { config: {}, layers: [] },
+            "configRequirements/read": { requirements: null },
+            "thread/start": threadStartResult("gpt-5.4"),
+            "mcpServerStatus/list": { data: [], nextCursor: null },
+            "turn/start":
+              receipt === "terminal response" ? completedTurnResult() : inProgressTurnResult(),
+          };
+          send({ id: request.id, result: results[request.method ?? ""] });
+          if (request.method === "turn/start") {
+            started.resolve();
+            if (receipt === "queued notification") {
+              sendCompletion();
+            } else if (receipt === "terminal response") {
+              harness.emitExit();
+            }
+          }
+        },
+      });
+      const run = runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: async () => harness.client },
+        taskLabel: "isolated completion",
+        developerInstructions: "Answer only.",
+        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "configured-transport",
+      });
+      const result = expect(run).resolves.toMatchObject({
+        text: `${receipt === "terminal response" ? "" : "First answer.\n\n"}The message was sent successfully.`,
+      });
+      try {
+        await started.promise;
+        if (receipt === "bound notification") {
+          // A serviced request proves the exact turn has bound, without depending on microtask counts.
+          harness.send({
+            id: "binding-fence",
+            method: "mcpServer/elicitation/request",
+            params: { threadId: "thread-finalizer", turnId: "turn-finalizer", serverName: "forms" },
+          });
+          await declined.promise;
+          sendCompletion();
+        }
+        await result;
+      } finally {
+        harness.client.close();
+        await run.catch(() => {});
+      }
+    },
+  );
+
+  it("rejects a waiting completion when its app-server client closes", async () => {
+    const fake = createClientFactory({ completeTurn: false });
+    const controller = new AbortController();
+    let outcome: unknown;
+    const run = runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: "gpt-5.4" },
+      timeoutMs: 5_000,
+      signal: controller.signal,
+      options: { clientFactory: fake.factory },
+      taskLabel: "isolated completion",
+      developerInstructions: "Name the conversation.",
+      input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
+      requiredModalities: ["text"],
+      isolation: "configured-transport",
+    }).catch((error: unknown) => {
+      outcome = error;
+    });
+    try {
+      await vi.waitFor(() => expect(fake.methods).toContain("turn/start"));
+      fake.close(new Error("app-server transport disconnected"));
+      await vi.waitFor(
+        () =>
+          expect(outcome).toEqual(
+            expect.objectContaining({
+              message: expect.stringContaining("closed"),
+            }),
+          ),
+        { timeout: 200 },
+      );
+    } finally {
+      controller.abort("test cleanup");
+      await run;
+    }
+  });
+
+  it("bounds turn notifications received before turn/start acknowledges", async () => {
+    const fake = createClientFactory({ preBindDeltaCount: 257 });
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "isolated completion",
+        developerInstructions: "Name the conversation.",
+        input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "configured-transport",
+      }),
+    ).rejects.toThrow("pre-bind notification buffer exceeded");
+  });
+
   it.each(["model/list", "mcpServerStatus/list"])(
     "does not dispatch a turn after its caller retires during %s",
     async (suspendedMethod) => {

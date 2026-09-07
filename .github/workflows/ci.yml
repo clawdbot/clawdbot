@@ -613,6 +613,14 @@ jobs:
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
               harness = os.path.join(workspace, ".ci-harness")
+              # This owner creates the harness, not candidate source. Keep strict source-status
+              # checks useful without hiding tracked edits or similarly named nested paths.
+              exclude = os.path.join(workspace, git_output(workspace, "rev-parse", "--git-path", "info/exclude").strip())
+              os.makedirs(os.path.dirname(exclude), exist_ok=True)
+              with open(exclude, "a+b") as output:
+                  output.seek(0)
+                  if output.read().splitlines()[-1:] != [b"/.ci-harness/"]:
+                      output.write(b"\n/.ci-harness/\n")
               os.makedirs(harness, exist_ok=True)
               if sha == os.environ["WORKFLOW_SHA"]:
                   # Export the workflow revision from the freshly populated index, replacing
@@ -1577,6 +1585,28 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
+          // Grouped rows list every striped test file. Current targets pack the
+          // projected runner contract; older targets retain the same projection
+          // as legacy JSON because their shard runner predates the codec.
+          const nodeTestGroupsCodecPath = "./scripts/lib/ci-node-test-groups-codec.mts";
+          const nodeTestGroupsCodec =
+            rawNodeTestShards.some((shard) => shard.groups) &&
+            existsSync(nodeTestGroupsCodecPath)
+              ? await importTargetPlan(nodeTestGroupsCodecPath)
+              : null;
+          const encodeNodeTestGroups = (groups) => {
+            if (typeof nodeTestGroupsCodec?.encodeNodeTestGroups !== "function") {
+              throw new Error("CI target emits grouped Node test rows without scripts/lib/ci-node-test-groups-codec.mts");
+            }
+            return nodeTestGroupsCodec.encodeNodeTestGroups(groups);
+          };
+          const projectNodeTestGroup = ({
+            configs,
+            env,
+            includePatterns,
+            shard_name,
+            timing_key,
+          }) => ({ configs, env, includePatterns, shard_name, timing_key });
           const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
           const knownToolingConfigs = new Set([
             goToolingConfig,
@@ -1586,12 +1616,16 @@ jobs:
           // The same capped matrix owns compact and plugin work; admit its longest rows first.
           const nodeTestShards = rawNodeTestShards
             .toSorted((a, b) => (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
-            .map((shard) => ({
+            .map((shard) => {
+              const groups = shard.groups?.map(projectNodeTestGroup);
+              return {
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
                 shard_name: shard.shardName,
-                groups: shard.groups,
+                groups_gzip_base64:
+                  groups && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined,
+                groups: groups && !nodeTestGroupsCodec ? groups : undefined,
                 configs: shard.configs,
                 env: shard.env,
                 includePatterns: shard.includePatterns,
@@ -1626,8 +1660,9 @@ jobs:
                       ) ||
                       (group.shard_name === "agentic-agents-support" &&
                         !group.includePatterns),
-                  ),
-              }));
+                   ),
+              };
+            });
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
           const nodeMatrixLimit = compactPlanMode === "pull-request" ? 120 : 64;
@@ -2683,6 +2718,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # This fixture uses synthetic documents and a mocked Gateway; exclude other UI artifacts.
+      - name: Upload synthetic widget prompt failure evidence
+        if: failure() && hashFiles('.artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: widget-sandbox-ci-${{ strategy.job-index }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/*.png
+            .artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/*.webm
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Test browser extension bootstrap end-to-end
         if: matrix.task == 'browser-extension'
         run: pnpm test:e2e:browser-extension
@@ -2697,8 +2745,8 @@ jobs:
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
     # First-attempt same-repo runs use Blacksmith unless the backend breaker is
     # set; manual dispatches, forks, and same-repo PR retries also use GitHub-hosted capacity.
-    # This lane owns the same serial Chromium workload as checks-ui-e2e, so it
-    # follows that job's hybrid routing: Blacksmith on attempt 1, hosted on rerun.
+    # Keep the existing hybrid route for the prepared Chromium workload:
+    # Blacksmith on attempt 1, hosted on rerun.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
@@ -2721,26 +2769,42 @@ jobs:
 
       - name: Test Control UI suites with a real Gateway
         env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
           OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
-        run: >-
-          node scripts/run-vitest.mjs run
-          --config test/vitest/vitest.ui-e2e.config.ts
-          --configLoader runner
-          ui/src/e2e/mcp-app-conformance.e2e.test.ts
-          ui/src/e2e/control-ui-auth-transports.e2e.test.ts
-          ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts
-          ui/src/e2e/logs-lifecycle.e2e.test.ts
-          ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts
-          ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts
-          ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts
-          ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts
-          ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts
-          ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts
-          extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
-          extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts
-          extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
-          extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts
+        run: |
+          set -euo pipefail
+          config=test/vitest/vitest.ui-e2e-prebuilt.config.ts
+          # Old frozen targets retain their own serial config and complete test list.
+          # A present config's readiness failure must fail this invocation.
+          if [[ ! -f "$config" ]]; then
+            if [[ "$FROZEN_TARGET" != "true" ]]; then
+              echo "::error::Current target is missing $config" >&2
+              exit 1
+            fi
+            config=test/vitest/vitest.ui-e2e.config.ts
+          fi
+          node scripts/run-vitest.mjs run \
+            --config "$config" \
+            --configLoader runner \
+            ui/src/e2e/mcp-app-conformance.e2e.test.ts \
+            ui/src/e2e/control-ui-auth-transports.e2e.test.ts \
+            ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts \
+            ui/src/e2e/profile-page.real-gateway.e2e.test.ts \
+            ui/src/e2e/logs-lifecycle.e2e.test.ts \
+            ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts \
+            ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts \
+            ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts \
+            ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
+            ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
+            extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts \
+            extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts \
+            extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts \
+            extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
@@ -3366,6 +3430,7 @@ jobs:
           path: .ci-workflow
           sparse-checkout: |
             scripts/ci-run-node-test-shard.mts
+            scripts/lib/ci-node-test-groups-codec.mts
             scripts/lib/direct-run.mjs
             scripts/lib/local-check-runtime.mts
             scripts/lib/numeric-options.mjs
@@ -3396,7 +3461,8 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_gzip_base64 || '' }}
+          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ matrix.groups && toJson(matrix.groups) || '' }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
@@ -3417,7 +3483,7 @@ jobs:
             runner=".ci-workflow/${runner}"
             [[ -f "$runner" ]]
           fi
-          node --import tsx "$runner"
+          time -p node --import tsx "$runner"
 
       - &runner_memory_peak_step
         name: Record runner memory peak
@@ -4704,6 +4770,14 @@ jobs:
           fi
           swift test "${openclawkit_test_args[@]}"
 
+      - name: Swabble tests
+        if: matrix.phase == 'tests' && env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          swabble_scratch="$(mktemp -d "$RUNNER_TEMP/swabble.XXXXXX")"
+          trap 'rm -rf "$swabble_scratch"' EXIT
+          swift test --package-path apps/swabble --scratch-path "$swabble_scratch" --build-system native --no-parallel
+
       - name: Swift test
         id: swift-test
         if: matrix.phase == 'tests'
@@ -4782,14 +4856,15 @@ jobs:
     name: ${{ format('ios-build ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
-    # Release device products are not inputs to the simulator test graph.
+    # Automatic CI compiles and lints; full manual validation adds independent
+    # Release device and simulator test phases.
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') }}
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && (needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') || '["smoke"]') }}
     # Blacksmith macOS 26 admission stalled while hosted retries completed.
-    # Start both phases on the verified hosted image instead of waiting to retry.
+    # Start each phase on the verified hosted image instead of waiting to retry.
     runs-on: macos-26
     timeout-minutes: 150
     env:
@@ -4822,7 +4897,8 @@ jobs:
 
       - &install_watch_rust_toolchain
         name: Install Watch Rust toolchain
-        if: env.HISTORICAL_TARGET != 'true'
+        # Frozen release sources can include Watch RTC even when they use compatibility CI.
+        if: env.HISTORICAL_TARGET != 'true' || hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''
         run: |
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:$PATH"
@@ -4831,7 +4907,7 @@ jobs:
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
 
       - name: Test Watch RTC engine
-        if: matrix.phase == 'tests' && env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase == 'tests' && (env.HISTORICAL_TARGET != 'true' || hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != '')
         working-directory: apps/shared/OpenClawWatchRTC
         run: |
           set -euo pipefail
@@ -4897,7 +4973,7 @@ jobs:
           fi
 
       - name: Swift lint
-        if: matrix.phase == 'tests'
+        if: matrix.phase == 'smoke' || matrix.phase == 'tests'
         run: |
           if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
             ./scripts/lint-swift.sh ios
@@ -4908,7 +4984,7 @@ jobs:
           fi
 
       - name: Build iOS app
-        if: matrix.phase == 'tests'
+        if: matrix.phase == 'smoke' || matrix.phase == 'tests'
         run: pnpm ios:build
 
       # Debug's incremental compilation can miss actor-isolation diagnostics
@@ -4963,6 +5039,8 @@ jobs:
             -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests \
             -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
+            -only-testing:OpenClawTests/LocationServiceCallbackTests \
+            -only-testing:OpenClawTests/LocationServiceOrderingTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
             -only-testing:OpenClawTests/WatchMessagingInboundTransportTests \
             -only-testing:OpenClawTests/WatchSessionActivationGateTests \
@@ -5054,11 +5132,10 @@ jobs:
       contents: read
     name: "ios-screenshots-${{ matrix.device_family }}"
     # Each shard builds its own simulator app; ios-build produces no input here.
-    # The final CI gate still requires both build and screenshot evidence.
+    # Full manual validation requires both build and screenshot evidence.
     needs: [preflight]
-    # Full manual/release validation always captures. PRs and their exact-head
-    # release-gate substitutes use the same conservative screenshot-risk scope.
-    if: ${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    # PRs and their exact-head release-gate substitutes retain only the build smoke.
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
     # Keep capture on the same verified hosted image as the iOS build phases.
     runs-on: macos-26
     timeout-minutes: 90
@@ -5202,7 +5279,7 @@ jobs:
       contents: read
     name: "ios-screenshot-evidence"
     needs: [preflight, ios-screenshot-shard]
-    if: ${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -5515,6 +5592,15 @@ jobs:
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
         run: pnpm test:docker:all
 
+      - name: Upload Fleet Docker proof
+        if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' fleet-cache ')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fleet-cache-docker-proof
+          path: .artifacts/docker-tests/**/fleet-cache.log
+          include-hidden-files: true
+          if-no-files-found: warn
+
       - *runner_memory_peak_step
 
   ci-gate:
@@ -5589,8 +5675,8 @@ jobs:
             macos-node=${{ needs.macos-node.result }}|${{ needs.preflight.outputs.run_macos_node }}
             macos-swift=${{ needs.macos-swift.result }}|${{ needs.preflight.outputs.run_macos_swift }}
             ios-build=${{ needs.ios-build.result }}|${{ needs.preflight.outputs.run_ios_build }}
-            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
-            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
         run: |

@@ -409,6 +409,52 @@ afterEach(async () => {
 const itWithCli = it.runIf(process.platform !== "win32");
 
 describe("OpenCode session catalog", () => {
+  itWithCli.each(["runtime", "request"] as const)(
+    "discovers paired nodes only for selected hosts through the %s node runtime",
+    async (discovery) => {
+      await installFakeOpenCode();
+      const nodes = [pairedNode([OPENCODE_SESSIONS_LIST_COMMAND])];
+      const invoke = vi.fn().mockResolvedValue(pairedNodeSessionPage(pairedNodeSession()));
+      const { listNodes: runtimeListNodes, provider } = capturePairedNodeCatalog(nodes, invoke);
+      const requestListNodes = vi.fn().mockResolvedValue({ nodes });
+      const options = discovery === "request" ? { listNodes: requestListNodes } : {};
+      for (const hostIds of [["gateway"], [], ["unknown"]]) {
+        const hosts = await provider!.list({ ...options, hostIds });
+        expect(hosts.map((host) => host.hostId)).toEqual(
+          hostIds[0] === "gateway" ? ["gateway"] : [],
+        );
+        if (hostIds[0] === "gateway") {
+          expect(hosts[0]?.sessions[0]?.threadId).toBe("ses_test");
+        }
+        expect(runtimeListNodes).not.toHaveBeenCalled();
+        expect(requestListNodes).not.toHaveBeenCalled();
+        expect(invoke).not.toHaveBeenCalled();
+      }
+
+      for (const hostIds of [undefined, ["gateway", "node:node-1"], ["node:node-1"]]) {
+        const hosts = await provider!.list({ ...options, ...(hostIds ? { hostIds } : {}) });
+        expect(hosts.map((host) => host.hostId)).toEqual(
+          hostIds?.length === 1 ? ["node:node-1"] : ["gateway", "node:node-1"],
+        );
+        expect(hosts.at(-1)?.sessions[0]?.threadId).toBe("ses_remote");
+      }
+      const hostIds = ["gateway", "node:node-1"];
+      const hosts = await provider!.list({
+        ...options,
+        hostIds,
+        onHost: () => {
+          hostIds.length = 0;
+        },
+      });
+      expect(hosts.map((host) => host.hostId)).toEqual(["gateway", "node:node-1"]);
+      expect(discovery === "request" ? requestListNodes : runtimeListNodes).toHaveBeenCalledTimes(
+        4,
+      );
+      expect(discovery === "request" ? runtimeListNodes : requestListNodes).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledTimes(4);
+    },
+  );
+
   itWithCli("lists and reads sessions through the official CLI JSON surfaces", async () => {
     await installFakeOpenCode();
     const listed = await listLocalOpenCodeSessionPage({ limit: 20 });

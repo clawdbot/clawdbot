@@ -18,7 +18,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { nextApnsRegistrationVersion } from "./push-apns-store-transaction.js";
+import {
+  clearApnsRegistrationFromDatabase,
+  nextApnsRegistrationVersion,
+} from "./push-apns-store-transaction.js";
 import {
   normalizeApnsRelayBaseUrl,
   normalizePersistedApnsRelayBaseUrl,
@@ -617,32 +620,6 @@ export async function clearApnsRegistrationIfCurrent(params: {
     ) {
       return false;
     }
-    const tombstone = executeSqliteQueryTakeFirstSync(
-      db,
-      stateDb
-        .selectFrom("apns_registration_tombstones")
-        .select("deleted_at_ms")
-        .where("node_id", "=", normalizedNodeId),
-    );
-    const previousVersions = [currentRow.updated_at_ms, tombstone?.deleted_at_ms].filter(
-      (version): version is number => version !== undefined,
-    );
-    const deletedAtMs = nextApnsRegistrationVersion(normalizedNodeId, previousVersions);
-    // Doctor may not have retired the old JSON yet. This durable tombstone
-    // prevents that stale source from restoring an invalidated registration.
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .insertInto("apns_registration_tombstones")
-        .values({ node_id: normalizedNodeId, deleted_at_ms: deletedAtMs })
-        .onConflict((conflict) =>
-          conflict.column("node_id").doUpdateSet({ deleted_at_ms: deletedAtMs }),
-        ),
-    );
-    executeSqliteQuerySync(
-      db,
-      stateDb.deleteFrom("apns_registrations").where("node_id", "=", normalizedNodeId),
-    );
-    return true;
+    return clearApnsRegistrationFromDatabase(db, normalizedNodeId);
   }, apnsStateDatabaseOptions(params.baseDir));
 }

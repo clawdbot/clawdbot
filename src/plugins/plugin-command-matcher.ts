@@ -56,17 +56,16 @@ export function matchRegisteredPluginCommand(params: {
     return null;
   }
   const { keys, args } = invocation;
-  const command = keys
-    .map((candidateKey) =>
-      params.commands.find(
-        (candidate) =>
-          pluginCommandSupportsChannel(candidate, params.channel) &&
-          listInvocationKeys(candidate, params.aliasScope).includes(candidateKey),
-      ),
-    )
-    .find((candidate): candidate is RegisteredPluginCommand => candidate !== undefined);
-  if (!command || (args && !command.acceptsArgs)) {
-    return null;
+  for (const candidateKey of keys) {
+    const command = params.commands.find(
+      (candidate) =>
+        pluginCommandSupportsChannel(candidate, params.channel) &&
+        listInvocationKeys(candidate, params.aliasScope).includes(candidateKey),
+    );
+    if (command) {
+      // The preferred spelling owns argument rejection; do not try another command.
+      return args && !command.acceptsArgs ? null : { command, args };
+    }
   }
-  return { command, args };
+  return null;
 }

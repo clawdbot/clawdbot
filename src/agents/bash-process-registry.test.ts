@@ -9,6 +9,7 @@ import {
   acknowledgeNotifyOnExit,
   addSession,
   appendOutput,
+  clearFinishedSessionsForScopes,
   deleteSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
@@ -19,7 +20,6 @@ import {
   markExited,
   prepareSessionPoll,
   recordNotifyOnExitRemoval,
-  setJobTtlMs,
   tail,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
@@ -430,33 +430,96 @@ describe("bash process registry", () => {
     }
   });
 
-  it("clamps a zero retention TTL to one minute", () => {
+  it("expires by completion-relative deadlines without retiring captured poll or notification receipts", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-07-09T00:00:00Z"));
-      setJobTtlMs(0);
-
-      const session = createRegistrySession({
-        id: "zero-ttl",
-        maxOutputChars: 100,
-        pendingMaxOutputChars: 30_000,
+      const long = createProcessSessionFixture({
+        id: "long",
+        cleanupMs: 4 * 60 * 60 * 1000,
         backgrounded: true,
       });
-      addSession(session);
-      markExited(session, 0, null, "completed");
-
-      vi.advanceTimersByTime(30_000);
-      expect(listFinishedSessions()).toHaveLength(1);
+      const short = createProcessSessionFixture({ id: "short", cleanupMs: 0, backgrounded: true });
+      addSession(long);
+      addSession(short);
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(120_000);
+      expect(getFinishedSession(short.id)).toBeUndefined();
+      // Completion order does not imply expiry order when agent durations differ.
+      markExited(long, 0, null, "completed");
+      vi.advanceTimersByTime(10_000);
+      appendOutput(short, "stdout", "retained poll output");
+      markExited(short, 0, null, "completed");
+      const endedAt = short.endedAt;
+      const expiresAt = short.expiresAt;
+      const remove = vi.fn(() => true);
+      recordNotifyOnExitRemoval(short, remove);
+      const delivery = prepareSessionPoll(short, {});
+      expect(delivery.output).toBe("retained poll output");
+      expect(long.expiresAt! - long.endedAt!).toBe(3 * 60 * 60 * 1000);
+      expect(short.expiresAt! - short.endedAt!).toBe(60_000);
+      expect(getFinishedSession(short.id)).toBe(short);
+      expect(vi.getTimerCount()).toBe(1);
 
       vi.advanceTimersByTime(60_000);
+      expect(getFinishedSession(short.id)).toBeUndefined();
+      expect(getFinishedSession(long.id)).toBe(long);
+      expect(short.endedAt).toBe(endedAt);
+      expect(short.expiresAt).toBe(expiresAt);
+      expect(short.pendingPollDelivery?.output).toBe("retained poll output");
+      expect(remove).not.toHaveBeenCalled();
+      delivery.acknowledge();
+      acknowledgeNotifyOnExit(short);
+      expect(remove).toHaveBeenCalledOnce();
+
+      vi.advanceTimersByTime(3 * 60 * 60 * 1000 - 70_000);
       expect(listFinishedSessions()).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
-      resetProcessRegistryForTests();
-      setJobTtlMs(30 * 60 * 1000);
       resetProcessRegistryForTests();
       vi.useRealTimers();
     }
   });
+
+  it.each(["delete", "scope", "reset"] as const)(
+    "retires its timer after %s removes retained results",
+    (removal) => {
+      vi.useFakeTimers();
+      try {
+        const first = createProcessSessionFixture({
+          id: "first",
+          cleanupMs: 60_000,
+          backgrounded: true,
+        });
+        const last = createProcessSessionFixture({
+          id: "last",
+          cleanupMs: 180_000,
+          backgrounded: true,
+        });
+        last.scopeKey = "retired";
+        addSession(first);
+        addSession(last);
+        markExited(first, 0, null, "completed");
+        markExited(last, 0, null, "completed");
+        deleteSession(first.id);
+        expect(vi.getTimerCount()).toBe(1);
+        vi.advanceTimersByTime(60_000);
+        expect(getFinishedSession(last.id)).toBe(last);
+        if (removal === "delete") {
+          deleteSession(last.id);
+        } else if (removal === "scope") {
+          clearFinishedSessionsForScopes(["retired"]);
+        } else {
+          resetProcessRegistryForTests();
+        }
+        expect(listFinishedSessions()).toHaveLength(0);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        resetProcessRegistryForTests();
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 describe("cursorKeyMode", () => {

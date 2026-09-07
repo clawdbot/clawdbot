@@ -1,5 +1,6 @@
 import { gunzipSync } from "node:zlib";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
+import type { Compilable, InferResult } from "kysely";
 import {
   compileSqliteQueryBindings,
   executeSqliteQuerySync,
@@ -8,11 +9,16 @@ import {
 } from "../infra/kysely-sync.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import type { CaptureObservedDimension, CaptureSessionCoverageSummary } from "./types.js";
+import type {
+  CaptureObservedDimension,
+  CaptureQueryPreset,
+  CaptureQueryRow,
+  CaptureSessionCoverageSummary,
+} from "./types.js";
 
 type DebugProxyCaptureDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "capture_events" | "capture_blobs"
+  "capture_sessions" | "capture_events" | "capture_blobs"
 >;
 type NodeSqliteDatabase = Parameters<typeof getNodeSqliteKysely>[0];
 
@@ -20,6 +26,137 @@ export type DebugProxyCaptureReader = {
   getSessionEvents(sessionId: string, limit?: number): Array<Record<string, unknown>>;
   readBlob(blobId: string): string | null;
 };
+
+export function listDebugProxyCaptureSessions(db: NodeSqliteDatabase, limit = 50) {
+  const query = getNodeSqliteKysely<DebugProxyCaptureDatabase>(db)
+    .selectFrom("capture_sessions as s")
+    .leftJoin("capture_events as e", "e.session_id", "s.id")
+    .select([
+      "s.id",
+      "s.started_at as startedAt",
+      "s.ended_at as endedAt",
+      "s.mode",
+      "s.source_process as sourceProcess",
+      "s.proxy_url as proxyUrl",
+    ])
+    .select((eb) => eb.fn.count<number>("e.id").as("eventCount"))
+    .groupBy("s.id")
+    .orderBy("s.started_at", "desc")
+    .limit(limit);
+  const { compiled, bind } = compileSqliteQueryBindings(() => query);
+  // Native reads retain the store's failure ownership without evicting its borrowed DB.
+  return db /* sqlite-allow-raw -- Execute Kysely SQL with native failure ownership. */
+    .prepare(compiled.sql)
+    .all(...bind(undefined)) as InferResult<typeof query>; // SAFETY: Native columns follow this generated projection.
+}
+
+export function findDebugProxyCaptureBlobReference(
+  db: NodeSqliteDatabase,
+  blobId: string,
+): string | null {
+  const query = getNodeSqliteKysely<DebugProxyCaptureDatabase>(db)
+    .selectFrom("capture_events")
+    .select("data_blob_id as blobId")
+    .where("data_blob_id", "=", blobId)
+    .limit(1);
+  const { compiled, bind } = compileSqliteQueryBindings(() => query);
+  const row = db /* sqlite-allow-raw -- Execute Kysely SQL with native failure ownership. */
+    .prepare(compiled.sql)
+    .get(...bind(undefined)) as InferResult<typeof query>[number] | undefined; // SAFETY: Native lookup returns the selected nullable text column.
+  return row?.blobId || null;
+}
+
+export function queryDebugProxyCapturePreset(
+  db: NodeSqliteDatabase,
+  preset: CaptureQueryPreset,
+  sessionId?: string,
+): CaptureQueryRow[] {
+  const kysely = getNodeSqliteKysely<DebugProxyCaptureDatabase>(db);
+  let events = kysely.selectFrom("capture_events");
+  if (sessionId) {
+    events = events.where("session_id", "=", sessionId);
+  }
+  const locations = events.select(["host", "path"]);
+  const count = kysely.fn.countAll<number>();
+  let query: Compilable<CaptureQueryRow>;
+  // Aggregate in SQLite so diagnostics do not hydrate whole capture sessions.
+  switch (preset) {
+    case "double-sends":
+      query = locations
+        .select(["method", count.as("duplicateCount")])
+        .where("kind", "=", "request")
+        .groupBy(["host", "path", "method", "data_sha256"])
+        .having(count, ">", 1)
+        .orderBy("duplicateCount", "desc")
+        .orderBy("host", "asc");
+      break;
+    case "retry-storms":
+      query = locations
+        .select(count.as("errorCount"))
+        .where("kind", "=", "response")
+        .where("status", ">=", 429)
+        .groupBy(["host", "path"])
+        .having(count, ">", 1)
+        .orderBy("errorCount", "desc")
+        .orderBy("host", "asc");
+      break;
+    case "cache-busting":
+      query = locations
+        .select(count.as("variantCount"))
+        .where("kind", "=", "request")
+        .where((eb) =>
+          eb.or([
+            eb("path", "like", "%?%"),
+            eb("headers_json", "like", "%cache-control%"),
+            eb("headers_json", "like", "%pragma%"),
+          ]),
+        )
+        .groupBy(["host", "path"])
+        .orderBy("variantCount", "desc")
+        .orderBy("host", "asc");
+      break;
+    case "ws-duplicate-frames":
+      query = locations
+        .select(count.as("duplicateFrames"))
+        .where("kind", "=", "ws-frame")
+        .where("direction", "=", "outbound")
+        .groupBy(["host", "path", "data_sha256"])
+        .having(count, ">", 1)
+        .orderBy("duplicateFrames", "desc")
+        .orderBy("host", "asc");
+      break;
+    case "missing-ack":
+      query = events
+        .select(["flow_id as flowId", "host", "path", count.as("outboundFrames")])
+        .where("kind", "=", "ws-frame")
+        .where("direction", "=", "outbound")
+        .where(
+          "flow_id",
+          "not in",
+          events
+            .select("flow_id")
+            .where("kind", "=", "ws-frame")
+            .where("direction", "=", "inbound"),
+        )
+        .groupBy(["flow_id", "host", "path"])
+        .orderBy("outboundFrames", "desc");
+      break;
+    case "error-bursts":
+      query = locations
+        .select(count.as("errorCount"))
+        .where("kind", "=", "error")
+        .groupBy(["host", "path"])
+        .orderBy("errorCount", "desc")
+        .orderBy("host", "asc");
+      break;
+    default:
+      return [];
+  }
+  const { compiled, bind } = compileSqliteQueryBindings(() => query);
+  return db /* sqlite-allow-raw -- Execute Kysely SQL with native failure ownership. */
+    .prepare(compiled.sql)
+    .all(...bind(undefined)) as CaptureQueryRow[]; // SAFETY: Each typed preset selects only text, count, or nullable columns.
+}
 
 export function readDebugProxyCaptureSessionEvents(
   db: NodeSqliteDatabase,

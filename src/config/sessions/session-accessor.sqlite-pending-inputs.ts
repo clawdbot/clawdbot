@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import {
@@ -9,6 +10,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionPendingInputs } from "../../state/openclaw-agent-db.generated.js";
@@ -48,6 +50,7 @@ export type SessionPendingInputOwner = {
   config?: OpenClawConfig;
   assertCurrent: () => void;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
+  restartRecovered?: true;
   /** Aggregate authority is the exact source closures, never persisted source identifiers. */
   sources?: readonly SessionPendingInputOwner[];
 };
@@ -59,7 +62,13 @@ const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOw
     owner: SessionPendingInputOwner;
     sourceInputId: string;
   }>(),
+  transactionRelocations: new WeakMap<DatabaseSync, Map<SessionPendingInputOwner, string>>(),
 }));
+
+const recoveredDedupeOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionPendingInputDedupeRecoveries"),
+  () => new WeakSet<SessionPendingInputOwner>(),
+);
 
 registerAgentEventLifecycleRotationHandler("session-pending-inputs", () => {
   const failures: unknown[] = [];
@@ -129,7 +138,7 @@ export function withSessionPendingInputRelocation<T>(
     return append();
   }
   assertPendingInputOwnerCurrent(owner);
-  if (owner.transcriptInputId !== sourceInputId || JSON.stringify(message) !== owner.messageJson) {
+  if (JSON.stringify(message) !== owner.messageJson) {
     throw new Error("Pending input relocation does not match its admitted transcript entry");
   }
   return owners.relocation.run({ owner, sourceInputId }, append);
@@ -190,6 +199,42 @@ export function projectSessionPendingInput(row: SessionPendingInputRow): Session
   };
 }
 
+/** Only a current recovered source can supersede its previous request receipt, once. */
+export function claimCurrentSessionPendingInputDedupeRecovery(
+  database: PendingInputDatabase,
+  scope: Pick<ResolvedTranscriptScope, "sessionId" | "sessionKey">,
+  runId: string,
+): boolean {
+  const owner = owners.current.getStore();
+  if (
+    !owner ||
+    owner.sources ||
+    owner.restartRecovered !== true ||
+    recoveredDedupeOwners.has(owner) ||
+    owner.databasePath !== database.path ||
+    owner.sessionId !== scope.sessionId ||
+    owner.sessionKey !== scope.sessionKey ||
+    owner.idempotencyKey !== `${runId}:user`
+  ) {
+    return false;
+  }
+  assertPendingInputOwnerCurrent(owner);
+  const row = readSessionPendingInputByKey(database, scope, owner.idempotencyKey);
+  const current = Boolean(
+    row &&
+    row.input_id === owner.inputId &&
+    row.run_id === runId &&
+    row.message_json === owner.messageJson &&
+    row.state === "queued" &&
+    row.consumed_event_id == null &&
+    readSessionPendingInputOwnerIds(database, [row]).has(owner.inputId),
+  );
+  if (current) {
+    recoveredDedupeOwners.add(owner);
+  }
+  return current;
+}
+
 /** Query only the exact physical transcript; copied keys cannot adopt another generation. */
 export function readSessionPendingInputByKey(
   database: PendingInputDatabase,
@@ -215,7 +260,7 @@ export type SessionPendingInputAppend = {
   message: PersistedUserTurnMessage;
   alreadyPromoted: boolean;
   sourceInputIds?: readonly string[];
-  commitRelocation?: (destinationInputId: string) => void;
+  stageRelocation?: (destinationInputId: string) => void;
 };
 
 /** The private call-path owner, not a copied id or durable row, permits promotion. */
@@ -250,11 +295,46 @@ export function resolveSessionPendingInputAppend(
     throw new Error("Pending input cannot be appended outside its admitted turn");
   }
   const relocation = owners.relocation.getStore();
-  const relocationCommit =
-    relocation?.owner === owner && relocation.sourceInputId === owner.transcriptInputId
+  const transactionRelocations = owners.transactionRelocations.get(database.db);
+  const transcriptInputId = transactionRelocations?.get(owner) ?? owner.transcriptInputId;
+  if (relocation?.owner === owner && relocation.sourceInputId !== transcriptInputId) {
+    throw new Error("Pending input relocation does not match its admitted transcript entry");
+  }
+  const stageRelocation =
+    relocation?.owner === owner
       ? (destinationInputId: string) => {
-          if (owner.transcriptInputId === relocation.sourceInputId) {
-            owner.transcriptInputId = destinationInputId;
+          let staged = owners.transactionRelocations.get(database.db);
+          const hadPrevious = staged?.has(owner) ?? false;
+          const previous = staged?.get(owner);
+          if (
+            !stageSqliteTransactionState(database.db, {
+              stage: () => {
+                staged ??= new Map();
+                owners.transactionRelocations.set(database.db, staged);
+                staged.set(owner, destinationInputId);
+              },
+              rollback: () => {
+                if (hadPrevious && previous !== undefined) {
+                  staged?.set(owner, previous);
+                } else {
+                  staged?.delete(owner);
+                }
+                if (staged?.size === 0) {
+                  owners.transactionRelocations.delete(database.db);
+                }
+              },
+              commit: () => {
+                owner.transcriptInputId = destinationInputId;
+                if (staged?.get(owner) === destinationInputId) {
+                  staged.delete(owner);
+                }
+                if (staged?.size === 0) {
+                  owners.transactionRelocations.delete(database.db);
+                }
+              },
+            })
+          ) {
+            throw new Error("Pending input relocation requires a transcript write transaction");
           }
         }
       : undefined;
@@ -294,11 +374,11 @@ export function resolveSessionPendingInputAppend(
       assertPendingInputOwnerCurrent(owner);
     }
     return {
-      inputId: owner.transcriptInputId,
+      inputId: transcriptInputId,
       message: parseSessionPendingInputMessage(owner.messageJson),
       alreadyPromoted,
       sourceInputIds: sources.map((source) => source.input_id),
-      ...(alreadyPromoted && relocationCommit ? { commitRelocation: relocationCommit } : {}),
+      ...(alreadyPromoted && stageRelocation ? { stageRelocation } : {}),
     };
   }
   // Terminal mirroring may replay a consumed input after cancellation. The caller
@@ -307,10 +387,10 @@ export function resolveSessionPendingInputAppend(
     assertPendingInputOwnerCurrent(owner);
   }
   return {
-    inputId: owner.transcriptInputId,
+    inputId: transcriptInputId,
     message: parseSessionPendingInputMessage(row?.message_json ?? owner.messageJson),
     alreadyPromoted: !row,
-    ...(!row && relocationCommit ? { commitRelocation: relocationCommit } : {}),
+    ...(!row && stageRelocation ? { stageRelocation } : {}),
   };
 }
 

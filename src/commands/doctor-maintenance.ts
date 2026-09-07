@@ -50,7 +50,7 @@ async function assertDoctorMaintenanceSchemasCompatible(env: NodeJS.ProcessEnv):
     pluginValidation: "core-only",
   }).readConfigFileSnapshot();
   const cfg = snapshot.sourceConfig ?? snapshot.config;
-  const schemas = preflightOpenClawDatabaseSchemas({
+  const schemas = await preflightOpenClawDatabaseSchemas({
     env,
     supportedVersions: {
       state: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -147,7 +147,7 @@ export async function beginDoctorMaintenance(params: {
       try {
         await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped);
       } finally {
-        recovery?.complete();
+        await recovery?.complete();
       }
     }
   };
@@ -210,7 +210,7 @@ export async function beginDoctorMaintenance(params: {
   } catch (error) {
     await release();
     throw new Error(
-      `Doctor could not enter maintenance. Stop the Gateway through its service owner, then run ${formatCliCommand("openclaw doctor --fix", env)}. ${String(error)}`,
+      `Doctor could not enter maintenance. ${String(error)} Stop-requiring repair must run from a shell outside the Gateway and automatic triage; use ${formatCliCommand("openclaw doctor --fix", env)} there.`,
       { cause: error },
     );
   }

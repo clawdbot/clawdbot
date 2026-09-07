@@ -420,11 +420,17 @@ export function applySessionEntryMaintenance(
       archivedKeys.add(key);
     },
     preserveKeys,
+    preserveRecentMs: maintenance.preserveRecentMs,
   });
   remainingEntryCount -= archived;
   const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
     log: false,
     onPruned: rememberRemoval("pruned"),
+    onArchived: ({ key }) => {
+      archivedKeys.add(key);
+      archived += 1;
+      remainingEntryCount -= 1;
+    },
     preserveKeys,
     preserveRecentMs: maintenance.preserveRecentMs,
   });
@@ -680,7 +686,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     }
     deletedEntries +=
       batch.workItems - (batch.entryRemovals.length - committedEntryRemovals.length);
-    emitCommittedSessionEntryRemovals(committedEntryRemovals);
+    emitCommittedSessionEntryRemovals(scope.agentId, committedEntryRemovals);
     for (const removal of committedEntryRemovals) {
       if (removal.maintenanceReason === "model-run-pruned") {
         committedCounts.modelRunPruned += 1;

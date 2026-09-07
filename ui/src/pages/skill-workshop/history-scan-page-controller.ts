@@ -10,10 +10,14 @@ export function loadSkillWorkshopPageData(params: {
   context: SkillWorkshopContext;
   force: boolean;
   state: SkillWorkshopState;
+  onProgress?: () => void;
 }): Promise<void> {
   const agentId = resolveSkillWorkshopAgentId(params.context);
   return Promise.all([
-    loadSkillWorkshopProposals(params.state, params.context, { force: params.force }),
+    loadSkillWorkshopProposals(params.state, params.context, {
+      force: params.force,
+      onProgress: params.onProgress,
+    }),
     loadSkillWorkshopHistoryScanStatus({
       agentId,
       gateway: params.context.gateway,
@@ -28,6 +32,7 @@ export async function runSkillWorkshopPageHistoryScan(params: {
   current: () => { context: SkillWorkshopContext; state: SkillWorkshopState } | undefined;
   isCurrent: () => boolean;
   state: SkillWorkshopState;
+  onProgress?: () => void;
 }): Promise<void> {
   const agentId = resolveSkillWorkshopAgentId(params.context);
   const historyState = params.state.skillWorkshopHistoryScan;
@@ -42,7 +47,10 @@ export async function runSkillWorkshopPageHistoryScan(params: {
     return;
   }
   const refreshes: Promise<void>[] = [
-    loadSkillWorkshopProposals(current.state, current.context, { force: true }),
+    loadSkillWorkshopProposals(current.state, current.context, {
+      force: true,
+      onProgress: params.onProgress,
+    }),
   ];
   if (current.state.skillWorkshopHistoryScan !== historyState) {
     refreshes.push(

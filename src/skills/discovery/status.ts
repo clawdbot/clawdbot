@@ -90,10 +90,10 @@ export type SkillStatusReport = {
   skills: SkillStatusEntry[];
 };
 
-export function resolveSkillStatusEntry(
-  skills: readonly SkillStatusEntry[],
+export function resolveSkillStatusEntry<T extends Pick<SkillStatusEntry, "name" | "skillKey">>(
+  skills: readonly T[],
   requestedName: string,
-): SkillStatusEntry | null {
+): T | null {
   const raw = requestedName.trim();
   if (!raw) {
     return null;
@@ -103,7 +103,7 @@ export function resolveSkillStatusEntry(
   const normalized = normalizeSkillIndexName(raw);
   // Names outrank metadata aliases. A tie at the strongest matching level
   // must not redirect inspection or Workshop updates to the first loaded skill.
-  const matchers: Array<(skill: SkillStatusEntry) => boolean> = [
+  const matchers: Array<(skill: T) => boolean> = [
     (skill) => skill.name === raw,
     (skill) => skill.skillKey === raw,
     (skill) => skill.name.toLowerCase() === lower || skill.skillKey.toLowerCase() === lower,

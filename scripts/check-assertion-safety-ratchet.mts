@@ -9,6 +9,7 @@ import {
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
+  parseRatchetArgs,
   parseRatchetCounts,
   reportRatchetFailures,
   reportRatchetSuccess,
@@ -250,31 +251,6 @@ function writeBaseline(root: string, counts: ReadonlyMap<string, number>) {
   fs.writeFileSync(path.join(root, BASELINE_PATH), formatBaseline(counts));
 }
 
-function parseArgs(argv: string[]) {
-  const args: { base?: string; prune: boolean; staged: boolean } = {
-    prune: false,
-    staged: false,
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--prune") {
-      args.prune = true;
-      continue;
-    }
-    if (arg === "--staged") {
-      args.staged = true;
-      continue;
-    }
-    if (arg === "--base" && argv[index + 1]) {
-      args.base = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    throw new Error("Unknown or incomplete argument: " + arg);
-  }
-  return args;
-}
-
 function formatDeltas(entries: RatchetCountDelta[], comparison: ">" | "<") {
   return entries.map((entry) => `${entry.entry}: ${entry.current} ${comparison} ${entry.allowed}`);
 }
@@ -285,7 +261,7 @@ function totalCount(counts: ReadonlyMap<string, number>) {
 
 export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
   try {
-    const args = parseArgs(argv);
+    const args = parseRatchetArgs(argv);
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
     }

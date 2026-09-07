@@ -197,7 +197,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     });
     // Routed sends settle here: the transport result is the settlement. This is
     // the single routed choke point, so every routed lane feeds the turn ledger.
-    turnLedger.recordRoutedDelivery(payload, isRoutedReplyDelivered(result));
+    turnLedger.recordRoutedDelivery(payload, result);
     return result;
   };
 

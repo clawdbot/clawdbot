@@ -1,5 +1,38 @@
+import { once } from "node:events";
+import { request } from "node:http";
 import { describe, expect, test } from "vitest";
-import { type CapturedSpan, createRecentTraceSummary } from "./otel-test-support.js";
+import {
+  type CapturedSpan,
+  createRecentTraceSummary,
+  startLocalOtlpReceiver,
+} from "./otel-test-support.js";
+
+test("closes an OTLP receiver with an unfinished request body", async () => {
+  const receiver = startLocalOtlpReceiver();
+  const port = await receiver.listen();
+  const client = request({
+    hostname: "127.0.0.1",
+    port,
+    path: "/v1/traces",
+    method: "POST",
+    headers: { expect: "100-continue", "content-length": "100" },
+  });
+  const clientError = new Promise<Error>((resolve) => {
+    client.once("error", resolve);
+  });
+  try {
+    const accepted = once(client, "continue");
+    client.flushHeaders();
+    await accepted;
+
+    await receiver.close();
+    await expect(clientError).resolves.toMatchObject({ code: "ECONNRESET" });
+    await receiver.close();
+  } finally {
+    client.destroy();
+    await receiver.close();
+  }
+});
 
 function span(traceId: string, name: string): CapturedSpan {
   return { attributes: {}, name, parent: false, traceId };

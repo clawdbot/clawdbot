@@ -1,6 +1,7 @@
 // Doctor command tests cover probe orchestration, fix mode, and runtime command output.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 
 const mocks = vi.hoisted(() => ({
   claimSessionSqliteMigrationGithubIssue: vi.fn(),
@@ -69,6 +70,42 @@ vi.mock("../plugins/installed-plugin-index-store-path.js", () => ({
 
 const { doctorCommand } = await import("./doctor.js");
 
+function createDoctorRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+    exit: vi.fn((code: number) => {
+      throw new Error(`exit:${code}`);
+    }),
+  };
+}
+
+function createRecoveryReport(
+  supportIssue: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
+): DoctorSessionSqliteReport {
+  return {
+    migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
+    mode: "recover",
+    supportIssue,
+    targets: [],
+    totals: {
+      archivedTranscriptFiles: 0,
+      archivedUnreferencedJsonlFiles: 0,
+      importedEntries: 0,
+      importedTranscriptEvents: 0,
+      issues: 0,
+      legacyEntries: 0,
+      sqliteEntries: 0,
+      targets: 0,
+      unreferencedJsonlFiles: 0,
+      validatedEntries: 0,
+      validatedTranscriptEvents: 0,
+    },
+  };
+}
+
 describe("doctorCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -99,15 +136,7 @@ describe("doctorCommand", () => {
       ],
     };
     mocks.runPostUpgradeProbes.mockResolvedValueOnce(report);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     await expect(doctorCommand(runtime, { postUpgrade: true, json: true })).rejects.toThrow(
       "exit:1",
@@ -137,15 +166,7 @@ describe("doctorCommand", () => {
       },
     };
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     await expect(
       doctorCommand(runtime, {
@@ -183,15 +204,7 @@ describe("doctorCommand", () => {
       },
     };
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     await expect(
       doctorCommand(runtime, {
@@ -231,15 +244,7 @@ describe("doctorCommand", () => {
       },
     };
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
     const stateDir = path.resolve(process.env.OPENCLAW_STATE_DIR ?? ".openclaw");
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const sqlitePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -301,15 +306,7 @@ describe("doctorCommand", () => {
       skipped: false,
     };
     mocks.runDoctorStateSqliteCompact.mockResolvedValueOnce(report);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     await expect(
       doctorCommand(runtime, {
@@ -330,39 +327,13 @@ describe("doctorCommand", () => {
       bodyPath: "/tmp/session.failure.md",
       title: "Session SQLite migration recovery report (run-1)",
     };
-    const report = {
-      migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
-      mode: "recover",
-      supportIssue,
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
+    const report = createRecoveryReport(supportIssue);
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
     mocks.submitGithubIssue.mockResolvedValueOnce({
       status: "created",
       url: "https://github.com/openclaw/openclaw/issues/123",
     });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     await expect(
       doctorCommand(runtime, {
@@ -393,25 +364,7 @@ describe("doctorCommand", () => {
       body: "stable sanitized body",
       title: "Session SQLite migration recovery report (run-1)",
     };
-    const report = {
-      migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
-      mode: "recover",
-      supportIssue,
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
+    const report = createRecoveryReport(supportIssue);
     const persisted = {
       marker: `openclaw-report:${"a".repeat(64)}`,
       status: "attempted",
@@ -426,15 +379,7 @@ describe("doctorCommand", () => {
       status: "outcome-unknown",
     });
     mocks.reconcileGithubIssue.mockResolvedValueOnce({ status: "not-found" });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
     const options = {
       sessionSqlite: "recover" as const,
       sessionSqliteGithubIssue: true,
@@ -473,35 +418,9 @@ describe("doctorCommand", () => {
         body: "stable sanitized body",
         title: "Session SQLite migration recovery report (run-1)",
       };
-      mocks.runDoctorSessionSqlite.mockResolvedValueOnce({
-        migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
-        mode: "recover",
-        supportIssue,
-        targets: [],
-        totals: {
-          archivedTranscriptFiles: 0,
-          archivedUnreferencedJsonlFiles: 0,
-          importedEntries: 0,
-          importedTranscriptEvents: 0,
-          issues: 0,
-          legacyEntries: 0,
-          sqliteEntries: 0,
-          targets: 0,
-          unreferencedJsonlFiles: 0,
-          validatedEntries: 0,
-          validatedTranscriptEvents: 0,
-        },
-      });
+      mocks.runDoctorSessionSqlite.mockResolvedValueOnce(createRecoveryReport(supportIssue));
       mocks.claimSessionSqliteMigrationGithubIssue.mockReturnValueOnce(claim);
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        writeStdout: vi.fn(),
-        writeJson: vi.fn(),
-        exit: vi.fn((code: number) => {
-          throw new Error(`exit:${code}`);
-        }),
-      };
+      const runtime = createDoctorRuntime();
 
       await expect(
         doctorCommand(runtime, {
@@ -528,25 +447,7 @@ describe("doctorCommand", () => {
       body: "private-report-text",
       title: "Session SQLite migration recovery report (run-1)",
     };
-    const report = {
-      migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
-      mode: "recover",
-      supportIssue,
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
+    const report = createRecoveryReport(supportIssue);
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
     mocks.submitGithubIssue.mockResolvedValueOnce({
       reason: "authentication-unavailable",
@@ -554,15 +455,7 @@ describe("doctorCommand", () => {
       url: fallbackUrl,
     });
     mocks.openUrl.mockResolvedValueOnce(true);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     await expect(
       doctorCommand(runtime, {
@@ -591,25 +484,7 @@ describe("doctorCommand", () => {
       body: "private-report-text",
       title: "Session SQLite migration recovery report (run-1)",
     };
-    const report = {
-      migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
-      mode: "recover",
-      supportIssue,
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
+    const report = createRecoveryReport(supportIssue);
     const persisted = {
       marker: `openclaw-report:${"a".repeat(64)}`,
       status: "attempted",
@@ -626,15 +501,7 @@ describe("doctorCommand", () => {
     });
     mocks.openUrl.mockResolvedValueOnce(false);
     mocks.reconcileGithubIssue.mockResolvedValueOnce({ status: "not-found" });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     const options = {
       json: true,
@@ -669,25 +536,7 @@ describe("doctorCommand", () => {
       body: "private-report-text",
       title: "Session SQLite migration recovery report (run-1)",
     };
-    const report = {
-      migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
-      mode: "recover",
-      supportIssue,
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
+    const report = createRecoveryReport(supportIssue);
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
     mocks.submitGithubIssue.mockResolvedValueOnce({
       reason: "transport-unavailable",
@@ -695,15 +544,7 @@ describe("doctorCommand", () => {
       url: "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text",
     });
     mocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: false, reason: "no-display" });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     await expect(
       doctorCommand(runtime, {
@@ -729,40 +570,14 @@ describe("doctorCommand", () => {
       body: "private-report-text".repeat(1_000),
       title: "Session SQLite migration recovery report (run-1)",
     };
-    const report = {
-      migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
-      mode: "recover",
-      supportIssue,
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
+    const report = createRecoveryReport(supportIssue);
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
     mocks.submitGithubIssue.mockResolvedValueOnce({
       cause: "authentication-unavailable",
       reason: "fallback-url-too-long",
       status: "fallback-unavailable",
     });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     await expect(
       doctorCommand(runtime, {
@@ -814,15 +629,7 @@ describe("doctorCommand", () => {
       },
     };
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     await expect(
       doctorCommand(runtime, {
@@ -844,36 +651,10 @@ describe("doctorCommand", () => {
       body: "sanitized body",
       title: "Session SQLite migration recovery report (run-1)",
     };
-    const report = {
-      migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
-      mode: "recover",
-      supportIssue,
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
+    const report = createRecoveryReport(supportIssue);
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
     mocks.promptYesNo.mockResolvedValueOnce(false);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const runtime = createDoctorRuntime();
 
     await expect(
       doctorCommand(runtime, {

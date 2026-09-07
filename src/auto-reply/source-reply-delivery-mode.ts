@@ -15,19 +15,32 @@ export function messageToolOwnsVisibleReply(params: {
   return params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
 }
 
+export function buildMessageToolTargetGuidance(requireExplicitMessageTarget: boolean): string {
+  return requireExplicitMessageTarget
+    ? "`send`: `target` + `message`; target required this turn."
+    : "`send`: `message`; current source is default target. Set `target` only elsewhere.";
+}
+
 export function buildHarnessVisibleReplyGuidance(params: {
   sourceReplyDeliveryMode?: string;
   messageToolAvailable: boolean;
+  requireExplicitMessageTarget?: boolean;
   uiPresentation?: Parameters<typeof buildUiPresentationPrompt>[0];
 }): string {
-  const deliveryGuidance =
-    messageToolOwnsVisibleReply(params) && params.messageToolAvailable
+  const deliveryGuidance = messageToolOwnsVisibleReply(params)
+    ? params.messageToolAvailable
       ? "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer."
-      : params.messageToolAvailable
-        ? "You can participate in the conversation throughout your work. Use `message` when you have something worth saying; you don’t need to wait until you’re finished, and sending a message doesn’t end your task. OpenClaw delivers your final response automatically."
-        : "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
+      : "No source-conversation reply can be sent from this turn. Final assistant text remains private and returns to the invoking workflow; it is not automatically delivered to the source conversation."
+    : params.messageToolAvailable
+      ? "You can participate in the conversation throughout your work. Use `message` when you have something worth saying; you don’t need to wait until you’re finished, and sending a message doesn’t end your task. OpenClaw delivers your final response automatically."
+      : "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
+  const targetGuidance =
+    params.messageToolAvailable && params.requireExplicitMessageTarget !== undefined
+      ? buildMessageToolTargetGuidance(params.requireExplicitMessageTarget)
+      : undefined;
   return [
     deliveryGuidance,
+    targetGuidance,
     params.uiPresentation ? buildUiPresentationPrompt(params.uiPresentation) : undefined,
   ]
     .filter(Boolean)

@@ -339,6 +339,16 @@
   "syntheticAuthRefs": ["claude-cli"],
   "nonSecretAuthMarkers": ["openclaw:claude-cli-native-auth"],
   "setup": {
+    "nativeSessionCatalog": {
+      "label": "Claude Code",
+      "legacyDefaultEnabled": true,
+      "description": "Existing native Claude Code conversations on this Gateway and eligible paired nodes.",
+      "nodeCommands": [
+        "anthropic.claude.sessions.list.v1",
+        "anthropic.claude.sessions.read.v1",
+        "anthropic.claude.terminal.resume.v1"
+      ]
+    },
     "providers": [
       {
         "id": "anthropic",

@@ -458,8 +458,3 @@ export async function executePerplexitySearch(
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  resolvePerplexityRequestModel,
-  resolvePerplexityApiKey,
-} as const;

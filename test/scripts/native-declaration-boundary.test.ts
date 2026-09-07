@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { portableRelativePath } from "../../scripts/lib/build-artifact-cache.mts";
 import { BoundaryInputSnapshot } from "../../scripts/lib/extension-boundary-inputs.mts";
+import { createDeclarationInputBoundary } from "../../scripts/lib/tsdown-declaration-boundary.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   installNativeAncestorTypes,
@@ -14,6 +15,33 @@ import {
 } from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([true, false])(
+  "diagnoses declaration escapes with an ancestor install=%s",
+  (ancestorInstall) => {
+    const ancestor = fs.realpathSync.native(roots.make("declaration-escape-diagnosis-"));
+    const root = path.join(ancestor, ".claude/worktrees/validation");
+    fs.mkdirSync(root, { recursive: true });
+    const install = path.join(ancestor, ancestorInstall ? "node_modules" : "other/node_modules");
+    const file = path.join(install, "synthetic-package/package.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "{}");
+    const boundary = createDeclarationInputBoundary(root);
+    expect(() => boundary.assert(file)).toThrow(`Declaration input escapes checkout: ${file}`);
+    if (ancestorInstall) {
+      expect(() => boundary.assert(file)).toThrow(`another install at ${install}`);
+      expect(() => boundary.assert(file)).toThrow("separate physical checkout");
+      expect(() => boundary.assert(file)).toThrow("Repeating pnpm install will not isolate");
+    } else {
+      expect(() => boundary.assert(file)).toThrow(
+        "shared installs and external symlinks are unsupported",
+      );
+      expect(() => boundary.assert(file)).toThrow(
+        "does not establish a missing or undeclared dependency",
+      );
+    }
+  },
+);
 
 function createNativeFixture(root: string, declared = root) {
   fs.mkdirSync(root, { recursive: true });
@@ -40,7 +68,7 @@ function createNativeFixture(root: string, declared = root) {
     "src/index.ts",
     'import type { Marker } from "synthetic-wrapper";\nexport type { Marker };\nexport const inferredOrigin = declarationOrigin;\n',
   );
-  const compile = (noEmit = false) => {
+  const compile = (noEmit = false, extraArgs: string[] = []) => {
     const config = path.join(declared, "tsconfig.json");
     const buildInfo = "dist/.tsbuildinfo";
     const outputRoot = noEmit ? undefined : path.join(root, "dist");
@@ -53,6 +81,7 @@ function createNativeFixture(root: string, declared = root) {
       "--tsBuildInfoFile",
       path.join(declared, buildInfo),
       "--listEmittedFiles",
+      ...extraArgs,
     ];
     const before = new BoundaryInputSnapshot(declared);
     before.signature(config, args, [], outputRoot);
@@ -82,7 +111,7 @@ function createNativeFixture(root: string, declared = root) {
         startedAt,
         outputRoot,
       );
-    return { config, args, buildInfo, outputs, info, outputRoot, record };
+    return { config, args, buildInfo, outputs, info, outputRoot, record, trace: compiled.stdout };
   };
   return { native, write, compile };
 }
@@ -109,6 +138,66 @@ it.each([false, true])(
     expect(run.record).toThrow(/Declaration input escapes checkout/);
   },
 );
+
+it("diagnoses manifest-only ancestor probes and seals the same local inputs in a standalone checkout", () => {
+  const ancestor = fs.realpathSync.native(roots.make("native-manifest-probe-"));
+  const nested = path.join(ancestor, ".claude/worktrees/validation");
+  const standalone = fs.realpathSync.native(roots.make("native-manifest-isolated-"));
+  const manifest = JSON.stringify({ name: "synthetic-js", version: "1.0.0", main: "index.js" });
+  writeNativeFixtureFile(ancestor, "node_modules/synthetic-js/package.json", manifest);
+  writeNativeFixtureFile(
+    ancestor,
+    "node_modules/synthetic-js/index.js",
+    "exports.origin = 'ancestor';\n",
+  );
+  for (const root of [nested, standalone]) {
+    const f = createNativeFixture(root);
+    f.write("src/index.ts", 'export type { Value } from "synthetic-wrapper";\n');
+    f.write("node_modules/synthetic-wrapper/package.json", '{"types":"index.d.ts"}');
+    f.write(
+      "node_modules/synthetic-wrapper/index.d.ts",
+      'export type Value = typeof import("synthetic-js");\n',
+    );
+    f.write("node_modules/synthetic-js/package.json", manifest);
+    f.write("node_modules/synthetic-js/index.js", "exports.origin = 'local';\n");
+    const run = f.compile(false, ["--traceResolution"]);
+    const directory = path.join(root, "dist");
+    const sourceFiles = run.info.fileNames.slice(0, run.info.fileInfos.length);
+    const externalManifest = path.join(ancestor, "node_modules/synthetic-js/package.json");
+    expect(
+      sourceFiles.some((file) =>
+        path.relative(root, path.resolve(directory, file)).startsWith(`..${path.sep}`),
+      ),
+    ).toBe(false);
+    expect(run.trace.replaceAll("\\", "/")).toContain(
+      `'synthetic-js' was successfully resolved to '${root.replaceAll("\\", "/")}/node_modules/synthetic-js/index.js'`,
+    );
+    if (root === nested) {
+      // Declaration lookup visits outer manifests before falling back to local JavaScript.
+      expect(run.info.packageJsons?.map((file) => path.resolve(directory, file))).toContain(
+        externalManifest,
+      );
+      expect(run.record).toThrow("complete local install");
+      expect(run.record).toThrow("Repeating pnpm install will not isolate");
+      continue;
+    }
+    const record = run.record();
+    expect(record.inputs).toContain("node_modules/synthetic-js/package.json");
+    expect(record.inputs?.some((file) => file.startsWith("../"))).toBe(false);
+    const warm = new BoundaryInputSnapshot(root);
+    expect(warm.matches(record, run.config, run.args, run.outputs, run.outputRoot)).toBe(true);
+    f.write("node_modules/synthetic-js/package.json", `${manifest}\n`);
+    expect(
+      new BoundaryInputSnapshot(root).matches(
+        record,
+        run.config,
+        run.args,
+        run.outputs,
+        run.outputRoot,
+      ),
+    ).toBe(false);
+  }
+});
 
 for (const kind of [
   "directory alias",
