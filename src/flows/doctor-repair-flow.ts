@@ -2,24 +2,19 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
-import { defineSplitHealthCheckInput, normalizeHealthCheck } from "./health-check-adapter.js";
+import { copyHealthCheck, normalizeHealthCheck } from "./health-check-adapter.js";
 import { listHealthChecks } from "./health-check-registry.js";
-import type {
-  HealthCheckInput,
-  HealthCheckRunResult,
-  RegisteredHealthCheck,
-} from "./health-check-runner-types.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type {
   HealthFinding,
   HealthRepairContext,
   HealthRepairDiff,
   HealthRepairEffect,
-  HealthRepairResult,
 } from "./health-checks.js";
 
 // Repair runner for structured doctor health checks; carries config between checks.
 interface DoctorRepairRunOptions {
-  readonly checks?: readonly HealthCheckInput[];
+  readonly checks?: readonly DoctorHealthCheck[];
   readonly dryRun?: boolean;
   readonly diff?: boolean;
 }
@@ -42,8 +37,8 @@ export async function runDoctorHealthRepairs(
   ctx: HealthRepairContext,
   opts: DoctorRepairRunOptions = {},
 ): Promise<DoctorRepairRunResult> {
-  const inputs = opts.checks ?? listHealthChecks().map(defineSplitHealthCheckInput);
-  const checks: readonly RegisteredHealthCheck[] = inputs.map(normalizeHealthCheck);
+  const inputs = opts.checks ?? listHealthChecks().map(copyHealthCheck);
+  const checks: readonly DoctorHealthCheck[] = inputs.map(normalizeHealthCheck);
   const findings: HealthFinding[] = [];
   const remainingFindings: HealthFinding[] = [];
   const changes: string[] = [];
@@ -87,18 +82,7 @@ export async function runDoctorHealthRepairs(
 }
 
 async function runHealthCheck(
-  check: RegisteredHealthCheck,
-  ctx: HealthRepairContext,
-  opts: DoctorRepairRunOptions,
-): Promise<DoctorRepairRunResult> {
-  if (check.sourceContract === "split") {
-    return runSplitHealthCheck(check, ctx, opts);
-  }
-  return runRunnableHealthCheck(check, ctx, opts);
-}
-
-async function runSplitHealthCheck(
-  check: RegisteredHealthCheck,
+  check: DoctorHealthCheck,
   ctx: HealthRepairContext,
   opts: DoctorRepairRunOptions,
 ): Promise<DoctorRepairRunResult> {
@@ -170,103 +154,6 @@ async function runSplitHealthCheck(
     checksRepaired,
     checksValidated,
   });
-}
-
-async function runRunnableHealthCheck(
-  check: RegisteredHealthCheck,
-  ctx: HealthRepairContext,
-  opts: DoctorRepairRunOptions,
-): Promise<DoctorRepairRunResult> {
-  const findings: HealthFinding[] = [];
-  const remainingFindings: HealthFinding[] = [];
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const diffs: HealthRepairDiff[] = [];
-  const effects: HealthRepairEffect[] = [];
-  let cfg = ctx.cfg;
-  let checksRepaired = 0;
-  let checksValidated = 0;
-
-  let result: HealthCheckRunResult;
-  try {
-    result = await check.run({
-      ...ctx,
-      repair: opts.dryRun !== true,
-      diff: opts.diff === true,
-      previewRepair: opts.dryRun === true,
-    });
-  } catch (err) {
-    warnings.push(`${check.id} run failed: ${scrubDoctorErrorMessage(err)}`);
-    return repairRunResult(ctx.cfg, findings, remainingFindings, changes, warnings, diffs, effects);
-  }
-
-  findings.push(...(result.findings ?? []));
-  warnings.push(...(result.warnings ?? []));
-  diffs.push(...(result.diffs ?? []));
-  effects.push(...(result.effects ?? []));
-  const status = result.status ?? "repaired";
-  const hasRepairOutput = hasHealthRepairOutput(result);
-  // Runnable checks may report "repairable" during dry-run without mutating config.
-  if (status === "repairable") {
-    changes.push(...(result.changes ?? []));
-    return repairRunResult(cfg, findings, remainingFindings, changes, warnings, diffs, effects, {
-      checksRepaired: hasRepairOutput ? 1 : 0,
-      checksValidated,
-    });
-  }
-  if (status !== "repaired") {
-    warnings.push(`${check.id} repair ${status}${result.reason ? `: ${result.reason}` : ""}`);
-    return repairRunResult(ctx.cfg, findings, remainingFindings, changes, warnings, diffs, effects);
-  }
-  if (result.config !== undefined && opts.dryRun !== true) {
-    cfg = result.config;
-  }
-  changes.push(...(result.changes ?? []));
-  if (hasRepairOutput) {
-    checksRepaired++;
-  }
-  if (opts.dryRun === true || !hasRepairOutput) {
-    return repairRunResult(cfg, findings, remainingFindings, changes, warnings, diffs, effects, {
-      checksRepaired,
-      checksValidated,
-    });
-  }
-
-  try {
-    const validation = await check.run(
-      {
-        ...ctx,
-        mode: "lint",
-        cfg,
-        repair: false,
-        diff: opts.diff === true,
-        previewRepair: false,
-      },
-      createValidationScope(findings),
-    );
-    remainingFindings.push(...(validation.findings ?? []));
-    checksValidated++;
-    if (validation.findings !== undefined && validation.findings.length > 0) {
-      warnings.push(`${check.id} repair left ${validation.findings.length} finding(s)`);
-    }
-  } catch (err) {
-    warnings.push(`${check.id} validation failed: ${scrubDoctorErrorMessage(err)}`);
-  }
-
-  return repairRunResult(cfg, findings, remainingFindings, changes, warnings, diffs, effects, {
-    checksRepaired,
-    checksValidated,
-  });
-}
-
-// Only non-empty repair effects count as work; a clean detector with status repaired should not.
-function hasHealthRepairOutput(result: HealthRepairResult | HealthCheckRunResult): boolean {
-  return (
-    result.config !== undefined ||
-    (result.changes?.length ?? 0) > 0 ||
-    (result.diffs?.length ?? 0) > 0 ||
-    (result.effects?.length ?? 0) > 0
-  );
 }
 
 function repairRunResult(

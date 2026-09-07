@@ -11,8 +11,8 @@ import type {
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
+import type { HealthCheckContext } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
@@ -85,19 +85,13 @@ export type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
   required?: true;
-  healthChecks: readonly HealthCheckInput[];
+  healthChecks: readonly DoctorHealthCheck[];
   healthCheckIds: readonly string[];
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
-export type DoctorContributionHealthCheck =
-  | (Omit<HealthCheck, "id" | "kind" | "source"> & {
-      readonly id?: string;
-      readonly kind?: "core";
-      readonly source?: string;
-    })
-  | (Omit<RunnableHealthCheck, "id" | "kind" | "source" | "sourceContract"> & {
-      readonly id?: string;
-      readonly kind?: "core";
-      readonly source?: string;
-    });
+export type DoctorContributionHealthCheck = Omit<DoctorHealthCheck, "id" | "kind" | "source"> & {
+  readonly id?: string;
+  readonly kind?: "core";
+  readonly source?: string;
+};

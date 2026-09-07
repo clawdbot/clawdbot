@@ -11,7 +11,6 @@ import {
   listHealthChecks,
   registerHealthCheck,
 } from "./health-check-registry.js";
-import type { RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
 
 const ctx: HealthCheckContext = {
@@ -210,7 +209,6 @@ describe("runDoctorLintChecks", () => {
         { checkId: "targeted", severity: "warning" as const, message: "warn" },
       ]),
       defaultEnabled: false,
-      sourceContract: "split",
     });
 
     await expect(
@@ -241,7 +239,6 @@ describe("runDoctorLintChecks", () => {
         { checkId: "targeted", severity: "warning" as const, message: "warn" },
       ]),
       defaultEnabled: false,
-      sourceContract: "split",
     });
     const defaultEnabled = check("regular", async () => []);
 
@@ -279,35 +276,6 @@ describe("runDoctorLintChecks", () => {
 
     expect(result).toEqual({ findings: [], checksRun: 1, checksSkipped: 0 });
     expect(detections).toEqual(["post-plugin"]);
-  });
-
-  it("supports single-run checks in lint mode", async () => {
-    const runnable: RunnableHealthCheck = {
-      sourceContract: "run",
-      id: "run-check",
-      kind: "core",
-      description: "run check",
-      async run(runCtx) {
-        expect(runCtx).toMatchObject({
-          mode: "lint",
-          repair: false,
-        });
-        return {
-          findings: [
-            {
-              checkId: "run-check",
-              severity: "warning",
-              message: "warn",
-            },
-          ],
-        };
-      },
-    };
-    const checkLocal = normalizeHealthCheck(runnable);
-
-    const result = await runDoctorLintChecks(ctx, { checks: [checkLocal] });
-
-    expect(result.findings.map((finding) => finding.checkId)).toEqual(["run-check"]);
   });
 
   it("turns thrown checks into error findings", async () => {

@@ -1,57 +1,7 @@
-// Health check runner types describe execution state for doctor health checks.
-import type {
-  HealthCheck,
-  HealthCheckContext,
-  HealthCheckScope,
-  HealthFinding,
-  HealthRepairDiff,
-  HealthRepairEffect,
-  HealthRepairResult,
-} from "./health-checks.js";
+// Private doctor selection metadata around the public health-check contract.
+import type { HealthCheck } from "./health-checks.js";
 
-// Runnable health-check contracts used by doctor lint/fix orchestration.
-interface HealthCheckRunContext extends HealthCheckContext {
-  readonly repair: boolean;
-  readonly diff?: boolean;
-  readonly previewRepair?: boolean;
-}
-
-/** Result shape for checks that combine detect, preview, and repair in one run() method. */
-export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes" | "status"> {
-  readonly findings?: readonly HealthFinding[];
-  readonly status?: "repairable" | "repaired" | "skipped" | "failed";
-  readonly changes?: readonly string[];
-  readonly diffs?: readonly HealthRepairDiff[];
-  readonly effects?: readonly HealthRepairEffect[];
-}
-
-/** Internal runner selection metadata. This is intentionally not part of the public SDK type. */
-interface HealthCheckSelectionOptions {
+export type DoctorHealthCheck = HealthCheck & {
   readonly defaultEnabled?: boolean;
   readonly updateReadiness?: "post-plugin";
-}
-
-export type SplitHealthCheckDefinition = HealthCheck & HealthCheckSelectionOptions;
-export type SplitHealthCheckInput = SplitHealthCheckDefinition & {
-  readonly sourceContract: "split";
 };
-
-/** Health-check implementation that owns its own detect/repair orchestration. */
-export interface RunnableHealthCheck
-  extends Pick<HealthCheck, "id" | "kind" | "description" | "source">, HealthCheckSelectionOptions {
-  readonly sourceContract: "run";
-  run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
-}
-
-export type HealthCheckInput = SplitHealthCheckInput | RunnableHealthCheck;
-
-/** Normalized check contract consumed by lint and repair runners. */
-type RegisteredHealthCheckBase = HealthCheck &
-  HealthCheckSelectionOptions & {
-    run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
-  };
-
-export type RegisteredHealthCheck = RegisteredHealthCheckBase &
-  ({ readonly sourceContract: "split" } | { readonly sourceContract: "run" });
-
-export type DetectableHealthCheckInput = SplitHealthCheckInput | RegisteredHealthCheck;

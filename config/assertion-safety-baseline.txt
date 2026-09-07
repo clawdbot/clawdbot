@@ -2700,7 +2700,6 @@ src/flows/doctor-core-checks.ts	4
 src/flows/doctor-health-contributions-final.ts	1
 src/flows/doctor-health-contributions.ts	1
 src/flows/doctor-removed-workspaces-state-check.ts	2
-src/flows/health-check-adapter.ts	1
 src/flows/search-setup.ts	6
 src/gateway/agent-runtime-identity-token.ts	1
 src/gateway/agent-turn/agent-dedupe.ts	3

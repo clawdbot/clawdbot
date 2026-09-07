@@ -4,7 +4,7 @@ import type {
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
 import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
-import type { HealthCheckInput } from "./health-check-runner-types.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthFinding } from "./health-checks.js";
 
 export function createDoctorHealthContribution(params: {
@@ -48,7 +48,7 @@ export function createDoctorHealthContribution(params: {
 function normalizeHealthChecks(
   contributionId: string,
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[],
-): readonly HealthCheckInput[] {
+): readonly DoctorHealthCheck[] {
   if (healthChecks === undefined) {
     return [];
   }
@@ -62,7 +62,7 @@ function normalizeContributionHealthCheck(
   check: DoctorContributionHealthCheck,
   contributionId: string,
   count: number,
-): HealthCheckInput {
+): DoctorHealthCheck {
   const id = check.id ?? (count === 1 ? deriveCoreHealthCheckId(contributionId) : undefined);
   if (id === undefined) {
     throw new Error(
@@ -74,9 +74,7 @@ function normalizeContributionHealthCheck(
     kind: check.kind ?? "core",
     source: check.source ?? "doctor",
   };
-  return "run" in check
-    ? { ...check, ...identity, sourceContract: "run" }
-    : { ...check, ...identity, sourceContract: "split" };
+  return { ...check, ...identity };
 }
 
 function deriveCoreHealthCheckId(contributionId: string): string {
@@ -88,7 +86,7 @@ function deriveCoreHealthCheckId(contributionId: string): string {
 async function runStructuredDoctorHealthContribution(params: {
   contributionId: string;
   ctx: DoctorHealthFlowContext;
-  checks: readonly HealthCheckInput[];
+  checks: readonly DoctorHealthCheck[];
 }): Promise<void> {
   if (params.checks.length === 0) {
     throw new Error(`doctor contribution ${params.contributionId} has no structured health`);
