@@ -1877,6 +1877,7 @@ process.stdout.write(sessionDir + "\\n");
   it.each([
     "ok",
     "queued",
+    "wait-timeout",
     "not-started",
     "turn-failed",
     "wrong-session",
@@ -1899,9 +1900,9 @@ if (method === "chat.send") {
   fs.writeFileSync(process.env.PROBE_MARKER_FILE, params.message.match(/OPENCLAW_E2E_SURVIVOR_[A-F0-9]+/)[0]);
   result = { status: outcome === "not-started" ? "error" : "started", runId: "serving-run" };
 } else if (method === "agent.wait") {
-  const pending = outcome === "queued" && !fs.existsSync(process.env.PROBE_MARKER_FILE + ".waited");
+  const pending = ["queued", "wait-timeout"].includes(outcome) && !fs.existsSync(process.env.PROBE_MARKER_FILE + ".waited");
   fs.writeFileSync(process.env.PROBE_MARKER_FILE + ".waited", "waited");
-  result = { runId: params.runId, status: pending ? "pending" : outcome === "turn-failed" ? "error" : "ok", endedAt: 1788820180863 };
+  result = { runId: params.runId, status: pending ? (outcome === "wait-timeout" ? "timeout" : "pending") : outcome === "turn-failed" ? "error" : "ok", ...(pending ? {} : { endedAt: 1788820180863 }) };
 } else if (method === "chat.history") {
   result = { sessionId: outcome === "wrong-session" ? "replacement" : "upgrade-main-session", messages: [{
     role: outcome === "user-only" ? "user" : "assistant",
@@ -1927,7 +1928,7 @@ process.stdout.write(JSON.stringify(result));
           },
         },
       );
-      const succeeded = outcome === "ok" || outcome === "queued";
+      const succeeded = outcome === "ok" || outcome === "queued" || outcome === "wait-timeout";
       expect(result.status, result.stderr).toBe(succeeded ? 0 : 1);
       expect(existsSync(receipt)).toBe(succeeded);
       if (succeeded) {

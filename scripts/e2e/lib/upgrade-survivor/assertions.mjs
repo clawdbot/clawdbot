@@ -1022,12 +1022,12 @@ async function assertRestartServingTurn(file) {
   do {
     completion = call("agent.wait", { runId: accepted.runId, timeoutMs: 90_000 });
     assert(completion?.runId === accepted.runId, "managed serving wait changed the run identity");
-    if (completion.status === "pending") {
+    if (completion.status === "pending" || completion.status === "timeout") {
       await new Promise((resolve) => {
         setTimeout(resolve, Math.min(500, Math.max(0, deadline - Date.now())));
       });
     }
-  } while (completion.status === "pending");
+  } while (completion.status === "pending" || completion.status === "timeout");
   assert(
     completion?.runId === accepted.runId &&
       completion.status === "ok" &&
