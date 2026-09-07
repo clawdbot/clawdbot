@@ -686,8 +686,11 @@ export async function startSecretEgressProxyServer(params: {
       const token = registered.token.toString("base64url");
       const proxyUrl = `http://${PROXY_AUTH_USERNAME}:${token}@127.0.0.1:${address.port}`;
       return {
+        // Clients disagree on proxy variable precedence, so publish both cases.
         HTTPS_PROXY: proxyUrl,
         HTTP_PROXY: proxyUrl,
+        https_proxy: proxyUrl,
+        http_proxy: proxyUrl,
         NODE_USE_ENV_PROXY: "1",
         NODE_EXTRA_CA_CERTS: trustBundlePath,
         SSL_CERT_FILE: trustBundlePath,

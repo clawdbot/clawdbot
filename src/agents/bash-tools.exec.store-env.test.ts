@@ -36,6 +36,8 @@ vi.mock("../secrets/egress-proxy/registry.js", () => ({
     return {
       HTTPS_PROXY: mocks.proxyUrl,
       HTTP_PROXY: mocks.proxyUrl,
+      https_proxy: mocks.proxyUrl,
+      http_proxy: mocks.proxyUrl,
       NODE_USE_ENV_PROXY: "1",
       NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
       SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
@@ -128,6 +130,8 @@ type StoreEnvHost = "gateway" | "sandbox" | "node";
 const EGRESS_ENV = {
   HTTPS_PROXY: mocks.proxyUrl,
   HTTP_PROXY: mocks.proxyUrl,
+  https_proxy: mocks.proxyUrl,
+  http_proxy: mocks.proxyUrl,
   NODE_USE_ENV_PROXY: "1",
   NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
   SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
@@ -458,6 +462,25 @@ describe("exec store environment", () => {
       );
     },
   );
+
+  it("replaces inherited proxy aliases for enabled gateway secret egress", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://uppercase.example:8080");
+    vi.stubEnv("HTTP_PROXY", "http://uppercase.example:8080");
+    vi.stubEnv("https_proxy", "http://lowercase.example:8080");
+    vi.stubEnv("http_proxy", "http://lowercase.example:8080");
+    mocks.egressActive = true;
+
+    await withTeamStoreEntries([], async () => {
+      const env = await captureStoreExecEnvironment({
+        host: "gateway",
+        callId: "call-egress-proxy-precedence",
+        config: { secrets: { egressProxy: { enabled: true } } },
+      });
+
+      expect(env).toMatchObject(EGRESS_ENV);
+      expect(mocks.spawnInputs.at(-1)?.env).toMatchObject(EGRESS_ENV);
+    });
+  });
 
   it.each(
     (["gateway", "sandbox", "node"] as const).flatMap((host) =>
