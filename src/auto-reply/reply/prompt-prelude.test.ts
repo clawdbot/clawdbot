@@ -59,6 +59,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("what changed?");
     expect(envelope.currentInboundContext).toEqual({
       text: "Current message:\nchat_id=C123",
+      fragments: [{ kind: "conversation-data", text: "Current message:\nchat_id=C123" }],
       promptJoiner: " ",
     });
   });

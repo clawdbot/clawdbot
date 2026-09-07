@@ -764,6 +764,13 @@ describe("atomic subagent completion admission store", () => {
         route: payload.route,
         expectedMediaUrls: payload.expectedMediaUrls,
         message: expect.stringContaining("canonical result"),
+        runtimeContextFragments: [
+          {
+            kind: "runtime-instruction",
+            text: expect.stringContaining("Compare the result with the requested outcome"),
+          },
+          { kind: "conversation-data", text: "canonical result" },
+        ],
       });
       if (recovered?.kind !== "agentTurn" || secondEntry.kind !== "agentTurn") {
         throw new Error("correlated completion changed queue entry kind");

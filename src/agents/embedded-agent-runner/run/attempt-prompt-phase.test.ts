@@ -153,6 +153,7 @@ function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) 
     },
   };
   const sessionManager = {
+    getHeader: () => ({ version: 3 }),
     appendCustomEntry: vi.fn(),
     getEntries: vi.fn(() => []),
   };

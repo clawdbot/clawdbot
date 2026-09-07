@@ -589,15 +589,35 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
   const modelContextLease = runtime
     ? leaseMcpAppModelContextForTurn({
         runtime,
-        prompt: executionParams.commandBody,
-        transcriptPrompt: executionParams.transcriptCommandBody,
       })
     : undefined;
   const turnParams = modelContextLease
     ? {
         ...executionParams,
-        commandBody: modelContextLease.prompt,
-        transcriptCommandBody: modelContextLease.transcriptPrompt,
+        followupRun: {
+          ...executionParams.followupRun,
+          currentInboundContext: {
+            ...executionParams.followupRun.currentInboundContext,
+            text: [
+              executionParams.followupRun.currentInboundContext?.text,
+              modelContextLease.legacyText,
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+            fragments: [
+              ...(executionParams.followupRun.currentInboundContext?.fragments ??
+                (executionParams.followupRun.currentInboundContext?.text
+                  ? [
+                      {
+                        kind: "conversation-data" as const,
+                        text: executionParams.followupRun.currentInboundContext.text,
+                      },
+                    ]
+                  : [])),
+              modelContextLease.context,
+            ],
+          },
+        },
       }
     : executionParams;
   // Keep committed facts outside cleanup so a restart cannot erase them.
