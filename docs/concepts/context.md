@@ -163,8 +163,13 @@ What persists across messages depends on the mechanism:
 For embedded Responses requests, current request metadata stays after the user
 message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
 previous response across tool rounds without dropping live context. A later user
-turn that retires transient context requires the updated history to be resent.
-Other transports keep that metadata at the request tail to preserve their cached
+turn in an OpenAI Responses-family session preserves hidden runtime-context
+carriers append-only, so the previous turn, including tool calls and results,
+remains an unchanged cached prefix. Retained carriers count toward the context
+window until compaction, which does not split a user message from its carrier.
+Carriers contain only the delimited context body; interpretation guidance lives
+once in the stable system prompt.
+Other transports keep transient metadata at the request tail to preserve their cached
 history prefix when the next user turn removes it.
 
 Docs: [Session](/concepts/session), [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning).

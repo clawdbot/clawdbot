@@ -1226,7 +1226,8 @@ describe("doctor health contributions", () => {
     expect(deferredPanels[0]?.[0]).toContain(pendingWarnings[1]);
     expect(deferredPanels[0]?.[0]).toContain("2 additional pending entries were omitted");
     expect(deferredPanels[0]?.[0]).toContain("No listed legacy source was removed.");
-    expect(deferredPanels[0]?.[0]).toContain('rerun "openclaw doctor --fix"');
+    expect(deferredPanels[0]?.[0]).toContain("Fix the config errors above.");
+    expect(deferredPanels[0]?.[0]).not.toContain("doctor --fix");
     expect(mocks.runLegacyStateMigrations).not.toHaveBeenCalled();
 
     // A later write pass must not retry the identical candidate or duplicate the warning.

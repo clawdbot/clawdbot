@@ -49,7 +49,7 @@ export type NormalizedPluginsConfig = {
 export type NormalizePluginId = (id: string) => string;
 
 /** Default plugin id normalizer for already-canonical ids. */
-export const identityNormalizePluginId: NormalizePluginId = (id) => id.trim();
+const identityNormalizePluginId: NormalizePluginId = (id) => id.trim();
 
 function normalizeList(value: unknown, normalizePluginId: NormalizePluginId): string[] {
   if (!Array.isArray(value)) {

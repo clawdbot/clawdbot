@@ -1,4 +1,5 @@
 // Read-only session queries.
+import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -247,6 +248,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             rowRepairAttempted?: boolean;
           } = {},
         ): Promise<Awaited<ReturnType<typeof listSessionsFromStoreAsync>>> {
+          const workStartedAt = performance.now();
           let loaded = options.loaded;
           if (!loaded) {
             const loadedStore = measureDiagnosticsTimelineSpanSync(
@@ -278,6 +280,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             () =>
               listSessionsFromStoreAsync({
                 cfg,
+                workStartedAt,
                 durableStorePath,
                 ...(entryFilter ? { entryFilter } : {}),
                 storePath,

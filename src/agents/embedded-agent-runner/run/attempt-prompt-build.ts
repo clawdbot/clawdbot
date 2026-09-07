@@ -22,9 +22,9 @@ import {
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
-import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
+import { buildRuntimeFactsPrompt } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
@@ -35,13 +35,7 @@ import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
-import { normalizeToolPolicyName } from "../../tool-policy.js";
 import { log } from "../logger.js";
-import {
-  beginPromptCacheObservation,
-  type PromptCacheChange,
-  type PromptCacheToolSnapshot,
-} from "../prompt-cache-observability.js";
 import {
   cloneToolResultPromptProjectionState,
   type ToolResultPromptProjectionState,
@@ -59,8 +53,6 @@ import {
 } from "./attempt-llm-boundary.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import {
-  prependSystemPromptAddition,
-  resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
 } from "./attempt-prompt-helpers.js";
@@ -79,9 +71,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
  * Assembles hook, orphan-repair, steering, and cache inputs for one prompt.
  */
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
-type CacheTrace = ReturnType<typeof createCacheTrace>;
 type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
-type CacheRetention = Parameters<typeof beginPromptCacheObservation>[0]["cacheRetention"];
 type PromptBuildHookContext = Parameters<typeof resolvePromptBuildHookResult>[0]["hookCtx"];
 
 type EmbeddedAttemptSteeringLease = {
@@ -103,7 +93,6 @@ type EmbeddedAttemptPromptAssembly = {
   promptForRuntimeContextBeforeAnnotation: string;
   transcriptLeafId: string | null;
   heartbeatSummary?: ReturnType<typeof resolveHeartbeatSummaryForAgent>;
-  promptCacheChangesForTurn: PromptCacheChange[] | null;
   leasedSteering?: EmbeddedAttemptSteeringLease;
 };
 
@@ -122,14 +111,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
-  cache: {
-    observabilityEnabled: boolean;
-    retention: CacheRetention;
-    streamStrategy: string;
-    transport: AgentSession["agent"]["transport"];
-    tools: readonly PromptCacheToolSnapshot[];
-    trace: CacheTrace;
-  };
 }): Promise<EmbeddedAttemptPromptAssembly> {
   const { attempt } = input;
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
@@ -186,7 +167,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
           activeToolNames: promptCacheToolNames,
           assertHostActive,
         });
-  const promptCacheToolNameSet = new Set(promptCacheToolNames.map(normalizeToolPolicyName));
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
     prompt: effectivePrompt,
@@ -197,9 +177,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     attempt.finalizePromptForResolvedTools && attempt.transcriptPrompt === undefined
       ? promptBeforeResolvedToolFinalization
       : attempt.transcriptPrompt;
-  const promptCacheTools = input.cache.tools.filter((tool) =>
-    promptCacheToolNameSet.has(normalizeToolPolicyName(tool.name)),
-  );
   const promptBeforePromptBuildHooks = effectivePrompt;
   const joinHookContext = (...values: Array<string | undefined>) =>
     values.filter((value): value is string => Boolean(value?.trim())).join("\n\n") || undefined;
@@ -239,24 +216,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         `(${hookResult?.prependSystemContext?.trim().length ?? 0}+${hookResult?.appendSystemContext?.trim().length ?? 0} chars)`,
     );
   }
-  const mediaTaskSystemPromptAddition = isSettledTurnFinalization
-    ? undefined
-    : resolveAttemptMediaTaskSystemPromptAddition({
-        sessionKey: attempt.sessionKey,
-        agentId: input.sessionAgentId,
-        trigger: attempt.trigger,
-      });
-  if (mediaTaskSystemPromptAddition) {
-    setSystemPrompt(
-      prependSystemPromptAddition({
-        systemPrompt: ensureSystemPromptCacheBoundary(systemPromptText),
-        systemPromptAddition: mediaTaskSystemPromptAddition,
-      }),
-    );
-  }
-
-  // Keep model identity after the stable cache boundary so media-only dynamic
-  // context cannot change the cached prefix between adjacent turns.
+  // Keep current model identity after the stable system cache boundary.
   const modelAwareSystemPrompt = isSettledTurnFinalization
     ? systemPromptText
     : appendModelIdentitySystemPrompt({
@@ -268,34 +228,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       });
   if (modelAwareSystemPrompt !== systemPromptText) {
     setSystemPrompt(modelAwareSystemPrompt);
-  }
-
-  let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
-  if (input.cache.observabilityEnabled) {
-    const cacheObservation = beginPromptCacheObservation({
-      sessionId: attempt.sessionId,
-      promptCacheKey: attempt.promptCacheKey,
-      sessionKey: attempt.sessionKey,
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-      modelApi: attempt.model.api,
-      cacheRetention: input.cache.retention,
-      streamStrategy: input.cache.streamStrategy,
-      transport: input.cache.transport,
-      systemPrompt: systemPromptText,
-      tools: promptCacheTools,
-    });
-    promptCacheChangesForTurn = cacheObservation.changes;
-    input.cache.trace?.recordStage("cache:state", {
-      options: {
-        snapshot: cacheObservation.snapshot,
-        previousCacheRead: cacheObservation.previousCacheRead ?? undefined,
-        changes: cacheObservation.changes?.map((change) => ({
-          code: change.code,
-          detail: change.detail,
-        })),
-      },
-    });
   }
 
   const routingSummary = describeProviderRequestRoutingSummary({
@@ -422,7 +354,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     promptForRuntimeContextBeforeAnnotation,
     transcriptLeafId,
     heartbeatSummary,
-    promptCacheChangesForTurn,
     leasedSteering,
   };
 }
@@ -439,6 +370,7 @@ type PromptContextAttempt = Pick<
   | "sessionId"
   | "sessionKey"
   | "suppressNextUserMessagePersistence"
+  | "operation"
 >;
 
 type PromptAssemblyContext = {
@@ -481,6 +413,7 @@ type EmbeddedAttemptPromptContext = {
 export function prepareEmbeddedAttemptPromptContext(input: {
   appendOnlyRuntimeContext?: boolean;
   attempt: PromptContextAttempt;
+  capabilityToolNames: ReadonlySet<string>;
   boundaryTimezone?: string;
   includeBoundaryTimestamp: boolean;
   isRawModelRun: boolean;
@@ -620,15 +553,26 @@ export function prepareEmbeddedAttemptPromptContext(input: {
       input.setActiveSessionSystemPrompt(runtimeSystemPrompt);
     }
   }
-  const runtimeContextForHook = isRuntimeOnlyTurn
-    ? undefined
-    : [
-        currentInboundContextText,
-        promptSubmission.runtimeContext?.trim(),
-        input.heartbeatOutcomeContext?.trim(),
-      ]
-        .filter((value): value is string => Boolean(value))
-        .join("\n\n") || undefined;
+  const runtimeFacts =
+    input.isRawModelRun || attempt.operation === "settled-tool-finalization"
+      ? undefined
+      : buildRuntimeFactsPrompt({
+          capabilityToolNames: input.capabilityToolNames,
+          cfg: attempt.config ?? {},
+          sessionKey: attempt.sessionKey,
+          sessionId: attempt.sessionId,
+          agentId: input.sessionAgentId,
+        });
+  const runtimeContextForHook =
+    [
+      currentInboundContextText,
+      ...(isRuntimeOnlyTurn
+        ? []
+        : [promptSubmission.runtimeContext?.trim(), input.heartbeatOutcomeContext?.trim()]),
+      runtimeFacts,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n") || undefined;
   const runtimeContextMessageForCurrentTurn =
     buildRuntimeContextCustomMessage(runtimeContextForHook);
   const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
@@ -648,9 +592,9 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     input.systemPromptReport.currentTurn = {
       ...(attempt.currentInboundEventKind ? { kind: attempt.currentInboundEventKind } : {}),
       promptChars: promptForModel.length,
-      runtimeContextChars: promptSubmission.runtimeOnly
-        ? (runtimeSystemContext?.length ?? 0)
-        : (runtimeContextForHook?.length ?? 0),
+      runtimeContextChars:
+        (runtimeContextForHook?.length ?? 0) +
+        (isRuntimeOnlyTurn ? (runtimeSystemContext?.length ?? 0) : 0),
       // Hook context reaches only the model, so count the delta beyond the
       // transcript prompt or downstream context accounting undercounts it.
       modelOnlyPromptChars: Math.max(0, promptForModel.length - promptForSession.length),

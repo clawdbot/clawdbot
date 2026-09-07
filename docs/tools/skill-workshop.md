@@ -159,7 +159,16 @@ operator's existing cron execution and approval policy; enabling review does not
 grant additional shell access. An approval-required policy can refuse unattended
 shell commands; a full-access policy permits them. File discovery does not need a shell.
 
-Reviews require the embedded runtime. If an enabled sandbox has
+Reviews support the embedded runtime and CLI runtimes that declare instruction
+isolation, disable their native tools, and use only the Gateway's restricted
+OpenClaw tool set, including Claude CLI. These CLI reviews retain the host-selected instruction snapshot;
+Workshop skill contents remain review material. OpenClaw carries the Workshop
+file root and prepared sandbox to the mediated tools. Changing the CLI working
+directory alone does not provide containment.
+
+Runtimes without those guarantees, including undeclared CLI backends, the Codex harness, and
+node-placed CLI execution, remain unsupported for rooted reviews and fail with
+an explanation. If an enabled sandbox has
 `workspaceAccess: "ro"` or `"none"`, the turn refuses to run rather than editing
 a disposable copy. A writable sandbox uses the agent's Workshop directory.
 Sandbox backends must support directory reads to provide shell-free discovery.

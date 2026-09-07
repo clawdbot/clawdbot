@@ -409,6 +409,8 @@ export async function executePluginOwnedProcess(params: {
   consumeStdout: (chunk: string) => void;
   onOutstandingWorkChange?: (active: boolean) => void;
   activeToolCount?: () => number;
+  getActiveLoopbackAskUserDeadline?: () => number | undefined;
+  onActiveLoopbackAskUserDeadlineChange?: (listener: () => void) => () => void;
   onNoOutputTimeout?: (error: FailoverError) => void;
   onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
   liveSession?: {
@@ -454,13 +456,25 @@ export async function executePluginOwnedProcess(params: {
           termination.reason = "overall-timeout";
           controller.abort(new Error("CLI plugin runtime exceeded its execution timeout."));
         }, overallTimeoutMs);
-  const resetNoOutputTimer = (delayMs = noOutputTimeoutMs) => {
+  const activeToolCount = () => Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals);
+  const resetNoOutputTimer = (delayMs?: number) => {
     clearTimeout(noOutputTimer);
-    if (delayMs === undefined || noOutputTimeoutMs === undefined) {
+    if (noOutputTimeoutMs === undefined) {
       return;
     }
+    const activeAskUserDeadline = params.getActiveLoopbackAskUserDeadline?.();
+    const baselineDeadline = outstanding.lastOutputAt + noOutputTimeoutMs;
+    const effectiveDelayMs =
+      delayMs ??
+      Math.max(
+        0,
+        (activeAskUserDeadline === undefined
+          ? baselineDeadline
+          : Math.max(baselineDeadline, activeAskUserDeadline)) - Date.now(),
+      );
     noOutputTimer = setTimeout(() => {
       const quietDurationMs = Date.now() - outstanding.lastOutputAt;
+      const askUserDeadline = params.getActiveLoopbackAskUserDeadline?.();
       const decision = noOutputPolicy.resolveCliNoOutputTimeoutDecision({
         context: {
           provider: run.provider,
@@ -474,14 +488,20 @@ export async function executePluginOwnedProcess(params: {
           mode: "no-output",
           timeoutSeconds: Math.round(quietDurationMs / 1000),
           observedActivity: outstanding.observed,
-          activeToolCount: Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals),
+          activeToolCount: activeToolCount(),
           backgroundTaskCount: outstanding.background,
         },
         hasOutputText: false,
         useResume: params.useResume,
         hasReplayUnsafeActivity: outstanding.replayUnsafe,
         allowResumeControlOnlyRetry: true,
-        outstandingWorkGraceMs: BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+        outstandingWorkGraceMs:
+          askUserDeadline === undefined
+            ? BLOCKED_TOOL_CALL_ABORT_FLOOR_MS
+            : Math.max(
+                BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+                askUserDeadline - outstanding.lastOutputAt,
+              ),
       });
       if (decision.deferMs !== undefined) {
         resetNoOutputTimer(decision.deferMs);
@@ -490,8 +510,11 @@ export async function executePluginOwnedProcess(params: {
       termination.reason = "no-output-timeout";
       params.onNoOutputTimeout?.(decision.error);
       controller.abort(decision.error);
-    }, delayMs);
+    }, effectiveDelayMs);
   };
+  const stopAskUserDeadlineListener = params.onActiveLoopbackAskUserDeadlineChange?.(() =>
+    resetNoOutputTimer(),
+  );
 
   const replyBackendHandle = run.replyOperation
     ? {
@@ -639,6 +662,7 @@ export async function executePluginOwnedProcess(params: {
   } finally {
     clearTimeout(overallTimer);
     clearTimeout(noOutputTimer);
+    stopAskUserDeadlineListener?.();
     params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.

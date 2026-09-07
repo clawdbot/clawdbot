@@ -236,6 +236,31 @@ original result and a keyed request fingerprint, not a second raw request.
 There is no backfill or configuration switch. Downgrading preserves the table
 but disables the new structured controls; upgrading can read retained receipts.
 
+### Schema bumps and older updaters
+
+Update-time Doctor checks the shared database and registered agent databases
+before CLI debug capture, maintenance, config rewrites, or migration ledger writes.
+If a database would advance `user_version` and a running `update_runs` row identifies
+the driving updater as the 2026.9.2 release line, Doctor reports
+`update-schema-bump-unfenced` and a nonzero exit. The
+refusal includes on-disk and target schema versions, the active update run's
+`before.version`, and manual update commands. Doctor leaves the databases and
+config unchanged.
+
+OpenClaw 2026.9.2 introduced the update ledger and reopens it with the previous
+build after the target's Doctor. That release cannot safely drive a schema bump.
+Earlier updaters, including 2026.9.1, never reopen shared state after Doctor and
+continue to work. A missing ledger table or no running row does not trigger this
+guard, including when a database schema is indeterminate. Builds from 2026.9.3
+onward, including prereleases, use transactional updates that suspend old-process
+ledger access and let candidate code finish after migration. The version check
+includes 2026.9.2 rebuilds and requires a valid semantic version; it adds no
+environment override. Same-schema repairs and ordinary Doctor runs remain available.
+
+Use the [manual update sequence](/install/updating#updating-from-2026.9.2-across-a-schema-bump)
+after the old updater restores the previous package. Package rollback cannot
+reverse a migration that already happened.
+
 ### Profile-owned skill library
 
 [Personal and team skills](/tools/skills#personal-skills-on-a-shared-gateway) use four first-use tables in the shared state database without changing its schema version: `skill_library_entries`, `skill_library_revisions`, `skill_library_events`, and `skill_library_uploads`. Ordinary workspace skills and unused-library discovery do not create these tables. Ownership, sharing, the current revision pointer, portable file manifests, and publication events are canonical SQLite data. Session selections remain in the existing per-agent session store; inherited cron selections remain in the existing private job record.

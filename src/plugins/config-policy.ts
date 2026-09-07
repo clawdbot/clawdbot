@@ -3,27 +3,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolvePluginActivationDecisionShared,
   toPluginActivationState,
-  type PluginActivationStateLike,
+  type PluginActivationStateLike as PluginActivationState,
 } from "./config-activation-shared.js";
 import {
-  identityNormalizePluginId,
-  normalizePluginsConfigWithResolverCore as normalizePluginsConfigWithResolverShared,
   resolveChannelConfigEnablement,
-  type NormalizePluginId,
-  type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
+  type NormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
-type PluginActivationState = PluginActivationStateLike;
-
-type NormalizedPluginsConfig = SharedNormalizedPluginsConfig;
-
-export function normalizePluginsConfigWithResolver(
-  config?: OpenClawConfig["plugins"],
-  normalizePluginId: NormalizePluginId = identityNormalizePluginId,
-): NormalizedPluginsConfig {
-  return normalizePluginsConfigWithResolverShared(config, normalizePluginId);
-}
+export { normalizePluginsConfigWithResolverCore as normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
 
 type PolicyEffectiveActivationParams = {
   id: string;

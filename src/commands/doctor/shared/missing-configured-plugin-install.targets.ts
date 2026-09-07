@@ -217,6 +217,7 @@ export async function collectConfiguredNpmPluginTargets(params: {
         syncOfficialPluginInstalls: true,
         updateChannel: params.channel,
         coreVersion: params.targetVersion,
+        versionBoundToCore: candidate?.versionBoundToOpenClaw,
       });
       if (target && parseRegistryNpmSpec(target.spec)) {
         targets.push({ pluginId, ...target });

@@ -617,6 +617,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           shouldRestart: true,
           jsonMode: Boolean(params.opts.json),
           expectedService: { serviceEnv: gatewayServiceEnv, serviceUpdateVerdict },
+          activatedInstall: params,
           timeoutMs: params.updateStepTimeoutMs,
         });
         before.windowsTaskAutoStartRecovery = stopped.windowsTaskAutoStartRecovery;

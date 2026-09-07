@@ -67,16 +67,26 @@
       {
         "type": "thinking_delta",
         "contentIndex": 0,
+        "delta": "seed"
+      },
+      {
+        "type": "thinking_delta",
+        "contentIndex": 0,
         "delta": " + thought"
       },
       {
         "type": "thinking_end",
         "contentIndex": 0,
-        "content": " + thought"
+        "content": "seed + thought"
       },
       {
         "type": "text_start",
         "contentIndex": 1
+      },
+      {
+        "type": "text_delta",
+        "contentIndex": 1,
+        "delta": "Hello"
       },
       {
         "type": "text_delta",
@@ -86,7 +96,7 @@
       {
         "type": "text_end",
         "contentIndex": 1,
-        "content": " world"
+        "content": "Hello world"
       },
       {
         "type": "done",
@@ -98,12 +108,12 @@
       "content": [
         {
           "type": "thinking",
-          "thinking": " + thought",
+          "thinking": "seed + thought",
           "thinkingSignature": "final-signature"
         },
         {
           "type": "text",
-          "text": " world"
+          "text": "Hello world"
         }
       ],
       "api": "anthropic-messages",

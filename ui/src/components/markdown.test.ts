@@ -299,12 +299,14 @@ describe("toSanitizedMarkdownHtml", () => {
       });
       fragment.addEventListener("click", handleMarkdownCodeBlockClick);
       try {
+        document.body.append(fragment);
         const button = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
         expect(button).toBeInstanceOf(HTMLButtonElement);
         button!.click();
         await vi.waitFor(() => expect(button!.getAttribute("aria-label")).toBe("Copied!"));
         expect(writeText).toHaveBeenCalledWith(text);
       } finally {
+        fragment.remove();
         fragment.removeEventListener("click", handleMarkdownCodeBlockClick);
         for (const [index, [, delay]] of schedule.mock.calls.entries()) {
           if (delay === 1_500) {

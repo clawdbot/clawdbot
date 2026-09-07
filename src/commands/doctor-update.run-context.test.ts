@@ -1,6 +1,5 @@
 import "./doctor-update.test-support.js";
 import { describe, expect, it, vi } from "vitest";
-import { ExitError } from "../runtime.js";
 
 const {
   installDoctorUpdateTestHooks,
@@ -13,57 +12,35 @@ const {
 installDoctorUpdateTestHooks();
 
 describe("Doctor update run lifecycle", () => {
-  it.each(["verified", "unavailable"] as const)(
-    "settles the admitted run after serving proof: %s",
-    async (proof) => {
-      mockGitCheckout();
-      mockManagedService({
-        verdict: { kind: "owned", refreshDefinition: false, fingerprint: "opaque" },
-      });
-      mockUpdateResult({
-        status: "ok",
-        mode: "git",
-        root: "/repo/link",
-        after: { version: "2026.4.24", buildId: "candidate-build" },
-      });
-      if (proof === "unavailable") {
-        mocks.verifyUpdateServing.mockResolvedValue({
-          status: "unavailable",
-          reason: "persistence-unavailable",
-        });
-      }
-      const offer = runOffer({ confirm: vi.fn().mockResolvedValue(true) });
-      if (proof === "verified") {
-        await expect(offer).resolves.toEqual({ updated: true, handled: true });
-      } else {
-        await expect(offer).rejects.toEqual(new ExitError(1));
-      }
-      expect(mocks.admitUpdateCommandRun).toHaveBeenCalledOnce();
-      const run = await mocks.admitUpdateCommandRun.mock.results[0]!.value;
-      expect(mocks.admitUpdateCommandRun.mock.invocationCallOrder[0]).toBeLessThan(
-        mocks.runGatewayUpdate.mock.invocationCallOrder[0]!,
-      );
-      expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ runId: run.runId }),
-      );
-      expect(mocks.verifyUpdateServing).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: run.runId,
-          env: run.env,
-          expectedVersion: "2026.4.24",
-          expectedBuildId: "candidate-build",
-          expectedBootId: "doctor-boot",
-        }),
-      );
-      expect(mocks.completeUpdateCommandRun).toHaveBeenCalledWith(
-        expect.objectContaining({ status: proof === "verified" ? "ok" : "error" }),
-        run,
-      );
-      expect(mocks.verifyUpdateServing.mock.invocationCallOrder[0]).toBeLessThan(
-        mocks.completeUpdateCommandRun.mock.invocationCallOrder[0]!,
-      );
-    },
-  );
+  it("settles the admitted run after Gateway readiness", async () => {
+    mockGitCheckout();
+    mockManagedService({
+      verdict: { kind: "owned", refreshDefinition: false, fingerprint: "opaque" },
+    });
+    mockUpdateResult({
+      status: "ok",
+      mode: "git",
+      root: "/repo/link",
+      after: { version: "2026.4.24", buildId: "candidate-build" },
+    });
+    const offer = runOffer({ confirm: vi.fn().mockResolvedValue(true) });
+    await expect(offer).resolves.toEqual({ updated: true, handled: true });
+    expect(mocks.admitUpdateCommandRun).toHaveBeenCalledOnce();
+    const run = await mocks.admitUpdateCommandRun.mock.results[0]!.value;
+    expect(mocks.admitUpdateCommandRun.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.runGatewayUpdate.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: run.runId }),
+    );
+    expect(mocks.completeUpdateCommandRun).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "ok" }),
+      run,
+    );
+    expect(mocks.waitForHttpReadiness.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.completeUpdateCommandRun.mock.invocationCallOrder[0]!,
+    );
+  });
 
   it("does not begin mutable work when canonical admission refuses", async () => {
     mockGitCheckout();
@@ -118,7 +95,6 @@ describe("Doctor update run lifecycle", () => {
       );
       expect(mocks.completeUpdateCommandRun).not.toHaveBeenCalled();
       expect(mocks.failUpdateCommandRun).not.toHaveBeenCalled();
-      expect(mocks.verifyUpdateServing).not.toHaveBeenCalled();
       expect(mocks.restartUpdatedGateway).not.toHaveBeenCalled();
       expect(mocks.triageCommand).not.toHaveBeenCalled();
     },

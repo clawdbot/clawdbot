@@ -1,3 +1,4 @@
+import { createBoundedLineFramer } from "../process/bounded-line-framer.js";
 import {
   appendCapturedOutput,
   createCapturedOutputBuffers,
@@ -38,6 +39,10 @@ export async function observeNodeWorkerChildOutput(
   currentTurnId: () => string | undefined,
 ): Promise<NodeWorkerTerminalOutcome> {
   let stdout = "";
+  const framer = createBoundedLineFramer(
+    NODE_WORKER_STDOUT_MAX_BYTES,
+    `worker stdout exceeded ${NODE_WORKER_STDOUT_MAX_BYTES} bytes`,
+  );
   let lastResult: string | undefined;
   let outputError: unknown;
   let journaled = false;
@@ -46,15 +51,11 @@ export async function observeNodeWorkerChildOutput(
       return;
     }
     try {
-      let newline: number;
-      while ((newline = stdout.indexOf("\n")) >= 0) {
-        const line = stdout.slice(0, newline);
-        stdout = stdout.slice(newline + 1);
-        if (Buffer.byteLength(line, "utf8") > NODE_WORKER_STDOUT_MAX_BYTES) {
-          throw new Error(`worker stdout exceeded ${NODE_WORKER_STDOUT_MAX_BYTES} bytes`);
-        }
+      const chunk = Buffer.from(stdout, "utf8");
+      stdout = "";
+      for (const line of framer.push(chunk)) {
         const frame = parseWorkerProcessResult(
-          JSON.parse(parseNodeWorkerOutputJson(line, active.scrubber.scrub)),
+          JSON.parse(parseNodeWorkerOutputJson(line.toString("utf8"), active.scrubber.scrub)),
         );
         if (!frame) {
           throw new Error("worker returned an invalid turn result");
@@ -62,12 +63,10 @@ export async function observeNodeWorkerChildOutput(
         onResult(frame);
         lastResult = JSON.stringify(frame.result);
       }
-      if (Buffer.byteLength(stdout, "utf8") > NODE_WORKER_STDOUT_MAX_BYTES) {
-        throw new Error(`worker stdout exceeded ${NODE_WORKER_STDOUT_MAX_BYTES} bytes`);
-      }
     } catch (error) {
       outputError = error;
       stdout = "";
+      framer.clear();
       active.adapter.kill("SIGKILL");
     }
   };
@@ -118,7 +117,7 @@ export async function observeNodeWorkerChildOutput(
             : "node worker launch interrupted during node-host shutdown"),
       });
     }
-    if (outputError || stdout.length > 0 || (exit.code === 0 && !lastResult)) {
+    if (outputError || framer.pendingByteLength > 0 || (exit.code === 0 && !lastResult)) {
       return Object.freeze({
         state: "failed",
         errorText: sanitizeNodeWorkerDiagnostic(
