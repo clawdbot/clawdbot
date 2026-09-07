@@ -64,7 +64,10 @@ function check(label: string, run: () => void): void {
   }
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 async function main(): Promise<void> {
   process.env.OPENCLAW_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proof-135481-"));
@@ -191,7 +194,14 @@ async function main(): Promise<void> {
     // Wait until the requester's turn is genuinely RUNNING on its lane, not
     // merely queued behind it — a queued task already reads as "busy", and
     // other lane work can hold the slot first.
-    for (let i = 0; i < 500 && !releaseTurn; i += 1) {
+    // `releaseTurn` is assigned from the enqueued task, not from this loop, so
+    // the loop condition counts spins and the readiness test is an explicit
+    // break — same bound (500 x 10ms) and same early exit as a combined
+    // condition, without tripping `no-unmodified-loop-condition`.
+    for (let spins = 0; spins < 500; spins += 1) {
+      if (releaseTurn) {
+        break;
+      }
       await sleep(10);
     }
     const heldLane = laneAvailability.readSessionLaneAvailability(requesterSessionKey);
