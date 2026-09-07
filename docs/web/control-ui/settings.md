@@ -52,6 +52,10 @@ GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the rea
 
 **Settings → Profile → GitHub connections** separately shows **My GitHub** and **System GitHub**. Identified people, including read-scoped operators, can connect and disconnect only their own account; administrators can also change the shared System account. Connecting defaults to **For me** for identified users and never changes their sign-in identity, co-author preference, or shared execution defaults. Personal credentials support explicit Gateway-brokered **Publish PR** actions, not ordinary agent shell commands. See [GitHub connections](/concepts/user-model#github-connections).
 
+Administrators also see the default agent's effective GitHub account and verification status here. **View agent account** opens **Agent settings → Tools → GitHub account**, where any agent's account source, credential type, OAuth expiry, and refresh state are available. Authenticated [GitHub Actions widgets](/tools/show-widget#read-github-actions-runs) use this effective agent account. **Verified** confirms the account with GitHub; repository permissions are checked on each data request.
+
+Credentials reserved for Control UI link previews are excluded from both agent authentication and its displayed status, including when the preview credential uses a SecretRef.
+
 Set an agent's display name, emoji, and avatar under **Agent settings → Overview → Identity**. The identity is stored with that agent and is shared by Control UI clients. Where the transcript shows avatars, saved and streaming assistant replies use the configured agent image or text avatar. Agents without a configured avatar omit the repeated fallback icon.
 
 ## Gateway host status
