@@ -146,6 +146,10 @@ describe("feishuPlugin metadata", () => {
   it("opts announce delivery into persisted session lookup", () => {
     expect(feishuPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
   });
+
+  it("declares exact native chat types", () => {
+    expect(feishuPlugin.capabilities.chatTypes).toEqual(["direct", "group"]);
+  });
 });
 
 describe("feishuPlugin config", () => {
