@@ -573,7 +573,11 @@ const OPENAI_SAFETY_IDENTIFIER_MAX_LENGTH = 64;
 export function resolveOpenAISafetyIdentifier(
   extraParams: Record<string, unknown> | undefined,
 ): string | undefined {
-  const raw = extraParams?.safetyIdentifier ?? extraParams?.safety_identifier;
+  // Single canonical spelling on purpose: extra params are merged across the
+  // global/model/agent scopes by literal key before reaching this resolver, so
+  // accepting an alias here would let a lower-precedence scope's spelling win
+  // over a higher-precedence override written with the other spelling.
+  const raw = extraParams?.safetyIdentifier;
   if (raw === undefined || raw === null) {
     return undefined;
   }

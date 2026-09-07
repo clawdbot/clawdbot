@@ -3369,8 +3369,8 @@ describe("applyExtraParamsToAgent", () => {
       expected: "clipo-a1b2c3",
     },
     {
-      name: "accepts snake_case safety_identifier and trims whitespace",
-      params: { safety_identifier: "  clipo-a1b2c3  " },
+      name: "trims whitespace around the configured safetyIdentifier",
+      params: { safetyIdentifier: "  clipo-a1b2c3  " },
       model: {
         api: "openai-responses",
         provider: "openai",
@@ -3466,6 +3466,19 @@ describe("applyExtraParamsToAgent", () => {
       } as Model<"openai-responses">,
     },
     {
+      name: "does not accept a snake_case safety_identifier alias (single canonical spelling)",
+      applyProvider: "openai",
+      configKey: "openai/gpt-5.4",
+      safetyIdentifier: undefined,
+      extraParams: { safety_identifier: "clipo-a1b2c3" },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+    },
+    {
       name: "skips safety_identifier injection for values over OpenAI's 64-character limit",
       applyProvider: "openai",
       configKey: "openai/gpt-5.4",
@@ -3489,11 +3502,11 @@ describe("applyExtraParamsToAgent", () => {
         baseUrl: "https://api.openai.com/v1",
       } as Model<"openai-responses">,
     },
-  ])("$name", ({ applyProvider, configKey, safetyIdentifier, model }) => {
+  ])("$name", ({ applyProvider, configKey, safetyIdentifier, extraParams, model }) => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider,
       applyModelId: "gpt-5.4",
-      cfg: buildModelConfig(configKey, { safetyIdentifier }),
+      cfg: buildModelConfig(configKey, extraParams ?? { safetyIdentifier }),
       model,
     });
 

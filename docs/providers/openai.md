@@ -1721,8 +1721,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
       OpenAI does not get these headers, even though it is a native route)
     - Keep OpenAI-only request shaping (`service_tier`, `store`,
       reasoning-compat, prompt-cache hints)
-    - Send `safety_identifier` when `params.safetyIdentifier` /
-      `params.safety_identifier` is configured, so OpenAI abuse-monitoring
+    - Send `safety_identifier` when `params.safetyIdentifier` is
+      configured, so OpenAI abuse-monitoring
       signals can be attributed to your deployment or hashed end user
 
     **Proxy/compatible routes:**
