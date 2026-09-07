@@ -34,6 +34,10 @@ describe("buildTurnStartParams temporal context", () => {
     const firstTurn = buildTurnStartParams(params, options);
     expect(firstTurn.input).toEqual([{ type: "text", text: "run exactly", text_elements: [] }]);
     expect(firstTurn.additionalContext).toEqual({
+      openclaw_source_delivery: {
+        kind: "application",
+        value: expect.stringContaining("reply normally in your final assistant message"),
+      },
       openclaw_temporal_context: {
         kind: "application",
         value:
@@ -78,4 +82,76 @@ describe("buildTurnStartParams temporal context", () => {
       configuredTimezone,
     );
   });
+});
+
+describe("buildTurnStartParams source-delivery context", () => {
+  it.each([false, true])(
+    "carries explicit current policy without changing raw input (native settings=%s)",
+    (preserveNativeTurnSettings) => {
+      const params = createParams("/tmp/session.jsonl", "/repo");
+      params.prompt = "unchanged current request";
+      params.permissionChange = {
+        owner: {},
+        baseExecOverrides: {},
+        notice: "Permission changed.",
+        request: vi.fn(),
+        applied: () => true,
+        recordApplied: vi.fn(),
+      };
+      const options = {
+        threadId: "thread-1",
+        cwd: "/repo",
+        appServer: createAppServerOptions(),
+        messageToolAvailable: true,
+        requireExplicitMessageTarget: false,
+        preserveNativeTurnSettings,
+      };
+      const turns = (["automatic", "message_tool_only", undefined] as const).map((mode) =>
+        buildTurnStartParams({ ...params, sourceReplyDeliveryMode: mode }, options),
+      );
+      const values = turns.map((turn) => turn.additionalContext?.openclaw_source_delivery?.value);
+      expect(values[0]).toContain("OpenClaw delivers your final response automatically");
+      expect(values[0]).toContain("sending a message doesn’t end your task");
+      expect(values[1]).toContain("Use `message(action=send)`");
+      expect(values[1]).toContain("For progress, set `final=false`");
+      expect(values[1]).toContain("Set `final=true`, or omit it,");
+      expect(values[1]).toContain("current source is default target");
+      expect(values[2]).toBe(values[0]);
+      for (const turn of turns) {
+        expect(turn.input).toEqual([{ type: "text", text: params.prompt, text_elements: [] }]);
+        expect(turn.additionalContext?.openclaw_temporal_context).toBeDefined();
+        expect(turn.additionalContext?.openclaw_permission_change).toEqual({
+          kind: "application",
+          value: "Permission changed.",
+        });
+        expect(turn.additionalContext?.openclaw_source_delivery?.kind).toBe("application");
+        expect(
+          Buffer.byteLength(turn.additionalContext!.openclaw_source_delivery!.value, "utf8"),
+        ).toBeLessThan(1_000);
+        if (preserveNativeTurnSettings) {
+          expect(turn).not.toHaveProperty("collaborationMode");
+        }
+      }
+      const required = buildTurnStartParams(
+        { ...params, sourceReplyDeliveryMode: "message_tool_only" },
+        { ...options, requireExplicitMessageTarget: true },
+      );
+      expect(required.additionalContext?.openclaw_source_delivery?.value).toContain(
+        "target required this turn",
+      );
+      const unavailable = buildTurnStartParams(
+        { ...params, sourceReplyDeliveryMode: "message_tool_only" },
+        { ...options, messageToolAvailable: false, requireExplicitMessageTarget: true },
+      );
+      expect(unavailable.additionalContext?.openclaw_source_delivery?.value).toContain(
+        "remains private",
+      );
+      expect(unavailable.additionalContext?.openclaw_source_delivery?.value).not.toContain(
+        "Use `message`",
+      );
+      expect(unavailable.additionalContext?.openclaw_source_delivery?.value).not.toContain(
+        "target required",
+      );
+    },
+  );
 });

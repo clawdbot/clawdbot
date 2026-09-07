@@ -228,7 +228,7 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
   };
   try {
     const fixtureIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(root, "state", "openclaw.sqlite"),
+      path: path.join(temporaryRoot, "state", "openclaw.sqlite"),
       identityKey: "hot-reload-fixture",
     });
     await stage(fixtureIdentity, false);
@@ -263,7 +263,6 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
     async run(params: {
       gateway: QaGatewayChild;
       operator: GatewayClient;
-      patchConfig: (change: unknown, replacePaths?: string[]) => Promise<unknown>;
       existingNode: HotReloadConnection;
     }): Promise<string> {
       const url = new URL(params.gateway.wsUrl);
@@ -272,15 +271,9 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
       const connections: HotReloadConnection[] = [];
       const identity = () =>
         loadOrCreateDeviceIdentity({
-          path: path.join(root, "state", "openclaw.sqlite"),
+          path: path.join(temporaryRoot, "state", "openclaw.sqlite"),
           identityKey: `hot-reload-${randomUUID()}`,
         });
-      const patchPairing = (pairing: GatewayNodePairingConfig) =>
-        params.patchConfig({ gateway: { nodes: { pairing } } }, [
-          "gateway.nodes.pairing.autoApproveCidrs",
-          // Replacing the SSH policy with false removes its nested CIDRs too.
-          "gateway.nodes.pairing.sshVerify.cidrs",
-        ]);
       const list = () => params.operator.request<PairingList>("device.pair.list", {});
       const expectPending = async (device: DeviceIdentity) => {
         const result = await list();
@@ -326,6 +319,33 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
         await expectPending(device);
       };
       try {
+        // Unrelated umbrella writes must not spend the held SSH proof's deadline
+        // waiting for their config-write rate-limit window to reset.
+        const configConnection = await connectHotReloadClient(params.gateway);
+        connections.push(configConnection);
+        const patchPairing = async (pairing: GatewayNodePairingConfig) => {
+          const { hash } = await configConnection.client.request<{ hash: string }>(
+            "config.get",
+            {},
+            { timeoutMs: 40_000 },
+          );
+          const result = await configConnection.client.request<{
+            sentinel: { payload: { stats: { requiresRestart: boolean } } };
+          }>(
+            "config.patch",
+            {
+              baseHash: hash,
+              raw: JSON.stringify({ gateway: { nodes: { pairing } } }),
+              replacePaths: [
+                "gateway.nodes.pairing.autoApproveCidrs",
+                // Replacing the SSH policy with false removes its nested CIDRs too.
+                "gateway.nodes.pairing.sshVerify.cidrs",
+              ],
+            },
+            { timeoutMs: 40_000 },
+          );
+          assert.equal(result.sentinel.payload.stats.requiresRestart, false);
+        };
         await patchPairing({
           autoApproveLocal: false,
           autoApproveCidrs: [`${address}/32`],

@@ -37,6 +37,7 @@ function configSnapshot(enabled: boolean, hash: string) {
 function emptyProposalManifest() {
   return {
     schema: "openclaw.skill-workshop.proposals-manifest.v1",
+    installedSkills: [],
     updatedAt: "2026-07-13T12:00:00.000Z",
     proposals: [],
   };
@@ -103,6 +104,7 @@ describeControlUiE2e("Skill Workshop self-learning config recovery mocked Gatewa
     try {
       const response = await page.goto(`${server.baseUrl}skills/workshop`);
       expect(response?.status()).toBe(200);
+      await page.locator("#skill-workshop-mode-tab-suggestions").click();
       const initialNavigationCount = mainFrameNavigations;
       const enableButton = page.getByRole("button", { name: "Enable self-learning", exact: true });
       await enableButton.waitFor();
@@ -134,8 +136,9 @@ describeControlUiE2e("Skill Workshop self-learning config recovery mocked Gatewa
       );
       expect(replayedPatch.baseHash).toBe("hash-current");
 
-      await gateway.setMethodResponse("config.get", configSnapshot(true, "hash-enabled"));
-      await gateway.resolveDeferred("config.patch", { ok: true });
+      const enabledSnapshot = configSnapshot(true, "hash-enabled");
+      await gateway.setMethodResponse("config.get", enabledSnapshot);
+      await gateway.resolveDeferred("config.patch", { ok: true, ...enabledSnapshot });
 
       const toggle = page.getByLabel("Toggle autonomous self-learning", { exact: true });
       await expect.poll(() => toggle.isChecked()).toBe(true);

@@ -2,6 +2,7 @@
 // through nested session-manager callbacks.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import type { TranscriptAppendRefusal } from "./session-accessor.sqlite-contract.js";
 
 export type SessionTranscriptWriterFence = Readonly<{
@@ -124,7 +125,7 @@ export async function withOwnedSessionTranscriptWrites<T>(
 
 /** Runs detached work without retaining an attempt-owned transcript context. */
 export function runWithoutOwnedSessionTranscriptWrites<T>(run: () => T): T {
-  return ownedTranscriptWriteContext.exit(run);
+  return ownedTranscriptWriteContext.exit(() => runWithCliHistoryWriter(undefined, run));
 }
 
 export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResult>(

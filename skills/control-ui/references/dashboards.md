@@ -29,6 +29,32 @@ UI. They can return unavailable even though board storage is healthy.
 `presentation: "expanded"` expands it; `"split"` restores a split view using the
 current panel layout.
 
+## Choose the owning session
+
+Resolve the owning session before the first dashboard or widget mutation. For a
+dedicated sidebar dashboard, create or reuse a visible session and move the work
+there first. Board widgets cannot move between sessions, and tabs never create
+sidebar rows.
+
+## Choose the content boundary
+
+`show_widget` is for self-contained HTML/SVG. The widget runs in a hard sandbox
+that rejects child-frame URL assignments and navigation, so an external
+application such as Grafana cannot be made into a dashboard widget by wrapping
+it in `<iframe src="...">`. `gateway.controlUi.allowExternalEmbedUrls` governs
+hosted transcript embeds; it does not relax the `show_widget` sandbox.
+
+For external or live content, choose one supported boundary:
+
+- add a normal user-clicked HTTPS link, which opens outside the widget;
+- fetch an exact HTTPS API declared in `capabilities.netOrigins` and render the
+  returned data in the widget;
+- use an advertised Gateway data binding; or
+- use a trusted plugin widget when the integration needs host privileges.
+
+Do not weaken `embedSandbox` or expose an authenticated application just to make
+a nested iframe render.
+
 ## Updating content
 
 For a custom widget, call `show_widget` again with:
@@ -68,8 +94,15 @@ preference is server-side session state.
 - Stable widget names, correct owners, and current revisions.
 - Layout is usable at desktop and narrow widths when relevant.
 - Widget frame loaded; no sandbox-origin or ticket error.
+- Every live-data origin is declared and granted in
+  `capabilities.netOrigins`; browser requests complete without CSP, CORS,
+  certificate, or mixed-content errors.
+- External links open intentionally; the widget does not rely on a nested
+  external iframe.
 - Interactive controls perform their intended action.
 - Capability prompts or grants match the widget's declared needs.
+- Dedicated dashboards appear as the intended pinned session row; a tab name
+  alone is not sidebar proof.
 
 Source documentation:
 

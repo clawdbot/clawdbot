@@ -8,6 +8,7 @@ export const MAX_PREAUTH_PAYLOAD_BYTES = 64 * 1024;
 // compress 5-8x, which is what keeps chat.startup off the cold-load critical path.
 export const WS_COMPRESSION_THRESHOLD_BYTES = 4 * 1024;
 export const WEBSOCKET_OPEN_READY_STATE = 1;
+export const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 
 const DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES = 6 * 1024 * 1024; // keep history responses comfortably under client WS limits
 const maxChatHistoryMessagesBytes = DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES;

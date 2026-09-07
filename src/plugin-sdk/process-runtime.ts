@@ -1,5 +1,6 @@
 // Public process helpers for plugins that spawn or probe local commands.
 
+export { splitCommandArgs } from "../utils/shell-argv.js";
 export {
   type CommandOptions,
   resolveCommandEnv,

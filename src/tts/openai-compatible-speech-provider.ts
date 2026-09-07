@@ -1,14 +1,11 @@
 // OpenAI-compatible speech provider sends speech synthesis requests to OpenAI-style APIs.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { asFiniteNumber, trimToUndefined } from "../agents/provider-http-errors.js";
 import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  readProviderBinaryResponse,
-  resolveProviderHttpRequestConfig,
-} from "../plugin-sdk/provider-http.js";
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString as trimToUndefined,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -354,6 +351,12 @@ export function createOpenAiCompatibleSpeechProvider<
       const baseUrl = resolveBaseUrl({ cfg: req.cfg, providerConfig: config });
       const responseFormat = config.responseFormat ?? options.defaultResponseFormat;
       const speed = overrides.speed ?? config.speed;
+      const {
+        assertOkOrThrowHttpError,
+        postJsonRequest,
+        readProviderBinaryResponse,
+        resolveProviderHttpRequestConfig,
+      } = await import("../plugin-sdk/provider-http.js");
       const { allowPrivateNetwork, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
         baseUrl,
         defaultBaseUrl: options.defaultBaseUrl,

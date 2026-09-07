@@ -6,6 +6,7 @@ import path from "node:path";
 import { type Mock, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as webMedia from "../../media/web-media.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
@@ -19,6 +20,7 @@ type StubPreparedRuntimeSnapshot = {
   agentDir: string;
   config: OpenClawConfig;
   workspaceDir?: string;
+  pluginRegistry?: PluginRegistry;
   createStores: () => { authStorage: unknown; modelRegistry: unknown };
 };
 
@@ -83,6 +85,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       input?: string[];
       api?: string;
       modelFound?: boolean;
+      pluginRegistry?: PluginRegistry;
     },
   ) {
     // Keep PDF tool tests focused on orchestration; provider discovery, auth, and
@@ -119,6 +122,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
             agentDir: input.agentDir,
             config: input.config,
             workspaceDir: input.workspaceDir,
+            pluginRegistry: params?.pluginRegistry,
             createStores: () => ({ authStorage, modelRegistry }),
           }),
           release,

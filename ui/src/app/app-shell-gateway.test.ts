@@ -68,8 +68,6 @@ function createProfileAppearanceGateway(profileId: string | null) {
     runtimeConfigClient: null,
     runtimeConfigSource: null,
     sessionKeyClient: null,
-    sidebarWorkboardRuntime: null,
-    syncSidebarWorkboard: vi.fn(),
   } as unknown as ShellGatewayHost;
   return {
     async completeProfileAppearance(this: void, accent = "#336699") {

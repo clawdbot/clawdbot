@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import type { ServerResponse } from "node:http";
+import { Agent, request, type ServerResponse } from "node:http";
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -13,6 +13,139 @@ import { createPreauthConnectionBudget } from "./server/preauth-connection-budge
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 
 describe("Gateway closing connection admission", () => {
+  it("delivers an upgrade rejection after an ordinary response on a reused connection", async () => {
+    const clients = new Set<never>();
+    const resolvedAuth = { mode: "none" as const, allowTailscale: false };
+    const server = createGatewayHttpServer({
+      clients,
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+      handleHooksRequest: async (_req, res) => {
+        res.end("ready");
+        return true;
+      },
+    });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
+    attachGatewayUpgradeHandler({
+      httpServer: server,
+      wss,
+      clients,
+      resolvedAuth,
+      preauthConnectionBudget: createPreauthConnectionBudget(),
+    });
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing listener");
+    }
+    const readResponse = (upgrade: boolean) =>
+      new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+        const req = request(
+          {
+            host: "127.0.0.1",
+            port: address.port,
+            path: "/socket",
+            agent,
+            headers: upgrade ? { connection: "Upgrade", upgrade: "websocket" } : {},
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+            res.once("error", reject);
+            res.once("end", () =>
+              resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }),
+            );
+          },
+        );
+        req.once("error", reject);
+        req.end();
+      });
+    try {
+      await expect(readResponse(false)).resolves.toEqual({ status: 200, body: "ready" });
+      await expect(readResponse(true)).resolves.toEqual({
+        status: 503,
+        body: "Gateway websocket handlers unavailable",
+      });
+    } finally {
+      agent.destroy();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      wss.close();
+    }
+  });
+
+  it("contains browser socket errors while plugin upgrade routing is pending", async () => {
+    const routing = createDeferredCore<Duplex>();
+    const releaseRouting = createDeferredCore();
+    const routed = createDeferredCore();
+    const clients = new Set<never>();
+    const resolvedAuth = { mode: "none" as const, allowTailscale: false };
+    const server = createGatewayHttpServer({
+      clients,
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+      handleHooksRequest: async (_req, res) => {
+        res.end("still available");
+        return true;
+      },
+    });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
+    attachGatewayUpgradeHandler({
+      httpServer: server,
+      wss,
+      clients,
+      resolvedAuth,
+      preauthConnectionBudget: createPreauthConnectionBudget(),
+      shouldEnforcePluginGatewayAuth: () => false,
+      handlePluginUpgrade: async (_req, socket) => {
+        routing.resolve(socket);
+        await releaseRouting.promise;
+        routed.resolve();
+        return true;
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing listener");
+    }
+    const browser = connect({ host: "127.0.0.1", port: address.port });
+    let transport: Duplex | undefined;
+    try {
+      await once(browser, "connect");
+      browser.write(
+        "GET /socket HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+      );
+      transport = await routing.promise;
+      const reset = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+      expect(() => transport!.emit("error", reset)).not.toThrow();
+      expect(transport.destroyed).toBe(true);
+      releaseRouting.resolve();
+      await routed.promise;
+      expect(await (await fetch(`http://127.0.0.1:${address.port}/next`)).text()).toBe(
+        "still available",
+      );
+    } finally {
+      releaseRouting.resolve();
+      browser.destroy();
+      transport?.destroy();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      wss.close();
+    }
+  });
+
   it.each([
     { route: "Gateway", queued: false },
     { route: "Gateway", queued: true },

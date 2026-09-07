@@ -1,14 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -53,7 +60,12 @@ describe("skill_workshop support paths", () => {
       ],
     });
     await expect(
-      readSkillProposalRecord((result.details as { id: string }).id, { env: testState.env }),
+      readSkillProposalRecord(
+        (result.details as { id: string }).id,
+        { config: {}, env: testState.env },
+        {},
+        { config: {} },
+      ),
     ).resolves.toMatchObject({
       supportFiles: [{ path: "scripts/a/b" }, { path: "scripts/a-b" }, { path: "references/a" }],
     });

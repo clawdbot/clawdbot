@@ -118,7 +118,6 @@ export type SlackMonitorContext = {
   threadInheritParent: boolean;
   slashCommand: Required<import("openclaw/plugin-sdk/config-contracts").SlackSlashCommandConfig>;
   textLimit: number;
-  ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
 
@@ -222,7 +221,6 @@ export function createSlackMonitorContext(params: {
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
-  ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
 }): SlackMonitorContext {
@@ -632,7 +630,6 @@ export function createSlackMonitorContext(params: {
     threadInheritParent: params.threadInheritParent,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
-    ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,
     mediaMaxBytes: params.mediaMaxBytes,
     logger,

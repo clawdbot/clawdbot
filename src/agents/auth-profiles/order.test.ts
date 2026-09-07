@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
-import { saveAuthProfileStore } from "./store.js";
+import { saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
 const pluginMetadataMocks = vi.hoisted(() => {
@@ -40,9 +40,12 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginMetadataMocks.loadPluginMetadataSnapshot,
 }));
 
-vi.mock("./external-auth.js", () => ({
-  listRuntimeExternalAuthProfiles: () => [],
-  overlayExternalAuthProfiles: <T>(store: T) => store,
+vi.mock("./external-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./external-auth.js")>()),
+  createExternalAuthRuntime: () => ({
+    listRuntimeExternalAuthProfiles: () => [],
+    overlayExternalAuthProfiles: <T>(store: T) => store,
+  }),
 }));
 
 import {

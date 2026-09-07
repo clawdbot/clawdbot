@@ -53,7 +53,10 @@ describe("parseConfigSetValue", () => {
 
   it("still reports JSON parse errors in strict JSON mode", () => {
     expect(() => parseConfigSetValue("not-json", true)).toThrow(
-      /(Unexpected token|Expected).*not-json/,
+      expect.objectContaining({
+        message: expect.stringContaining('Could not parse "not-json" as JSON for --strict-json.'),
+        cause: expect.any(SyntaxError),
+      }),
     );
   });
 

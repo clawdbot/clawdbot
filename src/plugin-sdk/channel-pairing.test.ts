@@ -7,11 +7,11 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
   createChannelPairingChallengeIssuer,
   createChannelPairingController,
 } from "./channel-pairing.js";
+import { createPluginRuntimeMock } from "./test-helpers/plugin-runtime-mock.js";
 
 function createReplyCollector() {
   const replies: string[] = [];
@@ -33,7 +33,7 @@ describe("createChannelPairingController", () => {
     const removeAllowFromStoreEntry = vi.fn(async () => ({ changed: true, allowFrom: [] }));
     const upsertPairingRequest = vi.fn(async () => ({ code: "123456", created: true }));
     const { replies, sendPairingReply } = createReplyCollector();
-    const runtime = {
+    const runtime = createPluginRuntimeMock({
       channel: {
         pairing: {
           readAllowFromStore,
@@ -41,7 +41,7 @@ describe("createChannelPairingController", () => {
           upsertPairingRequest,
         },
       },
-    } as unknown as PluginRuntime;
+    });
 
     const pairing = createChannelPairingController({
       core: runtime,
@@ -84,7 +84,7 @@ describe("createChannelPairingController", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "channel_pairing_requested", handler }]),
     );
-    const runtime = {
+    const runtime = createPluginRuntimeMock({
       channel: {
         pairing: {
           readAllowFromStore: vi.fn(async () => []),
@@ -92,7 +92,7 @@ describe("createChannelPairingController", () => {
           upsertPairingRequest: vi.fn(async () => ({ code: "ACCT1234", created: true })),
         },
       },
-    } as unknown as PluginRuntime;
+    });
 
     const pairing = createChannelPairingController({
       core: runtime,
@@ -144,7 +144,7 @@ describe("createChannelPairingChallengeIssuer", () => {
     expect(replies[0]).toContain("654321");
   });
 
-  it("normalizes account ids before sending channel_pairing_requested hooks", async () => {
+  it("keeps normalized bound scope in hooks despite conflicting challenge fields", async () => {
     const handler = vi.fn(async () => {});
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "channel_pairing_requested", handler }]),
@@ -155,11 +155,14 @@ describe("createChannelPairingChallengeIssuer", () => {
       upsertPairingRequest: vi.fn(async () => ({ code: "NORM1234", created: true })),
     });
 
-    await issueChallenge({
+    const challenge = {
       senderId: "user-3",
       senderIdLine: "Your id: user-3",
       sendPairingReply: async () => {},
-    });
+      channel: "other",
+      accountId: "other-account",
+    };
+    await issueChallenge(challenge);
 
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({

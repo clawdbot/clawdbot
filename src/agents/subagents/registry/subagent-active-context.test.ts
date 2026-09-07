@@ -1,6 +1,6 @@
 // Active subagent prompt tests cover the compact system prompt block that tells
 // a parent session which child runs are still in flight.
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildActiveSubagentSystemPromptAddition } from "./subagent-active-context.js";
 import {
@@ -10,6 +10,10 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 beforeEach(() => {
+  resetSubagentRegistryForTests();
+});
+
+afterEach(() => {
   resetSubagentRegistryForTests();
 });
 

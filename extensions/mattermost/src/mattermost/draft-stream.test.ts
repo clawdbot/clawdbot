@@ -113,6 +113,29 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBeUndefined();
   });
 
+  it("retracts a preview without publishing pending text or stopping its replacement", async () => {
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
+
+    stream.update("Inspect");
+    await stream.flush();
+    stream.update("Discard pending");
+    await stream.deleteCurrentMessage();
+    expect(stream.postId()).toBeUndefined();
+    stream.update("Resume");
+    await stream.flush();
+
+    expect(calls.map(({ path, init }) => `${init?.method} ${path}`)).toEqual([
+      "POST /posts",
+      "DELETE /posts/post-1",
+      "POST /posts",
+    ]);
+    expect(parseRequestJson(calls[2]?.init)).toMatchObject({
+      message: "Resume",
+      root_id: "root-1",
+    });
+    expect(stream.postId()).toBe("post-2");
+  });
+
   it("discardPending keeps the preview post but ignores later updates", async () => {
     const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 

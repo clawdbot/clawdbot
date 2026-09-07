@@ -152,6 +152,9 @@ export function findMatrixMarkdownMetadataRanges(
 
 export function findMatrixSpoilerDelimiterOffsets(markdown: string): number[] {
   const projected = projectMatrixMarkdown(markdown);
+  if (!projected.includes("||")) {
+    return [];
+  }
   const tokens = spoilerParser.parse(projected, {});
   const lineStarts = [0];
   for (let index = 0; index < projected.length; index += 1) {
@@ -195,6 +198,9 @@ export function findMatrixSpoilerDelimiterOffsets(markdown: string): number[] {
 
 export function hasMatrixSpoilerMetadataCollision(markdown: string): boolean {
   const projected = projectMatrixMarkdown(markdown);
+  if (!projected.includes("||")) {
+    return false;
+  }
   const ordinary = new Set(findMatrixSpoilerDelimiterOffsets(projected));
   const underlineTags = [...tokenizeHtmlTags(projected)].filter(
     (tag) => (tag.name === "u" || tag.name === "ins") && !isMarkdownEscaped(projected, tag.start),

@@ -104,7 +104,6 @@ type AgentsProps = {
     canRunCron: boolean;
   };
   basePath: string;
-  authToken: string | null;
   loading: boolean;
   error: string | null;
   agentsList: AgentsListResult | null;
@@ -247,7 +246,6 @@ export function renderAgents(props: AgentsProps) {
                       .value=${selectedId ?? ""}
                       .accessibleLabel=${t("usage.filters.agent")}
                       .identityById=${props.agentIdentityById}
-                      .authToken=${props.authToken}
                       .disabled=${props.loading}
                       .onSelect=${props.onSelectAgent}
                       .onCreateAgent=${props.access.canCreateAgent ? props.onCreateAgent : null}

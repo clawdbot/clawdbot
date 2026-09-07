@@ -8,7 +8,7 @@ import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-type
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
   canvasPreviewsMatch,
-  normalizeMessage,
+  readCanvasContentPreview,
   stripMessageDisplayMetadataText,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
@@ -22,13 +22,6 @@ export function appendCanvasBlockToAssistantMessage(
   preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
   rawText: string | null,
 ) {
-  if (
-    normalizeMessage(message).content.some(
-      (block) => block.type === "canvas" && canvasPreviewsMatch(block.preview, preview),
-    )
-  ) {
-    return message;
-  }
   const raw = message as Record<string, unknown>;
   const existingContent = Array.isArray(raw.content)
     ? [...raw.content]
@@ -37,6 +30,16 @@ export function appendCanvasBlockToAssistantMessage(
       : typeof raw.text === "string"
         ? [{ type: "text", text: raw.text }]
         : [];
+  // A shortcode carries identity, not the tool's sandbox or App descriptor.
+  // Only an existing structured block can replace the canonical projection.
+  if (
+    existingContent.some((block) => {
+      const existing = readCanvasContentPreview(block);
+      return existing && canvasPreviewsMatch(existing, preview);
+    })
+  ) {
+    return message;
+  }
   return {
     ...raw,
     content: [

@@ -75,41 +75,26 @@ openclaw-logs-page {
 }
 
 .log-level.trace,
-.log-level.debug {
-  color: var(--muted);
-}
-
-.log-level.info {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 30%, transparent);
-}
-
-.log-level.warn {
-  color: var(--warn);
-  border-color: var(--warn-subtle);
-}
-
-.log-level.error,
-.log-level.fatal {
-  color: var(--danger);
-  border-color: var(--danger-subtle);
-}
-
+.log-level.debug,
 .log-chip.trace,
 .log-chip.debug {
   color: var(--muted);
 }
 
+.log-level.info,
 .log-chip.info {
   color: var(--info);
   border-color: color-mix(in srgb, var(--info) 30%, transparent);
 }
 
+.log-level.warn,
 .log-chip.warn {
   color: var(--warn);
   border-color: var(--warn-subtle);
 }
 
+.log-level.error,
+.log-level.fatal,
 .log-chip.error,
 .log-chip.fatal {
   color: var(--danger);

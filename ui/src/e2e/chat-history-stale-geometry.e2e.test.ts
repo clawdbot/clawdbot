@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -5,6 +6,7 @@ import {
   CHAT_SNAPSHOT_STORE_NAME,
 } from "../pages/chat/session-snapshot-database.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -76,10 +78,12 @@ suite.define(() => {
       );
       expect(rowKeys.length).toBeGreaterThan(0);
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "00-prior-narrow-transcript.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "00-prior-narrow-transcript.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText("Restored message 18:", { exact: false }),
+          ]),
+        );
       }
       await expect
         .poll(
@@ -180,10 +184,12 @@ suite.define(() => {
         )
         .toBeLessThanOrEqual(1);
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "01-restored-without-phantom-gap.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "01-restored-without-phantom-gap.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText("Older 1", { exact: true }),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);

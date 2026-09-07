@@ -1,5 +1,5 @@
 // Restart helper tests cover update restart helper process selection and error handling.
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,6 +7,7 @@ import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "../../process/exec-spawn.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
 const windowsKillPolicyStartMarker = "# OPENCLAW_RESTART_KILL_POLICY_BEGIN";
@@ -31,15 +32,10 @@ function findPowerShell(): string | null {
 const powerShellPath = findPowerShell();
 const itWithPowerShell = powerShellPath ? it : it.skip;
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    {
-      spawn: vi.fn(),
-    },
-  );
-});
+vi.mock("../../process/exec-spawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec-spawn.js")>()),
+  spawnCommand: vi.fn(),
+}));
 
 describe("restart-helper", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -934,34 +930,20 @@ Write-Output "OPENCLAW_RESTART_POLICY_OK"
       await cleanupScript(scriptPath);
     });
 
-    it("uses custom profile in service names", async () => {
-      Object.defineProperty(process, "platform", { value: "linux" });
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "production",
-      });
-      expect(content).toContain("openclaw-gateway-production.service");
-      await cleanupScript(scriptPath);
-    });
-
-    it("uses custom profile in macOS launchd label", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      process.getuid = () => 502;
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "staging",
-      });
-      expect(content).toContain("gui/502/ai.openclaw.staging");
-      await cleanupScript(scriptPath);
-    });
-
-    it("uses custom profile in Windows task name", async () => {
-      Object.defineProperty(process, "platform", { value: "win32" });
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "production",
-      });
-      expect(content).toContain("$taskName = 'OpenClaw Gateway (production)'");
-      expectWindowsRestartWaitOrdering(content);
+    it.each([
+      ["linux", "production", "openclaw-gateway-production.service"],
+      ["darwin", "staging", "gui/502/ai.openclaw.staging"],
+      ["win32", "production", "$taskName = 'OpenClaw Gateway (production)'"],
+    ])("uses the %s service identity for profile %s", async (platform, profile, expected) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      if (platform === "darwin") {
+        process.getuid = () => 502;
+      }
+      const { scriptPath, content } = await prepareAndReadScript({ OPENCLAW_PROFILE: profile });
+      expect(content).toContain(expected);
+      if (platform === "win32") {
+        expectWindowsRestartWaitOrdering(content);
+      }
       await cleanupScript(scriptPath);
     });
 
@@ -1045,85 +1027,64 @@ Write-Output "OPENCLAW_RESTART_POLICY_OK"
   });
 
   describe("runRestartScript", () => {
-    it("spawns the script as a detached process on Linux", async () => {
-      Object.defineProperty(process, "platform", { value: "linux" });
-      const scriptPath = "/tmp/fake-script.sh";
-      const mockChild = { on: vi.fn(), unref: vi.fn() };
-      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+    it.each([
+      { platform: "linux", script: "/tmp/fake-script.sh" },
+      { platform: "win32", script: "C:\\Temp\\fake-script.bat" },
+      { platform: "win32", script: "C:\\Temp\\me&(ow)\\fake-script.bat" },
+    ])("observes detached completion for $platform $script", async ({ platform, script }) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      vi.mocked(spawnCommand).mockResolvedValue({ failed: false } as Awaited<
+        ReturnType<typeof spawnCommand>
+      >);
 
-      await runRestartScript(scriptPath);
+      await expect(runRestartScript(script, 1_000)).resolves.toBe(true);
 
-      expect(spawn).toHaveBeenCalledWith("/bin/sh", [scriptPath], {
+      const argv =
+        platform === "win32"
+          ? [
+              getWindowsCmdExePath(),
+              "/d",
+              "/s",
+              "/c",
+              script.includes("&") ? `"${script}"` : script,
+            ]
+          : ["/bin/sh", script];
+      expect(spawnCommand).toHaveBeenCalledWith(argv, {
         detached: true,
         stdio: "ignore",
-        windowsHide: true,
+        timeout: 1_000,
+        forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
       });
-      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
-      expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
-    it("uses cmd.exe on Windows", async () => {
-      Object.defineProperty(process, "platform", { value: "win32" });
-      const scriptPath = "C:\\Temp\\fake-script.bat";
-      const mockChild = { on: vi.fn(), unref: vi.fn() };
-      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+    it.each([false, true])(
+      "does not grant activation on a spawn error (async=%s)",
+      async (asyncError) => {
+        const error = Object.assign(new Error("spawn /bin/sh ENOENT"), { code: "ENOENT" });
+        if (asyncError) {
+          vi.mocked(spawnCommand).mockRejectedValue(error);
+        } else {
+          vi.mocked(spawnCommand).mockImplementation(() => {
+            throw error;
+          });
+        }
+        await expect(runRestartScript("/tmp/fake-script.sh", 1_000)).resolves.toBe(false);
+      },
+    );
 
-      await runRestartScript(scriptPath);
-
-      expect(spawn).toHaveBeenCalledWith(getWindowsCmdExePath(), ["/d", "/s", "/c", scriptPath], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
-      expect(mockChild.unref).toHaveBeenCalledTimes(1);
-    });
-
-    it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
-      Object.defineProperty(process, "platform", { value: "win32" });
-      const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
-      const mockChild = { on: vi.fn(), unref: vi.fn() };
-      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
-
-      await runRestartScript(scriptPath);
-
-      expect(spawn).toHaveBeenCalledWith(
-        getWindowsCmdExePath(),
-        ["/d", "/s", "/c", `"${scriptPath}"`],
-        {
-          detached: true,
-          stdio: "ignore",
-          windowsHide: true,
-        },
+    it.skipIf(process.platform === "win32").each([
+      { name: "completed activation", body: "exit 0", accepted: true, timeout: 1_000 },
+      { name: "native refusal", body: "exit 78", accepted: false, timeout: 1_000 },
+      { name: "interrupted activation", body: "kill -TERM $$", accepted: false, timeout: 1_000 },
+      { name: "activation timeout", body: "exec sleep 10", accepted: false, timeout: 100 },
+    ])("uses the actual process result for $name", async ({ body, accepted, timeout }) => {
+      const actual = await vi.importActual<typeof import("../../process/exec-spawn.js")>(
+        "../../process/exec-spawn.js",
       );
-    });
-
-    it("does not throw when spawn fails synchronously", async () => {
-      Object.defineProperty(process, "platform", { value: "linux" });
-      vi.mocked(spawn).mockImplementation(() => {
-        throw Object.assign(new Error("spawn /bin/sh ENOENT"), { code: "ENOENT" });
-      });
-
-      await expect(runRestartScript("/tmp/fake-script.sh")).resolves.toBeUndefined();
-    });
-
-    it("handles child process spawn errors after the detached handoff", async () => {
-      Object.defineProperty(process, "platform", { value: "linux" });
-      let errorHandler: ((error: Error) => void) | undefined;
-      const mockChild = {
-        on: vi.fn((event: string, handler: (error: Error) => void) => {
-          if (event === "error") {
-            errorHandler = handler;
-          }
-          return mockChild;
-        }),
-        unref: vi.fn(),
-      };
-      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
-
-      await runRestartScript("/tmp/fake-script.sh");
-      expect(errorHandler).toBeDefined();
-      expect(() => errorHandler?.(new Error("spawn /bin/sh ENOENT"))).not.toThrow();
+      vi.mocked(spawnCommand).mockImplementation(actual.spawnCommand);
+      const script = path.join(tempDirs.make("openclaw-restart-result-"), "restart.sh");
+      await fs.writeFile(script, `#!/bin/sh\n${body}\n`);
+      await expect(runRestartScript(script, timeout)).resolves.toBe(accepted);
     });
   });
 });
