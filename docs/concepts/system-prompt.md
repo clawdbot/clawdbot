@@ -97,6 +97,26 @@ own the detailed sandbox, permission, and server-setup instructions.
 
 Safety guardrails in the system prompt are advisory, not enforcement. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable prompt guardrails by design.
 
+Gateway-owned prompt assembly carries context provenance separately from message text.
+Context producers distinguish runtime instructions from conversation data and
+heartbeat outcomes. In new sessions, model projection escapes internal-context
+delimiter mentions in inbound text and quotes context data without changing the
+stored user transcript. Matching text never promotes a message into runtime
+context. This is prompt hardening, not an authorization boundary or a guarantee
+against prompt injection.
+
+The transcript header selects this projection: new sessions use version 4;
+existing version 3 sessions retain their previous projection across restarts.
+Branches and restored history keep the source version, as do reset boundaries
+and compaction within an existing transcript. Adoption leaves retained history
+untouched; Doctor repairs legacy headerless history with version 3. Unknown projection versions are
+rejected before model submission. Provider message roles remain unchanged to
+preserve retained-thinking prefix compatibility. Cloud-worker prompt assembly
+uses a separate launch contract and still needs this hardening; see
+[the cloud-worker follow-up](https://github.com/openclaw/openclaw/issues/140666).
+
+Resumed room CLI turns retain new thread notes, system events, and MCP App context.
+
 On channels with native approval cards/buttons, the prompt tells the agent to rely on that UI first, and to include a manual `/approve` command only when the tool result says chat approvals are unavailable or manual approval is the only path.
 
 ## Prompt modes
