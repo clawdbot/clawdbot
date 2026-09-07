@@ -73,7 +73,7 @@ export class BrowserPanelNativePresentation {
         }
         if (typeof IntersectionObserver === "function") {
           this.intersectionObserver ??= new IntersectionObserver((entries) => {
-            const entry = entries.find((entry) => entry.target === this.stage);
+            const entry = entries.find((candidate) => candidate.target === this.stage);
             if (entry) {
               this.intersecting = entry.isIntersecting;
               this.schedule();
@@ -159,7 +159,13 @@ export class BrowserPanelNativePresentation {
     tabId: string | null,
     rect: { x: number; y: number; width: number; height: number } | null,
   ): void {
-    const payload = { type: "present" as const, scope: this.scope, tabId, rect, visible: !!tabId };
+    const payload = {
+      type: "present" as const,
+      scope: this.scope,
+      tabId,
+      rect,
+      visible: Boolean(tabId),
+    };
     const serialized = JSON.stringify(payload);
     if (serialized === this.lastPayload) {
       return;

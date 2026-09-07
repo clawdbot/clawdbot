@@ -239,7 +239,7 @@ export function readNativeBrowserState(): NativeBrowserState | null {
   if (!hasNativeBrowserBridge()) {
     return null;
   }
-  const value = nativeWindow()?.__OPENCLAW_NATIVE_BROWSER__;
+  const value = nativeWindow()?.["__OPENCLAW_NATIVE_BROWSER__"];
   return isState(value) ? value : null;
 }
 export function subscribeNativeBrowserState(

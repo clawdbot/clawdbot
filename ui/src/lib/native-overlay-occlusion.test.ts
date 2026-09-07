@@ -13,7 +13,7 @@ vi.mock("../app/native-browser-bridge.ts", () => ({
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
-  for (const cleanup of cleanups.splice(0).reverse()) {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
     cleanup();
   }
   bridge.available = true;

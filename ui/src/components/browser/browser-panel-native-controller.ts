@@ -95,10 +95,10 @@ export class BrowserPanelNativeController {
           const owner =
             eligible
               .filter((presenter) => presenter.presentation.presentedTabId === tab.openerTabId)
-              .sort((a, b) => b.presentation.lastPresented - a.presentation.lastPresented)[0] ??
+              .toSorted((a, b) => b.presentation.lastPresented - a.presentation.lastPresented)[0] ??
             eligible
               .filter((presenter) => presenter.presentation.lastPresented > 0)
-              .sort((a, b) => b.presentation.lastPresented - a.presentation.lastPresented)[0];
+              .toSorted((a, b) => b.presentation.lastPresented - a.presentation.lastPresented)[0];
           if (owner) {
             popupScopes.set(tab.id, owner.presentation.scope);
           }

@@ -30,8 +30,8 @@ const nativeTab = (id: string, url = "https://example.test/page"): NativeBrowser
 
 function fakeNativeBrowser(tabs: NativeBrowserTab[] = []) {
   let state: NativeBrowserState = { revision: 0, tabs };
-  const publish = (tabs: NativeBrowserTab[]) => {
-    state = { revision: state.revision + 1, tabs };
+  const publish = (nextTabs: NativeBrowserTab[]) => {
+    state = { revision: state.revision + 1, tabs: nextTabs };
     vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
     window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail: state }));
   };
@@ -52,6 +52,14 @@ function fakeNativeBrowser(tabs: NativeBrowserTab[] = []) {
         };
       case "inspect":
         return { ok: true, node: createInspectedNode("Save") };
+      case "back":
+      case "forward":
+      case "navigate":
+      case "present":
+      case "release-scope":
+      case "reload":
+      case "stop":
+        break;
     }
     return { ok: true };
   });

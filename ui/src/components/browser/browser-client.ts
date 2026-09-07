@@ -371,7 +371,7 @@ export function readBrowserInspectedNode(value: unknown): BrowserInspectedNode |
     tag: stringOrEmpty(result.tag),
     id: stringOrEmpty(result.id),
     classes: Array.isArray(result.classes)
-      ? result.classes.filter((value): value is string => typeof value === "string")
+      ? result.classes.filter((entry): entry is string => typeof entry === "string")
       : [],
     role: stringOrEmpty(result.role),
     name: stringOrEmpty(result.name),

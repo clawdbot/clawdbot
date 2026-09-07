@@ -42,7 +42,7 @@ describe("native browser bridge wire contract", () => {
     { type: "navigate", tabId: "mac-1", url: "file:///private/example" },
     { type: "open", tabId: "", url: "about:blank" },
     { type: "open", tabId: "mac-1", url: "https://example.com", activate: "true" },
-    { type: "inspect", tabId: "mac-1", x: NaN, y: 4 },
+    { type: "inspect", tabId: "mac-1", x: Number.NaN, y: 4 },
     {
       type: "present",
       scope: "scope",
