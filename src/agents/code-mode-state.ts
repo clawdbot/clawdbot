@@ -278,6 +278,9 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   } else {
     const state = activeRuns.get(ownedRunId);
     if (!state) {
+      // Reached only when the expiry timer removed a run `wait` had already resolved,
+      // so this id is a genuine Code Mode run, never a caller-supplied shell session.
+      // Recovery guidance belongs at the entry point that accepts arbitrary ids.
       throw new ToolInputError("code mode run is unavailable or expired.");
     }
     activeRuns.delete(ownedRunId);

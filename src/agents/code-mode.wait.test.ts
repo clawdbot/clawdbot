@@ -10,6 +10,8 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
+import { processSchema } from "./bash-tools.schemas.js";
+import { reserveActiveRunSlot } from "./code-mode-state.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -571,6 +573,72 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       ),
     ).rejects.toThrow("code mode run is unavailable or expired");
     expect(testing.activeRuns.has("invalid-expiry-run")).toBe(false);
+  });
+
+  it("points a backgrounded shell sessionId at the process poll route when process is callable", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("process", "Control existing exec")],
+      config,
+      catalogRef,
+    });
+
+    // The reporter's case: exec backgrounds a command and returns
+    // {"status":"running","sessionId":"lucky-glade"}, which the model hands to wait.
+    const waitCall = expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+      "code-wait-shell-session-id",
+      { runId: "lucky-glade" },
+    );
+
+    await expect(waitCall).rejects.toThrow("code mode run is unavailable or expired");
+    await expect(waitCall).rejects.toThrow('polled with process (action "poll")');
+  });
+
+  it("does not advertise process when it is absent from the callable surface", async () => {
+    // Gated or empty catalogs must not send the model at a tool it cannot call.
+    const { tools: codeModeTools } = createCodeModeHarness();
+
+    const waitCall = expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+      "code-wait-no-process",
+      { runId: "lucky-glade" },
+    );
+
+    await expect(waitCall).rejects.toThrow("code mode run is unavailable or expired");
+    await expect(waitCall).rejects.not.toThrow("process");
+  });
+
+  it("only names a continuation action the process tool actually implements", async () => {
+    // exec returns the session id but owns no poll action, so guidance that names
+    // the wrong surface reproduces the dead end. Read the action out of the real
+    // rejection and bind it to the process action enum: renaming or dropping
+    // "poll" must fail here.
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("process", "Control existing exec")],
+      config,
+      catalogRef,
+    });
+    const message = await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant")
+      .execute("code-wait-enum-binding", { runId: "no-such-run" })
+      .then(
+        () => "",
+        (err: unknown) => (err instanceof Error ? err.message : String(err)),
+      );
+    const processActions = (processSchema.properties.action as { enum?: string[] }).enum ?? [];
+    const namedAction = /action "([^"]+)"/.exec(message)?.[1];
+
+    expect(namedAction).toBeDefined();
+    expect(processActions).toContain(namedAction);
+  });
+
+  it("keeps shell recovery guidance out of the lifecycle expiry rejection", () => {
+    // reserveActiveRunSlot only sees ids Code Mode minted itself, and shell tools can
+    // be absent entirely, so advertising process there would point at a surface the
+    // model may not have for a run that was never a shell session.
+    expect(() => reserveActiveRunSlot("expired-code-mode-run")).toThrow(
+      "code mode run is unavailable or expired.",
+    );
+    expect(() => reserveActiveRunSlot("expired-code-mode-run")).not.toThrow("process");
   });
 
   it("rejects wait calls from a different session scope", async () => {

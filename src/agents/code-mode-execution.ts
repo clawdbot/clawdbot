@@ -468,6 +468,26 @@ async function settleCodeModeResult(params: {
   return output.takeResult(metadata, channels, params.runtime.hasNetworkContent());
 }
 
+/**
+ * Rejection for the `wait` entry point, which accepts an arbitrary caller-supplied
+ * runId. `exec` hands back a background shell sessionId but owns no poll action, so
+ * without a next step the model reads this as lost work and abandons a running
+ * command. The route is derived from the surface actually callable in this run:
+ * gated or empty catalogs must not advertise a tool the model cannot call.
+ * Lifecycle-internal misses keep the plain text; they can only be real Code Mode runs.
+ */
+function codeModeWaitRunUnavailableMessage(ctx: ToolSearchToolContext): string {
+  const base =
+    "code mode run is unavailable or expired. This id must be a runId from a suspended code mode run";
+  // Model-facing tool name owned by `createProcessTool` in bash-tools.process.ts.
+  const hasProcessTool = ctx.catalogRef?.current?.entries?.some(
+    (entry) => entry.name === "process",
+  );
+  return hasProcessTool
+    ? `${base}; a background shell sessionId from exec is polled with process (action "poll").`
+    : `${base}.`;
+}
+
 export async function runWait(params: {
   toolCallId: string;
   ctx: ToolSearchToolContext;
@@ -479,7 +499,7 @@ export async function runWait(params: {
   removeExpiredRuns();
   const state = activeRuns.get(params.runId);
   if (!state) {
-    throw new ToolInputError("code mode run is unavailable or expired.");
+    throw new ToolInputError(codeModeWaitRunUnavailableMessage(params.ctx));
   }
   if (state.ctx.runId && state.ctx.runId !== params.ctx.runId) {
     throw new ToolInputError("code mode run belongs to a different agent run.");
