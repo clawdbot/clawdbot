@@ -5,12 +5,14 @@ import { describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { listAgentIds } from "../agents/agent-scope.js";
+import { type AgentsConfig, getRuntimeConfig as getMockedRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../config/sessions/store-writer-state.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
   listOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
+import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
 import {
   installGatewayTestHooks,
   onceMessage,
@@ -117,4 +119,75 @@ describe("Gateway fixture config publication", () => {
       }
     },
   );
+
+  test("publishes agent-only edits and removals without overwriting authored config", async () => {
+    const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+    const { writeConfigFile } = createGatewayConfigOverrides(actual);
+    const configPath = process.env.OPENCLAW_CONFIG_PATH!;
+    const store = path.join(path.dirname(configPath), "agents", "{agentId}", "sessions.json");
+    const authoredConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: { name: "Authored main" } },
+        defaults: { userTimezone: "UTC", timeoutSeconds: 90 },
+      } satisfies AgentsConfig,
+      session: { store },
+    };
+    await writeConfigFile(authoredConfig);
+    const workspace = path.join(path.dirname(configPath), "fixture-workspace");
+    const secondary = { name: "Fixture secondary", workspace };
+    // Publication must not inject main, even after deletion leaves a sole fixture agent.
+    const entries: NonNullable<AgentsConfig["entries"]> = { primary: { workspace }, secondary };
+    testState.agentsConfig = { ownership: "explicit", entries };
+    testState.agentConfig = { timeoutSeconds: 45 };
+
+    const expectPublished = async (
+      expectedEntries: NonNullable<AgentsConfig["entries"]>,
+      timeoutSeconds: number,
+    ) => {
+      const request = rpcReq<{ agents: Array<{ id: string; name?: string }> }>(
+        ws,
+        "agents.list",
+        {},
+      );
+      try {
+        const realConfig = actual.getRuntimeConfig();
+        expect(realConfig.agents?.entries).toEqual(expectedEntries);
+        expect(realConfig.agents?.defaults).toMatchObject({ userTimezone: "UTC", timeoutSeconds });
+        expect(realConfig.session?.store).toBe(store);
+        expect(getMockedRuntimeConfig()).toEqual(realConfig);
+        const response = await request;
+        expect(response.ok, JSON.stringify(response)).toBe(true);
+        expect(response.payload?.agents.map(({ id, name }) => ({ id, name }))).toEqual(
+          Object.entries(expectedEntries).map(([id, { name }]) => ({ id, name })),
+        );
+        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(authoredConfig);
+      } finally {
+        await request;
+      }
+    };
+
+    await expectPublished(
+      { primary: { workspace }, secondary: { name: "Fixture secondary", workspace } },
+      45,
+    );
+    // Entries can alias the published snapshot; the copied default must also refresh.
+    secondary.name = "Updated fixture";
+    testState.agentConfig.timeoutSeconds = 60;
+    await expectPublished(
+      { primary: { workspace }, secondary: { name: "Updated fixture", workspace } },
+      60,
+    );
+    delete entries.secondary;
+    delete testState.agentConfig.timeoutSeconds;
+    await expectPublished({ primary: { workspace } }, 90);
+    testState.agentsConfig = undefined;
+    testState.agentConfig = undefined;
+    await expectPublished({ main: { name: "Authored main" } }, 90);
+
+    authoredConfig.agents.entries.main.name = "Updated file intent";
+    await fs.writeFile(configPath, JSON.stringify(authoredConfig));
+    testState.agentConfig = { timeoutSeconds: 30 };
+    await expectPublished({ main: { name: "Updated file intent" } }, 30);
+  });
 });
