@@ -13,6 +13,7 @@ import {
 } from "../../infra/update-channels.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -71,6 +72,9 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       const root = await withUpdateInProgressEnv(invocationCwd, () =>
         lifecycle.run("preflight", async () => {
           // Refused invocations cannot create a ledger or write failure-triage artifacts.
+          // A missing canonical path can be an interrupted publication, not a
+          // fresh installation. Only the recovery executor may reconcile it.
+          await assertUpdateRecoveryAdmission({ env: process.env });
           assertConfigWriteAllowedInCurrentMode();
           await assertOpenClawStateWriteAllowedAtPath({
             databasePath: resolveOpenClawStateSqlitePath(process.env),

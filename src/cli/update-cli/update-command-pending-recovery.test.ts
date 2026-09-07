@@ -24,7 +24,10 @@ import { acquireOpenClawStateDatabaseFileExclusion } from "../../state/openclaw-
 import { assertCurrentStateRuntimeSchema } from "../../state/openclaw-state-db-fast-path.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import * as updateShared from "./shared.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { updateFinalizeCommand } from "./update-command-finalize.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   finishSuccessfulPackageSwitch,
   taskRecovery,
@@ -266,6 +269,27 @@ async function fixture() {
 }
 
 describe("pending recovery finalizer", () => {
+  it("refuses standalone finalization before recreating a displaced canonical database", async () => {
+    const f = await fixture();
+    const before = fs.readFileSync(f.displaced);
+    const config = path.join(f.root, "openclaw.json");
+    const originalConfig = fs.readFileSync(config);
+    const resolveRoot = vi
+      .spyOn(updateShared, "resolveUpdateRoot")
+      .mockRejectedValue(new Error("ordinary finalization reached root discovery"));
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+    await expect(
+      withOwnedManagedUpdateEnv({ ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: config }, () =>
+        updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+      ),
+    ).rejects.toThrow("publication requires reconciliation");
+    expect(resolveRoot).not.toHaveBeenCalled();
+    expect(fs.existsSync(f.file)).toBe(false);
+    expect(fs.readFileSync(f.displaced)).toEqual(before);
+    expect(fs.readFileSync(config)).toEqual(originalConfig);
+  });
+
   it.each([true, false])(
     "preserves a missing canonical database with live-context=%s",
     async (context) => {
