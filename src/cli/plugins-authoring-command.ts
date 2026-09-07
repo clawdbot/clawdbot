@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
@@ -222,10 +222,8 @@ export function buildToolPluginPackageManifest(params: {
     !Array.isArray(params.packageManifest.openclaw)
       ? { ...(params.packageManifest.openclaw as JsonObject) }
       : {};
-  const existingExtensions = Array.isArray(openclaw.extensions)
-    ? openclaw.extensions.filter((entry): entry is string => typeof entry === "string")
-    : [];
-  const extensions = uniqueStrings([...existingExtensions, params.entry]);
+  const entries = [...filterStringEntries(openclaw.extensions), params.entry];
+  const extensions = [...new Map(entries.map((entry) => [path.parse(entry).name, entry])).values()];
   return {
     ...params.packageManifest,
     openclaw: {

@@ -244,23 +244,54 @@ describe("plugin authoring commands", () => {
     ).toEqual([]);
   });
 
-  it("aligns package metadata with the selected runtime extension entry", () => {
-    expect(
-      buildToolPluginPackageManifest({
-        packageManifest: {
-          name: "demo",
-          openclaw: { setupEntry: "./setup.ts", extensions: ["./src/other.ts"] },
-        },
-        entry: "./src/index.ts",
-      }),
-    ).toEqual({
-      name: "demo",
-      openclaw: {
+  it.each([
+    {
+      name: "preserves a distinct existing entry",
+      extensions: ["./src/other.ts"],
+      expected: ["./src/other.ts", "./dist/index.js"],
+    },
+    {
+      name: "replaces the source entry with its compiled runtime entry",
+      extensions: ["./src/index.ts"],
+      expected: ["./dist/index.js"],
+    },
+    {
+      name: "preserves positional runtime metadata for sibling entries",
+      extensions: ["./src/index.ts", "./src/other.ts"],
+      runtimeExtensions: ["./dist/index.js", "./dist/other.js"],
+      expected: ["./dist/index.js", "./src/other.ts"],
+    },
+    {
+      name: "keeps an existing compiled runtime entry stable",
+      extensions: ["./dist/index.js", "./src/other.ts"],
+      runtimeExtensions: ["./dist/index.js", "./dist/other.js"],
+      expected: ["./dist/index.js", "./src/other.ts"],
+    },
+  ])(
+    "aligns package metadata with the selected entry: $name",
+    ({ extensions, runtimeExtensions, expected }) => {
+      const existingOpenClaw = {
         setupEntry: "./setup.ts",
-        extensions: ["./src/other.ts", "./src/index.ts"],
-      },
-    });
-  });
+        extensions,
+        ...(runtimeExtensions ? { runtimeExtensions } : {}),
+      };
+      expect(
+        buildToolPluginPackageManifest({
+          packageManifest: {
+            name: "demo",
+            openclaw: existingOpenClaw,
+          },
+          entry: "./dist/index.js",
+        }),
+      ).toEqual({
+        name: "demo",
+        openclaw: {
+          ...existingOpenClaw,
+          extensions: expected,
+        },
+      });
+    },
+  );
 
   it("validates manifest tools and package entry metadata", () => {
     const metadata = createDemoMetadata();
