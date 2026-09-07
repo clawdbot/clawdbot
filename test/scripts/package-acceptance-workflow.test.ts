@@ -12003,7 +12003,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       readFileSync("docs/ci.md", "utf8"),
       ...readdirSync("docs/ci")
         .filter((name) => name.endsWith(".md"))
-        .sort()
+        .toSorted()
         .map((name) => readFileSync(`docs/ci/${name}`, "utf8")),
     ].join("\n");
     const fullReleaseDocs = readFileSync("docs/reference/full-release-validation.md", "utf8");
