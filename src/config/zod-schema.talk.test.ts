@@ -46,6 +46,25 @@ describe("OpenClawSchema talk validation", () => {
     ).not.toThrow();
   });
 
+  it("accepts provider-neutral realtime transcription settings", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          transcription: {
+            provider: "local-stt",
+            providers: {
+              "local-stt": {
+                endpoint: "https://stt.example.test",
+                model: "large-v3-turbo",
+              },
+            },
+            model: "large-v3-turbo",
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts realtime Talk voice detection and reasoning defaults", () => {
     expect(() =>
       OpenClawSchema.parse({
@@ -112,6 +131,19 @@ describe("OpenClawSchema talk validation", () => {
         },
       }),
     ).toThrow(/talk\.provider|talk\.providers|missing "acme"/i);
+  });
+
+  it("rejects a transcription provider that does not match its provider map", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          transcription: {
+            provider: "local-stt",
+            providers: { deepgram: { apiKey: "secret" } }, // pragma: allowlist secret
+          },
+        },
+      }),
+    ).toThrow(/talk\.transcription|missing "local-stt"/i);
   });
 
   it.each(["constructor", "__proto__"])(

@@ -184,6 +184,34 @@ describe("talk normalization", () => {
     expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
   });
 
+  it("preserves normalized transcription settings in talk.config payloads", () => {
+    const payload = buildTalkConfigResponse(
+      normalizeTalkSection({
+        transcription: {
+          provider: " local-stt ",
+          providers: {
+            " local-stt ": {
+              endpoint: "https://stt.example.test",
+              model: "large-v3-turbo",
+            },
+          },
+          model: "large-v3-turbo",
+        },
+      }),
+    );
+
+    expect(payload?.transcription).toEqual({
+      provider: "local-stt",
+      providers: {
+        "local-stt": {
+          endpoint: "https://stt.example.test",
+          model: "large-v3-turbo",
+        },
+      },
+      model: "large-v3-turbo",
+    });
+  });
+
   it("does not report an active provider when the configured speech provider cannot resolve", () => {
     const mismatchPayload = buildTalkConfigResponse({
       provider: "acme",

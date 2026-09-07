@@ -220,12 +220,41 @@ const TalkRealtimeSchema = z
     }
   });
 
+const TalkTranscriptionSchema = z
+  .strictObject({
+    provider: z.string().optional(),
+    providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    model: z.string().optional(),
+  })
+  .superRefine((transcription, ctx) => {
+    const provider = normalizeLowercaseStringOrEmpty(transcription.provider ?? "");
+    const providers = transcription.providers ? Object.keys(transcription.providers) : [];
+
+    if (provider && providers.length > 0 && !Object.hasOwn(transcription.providers!, provider)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message: `talk.transcription.provider must match a key in talk.transcription.providers (missing "${provider}")`,
+      });
+    }
+
+    if (!provider && providers.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message:
+          "talk.transcription.provider is required when talk.transcription.providers defines multiple providers",
+      });
+    }
+  });
+
 export const TalkSchema = z
   .strictObject({
     agentId: z.string().trim().min(1).optional(),
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),
+    transcription: TalkTranscriptionSchema.optional(),
     consultThinkingLevel: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
       .optional(),

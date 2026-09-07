@@ -11,7 +11,6 @@ import { normalizeResolvedSecretInputString } from "../../config/types.secrets.j
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../talk/agent-consult-tool.js";
 import {
   checkClientVoiceToolConfirmationPolicy,
   noteClientVoiceConfirmationUtterance,
@@ -21,7 +20,7 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { prepareTalkAgentConsultTranscript } from "../talk-agent-consult-transcript.js";
-import { buildTalkRealtimeConfig } from "./talk-shared.js";
+import { buildTalkRealtimeConfig, buildTalkTranscriptionConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -393,33 +392,6 @@ describe("talk.catalog handler", () => {
     mocks.listRealtimeVoiceProviders.mockReturnValue([]);
     mocks.getResolvedSpeechProviderConfig.mockReturnValue({});
     mocks.resolveTtsConfig.mockReturnValue({ timeoutMs: 30_000 });
-  });
-
-  it("rejects an ambiguous owner before discovering catalog providers", async () => {
-    const respond = vi.fn();
-    await mocks.listRealtimeTranscriptionProviders.withImplementation(
-      () => {
-        throw new Error("provider discovery failed");
-      },
-      () =>
-        callTalkHandler("talk.catalog", {
-          params: {},
-          respond,
-          context: {
-            getRuntimeConfig: () => ({
-              agents: { ownership: "explicit", entries: { primary: {}, voice: {} } },
-            }),
-          },
-        }),
-    );
-
-    expectRespondError(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: expect.stringContaining("Talk session ownership has no explicit owner"),
-    });
-    expect(mocks.canonicalizeSpeechProviderId).not.toHaveBeenCalled();
-    expect(mocks.listRealtimeTranscriptionProviders).not.toHaveBeenCalled();
-    expect(mocks.listRealtimeVoiceProviders).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1061,6 +1033,49 @@ describe("talk.catalog handler", () => {
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
       transcription: { ready: false, activeProvider: "transcription" },
       realtime: { ready: false, activeProvider: "realtime" },
+    });
+  });
+});
+
+describe("buildTalkTranscriptionConfig", () => {
+  it("prefers talk.transcription over legacy voice-call streaming settings", () => {
+    const localProvider = {
+      id: "local-stt",
+      label: "Local STT",
+      aliases: ["local"],
+      isConfigured: vi.fn(() => true),
+    };
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([localProvider] as never);
+
+    expect(
+      buildTalkTranscriptionConfig({
+        plugins: {
+          entries: {
+            "voice-call": {
+              config: {
+                streaming: {
+                  provider: "legacy-stt",
+                  providers: { "legacy-stt": { endpoint: "https://legacy.invalid" } },
+                },
+              },
+            },
+          },
+        },
+        talk: {
+          transcription: {
+            provider: "local-stt",
+            providers: { "local-stt": { endpoint: "https://stt.example.test" } },
+            model: "large-v3-turbo",
+          },
+        },
+      }),
+    ).toEqual({
+      provider: "local-stt",
+      providers: {
+        "legacy-stt": { endpoint: "https://legacy.invalid" },
+        "local-stt": { endpoint: "https://stt.example.test" },
+      },
+      model: "large-v3-turbo",
     });
   });
 });
@@ -1999,18 +2014,6 @@ describe("talk.session unified handlers", () => {
       language: "de",
       consultAuthority: {
         senderIsOwner: false,
-        replyCaller: {
-          ApprovalReviewerDeviceId: undefined,
-          ChatType: "direct",
-          GatewayClientCaps: [],
-          GatewayClientScopes: ["operator.talk"],
-          OriginatingChannel: "webchat",
-          Provider: "webchat",
-          Surface: "webchat",
-          SenderId: undefined,
-          SenderName: undefined,
-          SenderUsername: undefined,
-        },
         toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       },
     });
@@ -2166,22 +2169,6 @@ describe("talk.session unified handlers", () => {
     expect(mocks.steerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
-      authority: {
-        senderIsOwner: false,
-        replyCaller: {
-          ApprovalReviewerDeviceId: undefined,
-          ChatType: "direct",
-          GatewayClientCaps: [],
-          GatewayClientScopes: [],
-          OriginatingChannel: "webchat",
-          Provider: "webchat",
-          Surface: "webchat",
-          SenderId: undefined,
-          SenderName: undefined,
-          SenderUsername: undefined,
-        },
-        toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only"),
-      },
       sessionKey: "agent:main:main",
       text: "use the safer plan",
       mode: "steer",
@@ -2807,10 +2794,6 @@ describe("talk.client.toolCall handler", () => {
         name: "openclaw_agent_consult",
         args: { question: "Do something" },
       },
-      client: {
-        connId: "conn-1",
-        connect: { scopes: ["operator.admin"], caps: ["tool-events", "task-suggestions"] },
-      },
       respond,
       context: { getRuntimeConfig: () => ({}) as OpenClawConfig },
     });
@@ -2823,10 +2806,6 @@ describe("talk.client.toolCall handler", () => {
     expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
       expect.objectContaining({ voiceSessionId: "voice-test", runId: "run-voice-1" }),
     );
-    expect(mocks.chatSend.mock.calls[0]?.[0].client.connect).toMatchObject({
-      scopes: ["operator.admin"],
-      caps: ["tool-events"],
-    });
     expect(mocks.chatSend).toHaveBeenCalledTimes(1);
     expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
   });
@@ -3190,7 +3169,6 @@ describe("talk.client.steer handler", () => {
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       runTarget: expect.objectContaining({ runId: "run-voice-1" }),
-      getToolAuthorityOverlay: expect.any(Function),
       text: "use the safer plan",
       mode: "steer",
     });
@@ -3413,7 +3391,6 @@ describe("talk.client.create handler", () => {
       },
       16,
       800,
-      "model-context",
     );
     expect(mocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai" }),
@@ -3712,7 +3689,6 @@ describe("talk.client.create handler", () => {
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       runTarget: expect.objectContaining({ runId: "talk-realtime-consult:gpt-live" }),
-      getToolAuthorityOverlay: expect.any(Function),
       text: "Use the safer plan",
       mode: "steer",
     });

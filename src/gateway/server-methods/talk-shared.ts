@@ -305,20 +305,28 @@ export function buildTalkTranscriptionConfig(
   requestedModel?: string,
 ) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
-  const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
-  const providerConfigs = streamingConfig.providers ?? {};
+  const talkTranscription = getRecord(config.talk?.transcription);
+  const talkProvider = normalizeOptionalString(talkTranscription?.provider);
+  const talkProviderConfigs = getRecord(talkTranscription?.providers) as
+    | Record<string, RealtimeTranscriptionProviderConfig>
+    | undefined;
+  const provider =
+    normalizeOptionalString(requestedProvider) ?? talkProvider ?? streamingConfig.provider;
+  const providerConfigs = Object.assign({}, streamingConfig.providers, talkProviderConfigs);
+  const configuredModel =
+    normalizeOptionalString(requestedModel) ?? normalizeOptionalString(talkTranscription?.model);
   const configuredProviderIds = [provider, ...Object.keys(providerConfigs)];
   const voiceModelDefault = resolveConfiguredVoiceModelDefaultRef({
     config,
     provider,
     providerConfigs,
     providers: listTalkTranscriptionProviders(config, configuredProviderIds),
-    requestedModel: normalizeOptionalString(requestedModel),
+    requestedModel: configuredModel,
   });
   return {
     provider: provider ?? voiceModelDefault?.provider,
     providers: providerConfigs,
-    model: voiceModelDefault?.model,
+    model: configuredModel ?? voiceModelDefault?.model,
   };
 }
 
