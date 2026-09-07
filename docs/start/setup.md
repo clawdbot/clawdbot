@@ -184,7 +184,7 @@ Use this when debugging auth or deciding what to back up:
 - **Model auth profiles**: shared and agent-local SQLite auth stores; see [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) for inheritance and legacy shared-store relocation
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
-  More detail: [Security](/gateway/security#credential-storage-map).
+  More detail: [Security](/gateway/security/secrets-and-storage#credential-storage-map).
 
 ## Updating (without wrecking your setup)
 

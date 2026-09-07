@@ -2482,5 +2482,57 @@
   {
     "source": "Codex harness troubleshooting",
     "target": "Codex harness 故障排查"
+  },
+  {
+    "source": "Security trust model",
+    "target": "安全信任模型"
+  },
+  {
+    "source": "Running the security audit",
+    "target": "运行安全审计"
+  },
+  {
+    "source": "Security audit checks",
+    "target": "安全审计检查项"
+  },
+  {
+    "source": "Hardened baselines",
+    "target": "加固基线"
+  },
+  {
+    "source": "Access control and allowlists",
+    "target": "访问控制与允许列表"
+  },
+  {
+    "source": "Prompt injection",
+    "target": "提示注入"
+  },
+  {
+    "source": "Tool and agent permissions",
+    "target": "工具与 Agent 权限"
+  },
+  {
+    "source": "Browser control risks",
+    "target": "浏览器控制风险"
+  },
+  {
+    "source": "Network exposure",
+    "target": "网络暴露面"
+  },
+  {
+    "source": "Secrets, storage, and logs",
+    "target": "密钥、存储与日志"
+  },
+  {
+    "source": "Dependency locking",
+    "target": "依赖锁定"
+  },
+  {
+    "source": "Rate limiting",
+    "target": "限流"
+  },
+  {
+    "source": "Operator incident response",
+    "target": "运维方事件响应"
   }
 ]

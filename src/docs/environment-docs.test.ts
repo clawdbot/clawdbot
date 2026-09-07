@@ -33,7 +33,7 @@ describe("environment docs", () => {
   });
 
   it("keeps the security guide aligned with the workspace dotenv credential boundary", async () => {
-    const markdown = await readDoc("docs/gateway/security/index.md");
+    const markdown = await readDoc("docs/gateway/security/secrets-and-storage.md");
 
     expect(markdown).toContain(
       "Provider credential environment variables are blocked from untrusted workspace `.env` files",
