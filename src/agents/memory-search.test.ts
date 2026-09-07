@@ -599,6 +599,11 @@ describe("memory search config", () => {
     expect(resolveMemorySearchConfig(cfg, "main")?.query.timeoutMs).toBe(2_147_000_000);
   });
 
+  it("leaves the query deadline unset when it is not configured", () => {
+    const cfg = asConfig({ memory: { search: {} }, agents: { defaults: {} } });
+    expect(resolveMemorySearchConfig(cfg, "main")?.query.timeoutMs).toBeUndefined();
+  });
+
   it("merges extra memory paths from defaults and overrides", () => {
     const cfg = asConfig({
       memory: {

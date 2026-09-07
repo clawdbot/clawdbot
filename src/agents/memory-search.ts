@@ -90,7 +90,7 @@ export type ResolvedMemorySearchConfig = {
   query: {
     maxResults: number;
     minScore: number;
-    /** Deadline for one memory_search or memory_get call; consumers default it when absent. */
+    /** Configured deadline for one memory_search or memory_get call; absent when unset. */
     timeoutMs?: number;
     hybrid: {
       enabled: boolean;
@@ -122,7 +122,6 @@ const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 const DEFAULT_SESSION_DELTA_MESSAGES = 50;
 const DEFAULT_MAX_RESULTS = 6;
 const DEFAULT_MIN_SCORE = 0.35;
-const DEFAULT_QUERY_TIMEOUT_SECONDS = 15;
 const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
@@ -171,6 +170,16 @@ function getConfiguredMemoryEmbeddingProvider(providerId: string, cfg: OpenClawC
   return getMemoryEmbeddingProvider(providerId, cfg);
 }
 
+/**
+ * Present only when configured. Consumers keep their built-in defaults when it is
+ * absent, so an unset key changes no shipped behaviour.
+ */
+function resolveQueryTimeoutMs(timeoutSeconds: number | undefined): { timeoutMs?: number } {
+  const timeoutMs =
+    timeoutSeconds === undefined ? undefined : clampTimerTimeoutMs(timeoutSeconds * 1000);
+  return timeoutMs === undefined ? {} : { timeoutMs };
+}
+
 /** Resolves source and query settings without loading an embedding provider runtime. */
 export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: string) {
   const defaults = cfg.memory?.search;
@@ -211,12 +220,7 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
         0,
         1,
       ),
-      timeoutMs:
-        clampTimerTimeoutMs(
-          (overrides?.query?.timeoutSeconds ??
-            defaults?.query?.timeoutSeconds ??
-            DEFAULT_QUERY_TIMEOUT_SECONDS) * 1000,
-        ) ?? DEFAULT_QUERY_TIMEOUT_SECONDS * 1000,
+      ...resolveQueryTimeoutMs(overrides?.query?.timeoutSeconds ?? defaults?.query?.timeoutSeconds),
       hybrid: {
         enabled: DEFAULT_HYBRID_ENABLED,
         vectorWeight: DEFAULT_HYBRID_VECTOR_WEIGHT,

@@ -348,6 +348,25 @@ describe("memory_get corpus outcomes", () => {
     await expect(pending).rejects.toThrow("cancelled");
   });
 
+  it("leaves a primary read unbounded when no deadline is configured", async () => {
+    vi.useFakeTimers();
+    setMemoryReadFileImpl(async () => await new Promise<never>(() => {}));
+    const pending = createMemoryGetToolOrThrow().execute("call_get_primary_unbounded", {
+      path: lookup,
+    });
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+  });
+
   it("cuts a hanging primary read at the configured deadline", async () => {
     vi.useFakeTimers();
     setMemoryReadFileImpl(async () => await new Promise<never>(() => {}));

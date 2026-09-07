@@ -572,7 +572,8 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
         const from = readPositiveIntegerParam(rawParams, "from");
         const lines = readPositiveIntegerParam(rawParams, "lines");
         const requestedCorpus = readCorpusParam(rawParams, ["memory", "wiki", "all"]);
-        const timeoutMs = settings.query.timeoutMs ?? DEFAULT_MEMORY_SEARCH_TIMEOUT_MS;
+        // Left undefined when unset: the read paths apply their own shipped defaults.
+        const timeoutMs = settings.query.timeoutMs;
         if (requestedCorpus === "wiki") {
           return await executeWikiMemoryReadResult({
             relPath,

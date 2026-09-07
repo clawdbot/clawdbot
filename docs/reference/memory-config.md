@@ -400,7 +400,7 @@ All under `memory.search.query`:
 | ---------------- | -------- | ------- | --------------------------------------------------------------------------- |
 | `maxResults`     | `number` | `6`     | Max memory hits returned before injection                                   |
 | `minScore`       | `number` | `0.35`  | Minimum relevance score to include a hit                                    |
-| `timeoutSeconds` | `number` | `15`    | Seconds a `memory_search` or `memory_get` call may run before it is cut off |
+| `timeoutSeconds` | `number` | unset   | Seconds a `memory_search` or `memory_get` call may run before it is cut off |
 
 Without a per-call `maxResults`, primary-only `memory_search` calls use this
 configured limit, including `corpus=memory` and `corpus=sessions`. Wiki and
@@ -413,6 +413,11 @@ deadline returns what it already has, or reports the corpus as unavailable with 
 `timed out after` warning. Raise it when a large index or a slow embedding
 provider keeps timing out; per-agent overrides under
 `agents.entries.<id>.memory.search.query.timeoutSeconds` are honored.
+
+When the key is unset, nothing changes from earlier releases: `memory_search`,
+`corpus: "wiki"` reads, and `corpus: "all"` reads keep the built-in 15-second
+deadline, and a primary-only `memory_get` (no `corpus`, or `corpus: "memory"`)
+stays unbounded. Setting the key applies the same deadline to all of them.
 
 Hybrid retrieval remains enabled. The builtin engine always applies a fixed
 30-day recency half-life to dated daily notes and a fixed importance

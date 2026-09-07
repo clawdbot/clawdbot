@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { jsonResult } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
@@ -17,7 +18,10 @@ type MemoryReadRequest = {
   agentSessionKey?: string;
   sandboxed?: boolean;
   signal?: AbortSignal;
-  /** Deadline for the whole read; defaults to the built-in memory search timeout. */
+  /**
+   * Configured deadline for the whole read. When absent, wiki and combined reads keep
+   * the built-in memory search timeout and a primary-only read stays unbounded.
+   */
   timeoutMs?: number;
 };
 
@@ -58,6 +62,19 @@ export async function executeMemoryReadResult(
   params: MemoryReadRequest & { read: () => Promise<MemoryReadResult> },
 ) {
   if (params.requestedCorpus !== "all") {
+    if (params.timeoutMs === undefined) {
+      // Shipped behaviour: a primary-only read has no deadline unless one is configured.
+      try {
+        return jsonResult(await params.read());
+      } catch (error) {
+        return jsonResult({
+          path: params.relPath,
+          text: "",
+          disabled: true,
+          error: formatErrorMessage(error),
+        });
+      }
+    }
     return await runMemoryCorpusDeadline({
       operation: "memory_get",
       timeoutMs: params.timeoutMs,
