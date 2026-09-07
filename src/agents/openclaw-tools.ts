@@ -143,13 +143,10 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     preparedModelRuntime: options?.preparedModelRuntime,
   });
   const trimmedRunSessionKey = options?.runSessionKey?.trim();
-  // Match the durable controller key the spawn/subagents tools use, so media-generation
-  // tasks (image/video/music) persist their ownerKey under the same key the unified list
-  // tool queries by exact equality. Split-key callers (e.g. Telegram DM with a policy key
-  // distinct from the durable run key) would otherwise see their media tasks disappear from
-  // `subagents list` and fail to cancel with "Task outside session tree". Cron runs already
-  // carry their durable run-scoped key here, so the cron-specific branch is absorbed.
-  const mediaGenerationAgentSessionKey = trimmedRunSessionKey ?? options?.agentSessionKey;
+  const mediaGenerationAgentSessionKey =
+    trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
+      ? trimmedRunSessionKey
+      : options?.agentSessionKey;
   const mediaGenerationAsyncStartCallback = createMediaGenerationAsyncStartCallback({
     sessionKey: mediaGenerationAgentSessionKey,
     onYield: options?.onYield,

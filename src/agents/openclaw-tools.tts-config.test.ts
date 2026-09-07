@@ -416,7 +416,7 @@ describe("createOpenClawTools media generation session wiring", () => {
     );
   });
 
-  it("uses the durable run session key for non-cron media completions", () => {
+  it("keeps the requester session key for non-cron media completions", () => {
     const config = {
       agents: {
         defaults: {
@@ -435,7 +435,7 @@ describe("createOpenClawTools media generation session wiring", () => {
 
     expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentSessionKey: "agent:main:slack:channel:C123:run:run-123",
+        agentSessionKey: "agent:main:slack:channel:C123",
       }),
     );
   });

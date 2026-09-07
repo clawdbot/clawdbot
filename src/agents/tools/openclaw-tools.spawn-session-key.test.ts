@@ -246,14 +246,9 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
     );
   });
 
-  it("passes the durable runSessionKey to media-generation tools when keys differ", () => {
-    // Regression for the ClawSweeper P2 finding on #137779: media-generation tasks
-    // persist their ownerKey from the agentSessionKey the factory hands them, while the
-    // unified subagents list/cancel tool matches that key by exact equality against the
-    // durable controller key. If image/video/music tools kept receiving the policy key
-    // under a split-key caller (Telegram DM), their tasks would vanish from `subagents list`
-    // and cancellation would fail with "Task outside session tree". The factory must hand
-    // every media generator the same durable key it hands spawn/subagents.
+  it("preserves the policy owner key for non-cron media tasks when keys differ", () => {
+    // Retained tasks use the policy key for media status and duplicate lookup.
+    // The subagents tool accepts both keys without changing media ownership.
     const policyKey = "agent:main:telegram:default:direct:456";
     const durableKey = "agent:main:telegram:direct:456";
 
@@ -270,10 +265,12 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
       ["music_generate", mocks.musicGenerateToolOptions],
     ] as const) {
       expect(captured, `${name} tool should be constructed`).toHaveBeenCalledWith(
-        expect.objectContaining({ agentSessionKey: durableKey }),
+        expect.objectContaining({ agentSessionKey: policyKey }),
       );
       const call = captured.mock.calls[0]?.[0] as { agentSessionKey?: string } | undefined;
-      expect(call?.agentSessionKey, `${name} must not receive the policy key`).not.toBe(policyKey);
+      expect(call?.agentSessionKey, `${name} must retain existing task ownership`).not.toBe(
+        durableKey,
+      );
     }
   });
 
