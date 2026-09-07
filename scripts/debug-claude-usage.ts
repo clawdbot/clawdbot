@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { normalizeOptionalString } from "../packages/normalization-core/src/string-coerce.js";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.mjs";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -177,17 +177,6 @@ const withFetchTimeout = async <T>(
   }
 };
 
-const readBoundedResponseText = (
-  response: Response,
-  label: string,
-  signal: AbortSignal,
-  maxBytes = FETCH_RESPONSE_MAX_BYTES,
-): Promise<string> =>
-  readBoundedResponseTextWithLimit(response, label, maxBytes, {
-    createTooLargeError: (message: string) => new Error(message),
-    signal,
-  });
-
 const fetchText = async (
   label: string,
   url: string,
@@ -198,7 +187,7 @@ const fetchText = async (
   const timeoutMs = options.timeoutMs ?? resolveFetchTimeoutMs();
   return await withFetchTimeout(label, timeoutMs, async (signal) => {
     const res = await fetchImpl(url, { ...init, signal });
-    const text = await readBoundedResponseText(res, label, signal);
+    const text = await readBoundedResponseText(res, label, FETCH_RESPONSE_MAX_BYTES, { signal });
     return { res, text };
   });
 };
@@ -535,10 +524,8 @@ const main = async (argv = process.argv.slice(2)) => {
 
 export const testing = {
   CLAUDE_COOKIE_HOST_SQL,
-  FETCH_RESPONSE_MAX_BYTES,
   fetchAnthropicOAuthUsage,
   parseArgs,
-  readBoundedResponseText,
   resolveFetchTimeoutMs,
 };
 
