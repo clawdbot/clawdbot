@@ -9,9 +9,15 @@ import {
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
   type MessagePresentation,
+  type MessagePresentationAction,
   type MessagePresentationBlock,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolveAskUserQuestionOptionIndex,
+  resolveAskUserQuestionOptionIndices,
+  type AskUserQuestionOptionIndices,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   isRecord,
@@ -29,6 +35,7 @@ import {
 } from "./flex-templates/media-control-cards.js";
 import { fitsLineFlexBubble } from "./flex-templates/message.js";
 import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
+import { buildLineQuestionPostbackData, type LineQuestionPostback } from "./question-postback.js";
 import type { LineQuickReplyItem, LineRichCard } from "./types.js";
 
 const nonempty = () => Type.String({ minLength: 1 });
@@ -136,9 +143,63 @@ export const LINE_PRESENTATION_CAPABILITIES = {
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
-function toLineAction(button: MessagePresentationButton): Action | undefined {
+/**
+ * Reads the choice one question button carries. The Gateway owns option order, so a
+ * tap sends the index it published, never the rendered label; a choice it no longer
+ * lists renders no button at all rather than a tap that answers the wrong option.
+ */
+function toLineQuestionChoice(
+  action: Extract<MessagePresentationAction, { type: "question" }>,
+  questionOptionIndices: AskUserQuestionOptionIndices | undefined,
+): LineQuestionPostback | undefined {
+  if ("intent" in action) {
+    // The free-text control is dropped before the card is built, so only a
+    // declared choice ever reaches here.
+    return undefined;
+  }
+  const optionIndex = resolveAskUserQuestionOptionIndex({
+    questionOptionIndices,
+    questionId: action.questionId,
+    optionValue: action.optionValue,
+  });
+  return optionIndex === undefined ? undefined : { questionId: action.questionId, optionIndex };
+}
+
+/**
+ * The free-text control is not drawn. LINE can open the composer on a tap
+ * (`inputOption: "openKeyboard"`), so the platform is not the reason: an answer
+ * is claimed only on the plain-text inbound path, which no postback reaches, so
+ * the button cannot change whether what follows it counts as the answer. It
+ * would add a tap that changes nothing the card's own words already offer, which
+ * is why Discord and Slack leave that route in text too.
+ */
+function isLineTextFallbackButton(button: MessagePresentationButton): boolean {
+  const action = resolveMessagePresentationButtonAction(button);
+  return action?.type === "question" && "intent" in action && action.intent === "custom-input";
+}
+
+/** A control the Gateway owns, whose label the operator cannot disambiguate. */
+function isLineQuestionButton(button: MessagePresentationButton): boolean {
+  return resolveMessagePresentationButtonAction(button)?.type === "question";
+}
+
+function toLineAction(
+  button: MessagePresentationButton,
+  questionOptionIndices?: AskUserQuestionOptionIndices,
+): Action | undefined {
   const normalized = resolveMessagePresentationButtonAction(button);
   const { label } = button;
+  if (normalized?.type === "question") {
+    const choice = toLineQuestionChoice(normalized, questionOptionIndices);
+    const data = choice && buildLineQuestionPostbackData(choice);
+    if (!data) {
+      return undefined;
+    }
+    // The free-text control answers nothing by itself; opening the composer is
+    // what it is for, and it is the only feedback the tap can give on a card
+    // LINE will not let us edit afterwards.
+    return { type: "postback", label, data, displayText: label };
+  }
   if (normalized?.type === "command") {
     return { type: "message", label, text: normalized.command };
   }
@@ -162,12 +223,34 @@ export function renderLinePresentation(payload: ReplyPayload, presentation: Mess
   const quickReplyItems: LineQuickReplyItem[] = [];
   const carriedBlocks: MessagePresentationBlock[] = [];
   const cardBody: string[] = [];
+  // Controls this renderer declines to draw. The shared adapter already names a
+  // control it drops for budget under `Actions:`, so naming these the same way
+  // keeps one wording for "offered, but not tappable here" no matter which layer
+  // dropped it; without it a two- or three-option question loses the free-text
+  // route from the card entirely.
+  const omittedControlLabels: string[] = [];
+  const questionLabels = new Set<string>();
+  const questionOptionIndices = resolveAskUserQuestionOptionIndices(payload);
   for (const block of presentation.blocks) {
     if (block.type === "buttons") {
       for (const button of block.buttons) {
-        const action = toLineAction(button);
+        if (isLineTextFallbackButton(button)) {
+          omittedControlLabels.push(button.label);
+          continue;
+        }
+        const action = toLineAction(button, questionOptionIndices);
         if (!action) {
           return null;
+        }
+        // Two Gateway options are distinct by contract, but a label is truncated
+        // to fit the control. Options that collide after that would be two
+        // identical taps, so the whole reply falls back to text that still
+        // distinguishes them.
+        if (isLineQuestionButton(button)) {
+          if (questionLabels.has(button.label)) {
+            return null;
+          }
+          questionLabels.add(button.label);
         }
         buttons.push({ label: button.label, action });
       }
@@ -200,12 +283,18 @@ export function renderLinePresentation(payload: ReplyPayload, presentation: Mess
   if (buttons.length === 0 && quickReplyItems.length === 0) {
     return null;
   }
+  if (hasCard && omittedControlLabels.length > 0) {
+    cardBody.push(`Actions:\n${omittedControlLabels.map((label) => `- ${label}`).join("\n")}`);
+  }
 
   const lineData = isRecord(payload.channelData?.line) ? payload.channelData.line : {};
   const title = presentation.title || "Choose an option";
+  // The card's own heading can be generic, but altText is the whole message in
+  // the notification and the chat list, so it carries the words being asked.
+  const altText = presentation.title || cardBody[0] || title;
   const flexMessage = hasCard
     ? {
-        altText: title,
+        altText,
         contents: createActionCard(title, cardBody.join("\n") || "Choose an option.", buttons),
       }
     : undefined;

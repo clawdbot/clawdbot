@@ -151,20 +151,23 @@ Button semantics:
   kind from the ID.
 - `action.type: "question"` identifies one choice for a live, runtime-authored
   `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
-  agents and plugins must not synthesize question IDs. Telegram, Discord, and
-  Slack map it to transport-private native callbacks and resolve the choice
+  agents and plugins must not synthesize question IDs. Telegram, Discord, Slack
+  and LINE map it to transport-private native callbacks and resolve the choice
   through the Gateway. When the question becomes answered, expired, or
-  cancelled, those channels edit the delivered message, remove its actions,
-  and append the terminal status. WhatsApp, Signal, and iMessage render up to
-  four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
+  cancelled, Telegram, Discord and Slack edit the delivered message, remove its
+  actions, and append the terminal status; LINE cannot edit a message it already
+  delivered, so a tap that arrives after the question ended is answered with a
+  notice instead. LINE draws at most four controls on one card, which its
+  two-to-four option bound already fits. WhatsApp, Signal, and iMessage render up
+  to four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
   shapes degrade to label text, and the user can answer with a plain-text
   reply.
 - `intent: "custom-input"` switches a live question to its free-text answer
   path without resolving it. Producers must also state the free-text route in
   visible text. A channel can omit this one native control while keeping
   declared-choice controls native when it cannot target a text composer safely.
-  Telegram maps it to **Other…** and Force Reply. Discord and Slack keep the
-  visible text route.
+  Telegram maps it to **Other…** and Force Reply. Discord, Slack and LINE keep
+  the visible text route.
 - `action.type: "url"` opens a normal link.
 - `action.type: "web-app"` launches a channel-native web app. Set `url` for a
   URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch

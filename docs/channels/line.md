@@ -302,6 +302,27 @@ Each select keeps its prompt and any overflow options together in that text.
 Prompts and overflow option names remain complete; only native quick-reply button
 labels are shortened to LINE's 20-character limit.
 
+The options an `ask_user` question offers become tappable controls on the same Flex
+card, and a tap answers the question directly. LINE carries the option index the
+Gateway assigned rather than the label, so a reply whose choices the Gateway no longer
+lists falls back to readable text instead of drawing a tap that answers the wrong
+option. The eligible shape is one single-select, non-secret question offering two to
+four distinct options — the same bound Telegram, Discord and Slack use; anything else
+stays readable text that a typed reply still answers.
+
+The **Other…** free-text control is not drawn. Tapping it resolves nothing by itself, and LINE
+cannot take a control back off a card it already delivered, so the button would add a tap that
+changes nothing the question's own text does not already offer. Discord and Slack leave that
+route in text for the same reason. Every declared option therefore keeps a native control, and
+**Other…** stays named in the card's text under `Actions:` whatever the option count.
+
+LINE cannot edit a message it already delivered, so the controls stay on screen after
+the question ends. A tap that arrives then is answered with `That question is no longer
+waiting for an answer.` A tap from someone the group's `groupPolicy` does not admit is
+dropped before that, with nothing sent back. The Gateway reports one
+terminal state for answered, cancelled and expired questions alike, so the notice does
+not claim which one it was.
+
 ```json5
 {
   action: "send",

@@ -57,6 +57,7 @@ import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
 import { quotesLineBotMessage } from "./outbound-message-log.js";
+import { parseLineQuestionPostbackData, resolveLineQuestionPostback } from "./question-postback.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
@@ -106,6 +107,42 @@ function normalizeLineIngressEntry(value: string): string | null {
   return normalizeLineAllowEntry(value) || null;
 }
 
+/**
+ * Say one line back to a sender, preferring their reply token so the answer costs no
+ * push quota, and falling back to a push when no token is usable. A partial-delivery
+ * failure means the reply was seen, so it never falls back.
+ */
+async function sendLineHandlerText(params: {
+  context: LineHandlerContext;
+  text: string;
+  replyToken?: string;
+  pushTarget: string;
+  logLabel: string;
+}): Promise<void> {
+  const { context, logLabel, text } = params;
+  const sendOptions = {
+    cfg: context.cfg,
+    accountId: context.account.accountId,
+    channelAccessToken: context.account.channelAccessToken,
+  };
+  if (params.replyToken) {
+    try {
+      await replyMessageLine(params.replyToken, [{ type: "text", text }], sendOptions);
+      return;
+    } catch (err) {
+      logVerbose(`${logLabel}: ${String(err)}`);
+      if (isChannelPartialDeliveryError(err)) {
+        return;
+      }
+    }
+  }
+  try {
+    await pushMessageLine(params.pushTarget, text, sendOptions);
+  } catch (err) {
+    logVerbose(`${logLabel}: ${String(err)}`);
+  }
+}
+
 async function sendLinePairingReply(params: {
   senderId: string;
   replyToken?: string;
@@ -135,33 +172,14 @@ async function sendLinePairingReply(params: {
     onCreated: () => {
       logVerbose(`line pairing request sender=${senderId}`);
     },
-    sendPairingReply: async (text) => {
-      if (replyToken) {
-        try {
-          await replyMessageLine(replyToken, [{ type: "text", text }], {
-            cfg: context.cfg,
-            accountId: context.account.accountId,
-            channelAccessToken: context.account.channelAccessToken,
-          });
-          return;
-        } catch (err) {
-          logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
-          // A visible reply survived failed bookkeeping; a fallback push would duplicate it.
-          if (isChannelPartialDeliveryError(err)) {
-            return;
-          }
-        }
-      }
-      try {
-        await pushMessageLine(`line:${senderId}`, text, {
-          cfg: context.cfg,
-          accountId: context.account.accountId,
-          channelAccessToken: context.account.channelAccessToken,
-        });
-      } catch (err) {
-        logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
-      }
-    },
+    sendPairingReply: async (text) =>
+      await sendLineHandlerText({
+        context,
+        text,
+        replyToken,
+        pushTarget: `line:${senderId}`,
+        logLabel: `line pairing reply failed for ${senderId}`,
+      }),
   });
 }
 
@@ -577,6 +595,16 @@ async function handleLeaveEvent(event: LeaveEvent, _context: LineHandlerContext)
   logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
 }
 
+/** What a tap that did not answer the question has to tell the person who tapped. */
+function lineQuestionOutcomeNotice(status: "already-terminal" | "failed"): string {
+  if (status === "already-terminal") {
+    // The Gateway reports one terminal state for answered, cancelled and expired
+    // questions alike, so the notice claims only what it knows.
+    return "That question is no longer waiting for an answer.";
+  }
+  return "Could not record that answer. Reply with the option text instead.";
+}
+
 async function handlePostbackEvent(
   event: PostbackEvent,
   context: LineHandlerContext,
@@ -586,6 +614,32 @@ async function handlePostbackEvent(
 
   const decision = await resolveLineEventAdmission(event, context);
   if (!decision) {
+    return;
+  }
+
+  const question = parseLineQuestionPostbackData(data ?? "");
+  if (question) {
+    // An ask_user tap answers the pending question; it is not a new turn.
+    const { userId, groupId, roomId } = getLineSourceInfo(event.source);
+    const outcome = await resolveLineQuestionPostback({
+      cfg: context.cfg,
+      callback: question,
+      accountId: context.account.accountId,
+      ...(userId ? { senderId: userId } : {}),
+    });
+    // A recorded answer needs no acknowledgement: the agent's next reply is the
+    // feedback, and LINE already echoed the label through the action's displayText.
+    const pushTarget = groupId ?? roomId ?? (userId ? `line:${userId}` : undefined);
+    if (outcome.status === "answered" || !pushTarget) {
+      return;
+    }
+    await sendLineHandlerText({
+      context,
+      replyToken: event.replyToken,
+      pushTarget,
+      logLabel: "line: question answer notice failed",
+      text: lineQuestionOutcomeNotice(outcome.status),
+    });
     return;
   }
 

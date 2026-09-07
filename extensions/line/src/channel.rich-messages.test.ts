@@ -130,6 +130,225 @@ describe("LINE rich-message boundaries", () => {
     });
   });
 
+  it("turns an ask_user question into tappable LINE options", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Agent needs input:\n\nWhich environment?\n1. Staging\n2. Production",
+      presentationTextMode: "fallback",
+      channelData: {
+        askUser: {
+          questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+          optionValues: ["Staging", "Production"],
+        },
+      },
+      presentation: {
+        blocks: [
+          { type: "text", text: "Which environment?" },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Staging",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Staging",
+                },
+              },
+              {
+                label: "Production",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Production",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as {
+      flexMessage?: {
+        contents?: { footer?: { contents?: Array<{ action?: { data?: string } }> } };
+      };
+    };
+    // The Gateway owns option order, so the tap carries an index, never the label.
+    expect(
+      line.flexMessage?.contents?.footer?.contents?.map((button) => button.action?.data),
+    ).toEqual([
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=0",
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
+    ]);
+    // altText is the whole message in the notification and the chat list, so a
+    // question that only ever renders as a card still has to say what it asks.
+    expect((line.flexMessage as { altText?: string } | undefined)?.altText).toBe(
+      "Which environment?",
+    );
+  });
+
+  // The free-text route is only ever offered as text on LINE. Above the action
+  // budget the shared adapter writes it under `Actions:`; below it the control is
+  // still delivered here, so the renderer has to write the same words itself or a
+  // two- or three-option card offers no way to answer in your own words.
+  it("names the omitted Other… control on a card whatever the option count", () => {
+    const QUESTION_ID = "ask_3d8dbe55be452a9a39add7c909beb119";
+    const readCardBody = (optionCount: number): string | undefined => {
+      const labels = ["Staging", "Production", "Canary", "Sandbox"].slice(0, optionCount);
+      const prepared = prepareLineReplyPayload({
+        text: "Which environment?",
+        presentationTextMode: "fallback",
+        channelData: { askUser: { questionId: QUESTION_ID, optionValues: labels } },
+        presentation: {
+          blocks: [
+            { type: "text", text: "Which environment?" },
+            {
+              type: "buttons",
+              buttons: [
+                ...labels.map((label) => ({
+                  label,
+                  action: {
+                    type: "question" as const,
+                    questionId: QUESTION_ID,
+                    optionValue: label,
+                  },
+                })),
+                {
+                  label: "Other…",
+                  action: {
+                    type: "question" as const,
+                    questionId: QUESTION_ID,
+                    intent: "custom-input" as const,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      });
+      const flex = (prepared.channelData?.line as { flexMessage?: { contents?: unknown } })
+        ?.flexMessage?.contents as { body?: { contents?: Array<{ text?: string }> } } | undefined;
+      return flex?.body?.contents?.map((entry) => entry.text).find((text) => text?.includes("\n"));
+    };
+
+    // Four options push Other… past the action budget, so the shared adapter owns
+    // this wording. Comparing against it keeps the two shapes from drifting apart.
+    const overBudget = readCardBody(4);
+    expect(overBudget).toBe("Which environment?\nActions:\n- Other…");
+    expect(readCardBody(2)).toBe(overBudget);
+    expect(readCardBody(3)).toBe(overBudget);
+  });
+
+  it("falls back to text when two options truncate to the same control label", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Which environment? 1. Deploy the release candidate to the shared staging cluster 2. Deploy the release candidate to the shared production cluster",
+      presentationTextMode: "fallback",
+      channelData: {
+        askUser: {
+          questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+          optionValues: [
+            "Deploy the release candidate to the shared staging cluster",
+            "Deploy the release candidate to the shared production cluster",
+          ],
+        },
+      },
+      presentation: {
+        blocks: [
+          { type: "text", text: "Which environment?" },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Deploy the release candidate to the shared staging cluster",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Deploy the release candidate to the shared staging cluster",
+                },
+              },
+              {
+                label: "Deploy the release candidate to the shared production cluster",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Deploy the release candidate to the shared production cluster",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    // Both labels truncate to the same 40 characters, so two taps would read
+    // identically; the prose still names them in full.
+    expect((prepared.channelData?.line as { flexMessage?: unknown } | undefined)?.flexMessage).toBe(
+      undefined,
+    );
+    expect(prepared.text).toContain("Deploy the release candidate to the shared staging cluster");
+  });
+
+  it("draws the declared options and leaves the free-text route to the card text", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Agent needs input: Which environment?",
+      presentationTextMode: "fallback",
+      channelData: {
+        askUser: {
+          questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+          optionValues: ["Staging", "Production"],
+        },
+      },
+      presentation: {
+        blocks: [
+          { type: "text", text: "Which environment?" },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Staging",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Staging",
+                },
+              },
+              {
+                label: "Production",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Production",
+                },
+              },
+              {
+                label: "Other…",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  intent: "custom-input",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as {
+      flexMessage?: {
+        contents?: { footer?: { contents?: Array<{ action?: { data?: string } }> } };
+      };
+    };
+    const footer = line.flexMessage?.contents?.footer?.contents;
+    // A tap on the free-text control would open the composer and nothing else:
+    // the answer typed after it is queued as a new turn rather than claimed by
+    // the question. The card's own words carry that route instead.
+    expect(footer?.map((button) => button.action?.data)).toEqual([
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=0",
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
+    ]);
+  });
+
   it.each([
     { name: "exact byte limit", character: "x", extraBytes: 0, fits: true },
     { name: "one byte over", character: "x", extraBytes: 1, fits: false },
