@@ -61,9 +61,7 @@ import {
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
-const loadStateDirMigrations = createLazyRuntimeModule(
-  () => import("../infra/state-migrations.state-dir.js"),
-);
+const loadState = createLazyRuntimeModule(() => import("../infra/state-migrations.state-dir.js"));
 
 const loadCronRepair = createLazyRuntimeModule(() => import("./doctor/cron/legacy-repair.js"));
 
@@ -340,7 +338,7 @@ export async function runDoctorConfigPreflight(
       stateMigrationsRequested &&
       (!migrationCheckpoint || shouldRecordStateCheckpoint) &&
       !skipPristineStartupStateMigrations
-        ? await measurePreflightStep("state-migrations-import", loadStateDirMigrations)
+        ? await measurePreflightStep("state-migrations-import", loadState)
         : undefined;
     if (stateDirMigrations && stateMigrationsAllowed) {
       const { autoMigrateLegacyStateDir } = stateDirMigrations;
@@ -467,10 +465,7 @@ export async function runDoctorConfigPreflight(
         ) {
           shouldRecordStateCheckpoint = true;
           if (!stateDirMigrations && !skipPristineStartupStateMigrations) {
-            stateDirMigrations = await measurePreflightStep(
-              "state-migrations-import",
-              loadStateDirMigrations,
-            );
+            stateDirMigrations = await measurePreflightStep("state-migrations-import", loadState);
           }
         }
         // The refreshed package inventory now owns both state migration and its checkpoint.
