@@ -209,8 +209,9 @@ openclaw_e2e_wait_gateway_ready() {
   return "$PROBE_READY_STATUS"
 }
 check_gateway_status() { printf 'authenticated\\n' >>"$PROBE_EVENTS"; }
-# Model/package preparation is covered separately; keep service readiness and phases real.
+# Independent preparation is covered separately; preserve this probe's service manager.
 prepare_restart_inference() { :; }
+install_update_restart_systemctl_shim() { :; }
 prepare_restart_fixture() {
   restart_fixture_package="$RUNTIME_ROOT/future.tgz"
   restart_fixture_version="2100.1.0"
@@ -287,7 +288,11 @@ exit "$probe_status"
           .map((line) => JSON.parse(line));
         expect(
           completedPhases.filter((event) => event.status === "passed").map((event) => event.phase),
-        ).toEqual(["prepare-restart-inference", "prepare-restart-fixture"]);
+        ).toEqual([
+          "prepare-restart-inference",
+          "prepare-restart-fixture",
+          "prepare-restart-manager",
+        ]);
         expect(phases).not.toContain("recovery-update-restart");
       }
     },

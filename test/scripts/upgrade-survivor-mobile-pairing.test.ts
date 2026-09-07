@@ -854,6 +854,7 @@ prepare_restart_fixture() {
   restart_fixture_package=/tmp/future-package.tgz
   restart_fixture_version=2100.1.0
 }
+install_update_restart_systemctl_shim() { :; }
 run_update_restart_probe_gateway() { :; }
 check_gateway_status() { :; }
 update_candidate() {
@@ -871,6 +872,7 @@ repair_update_restart_auth
       expect(result.trim().split("\n")).toEqual([
         "prepare-restart-inference",
         "prepare-restart-fixture",
+        "prepare-restart-manager",
         "prepare-recovery-service",
         "prepared-gateway-auth",
         "recovery-update-restart",
