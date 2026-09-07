@@ -165,6 +165,36 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
     expect(chunks.every((chunk) => chunk.rendered.length <= 5)).toBe(true);
   });
 
+  it("keeps unmergeable whitespace-only slices instead of dropping them", () => {
+    // A fixed-column run that fits neither neighbor and cannot be redistributed
+    // must survive coalescing standalone. Chunking must stay lossless (see #127655).
+    const text = `A${" ".repeat(25)}B`;
+    const ir = markdownToIR(text);
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir,
+      limit: 10,
+      renderChunk: (chunk) => chunk.text,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(ir.text);
+    expect(chunks.map((chunk) => chunk.source.text).join("")).toContain(" ".repeat(25));
+    expect(chunks.every((chunk) => chunk.rendered.length <= 10)).toBe(true);
+  });
+
+  it("preserves oversized single-char whitespace without loss", () => {
+    // A single-char slice that renders oversized bypasses the size split and
+    // must still survive coalescing instead of being silently dropped.
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir: { text: " ", styles: [], links: [] },
+      limit: 10,
+      renderChunk: () => "0123456789X",
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(" ");
+  });
+
   it("treats Infinity as no size cap and returns a single chunk", () => {
     const text = "one two three four five six seven eight nine ten";
     const ir = markdownToIR(text);

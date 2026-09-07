@@ -351,16 +351,14 @@ function coalesceWhitespaceOnlyMarkdownIRChunks<TRendered>(
       }
     }
 
-    // Preserve zero chunks when a renderer trims semantic whitespace away.
-    if (
-      options.measureRendered(chunk.output.rendered) > 0 &&
-      (chunk.rawSource.styles.length > 0 ||
-        chunk.rawSource.links.length > 0 ||
-        chunk.rawSource.annotations?.length ||
-        chunk.rawSource.listItems?.length)
-    ) {
-      coalesced.push(current);
-    }
+    // Lossless fallback: this whitespace-only slice could not merge into either
+    // neighbor or be redistributed between them. Emitting it standalone keeps
+    // chunking lossless instead of silently dropping accepted content such as
+    // fixed-column data runs (see #127655). Every slice reaching this stage
+    // already fits the render limit individually, so no further split is needed.
+    // This also preserves zero chunks when a renderer trims semantic whitespace
+    // away.
+    coalesced.push(current);
   });
 
   return coalesced;
