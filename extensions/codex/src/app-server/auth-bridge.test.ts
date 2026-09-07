@@ -3474,6 +3474,96 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("does not treat a just-issued OpenAI Codex refresh token as invalidated", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    oauthMocks.refreshOpenAICodexToken.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'OpenAI Codex token refresh failed (401): {"error":{"message":"Your refresh token has been invalidated. Please try signing in again.","type":"invalid_request_error","code":"refresh_token_invalidated"}}',
+        ),
+        {
+          oauthRefreshFailure: {
+            reason: "token_invalidated",
+            status: 401,
+            code: "refresh_token_invalidated",
+          },
+        },
+      ),
+    );
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "just-issued-access-token",
+          refresh: "just-issued-refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-just-issued",
+          email: "codex@example.test",
+        },
+      });
+
+      await expect(
+        refreshCodexAppServerAuthTokens({
+          agentDir,
+          authProfileId: "openai:work",
+        }),
+      ).resolves.toEqual({
+        accessToken: "just-issued-access-token",
+        chatgptAccountId: "account-just-issued",
+        chatgptPlanType: null,
+      });
+      expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still fails when a truly invalidated OpenAI Codex refresh token cannot be used", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    oauthMocks.refreshOpenAICodexToken.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'OpenAI Codex token refresh failed (401): {"error":{"message":"Your refresh token has been invalidated. Please try signing in again.","type":"invalid_request_error","code":"refresh_token_invalidated"}}',
+        ),
+        {
+          oauthRefreshFailure: {
+            reason: "token_invalidated",
+            status: 401,
+            code: "refresh_token_invalidated",
+          },
+        },
+      ),
+    );
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "expired-access-token",
+          refresh: "invalidated-refresh-token",
+          expires: Date.now() - 60_000,
+          accountId: "account-invalidated",
+          email: "codex@example.test",
+        },
+      });
+
+      await expect(
+        refreshCodexAppServerAuthTokens({
+          agentDir,
+          authProfileId: "openai:work",
+        }),
+      ).rejects.toThrow(/refresh_token_invalidated/);
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("invalidated-refresh-token");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       identity: "profile metadata",
