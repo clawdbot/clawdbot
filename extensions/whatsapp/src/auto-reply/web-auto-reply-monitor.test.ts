@@ -201,13 +201,6 @@ function makeOwnerGroupConfig() {
   });
 }
 
-function makeInboundCfg(responsePrefix = "") {
-  return {
-    agents: { defaults: { workspace: "/tmp/openclaw" } },
-    channels: { whatsapp: { responsePrefix } },
-  } as never;
-}
-
 describe("WhatsApp listener diagnostics", () => {
   it("describes WhatsApp inbound listener scope without implying DM-only routing", () => {
     expect(
@@ -772,8 +765,6 @@ describe("applyGroupGating", () => {
 describe("buildInboundLine", () => {
   it("prefixes group messages with sender", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createGroupMessage({
         admission: { accountId: "default" },
         body: "ping",
@@ -790,8 +781,6 @@ describe("buildInboundLine", () => {
 
   it("includes reply-to context blocks when replyToBody is present", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({
         admission: {
           conversation: {
@@ -811,10 +800,8 @@ describe("buildInboundLine", () => {
     expect(line).toContain("[/Replying]");
   });
 
-  it("applies the WhatsApp responsePrefix when configured", () => {
+  it("keeps outbound WhatsApp responsePrefix out of inbound messages", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg("[PFX]"),
-      agentId: "main",
       msg: createDirectMessage({
         admission: {
           conversation: {
@@ -827,13 +814,13 @@ describe("buildInboundLine", () => {
       envelope: { includeTimestamp: false },
     });
 
-    expect(line).toContain("[PFX] ping");
+    expect(line).toContain("ping");
+    expect(line).not.toContain("{provider}");
+    expect(line).not.toContain("{model}");
   });
 
   it("normalizes direct from labels by stripping whatsapp: prefix", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({
         admission: {
           conversation: {
@@ -854,8 +841,6 @@ describe("buildInboundLine", () => {
 describe("buildInboundLine reply context", () => {
   it("omits reply context when replyToBody is missing", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({ body: "ping" }),
       envelope: { includeTimestamp: false },
     });
@@ -864,8 +849,6 @@ describe("buildInboundLine reply context", () => {
 
   it("uses unknown sender label when reply sender is absent", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({ body: "ping", replyToBody: "original" }),
       envelope: { includeTimestamp: false },
     });

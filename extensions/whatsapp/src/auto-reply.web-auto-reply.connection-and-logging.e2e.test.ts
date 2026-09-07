@@ -884,11 +884,8 @@ describe("web auto-reply connection", () => {
   });
 
   it("builds separate timestamped inbound envelopes without batching", () => {
-    const cfg = {} as OpenClawConfig;
     const buildLine = (body: string, id: string, timestamp: number) =>
       buildInboundLine({
-        cfg,
-        agentId: "main",
         envelope: { timezone: "utc" },
         msg: createTestWebInboundMessage({
           event: { id, timestamp },
@@ -908,13 +905,13 @@ describe("web auto-reply connection", () => {
 
     expect(firstBody).toMatch(
       new RegExp(
-        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(firstTimestamp)}\\] \\+1: \\[openclaw\\] first`,
+        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(firstTimestamp)}\\] \\+1: first`,
       ),
     );
     expect(firstBody).not.toContain("second");
     expect(secondBody).toMatch(
       new RegExp(
-        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(secondTimestamp)}\\] \\+1: \\[openclaw\\] second`,
+        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(secondTimestamp)}\\] \\+1: second`,
       ),
     );
     expect(secondBody).not.toContain("first");

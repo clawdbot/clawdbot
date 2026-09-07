@@ -314,9 +314,7 @@ export async function processMessage(params: {
   });
 
   let combinedBody = buildInboundLine({
-    cfg: params.cfg,
     msg: msgForAgent,
-    agentId: params.route.agentId,
     previousTimestamp,
     envelope: envelopeOptions,
     visibleReplyTo,
