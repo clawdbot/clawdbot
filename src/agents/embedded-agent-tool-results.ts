@@ -246,6 +246,9 @@ export function sanitizeToolArgs(args: unknown): unknown {
   return redactStringsDeep(args);
 }
 
+/** A string result keeps its string type: only model-visible redaction is applied to it. */
+export function sanitizeToolResult(result: string): string;
+export function sanitizeToolResult(result: unknown): unknown;
 export function sanitizeToolResult(result: unknown): unknown {
   if (typeof result === "string") {
     return redactModelVisibleToolPayloadText(result);

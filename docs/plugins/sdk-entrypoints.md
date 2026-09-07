@@ -41,6 +41,16 @@ this keeps an empty coverage list false and avoids allow-side compatibility.
 Prepare matchers for one synchronous operation; do not retain an authorization
 decision across awaited work.
 
+## Sandbox bind parsing
+
+`openclaw/plugin-sdk/agent-harness-runtime` exports
+`splitSandboxBindSpec(spec, options?)`. It returns raw `{ host, container, options }`
+segments, or `null` when no host/container separator exists. Windows host drive
+prefixes are always preserved. Pass `{ allowWindowsContainerPath: true }` to
+preserve drive prefixes in container paths too, as Policy does for its existing
+Windows bind grammar. The default keeps POSIX container parsing unchanged.
+This helper splits text; it does not validate or authorize a mount.
+
 ## Package entries
 
 Installed plugins point `package.json` `openclaw` fields at both source and

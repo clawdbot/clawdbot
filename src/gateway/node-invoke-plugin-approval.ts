@@ -18,12 +18,8 @@ import {
   type NodeInvokePlacementGrantAuthorization,
 } from "./node-invoke-placement-grant.js";
 import type { NodeSession } from "./node-registry.js";
-import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
-import {
-  bindApprovalRequesterMetadata,
-  buildRequestedApprovalEvent,
-  handlePendingApprovalRequest,
-} from "./server-methods/approval-shared.js";
+import { bindApprovalRequesterMetadata } from "./server-methods/approval-shared.js";
+import { handlePendingPluginApprovalRequest } from "./server-methods/plugin-approval-request-delivery.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
 function sanitizeOptionalMeta(value?: string | null): string | null {
@@ -153,8 +149,8 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       const { allowedDecisions, binding: placementGrant } = placementGrantResolution;
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
-        // The record feeds the same broadcast, forwarder, and push paths as
-        // RPC ingress. Normalize before escaping so empty prompts fail closed.
+        // Internal node prompts truncate; RPC ingress rejects oversized prompts.
+        // Normalize before escaping so empty prompts still fail closed.
         title: truncateUtf16Safe(
           sanitizeExecApprovalDisplayText(normalizeOptionalString(input.title) ?? ""),
           80,
@@ -201,45 +197,17 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
       const decisionPromise = manager.register(record, timeoutMs);
-      const requestEvent = buildRequestedApprovalEvent(record, "plugin");
-      const forwardRequest = params.context.forwardPluginApprovalRequest;
-      const iosPushRequest = params.context.pluginApprovalIosPushDelivery?.handleRequested?.bind(
-        params.context.pluginApprovalIosPushDelivery,
-      );
-      await handlePendingApprovalRequest({
+      await handlePendingPluginApprovalRequest({
         manager,
         record,
         respond,
         context: params.context,
         // The carried connection is turn provenance, not the presenter. Keep
         // a sole-reviewer operator eligible for this internally minted prompt.
-        requestEventName: "plugin.approval.requested",
-        requestEvent,
         twoPhase: false,
-        approvalKind: "plugin",
-        deliverRequest: () =>
-          runApprovalRequestDeliveries({
-            context: params.context,
-            record,
-            forward: forwardRequest
-              ? [
-                  () => forwardRequest(requestEvent),
-                  "plugin approvals: forward node policy request failed",
-                ]
-              : undefined,
-            iosPush: iosPushRequest
-              ? [
-                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
-                  "plugin approvals: iOS push node policy request failed",
-                ]
-              : undefined,
-          }),
-        afterDecision: async (decision) => {
-          if (decision === null) {
-            await params.context.pluginApprovalIosPushDelivery?.handleExpired?.(requestEvent);
-          }
-        },
-        afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
+        forwardRequest: params.context.forwardPluginApprovalRequest,
+        getIosPushDelivery: () => params.context.pluginApprovalIosPushDelivery,
+        source: "node-policy",
       });
       let decision = manager.projectDecisionIfActive(record.id, await decisionPromise);
       if (!params.isCurrent()) {

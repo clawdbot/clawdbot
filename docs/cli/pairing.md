@@ -28,6 +28,12 @@ openclaw pairing approve telegram <code>
 openclaw pairing approve --channel telegram --account work <code> --notify
 ```
 
+Use `--account <accountId>` to restrict either command to one channel account.
+If you omit `--account`, `list` shows pending requests across the channel's accounts,
+and `approve` uses the account belonging to the matching request. Explicitly empty
+or whitespace-only values, such as `--account ""`, are rejected with
+`--account must not be blank`.
+
 ## `pairing list`
 
 List pending pairing requests for one channel.

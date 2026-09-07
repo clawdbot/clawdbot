@@ -91,6 +91,17 @@ External-plugin compatibility work follows this order:
 
 ### Retained helper contracts
 
+Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.
+They use the newer prepared-expiry, DM-policy refinement, and live-catalog outcome
+helpers when those exports are available, with plugin-local fallbacks for the
+2026.9.2 SDK. The fallbacks preserve Discord's timestamp validation, idle-first
+expiry ties, and root/account DM-policy validation through the older SDK
+validators, and llama.cpp's ready, authentication-rejected, and unavailable catalog outcomes
+with credential-profile attribution. They do not retry or suppress errors from
+an available newer helper. Remove these fallbacks only when the declared plugin
+API floor no longer includes 2026.9.2; test built plugin imports against that
+minimum host before changing unconditional SDK imports.
+
 Retained compatibility entrypoints keep their shipped caller names:
 `inbound-envelope` uses `resolveStorePath`, `provider-catalog-runtime` exports
 `resolvePluginProviders`, and `agent-runtime`'s
