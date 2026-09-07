@@ -296,6 +296,9 @@ export function blockSubagentCompletionDelivery(params: {
       task.status === "succeeded" &&
       (subagent.execution.outcome?.status === "ok" || missingHistoricalOutcome);
     const deliveryAlreadyObserved = task.deliveryStatus === "delivered";
+    const deliveryProjectionAlreadySettled =
+      deliveryAlreadyObserved ||
+      (task.deliveryStatus === "failed" && task.terminalOutcome === "blocked");
     // A terminal non-success still owns its failed requester wake. Classify the
     // persisted pair; a missing or superseded owner is not permission to settle.
     if (
@@ -335,7 +338,7 @@ export function blockSubagentCompletionDelivery(params: {
     } else {
       subagent.suppressCompletionDelivery = true;
     }
-    if (successful && !deliveryAlreadyObserved) {
+    if (successful && !deliveryProjectionAlreadySettled) {
       const terminal = resolveRequiredCompletionDeliveryFailureTerminalResult(params.reason);
       Object.assign(task, {
         ...terminal,
@@ -350,7 +353,7 @@ export function blockSubagentCompletionDelivery(params: {
       lastEventAt: now,
     });
     const text =
-      successful && !deliveryAlreadyObserved && task.notifyPolicy !== "silent"
+      successful && !deliveryProjectionAlreadySettled && task.notifyPolicy !== "silent"
         ? formatTaskBlockedFollowupMessage(task)
         : null;
     const queued = text

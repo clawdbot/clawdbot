@@ -293,6 +293,49 @@ describe("atomic rejected requester-settle storage", () => {
     }
   });
 
+  it("does not enqueue a second blocked alert for a legacy successful settlement", async () => {
+    useDefaultDatabase();
+    const input = armRequesterWake(records());
+    admitSubagentCompletionDelivery({
+      ...input,
+      databaseOptions: { database },
+    });
+    subagentRuns.set(input.subagent.runId, input.subagent);
+    ensureTaskRegistryReady();
+    publishTaskRecordAfterAtomicStore(input.task);
+    expect(
+      blockSubagentCompletionDelivery({
+        subagent: input.subagent,
+        taskId: input.task.taskId,
+        reason: "legacy partial settlement",
+        databaseOptions: { database },
+      }),
+    ).toBe(true);
+    const blockedAlertCount = () =>
+      database.db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM delivery_queue_entries WHERE queue_name = 'session' AND entry_kind = 'systemEvent'",
+        )
+        .get();
+    expect(blockedAlertCount()).toEqual({ count: 1 });
+
+    const driver = requesterWakeDriver([input]);
+    try {
+      await driver.run();
+      expect(blockedAlertCount()).toEqual({ count: 1 });
+      reopenOwners();
+      expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
+      expect(getTaskById(input.task.taskId)).toMatchObject({
+        status: "succeeded",
+        deliveryStatus: "failed",
+        terminalOutcome: "blocked",
+        error: "legacy partial settlement",
+      });
+    } finally {
+      driver.controller.clearScheduledResumeTimers();
+    }
+  });
+
   it("rolls the whole rejected batch back when a later generation changed", async () => {
     useDefaultDatabase();
     const first = failedRecords("failed", { status: "error" });
