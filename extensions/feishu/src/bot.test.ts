@@ -6,8 +6,9 @@ import type {
   getSessionBindingService,
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, type ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -1284,6 +1285,64 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("routes Feishu groups with exact bindings from the live runtime config", async () => {
+    mockResolveAgentRoute.mockImplementation((params) =>
+      resolveAgentRoute(params as Parameters<typeof resolveAgentRoute>[0]),
+    );
+
+    const startupCfg = createFeishuTestConfig(
+      {
+        enabled: true,
+        groups: { oc_target: { allow: true, requireMention: false } },
+      },
+      {
+        agents: { list: [{ id: "main" }, { id: "oc1" }] },
+        bindings: [
+          {
+            agentId: "oc1",
+            match: {
+              channel: "feishu",
+              accountId: "default",
+              peer: { kind: "group", id: "*" },
+            },
+          },
+        ],
+      },
+    );
+    const liveCfg = {
+      ...startupCfg,
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            peer: { kind: "group", id: "oc_target" },
+          },
+        },
+        ...(startupCfg.bindings ?? []),
+      ],
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg: startupCfg,
+      currentCfg: liveCfg,
+      event: createFeishuTestEvent({
+        messageId: "msg-group-live-binding",
+        senderOpenId: "ou_sender",
+        chatId: "oc_target",
+        chatType: "group",
+      }),
+    });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:feishu:group:oc_target",
+      }),
+    );
+  });
+
   it("drops a DM denied by refreshed dynamic-agent policy", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
@@ -1328,6 +1387,52 @@ describe("handleFeishuMessage command authorization", () => {
     });
 
     expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("drops a bound DM revoked while sender lookup is pending", async () => {
+    const lookupStarted = createDeferred<void>();
+    const releaseLookup = createDeferred<void>();
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn(async () => {
+            lookupStarted.resolve();
+            await releaseLookup.promise;
+            return { data: {} };
+          }),
+        },
+      },
+    });
+    mockResolveAgentRoute.mockReturnValue({
+      ...createFeishuTestRoute(),
+      matchedBy: "binding.peer",
+    });
+    const cfg = createFeishuTestConfig({
+      appId: "cli_test",
+      appSecret: "test-secret",
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      resolveSenderNames: true,
+    });
+    const channelRuntime = createFeishuBotRuntime().channel;
+    const pending = dispatchMessage({
+      cfg,
+      channelRuntime,
+      event: createFeishuTestEvent({
+        messageId: "msg-revoked-during-lookup",
+        senderOpenId: "ou_revoked_during_lookup",
+      }),
+    });
+    await lookupStarted.promise;
+    currentRuntimeConfig = createFeishuTestConfig({
+      ...cfg.channels?.feishu,
+      dmPolicy: "disabled",
+    });
+    releaseLookup.resolve();
+    await pending;
+
+    expect(channelRuntime.inbound.run).not.toHaveBeenCalled();
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 

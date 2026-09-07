@@ -359,7 +359,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
       // +1: shared static UI guidance, separate from per-turn harness delivery policy.
       // +1: shared root/account DM policy refinement for channel schemas.
-      4447,
+      // -1: add one tool policy object and retire two unused deprecated mode exports.
+      4446,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -487,7 +488,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
       // +1: shared static UI guidance, separate from per-turn harness delivery policy.
       // +1: shared root/account DM policy refinement for channel schemas.
-      2631,
+      // -2: retire the deprecated mode projection callables.
+      2629,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
