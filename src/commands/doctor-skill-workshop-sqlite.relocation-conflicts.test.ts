@@ -225,6 +225,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       externalProposalCount: 0,
       externalProposalCountsByAgent: {},
       legacyBackupRootCount: 0,
+      preservedLegacyBackupRootCount: 0,
     });
     await expectWorkshopMigrationConverged({ config, env: testState.env });
     await expect(

@@ -92,6 +92,7 @@ export type LegacyWorkshopMigrationInspection = {
   externalProposalCount: number;
   externalProposalCountsByAgent: Record<string, number>;
   legacyBackupRootCount: number;
+  preservedLegacyBackupRootCount: number;
 };
 
 async function readJson(rootDir: Root, relativePath: string, maxBytes: number): Promise<unknown> {
@@ -142,6 +143,7 @@ export async function inspectLegacySkillWorkshopMigration(params: {
       return counts;
     }, {}),
     legacyBackupRootCount: backups.length,
+    preservedLegacyBackupRootCount: backups.filter((backup) => "warning" in backup).length,
   };
 }
 
