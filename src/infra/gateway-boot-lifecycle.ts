@@ -7,11 +7,13 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { pathMayExistSync } from "./path-existence.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
 
 // Retain the released media-only tag while its bounded boot history expires.
@@ -284,6 +286,9 @@ export function completeGatewayBootLifecycle(
 export function repairGatewayMaintenanceStartupFailures(
   env: NodeJS.ProcessEnv = process.env,
 ): number {
+  if (!pathMayExistSync(resolveOpenClawStateSqlitePath(env))) {
+    return 0;
+  }
   try {
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
