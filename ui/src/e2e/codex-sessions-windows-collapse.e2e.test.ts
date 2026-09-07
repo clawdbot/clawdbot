@@ -14,7 +14,7 @@ const catalogGroupingStorageKey = "openclaw:sidebar:sessions:catalog-grouping";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 
 suite.define(() => {
-  it("migrates a collapsed Windows project key and keeps it collapsed after reload", async () => {
+  it("migrates catalog and regular Windows project keys through reload and expansion", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -33,22 +33,45 @@ suite.define(() => {
         const legacySectionId = String.raw`catalog-project:codex:gateway:local:project:C:\WORK\OPENCLAW\.CLAUDE\WORKTREES\fix-older`;
         const canonicalSectionId =
           "catalog-project:codex:gateway:local:project:windows:drive:c:/work/openclaw";
+        const regularPath = String.raw`C:\Work\OpenClaw\.CLAUDE\WORKTREES\task`;
+        const regularId = String.raw`project:C:\Work\OpenClaw`;
         await page.addInitScript(
-          ({ groupingKey, legacyId, sectionsKey }) => {
+          ({ groupingKey, legacyId, sectionsKey, regularPath: savedRegularPath }) => {
             localStorage.setItem(groupingKey, "project");
+            localStorage.setItem("openclaw:sidebar:sessions:grouping", "project");
             if (localStorage.getItem(sectionsKey) === null) {
-              localStorage.setItem(sectionsKey, JSON.stringify([legacyId]));
+              localStorage.setItem(
+                sectionsKey,
+                JSON.stringify([legacyId, `project:${savedRegularPath}`]),
+              );
             }
           },
           {
             groupingKey: catalogGroupingStorageKey,
             legacyId: legacySectionId,
             sectionsKey: collapsedSessionSectionsStorageKey,
+            regularPath,
           },
         );
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
           methodResponses: {
+            "sessions.list": {
+              count: 1,
+              defaults: { contextTokens: null, model: "fixture-model", modelProvider: "fixture" },
+              path: "",
+              ts: Date.now(),
+              sessions: [
+                {
+                  key: "agent:main:windows-upgrade",
+                  kind: "direct",
+                  label: "Regular Windows workspace",
+                  status: "idle",
+                  updatedAt: Date.now(),
+                  spawnedWorkspaceDir: regularPath,
+                },
+              ],
+            },
             "sessions.catalog.list": {
               catalogs: [
                 {
@@ -90,6 +113,9 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
+        const regularSection = page.locator(`[data-session-section=${JSON.stringify(regularId)}]`);
+        const regularToggle = regularSection.locator(".sidebar-session-group-toggle");
+        await expect.poll(() => regularToggle.getAttribute("aria-expanded")).toBe("false");
         const section = page.locator('[data-session-section="catalog:codex"]');
         const project = section.locator(
           '[data-session-catalog-project="project:windows:drive:c:/work/openclaw"]',
@@ -103,7 +129,7 @@ suite.define(() => {
             (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
             collapsedSessionSectionsStorageKey,
           ),
-        ).toEqual([canonicalSectionId]);
+        ).toEqual([regularId, canonicalSectionId]);
         if (captureUiProofEnabled) {
           await section.screenshot({
             animations: "disabled",
@@ -112,6 +138,7 @@ suite.define(() => {
         }
 
         await page.reload();
+        await expect.poll(() => regularToggle.getAttribute("aria-expanded")).toBe("false");
         await project.waitFor({ state: "visible" });
         await expect.poll(() => project.getAttribute("aria-expanded")).toBe("false");
         expect(
@@ -119,7 +146,7 @@ suite.define(() => {
             (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
             collapsedSessionSectionsStorageKey,
           ),
-        ).toEqual([canonicalSectionId]);
+        ).toEqual([regularId, canonicalSectionId]);
         if (captureUiProofEnabled) {
           await section.screenshot({
             animations: "disabled",
@@ -131,6 +158,8 @@ suite.define(() => {
         }
 
         await project.click();
+        await regularToggle.click();
+        await regularSection.getByText("Regular Windows workspace", { exact: true }).waitFor();
         await expect.poll(() => project.getAttribute("aria-expanded")).toBe("true");
         expect(await section.getByText("Direct Windows checkout", { exact: true }).count()).toBe(1);
         expect(await section.getByText("Windows worktree checkout", { exact: true }).count()).toBe(
@@ -142,6 +171,15 @@ suite.define(() => {
             path: path.join(suite.artifactDir, "03-windows-project-expanded.png"),
           });
         }
+        await page.reload();
+        await expect.poll(() => regularToggle.getAttribute("aria-expanded")).toBe("true");
+        await expect.poll(() => project.getAttribute("aria-expanded")).toBe("true");
+        expect(
+          await page.evaluate(
+            (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
+            collapsedSessionSectionsStorageKey,
+          ),
+        ).toEqual([]);
       },
     );
   });
