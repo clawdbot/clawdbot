@@ -1,6 +1,7 @@
 // Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
 import { GatewayCredentialsRequiredError, GatewayTransportError } from "../gateway/call.js";
+import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import {
   ExpectedCliError,
   formatCliFailureLines,
@@ -12,6 +13,31 @@ const PLUGIN_POLICY_MESSAGE =
   'The `openclaw workboard` command is provided by the "workboard" plugin, but that bundled plugin is disabled by default. Run `openclaw plugins enable workboard` to enable that CLI surface.';
 
 describe("formatCliJsonFailure", () => {
+  it("preserves the typed schema refusal when a runner migration fails before Doctor starts", () => {
+    const databases = [
+      {
+        kind: "state" as const,
+        path: "/state/openclaw.sqlite",
+        foundVersion: 15,
+        supportedVersion: 16,
+      },
+    ];
+    const error = new UpdateSchemaRefusalError(databases, "2026.9.2", {
+      cause: new Error("content migration failed"),
+    });
+    expect(formatCliJsonFailure(error, { env: {} })).toMatchObject({
+      ok: false,
+      error: {
+        type: "cli_error",
+        code: "update-schema-bump-unfenced",
+        updaterVersion: "2026.9.2",
+        message: expect.stringContaining("Deferral failed: content migration failed"),
+        databases,
+        commands: expect.arrayContaining(["openclaw gateway stop", "openclaw doctor --fix"]),
+      },
+    });
+  });
+
   it("uses the canonical typed envelope and redacts the message", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const payload = formatCliJsonFailure(new Error(`Authorization: Bearer ${token}`));

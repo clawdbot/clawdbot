@@ -16,6 +16,10 @@ import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
+import {
+  readStateSchemaContentVersion,
+  resolveStateSchemaVersionToPublish,
+} from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const STATE_V6_ADDITIVE_TABLES = [
@@ -87,7 +91,7 @@ export function assertOpenClawStateDatabaseForMaintenance(
   readTable?: SqliteTableContractReader,
 ): void {
   const userVersion = assertSupportedStateSchemaVersion(database, options.pathname);
-  if (userVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
@@ -97,11 +101,11 @@ export function assertOpenClawStateDatabaseForMaintenance(
   const metadata = database
     .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
     .get() as { schema_version?: unknown } | undefined;
-  if (metadata?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  if (metadata?.schema_version !== userVersion) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
     throw new Error(
-      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${OPENCLAW_STATE_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
   }
   assertSqliteSchemaContains(
@@ -239,7 +243,8 @@ export function markCurrentStateSchemaVersion(
   if (!tableExists(db, "audit_events")) {
     return;
   }
-  db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+  const version = resolveStateSchemaVersionToPublish(db);
+  db.exec(`PRAGMA user_version = ${version};`);
   if (
     tableExists(db, "schema_meta") &&
     ["meta_key", "schema_version", "updated_at"].every((column) =>
@@ -258,12 +263,12 @@ export function markCurrentStateSchemaVersion(
          ON CONFLICT(meta_key) DO UPDATE SET
            schema_version = excluded.schema_version,
            updated_at = excluded.updated_at`,
-      ).run(OPENCLAW_STATE_SCHEMA_VERSION, now, now);
+      ).run(version, now, now);
       return;
     }
     db.prepare(
       "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary'",
-    ).run(OPENCLAW_STATE_SCHEMA_VERSION, now);
+    ).run(version, now);
   }
 }
 

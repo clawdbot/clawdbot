@@ -69,6 +69,7 @@ import {
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   ensureAdditiveStateColumns,
   ensureFirstUseAdditiveStateColumnsForStrictMigration,
@@ -102,7 +103,14 @@ import {
   runWithOpenClawStateWriteAccess,
 } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
+import {
+  readStateSchemaContentVersion,
+  readStateSchemaPublicationBlocker,
+  resolveStateSchemaVersionToPublish,
+  type StateSchemaPublicationBlocker,
+} from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
 export { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 
 export { OPENCLAW_DATABASE_SCHEMA_DOCS_URL, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS };
@@ -134,6 +142,52 @@ function assertOpenClawStateDatabaseFreshOpenAllowed(
 
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 const stateDbLog = createSubsystemLogger("state/db");
+const deferredStateDatabases = new WeakSet<DatabaseSync>();
+
+function runStateSchemaMigrationTransaction<T>(
+  db: DatabaseSync,
+  pathname: string,
+  migrate: () => T,
+  transactionOptions: SqliteTransactionOptions,
+): T {
+  return runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      const publishedVersion = readSqliteUserVersion(db);
+      const blocker =
+        publishedVersion < OPENCLAW_STATE_SCHEMA_VERSION
+          ? readStateSchemaPublicationBlocker(db)
+          : undefined;
+      if (!blocker) {
+        return migrate();
+      }
+      try {
+        // Check before canonical DDL could recreate the missing publication owner.
+        if (!tableExists(db, "config_machine_state")) {
+          throw new Error("Shared state schema publication requires config_machine_state.");
+        }
+        return migrate();
+      } catch (cause) {
+        if (cause instanceof OpenClawStateOwnershipError) {
+          throw cause;
+        }
+        throw new UpdateSchemaRefusalError(
+          [
+            {
+              kind: "state",
+              path: pathname,
+              foundVersion: publishedVersion,
+              supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+            },
+          ],
+          blocker.updaterVersion,
+          { cause },
+        );
+      }
+    },
+    transactionOptions,
+  );
+}
 
 function executeCanonicalStateSchema(
   database: DatabaseSync,
@@ -157,12 +211,13 @@ function repairStateSchema(
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedStateSchemaVersion(db, pathname);
     db.exec("PRAGMA foreign_keys = OFF;");
-    const changes = runSqliteImmediateTransactionSync(
+    const changes = runStateSchemaMigrationTransaction(
       db,
+      pathname,
       () => {
         assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
         const applied: string[] = [];
-        const previousVersion = readSqliteUserVersion(db);
+        const previousVersion = readStateSchemaContentVersion(db);
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             allowMissingColumns: true,
@@ -244,7 +299,7 @@ function repairStateSchema(
         markCurrentStateSchemaVersion(db, {
           createMetadataIfMissing: previousVersion < OPENCLAW_STATE_SCHEMA_VERSION,
         });
-        if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+        if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
           assertCurrentStateRuntimeSchema(db, pathname);
         }
         if (rebuiltIndexNames.size > 0) {
@@ -269,6 +324,9 @@ function repairStateSchema(
           ],
     };
   } catch (err) {
+    if (err instanceof UpdateSchemaRefusalError) {
+      throw err;
+    }
     if (err instanceof OpenClawStateOwnershipError) {
       ownershipRefused = true;
       throw err;
@@ -376,8 +434,9 @@ function ensureSchema(
     const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
     db.exec("PRAGMA foreign_keys = OFF;"); // Rebuilding referenced tables requires this before BEGIN.
     try {
-      runSqliteImmediateTransactionSync(
+      runStateSchemaMigrationTransaction(
         db,
+        pathname,
         () => {
           // Recheck ownership after BEGIN IMMEDIATE to exclude a concurrent external claim.
           assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
@@ -387,7 +446,7 @@ function ensureSchema(
           if (initializeNativeOnly && !isUninitializedNativeStartupDatabase(db)) {
             return [];
           }
-          const previousVersion = readSqliteUserVersion(db);
+          const previousVersion = readStateSchemaContentVersion(db);
           if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
             verifyAndRepairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
               allowMissingColumns: true,
@@ -430,7 +489,8 @@ function ensureSchema(
           repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             verifyPhysicalIntegrity: false,
           });
-          db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+          const schemaVersion = resolveStateSchemaVersionToPublish(db);
+          db.exec(`PRAGMA user_version = ${schemaVersion};`);
           executeSqliteQuerySync(
             db,
             kysely
@@ -438,7 +498,7 @@ function ensureSchema(
               .values({
                 meta_key: "primary",
                 role: "global",
-                schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+                schema_version: schemaVersion,
                 agent_id: null,
                 app_version: VERSION,
                 created_at: now,
@@ -449,7 +509,7 @@ function ensureSchema(
                   .column("meta_key")
                   .doUpdateSet({
                     role: "global",
-                    schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+                    schema_version: schemaVersion,
                     agent_id: null,
                     app_version: VERSION,
                     updated_at: now,
@@ -458,7 +518,7 @@ function ensureSchema(
                   // open and defeat no-change backup detection.
                   .where((eb) =>
                     eb.or([
-                      eb("schema_meta.schema_version", "!=", OPENCLAW_STATE_SCHEMA_VERSION),
+                      eb("schema_meta.schema_version", "!=", schemaVersion),
                       eb("schema_meta.app_version", "is not", VERSION),
                       eb("schema_meta.role", "!=", "global"),
                     ]),
@@ -521,7 +581,7 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedStateSchemaVersion(db, pathname);
     assertSqliteIntegrity(db, pathname);
-    if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+    if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
       assertOpenClawStateDatabaseForMaintenance(db, { pathname });
     }
   } catch (error) {
@@ -594,6 +654,12 @@ function openOpenClawStateDatabaseWithBusyTimeout(
       env,
       schemaReady: true,
     });
+    if (deferredStateDatabases.has(cached.db)) {
+      reconcileOpenClawStateSchemaPublication(options);
+      if (readSqliteUserVersion(cached.db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+        deferredStateDatabases.delete(cached.db);
+      }
+    }
     return cached;
   }
   try {
@@ -639,6 +705,9 @@ function openOpenClawStateDatabaseWithBusyTimeout(
     }
     throw error;
   }
+  if (readSqliteUserVersion(unpublished.db) < OPENCLAW_STATE_SCHEMA_VERSION) {
+    deferredStateDatabases.add(unpublished.db);
+  }
   return stateDbCache.publishOpenClawStateDatabase(unpublished);
 }
 
@@ -647,6 +716,38 @@ export function openOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase {
   return openOpenClawStateDatabaseWithBusyTimeout(options);
+}
+
+/** The Gateway watcher also publishes without requiring a new physical database open. */
+export function reconcileOpenClawStateSchemaPublication(
+  options: OpenClawStateDatabaseOptions = {},
+): StateSchemaPublicationBlocker | undefined {
+  const pending = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+    if (
+      readSqliteUserVersion(db) >= OPENCLAW_STATE_SCHEMA_VERSION ||
+      readStateSchemaContentVersion(db) < OPENCLAW_STATE_SCHEMA_VERSION
+    ) {
+      return undefined;
+    }
+    return { blocker: readStateSchemaPublicationBlocker(db) };
+  }, options);
+  if (!pending || pending.blocker) {
+    return pending?.blocker;
+  }
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      // The advisory read may race a new update. Re-read every driver under the write lock.
+      const blocker = readStateSchemaPublicationBlocker(db);
+      if (blocker) {
+        return blocker;
+      }
+      assertOpenClawStateDatabaseForMaintenance(db, { pathname: resolveDatabasePath(options) });
+      markCurrentStateSchemaVersion(db);
+      return undefined;
+    },
+    options,
+    { operationLabel: "state.schema.publish" },
+  );
 }
 
 /** Run one operation through the shared owner without waiting synchronously on SQLite locks. */

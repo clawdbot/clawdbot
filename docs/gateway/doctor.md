@@ -78,6 +78,25 @@ To review changes before writing, open the config file first:
 cat ~/.openclaw/openclaw.json
 ```
 
+## Schema publication during a 2026.9.2 update
+
+When OpenClaw 2026.9.2 drives an update that needs a newer shared-state schema,
+Doctor applies the migration content and reports
+`schema content applied; version publication deferred until update run <id> finishes`.
+The old updater can finish its ledger access, while the new Gateway uses the
+migrated content. Publication waits until all affected terminal runs are at least
+five minutes old; a running row unchanged for more than 30 minutes counts as
+abandoned. Every writable database open follows this rule, and the Gateway
+watcher schedules publication after the deadline.
+
+Deferral does not cover agent-database migrations. Doctor reports
+`update-schema-bump-unfenced` if one is pending, if the required shared-state
+metadata table is missing, or if the content migration fails. Follow the
+[manual update sequence](/install/updating#updating-from-2026.9.2-across-a-schema-bump)
+from the refusal. See [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters)
+for the publication contract and the remaining risk for an old CLI stalled
+beyond the grace period.
+
 ## Read-only lint mode
 
 `openclaw doctor --lint` is the automation-friendly sibling of
