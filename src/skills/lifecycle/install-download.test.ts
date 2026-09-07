@@ -444,6 +444,84 @@ describe("installDownloadSpec extraction safety", () => {
     );
   });
 
+  it("does not guess an archive type from a URL without an extension or Content-Disposition filename", async () => {
+    mockArchiveResponse(Buffer.from("plain-bytes"));
+    const result = await installDownloadSpec({
+      entry: buildEntry("cd-missing-archive-name"),
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/download",
+        extract: true,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.message).toBe("extract requested but archive type could not be detected");
+  });
+
+  it.each([
+    {
+      name: "quoted filename",
+      disposition: 'attachment; filename="runtime.zip"',
+      urlPath: "/download",
+    },
+    {
+      name: "RFC 5987 filename* with a language tag",
+      disposition: "attachment; filename*=UTF-8'en'runtime.zip",
+      urlPath: "/download",
+    },
+    {
+      name: "quoted filename containing a semicolon",
+      disposition: 'attachment; filename="runtime;linux.zip"',
+      urlPath: "/download",
+    },
+    {
+      name: "URL suffix when Content-Disposition is a generic download name",
+      disposition: 'attachment; filename="download"',
+      urlPath: "/runtime.zip",
+    },
+  ])("extracts a zip using Content-Disposition $name", async ({ disposition, name, urlPath }) => {
+    const executableContents = "#!/bin/sh\nprintf verified\\n\n";
+    const zip = new JSZip();
+    zip.folder("package/empty/");
+    zip.file("package/run.sh", executableContents, { unixPermissions: 0o755 });
+    const archive = await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
+
+    await withDownloadServer(
+      (response) => {
+        response.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-disposition": disposition,
+        });
+        response.end(archive);
+      },
+      async (origin) => {
+        const entry = buildEntry(`cd-archive-${name.replaceAll(" ", "-")}`);
+        const result = await installDownloadSpec({
+          entry,
+          spec: {
+            kind: "download",
+            id: "dl",
+            url: `${origin}${urlPath}`,
+            extract: true,
+            targetDir: "runtime",
+            stripComponents: 1,
+          },
+          timeoutMs: 30_000,
+        });
+
+        expect(result.message).not.toContain("archive type could not be detected");
+        expect(result.ok).toBe(true);
+        const destinationDir = path.join(resolveSkillToolsRootDir(entry), "runtime");
+        await expect(fs.readFile(path.join(destinationDir, "run.sh"), "utf8")).resolves.toBe(
+          executableContents,
+        );
+      },
+    );
+  });
+
   it.each([
     { name: "new destination", existing: false },
     { name: "existing destination", existing: true },

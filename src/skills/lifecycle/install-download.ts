@@ -67,11 +67,77 @@ function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): st
   return resolved;
 }
 
-function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | undefined {
-  const explicit = normalizeOptionalLowercaseString(spec.archive);
-  if (explicit) {
-    return explicit;
+function* parseSkillInstallDispositionParameters(header: string): Generator<{
+  name: string;
+  value: string;
+}> {
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index <= header.length; index += 1) {
+    const character = header[index];
+    if (escaped || (quoted && character === "\\")) {
+      escaped = !escaped;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (index !== header.length && (quoted || character !== ";")) {
+      continue;
+    }
+    const parameter = header.slice(start, index).trim();
+    start = index + 1;
+    const separator = parameter.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+    let value = parameter.slice(separator + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
+    ) {
+      value = value.slice(1, -1);
+    }
+    yield {
+      name: parameter.slice(0, separator).trim().toLowerCase(),
+      value,
+    };
   }
+}
+
+function parseSkillInstallFileName(header: string | null): string | undefined {
+  if (!header) {
+    return undefined;
+  }
+  let fallback: string | undefined;
+  for (const parameter of parseSkillInstallDispositionParameters(header)) {
+    if (parameter.name === "filename*") {
+      const match = /^([^']*)'[^']*'(.*)$/u.exec(parameter.value);
+      const charset = match?.[1]?.toLowerCase();
+      const encoded = match?.[2];
+      if (charset === "utf-8" && encoded) {
+        try {
+          const decoded = path.basename(decodeURIComponent(encoded)).replace(/[\\/]/g, "_");
+          if (decoded) {
+            return decoded;
+          }
+        } catch {
+          // Keep scanning for a quoted filename= fallback.
+        }
+      }
+      continue;
+    }
+    if (parameter.name === "filename") {
+      const decoded = path.basename(parameter.value).replace(/[\\/]/g, "_");
+      fallback ??= decoded || undefined;
+    }
+  }
+  return fallback;
+}
+
+function detectArchiveType(filename: string | undefined): string | undefined {
   const lower = normalizeOptionalLowercaseString(filename);
   if (!lower) {
     return undefined;
@@ -88,6 +154,18 @@ function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | 
   return undefined;
 }
 
+function resolveArchiveType(
+  spec: SkillInstallSpec,
+  filename: string,
+  headerFileName?: string,
+): string | undefined {
+  const explicit = normalizeOptionalLowercaseString(spec.archive);
+  if (explicit) {
+    return explicit;
+  }
+  return detectArchiveType(headerFileName) ?? detectArchiveType(filename);
+}
+
 async function downloadFile(params: {
   url: string;
   relativePath: string;
@@ -95,7 +173,7 @@ async function downloadFile(params: {
   tempPath: string;
   sha256?: string;
   timeoutMs: number;
-}): Promise<{ bytes: number }> {
+}): Promise<{ bytes: number; archiveFileName?: string }> {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     timeoutMs: Math.max(1_000, params.timeoutMs),
@@ -105,6 +183,7 @@ async function downloadFile(params: {
       await cancelIgnoredResponseBody(response);
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
+    const archiveFileName = parseSkillInstallFileName(response.headers.get("content-disposition"));
     // Encoded Content-Length measures wire bytes, not the decoded stream we cap.
     const contentEncoding = normalizeOptionalLowercaseString(
       response.headers.get("content-encoding"),
@@ -147,7 +226,9 @@ async function downloadFile(params: {
       }
     }
     await params.pinnedRoot.copyIn(params.relativePath, params.tempPath);
-    return { bytes: file.bytesWritten };
+    return archiveFileName
+      ? { bytes: file.bytesWritten, archiveFileName }
+      : { bytes: file.bytesWritten };
   } finally {
     await release();
   }
@@ -269,6 +350,7 @@ export async function installDownloadSpec(params: {
   }
   return await withTempDownloadPath({ prefix: "skill-download" }, async (tempArchivePath) => {
     let downloaded;
+    let archiveFileName: string | undefined;
     try {
       const result = await downloadFile({
         url,
@@ -279,12 +361,13 @@ export async function installDownloadSpec(params: {
         timeoutMs,
       });
       downloaded = result.bytes;
+      archiveFileName = result.archiveFileName;
     } catch (err) {
       const message = formatErrorMessage(err);
       return { ok: false, message, stdout: "", stderr: message, code: null };
     }
 
-    const archiveType = resolveArchiveType(spec, filename);
+    const archiveType = resolveArchiveType(spec, filename, archiveFileName);
     const shouldExtract = spec.extract ?? Boolean(archiveType);
     if (!shouldExtract) {
       return {
