@@ -8,7 +8,7 @@ import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { listAppServerRuntimeModelBackendBindings } from "./app-server-runtime-bindings.js";
+import { isAppServerRuntimeModelBackendBinding } from "./app-server-runtime-bindings.js";
 import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 
 /** Persisted runtime fields used to recover session runtime compatibility. */
@@ -72,17 +72,7 @@ export function resolveCompatibleAgentRuntimeForProvider(params: {
   // bridge harness: `/model zai/glm-5.3 --runtime glm-bridge` returned
   // 'Runtime "glm-bridge" is not supported for zai' and the model never changed,
   // even though the picker offered that exact combination (openclaw-vgx7).
-  if (
-    listAppServerRuntimeModelBackendBindings().some(
-      (binding) =>
-        binding.runtime === runtime && binding.provider.trim().toLowerCase() === provider,
-    )
-  ) {
-    return runtime;
-  }
-  // The Codex harness additionally owns OpenClaw's virtual `codex` provider
-  // namespace, which is not a model provider and so has no binding row.
-  if (runtime === "codex" && provider === "codex") {
+  if (isAppServerRuntimeModelBackendBinding({ provider, runtime })) {
     return runtime;
   }
   return isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }) ? runtime : undefined;

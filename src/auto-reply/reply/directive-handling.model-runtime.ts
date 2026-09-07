@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-runtime-id.js";
 /** Resolves and applies explicit runtime selections attached to `/model`. */
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
+import { isAppServerRuntimeModelBackendBinding } from "../../agents/app-server-runtime-bindings.js";
 import { resolveAgentHarnessOwnerPluginIds } from "../../agents/harness/runtime-plugin.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
@@ -97,8 +98,21 @@ function resolveUnavailableHarnessOwnerText(params: {
   agentId?: string;
   workspaceDir?: string;
 }): string | undefined {
+  if (params.runtime === OPENCLAW_AGENT_RUNTIME_ID) {
+    return undefined;
+  }
+  // App-server harness bindings are the non-CLI parallel of the CLI runtime
+  // bindings, so a pair served by one is never served by the other. Answering
+  // from the static table first keeps the CLI-backend probe -- which falls
+  // through to synchronous plugin setup discovery once a config is supplied --
+  // off the native `/model` fast path, which forbids it and which `main` never
+  // reached here because it accepted a compatible runtime unconditionally.
+  const appServerBound = isAppServerRuntimeModelBackendBinding({
+    provider: params.provider,
+    runtime: params.runtime,
+  });
   if (
-    params.runtime === OPENCLAW_AGENT_RUNTIME_ID ||
+    !appServerBound &&
     isCliRuntimeAliasForProvider({
       provider: params.provider,
       runtime: params.runtime,

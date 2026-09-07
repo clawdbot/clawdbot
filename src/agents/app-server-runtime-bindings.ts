@@ -58,3 +58,30 @@ const APP_SERVER_RUNTIME_MODEL_BACKEND_BINDINGS: readonly AppServerRuntimeModelB
 export function listAppServerRuntimeModelBackendBindings(): readonly AppServerRuntimeModelBackendBinding[] {
   return APP_SERVER_RUNTIME_MODEL_BACKEND_BINDINGS;
 }
+
+/**
+ * Reports whether an app-server agent harness serves this provider/runtime pair.
+ *
+ * These bindings are the non-CLI parallel of the CLI runtime bindings, so a pair
+ * answered here is never also a CLI backend pairing. Callers use that to decide
+ * which availability rule applies without probing the CLI setup registry, which
+ * can fall through to synchronous plugin setup discovery.
+ */
+export function isAppServerRuntimeModelBackendBinding(params: {
+  provider: string | undefined;
+  runtime: string | undefined;
+}): boolean {
+  const provider = (params.provider ?? "").trim().toLowerCase();
+  const runtime = (params.runtime ?? "").trim().toLowerCase();
+  if (!provider || !runtime) {
+    return false;
+  }
+  // The Codex harness additionally owns OpenClaw's virtual `codex` provider
+  // namespace, which is not a model provider and so has no binding row.
+  if (runtime === "codex" && provider === "codex") {
+    return true;
+  }
+  return APP_SERVER_RUNTIME_MODEL_BACKEND_BINDINGS.some(
+    (binding) => binding.runtime === runtime && binding.provider.trim().toLowerCase() === provider,
+  );
+}
