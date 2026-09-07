@@ -301,7 +301,6 @@ export async function handleFeishuMessage(params: {
   turnAdoptionLifecycle?: FeishuIngressLifecycle;
 }): Promise<void> {
   const {
-    cfg: accountStartCfg,
     event,
     botOpenId,
     botName,
@@ -314,11 +313,8 @@ export async function handleFeishuMessage(params: {
     turnAdoptionLifecycle,
   } = params;
 
-  // Start each message with live routing config instead of the long-lived account snapshot.
-  // Direct messages still reauthorize below if policy changes during awaited work.
-  const cfg =
-    // SAFETY: The host supplies the same validated config shape as the account-start snapshot.
-    (getFeishuRuntime().config?.current() as ClawdbotConfig | undefined) ?? accountStartCfg;
+  // Resolve each turn from live config; DMs reauthorize after awaited work below.
+  const cfg = getFeishuRuntime().config.current() as ClawdbotConfig;
 
   // Resolve account with merged config
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
