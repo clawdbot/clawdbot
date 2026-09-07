@@ -148,7 +148,7 @@ describe("active-memory doctor state migration", () => {
       expect.stringContaining("Archived Active Memory session toggles legacy source"),
     ]);
     await expect(fs.access(sourcePath)).rejects.toThrow();
-    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${sourcePath}.migrated`);
 
     const entries = await createDoctorContext(env)
       .openPluginStateKeyedStore({
