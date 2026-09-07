@@ -6,15 +6,15 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { readResponseTextPrefix } from "../../infra/http-body.js";
+import { redactToolPayloadText } from "../../logging/redact.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { createProviderErrorTextRedactor } from "../provider-http-errors.js";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
   readCache,
-  readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
   writeCache,
@@ -30,12 +30,17 @@ const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
   () => import("./web-guarded-fetch.js"),
 );
 
-type WebSearchEndpointOptions = {
-  url: string;
-  timeoutSeconds: number;
-  init: RequestInit;
-  signal?: AbortSignal;
-};
+async function loadTrustedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
+> {
+  return (await webGuardedFetchLoader.load()).withTrustedWebToolsEndpoint;
+}
+
+async function loadSelfHostedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
+> {
+  return (await webGuardedFetchLoader.load()).withSelfHostedWebToolsEndpoint;
+}
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
@@ -84,19 +89,72 @@ export function readProviderEnvValue(envVars: string[]): string | undefined {
 }
 
 export async function withTrustedWebSearchEndpoint<T>(
-  params: WebSearchEndpointOptions,
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    signal?: AbortSignal;
+  },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const { withTrustedWebToolsEndpoint } = await webGuardedFetchLoader.load();
-  return withTrustedWebToolsEndpoint(params, async ({ response }) => run(response));
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
+  return withTrustedWebToolsEndpoint(
+    {
+      url: params.url,
+      init: params.init,
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+    },
+    async ({ response }) => run(response),
+  );
 }
 
 export async function withSelfHostedWebSearchEndpoint<T>(
-  params: WebSearchEndpointOptions,
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    signal?: AbortSignal;
+  },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const { withSelfHostedWebToolsEndpoint } = await webGuardedFetchLoader.load();
-  return withSelfHostedWebToolsEndpoint(params, async ({ response }) => run(response));
+  const withSelfHostedWebToolsEndpoint = await loadSelfHostedWebToolsEndpoint();
+  return withSelfHostedWebToolsEndpoint(
+    {
+      url: params.url,
+      init: params.init,
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+    },
+    async ({ response }) => run(response),
+  );
+}
+
+/**
+ * Collects exact outbound credential strings (plus scheme-stripped
+ * Authorization variants) longest-first so error bodies reflecting them can be
+ * masked before the message reaches agent-visible surfaces or logs.
+ */
+function collectCredentialVariants(headers: Record<string, string>): string[] {
+  return Object.entries(headers)
+    .filter(([name]) => name.toLowerCase() !== "content-type")
+    .flatMap(([name, header]) => {
+      const normalized = header.trim();
+      if (!normalized) {
+        return [];
+      }
+      return name.toLowerCase() === "authorization"
+        ? [normalized, normalized.replace(/^\S+\s+/u, "")]
+        : [normalized];
+    })
+    .toSorted((left, right) => right.length - left.length);
+}
+
+function redactReflectedErrorDetail(value: string, headers: Record<string, string>): string {
+  const credentials = collectCredentialVariants(headers);
+  return redactToolPayloadText(
+    credentials.reduce((redacted, credential) => redacted.replaceAll(credential, "***"), value),
+  );
 }
 
 export async function postTrustedWebToolsJson<T>(
@@ -112,28 +170,34 @@ export async function postTrustedWebToolsJson<T>(
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const headers = new Headers(params.extraHeaders);
-  headers.set("Accept", "application/json");
-  headers.set("Authorization", `Bearer ${params.apiKey}`);
-  headers.set("Content-Type", "application/json");
-  return withTrustedWebSearchEndpoint(
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
+  const requestHeaders: Record<string, string> = {
+    ...params.extraHeaders,
+    Accept: "application/json",
+    Authorization: `Bearer ${params.apiKey}`,
+    "Content-Type": "application/json",
+  };
+  return withTrustedWebToolsEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
       signal: params.signal,
       init: {
         method: "POST",
-        headers,
+        headers: requestHeaders,
         body: JSON.stringify(params.body),
       },
     },
-    async (response) => {
+    async ({ response }) => {
       if (!response.ok) {
-        return await throwWebSearchApiError(response, params.errorLabel, {
-          headers,
-          maxBytes: params.maxErrorBytes,
-          signal: params.signal,
+        const bodyRead = await readResponseTextPrefix(response, params.maxErrorBytes ?? 64_000, {
+          chunkTimeoutMs: 10_000,
         });
+        // A truncated credential cannot be identified safely; drop the entire diagnostic.
+        const detail = bodyRead.truncated
+          ? ""
+          : redactReflectedErrorDetail(bodyRead.text || response.statusText, requestHeaders);
+        throw new Error(`${params.errorLabel} API error (${response.status}): ${detail}`);
       }
       return await parseResponse(response);
     },
@@ -143,20 +207,15 @@ export async function postTrustedWebToolsJson<T>(
 export async function throwWebSearchApiError(
   res: Response,
   providerLabel: string,
-  request?: { headers: HeadersInit; maxBytes?: number; signal?: AbortSignal },
+  requestHeaders?: Record<string, string>,
 ): Promise<never> {
-  const detail = await readResponseText(res, { maxBytes: request?.maxBytes ?? 64_000 });
-  // Best-effort error-body reads must not turn caller cancellation into a provider failure.
-  request?.signal?.throwIfAborted();
-  const redact = createProviderErrorTextRedactor({
-    headers: new Headers(request?.headers),
-    defaultAuthHeader: "Authorization",
-    defaultAuthPrefix: "Bearer ",
-  });
-  const message = redact(detail.text || res.statusText, {
-    truncated: Boolean(detail.text) && detail.truncated,
-  });
-  throw new Error(`${providerLabel} API error (${res.status}): ${message}`);
+  const headers = requestHeaders ?? {};
+  const bodyRead = await readResponseTextPrefix(res, 64_000, { chunkTimeoutMs: 10_000 });
+  // A truncated credential cannot be identified safely; drop the entire diagnostic.
+  const detail = bodyRead.truncated
+    ? ""
+    : redactReflectedErrorDetail(bodyRead.text || res.statusText, headers);
+  throw new Error(`${providerLabel} API error (${res.status}): ${detail}`);
 }
 
 export function resolveSiteName(url: string | undefined): string | undefined {
@@ -390,12 +449,9 @@ export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessPro
     : parsedDateRange;
 }
 
-/** Reads a marked search payload; omitted TTL preserves the stored-expiry SDK contract. */
-export function readCachedSearchPayload(
-  cacheKey: string,
-  ttlMs?: number,
-): Record<string, unknown> | undefined {
-  const cached = readCache(SEARCH_CACHE, cacheKey, ttlMs);
+/** Reads a search cache payload and marks it so provider responses can disclose cache hits. */
+export function readCachedSearchPayload(cacheKey: string): Record<string, unknown> | undefined {
+  const cached = readCache(SEARCH_CACHE, cacheKey);
   return cached ? { ...cached.value, cached: true } : undefined;
 }
 

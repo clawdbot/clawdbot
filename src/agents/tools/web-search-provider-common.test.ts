@@ -1,119 +1,32 @@
-// Shared web-search tests cover HTTP error ownership and module-local cache isolation.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { redactToolPayloadText } from "../../logging/redact.js";
-import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
-import { postTrustedWebToolsJson, throwWebSearchApiError } from "./web-search-provider-common.js";
+// Shared web_search provider tests cover module-local cache isolation and
+// reflected-credential redaction on the shared error surfaces.
+import { createServer, type Server } from "node:http";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
-const realFetch = globalThis.fetch;
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+vi.mock("../../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/net/fetch-guard.js")>();
+  // Pass guarded fetch through to the real network so loopback proofs exercise
+  // the same transport path production uses.
+  return {
+    ...actual,
+    fetchWithSsrFGuard: vi.fn(
+      async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => {
+        const response = await fetch(params.url, {
+          method: params.init?.method,
+          headers: params.init?.headers,
+          body: params.init?.body as string | undefined,
+          signal: params.signal,
+        });
+        return { response, finalUrl: params.url, release: async () => {} };
+      },
+    ),
+  };
 });
 
-function postSearch(overrides: Partial<Parameters<typeof postTrustedWebToolsJson>[0]> = {}) {
-  return postTrustedWebToolsJson(
-    {
-      url: "https://search.example.com/search",
-      timeoutSeconds: 5,
-      apiKey: "s7Key",
-      body: { query: "test" },
-      errorLabel: "Search",
-      extraHeaders: { authorization: "Bearer synthetic-stale-key" },
-      ...overrides,
-    },
-    (response) => response.json(),
-  );
-}
-
-describe("web provider HTTP errors", () => {
-  it.each([
-    ["short body credential", "s7Key", "rejected $key", "", undefined, "rejected ***"],
-    ["short reason credential", "s7Key", "", "rejected $key", undefined, "rejected ***"],
-    ["bearer reflection", "synthetic-web-key-long", "Bearer $key", "", undefined, "Bearer ***"],
-    ["truncated credential", "synthetic-web-key-long", "rejected $key", "", 15, "rejected ***"],
-    ["ordinary detail", "s7Key", "quota exceeded", "", undefined, "quota exceeded"],
-  ] as const)(
-    "redacts %s without discarding diagnostics",
-    async (_, apiKey, body, phrase, maxErrorBytes, expected) => {
-      let authorization: string | undefined;
-      await withServer(
-        (request, response) => {
-          authorization = request.headers.authorization;
-          response.writeHead(401, phrase.replace("$key", apiKey));
-          response.end(body.replace("$key", apiKey));
-        },
-        async (baseUrl) => {
-          // Only routing is injected: the guarded owner consumes a real HTTP response body.
-          vi.stubGlobal(
-            "fetch",
-            vi.fn((_input, init) => realFetch(baseUrl, init)),
-          );
-          const error = await postSearch({ apiKey, maxErrorBytes }).catch(
-            (cause: unknown) => cause,
-          );
-          expect(authorization).toBe(`Bearer ${apiKey}`);
-          expect(error).toEqual(new Error(`Search API error (401): ${expected}`));
-        },
-      );
-    },
-  );
-
-  it("preserves caller cancellation after error headers arrive", async () => {
-    const controller = new AbortController();
-    const reason = new Error("synthetic caller cancellation");
-    await withServer(
-      (_request, response) => {
-        response.writeHead(401);
-        response.write("partial diagnostic");
-      },
-      async (baseUrl) => {
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async (_input, init) => {
-            const response = await realFetch(baseUrl, init);
-            controller.abort(reason);
-            return response;
-          }),
-        );
-        await expect(postSearch({ signal: controller.signal })).rejects.toBe(reason);
-      },
-    );
-  });
-
-  it("keeps successful responses and existing two-argument SDK calls usable", async () => {
-    expect(redactToolPayloadText("Bearer tokens")).toBe("Bearer tokens");
-    await withServer(
-      (_request, response) => response.end('{"answer":"Bearer tokens"}'),
-      async (baseUrl) => {
-        vi.stubGlobal(
-          "fetch",
-          vi.fn((_input, init) => realFetch(baseUrl, init)),
-        );
-        await expect(postSearch()).resolves.toEqual({ answer: "Bearer tokens" });
-      },
-    );
-    await expect(
-      throwWebSearchApiError(new Response("quota exceeded", { status: 429 }), "Search"),
-    ).rejects.toThrow("Search API error (429): quota exceeded");
-  });
-});
+const { postTrustedWebToolsJson, throwWebSearchApiError } =
+  await import("./web-search-provider-common.js");
 
 describe("web_search shared cache", () => {
-  it("honors the reader TTL while preserving the shipped one-argument reader", async () => {
-    const { readCachedSearchPayload, writeCachedSearchPayload } =
-      await import("./web-search-provider-common.js");
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const key = "query:reader-ttl";
-    writeCachedSearchPayload(key, { text: "original" }, 900_000);
-    expect(readCachedSearchPayload(key, 0)).toBeUndefined();
-    writeCachedSearchPayload(key, { text: "disabled" }, 0);
-    clock.mockReturnValue(61_000);
-    expect(readCachedSearchPayload(key, 60_000)).toBeUndefined();
-    expect(readCachedSearchPayload(key)).toEqual({ text: "original", cached: true });
-    clock.mockReturnValue(901_001);
-    expect(readCachedSearchPayload(key)).toBeUndefined();
-  });
-
   it("keeps cache entries module-local instead of exposing them on a global symbol", async () => {
     // Cache state should die with the module instance; a global symbol would
     // leak search payloads across tests, sessions, and plugin reloads.
@@ -128,5 +41,106 @@ describe("web_search shared cache", () => {
     expect(
       (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.web-search.cache")],
     ).toBeUndefined();
+  });
+});
+
+function reflectedCredentialResponse(): Response {
+  return new Response('{"error":"invalid key sk-live-abcdef123456"}', { status: 401 });
+}
+
+describe("throwWebSearchApiError credential redaction", () => {
+  it("masks reflected bearer credentials in raw and scheme-stripped forms", async () => {
+    const err = await throwWebSearchApiError(reflectedCredentialResponse(), "Perplexity", {
+      Authorization: "Bearer sk-live-abcdef123456",
+      "Content-Type": "application/json",
+    }).catch((error: unknown) => error);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(String(err)).not.toContain("sk-live-abcdef123456");
+    expect(String(err)).toContain("***");
+  });
+
+  it("masks non-Authorization header credentials like x-api-key values", async () => {
+    const err = await throwWebSearchApiError(
+      new Response("bad key: super-secret-key-42", { status: 403 }),
+      "Tavily",
+      { "x-api-key": "super-secret-key-42" },
+    ).catch((error: unknown) => error);
+
+    expect(String(err)).not.toContain("super-secret-key-42");
+    expect(String(err)).toContain("***");
+  });
+
+  it("drops truncated error bodies instead of risking a half-redacted credential", async () => {
+    const oversized = `${"padding".repeat(12_000)}sk-live-abcdef123456`;
+    const err = await throwWebSearchApiError(new Response(oversized, { status: 429 }), "Xai").catch(
+      (error: unknown) => error,
+    );
+
+    expect(String(err)).not.toContain("sk-live-abcdef123456");
+    expect(String(err)).toMatch(/API error \(429\): $/u);
+  });
+
+  it("falls back to status text when the body is empty", async () => {
+    const err = await throwWebSearchApiError(
+      new Response("", { status: 500, statusText: "Internal Failure" }),
+      "Brave",
+    ).catch((error: unknown) => error);
+
+    expect(String(err)).toContain("Brave API error (500): Internal Failure");
+  });
+});
+
+describe("postTrustedWebToolsJson reflected credentials over real loopback", () => {
+  let server: Server;
+  let baseUrl: string;
+  let seenAuthorization: string | undefined;
+
+  const startServer = async (): Promise<void> => {
+    server = createServer((req, res) => {
+      seenAuthorization = req.headers.authorization;
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({ error: `rejected credential ${String(req.headers.authorization)}` }),
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("no loopback port");
+    }
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  };
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
+  });
+
+  it("masks the bearer credential a proxy echoes back in an error body", async () => {
+    await startServer();
+    const apiKey = "sk-tavily-loopback-9876543210";
+    const err = await postTrustedWebToolsJson(
+      {
+        url: baseUrl,
+        timeoutSeconds: 5,
+        apiKey,
+        body: { query: "test" },
+        errorLabel: "Tavily",
+      },
+      async () => ({}),
+    ).catch((error: unknown) => error);
+
+    expect(seenAuthorization).toBe(`Bearer ${apiKey}`);
+    expect(err).toBeInstanceOf(Error);
+    expect(String(err)).not.toContain(apiKey);
+    expect(String(err)).toContain("rejected credential ***");
   });
 });
