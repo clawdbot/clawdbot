@@ -140,7 +140,6 @@ describe("Bedrock tool-result replay", () => {
             content: [{ text: "(see attached audio)" }],
           },
         },
-        { cachePoint: { type: "default" } },
       ],
     });
   });
@@ -175,7 +174,6 @@ describe("Bedrock tool-result replay", () => {
             ],
           },
         },
-        { cachePoint: { type: "default" } },
       ],
     });
   });
@@ -207,7 +205,6 @@ describe("Bedrock tool-result replay", () => {
       content: [
         { toolResult: { toolUseId: "call_husk", content: [{ text: "(no output)" }] } },
         { toolResult: { toolUseId: "call_text", content: [{ text: "actual tool output" }] } },
-        { cachePoint: { type: "default" } },
       ],
     });
     expect(JSON.stringify(messages)).not.toContain('"image"');

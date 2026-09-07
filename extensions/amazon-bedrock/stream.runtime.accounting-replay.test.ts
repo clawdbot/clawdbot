@@ -93,6 +93,7 @@ async function captureMessages(
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("Bedrock reasoning replay", () => {
@@ -304,6 +305,20 @@ describe("Bedrock reasoning replay", () => {
 });
 
 describe("Bedrock prompt cache ownership", () => {
+  it("keeps unset Nova payloads identical to disabled caching despite environment defaults", async () => {
+    vi.stubEnv("OPENCLAW_CACHE_RETENTION", "long");
+    vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", "1");
+    const model = bedrockModel({});
+    const context: Context = {
+      systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
+      messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+    };
+    const unset = await capturePayload(model, context);
+    const disabled = await capturePayload(model, context, { cacheRetention: "none" });
+    expect(JSON.stringify(unset)).not.toContain("cachePoint");
+    expect(JSON.stringify(unset)).toBe(JSON.stringify(disabled));
+  });
+
   it.each([
     ["amazon.nova-micro-v1:0", true],
     ["eu.amazon.nova-lite-v1:0", true],
@@ -321,7 +336,7 @@ describe("Bedrock prompt cache ownership", () => {
       false,
     ],
   ])("emits only supported Nova checkpoints for %s", async (id, supported) => {
-    for (const cacheRetention of ["short", "long", "none"] as const) {
+    for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
       const payload = await capturePayload(
         bedrockModel({ id, name: "Nova Pro" }),
         {
@@ -335,9 +350,9 @@ describe("Bedrock prompt cache ownership", () => {
             },
           ],
         },
-        { cacheRetention },
+        cacheRetention === undefined ? {} : { cacheRetention },
       );
-      if (supported && cacheRetention !== "none") {
+      if (supported && (cacheRetention === "short" || cacheRetention === "long")) {
         expect(payload.system).toEqual([
           { text: "Stable workspace" },
           { cachePoint: { type: "default" } },
@@ -349,6 +364,9 @@ describe("Bedrock prompt cache ownership", () => {
         ]);
       } else {
         expect(JSON.stringify(payload)).not.toContain("cachePoint");
+        if (supported || cacheRetention === "none") {
+          expect(payload.system).toEqual([{ text: "Stable workspace\nToday: Monday" }]);
+        }
       }
       expect(payload.toolConfig?.tools).toHaveLength(1);
       expect(payload.toolConfig?.tools?.[0]).toHaveProperty("toolSpec.name", "lookup");

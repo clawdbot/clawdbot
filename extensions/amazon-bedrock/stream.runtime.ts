@@ -81,7 +81,11 @@ import {
   stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBedrockCachePoint, type BedrockOptions } from "./bedrock-options.js";
+import {
+  resolveBedrockCachePoint,
+  resolveBedrockPromptCachePolicy,
+  type BedrockOptions,
+} from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & {
@@ -262,7 +266,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     let client: BedrockRuntimeClient | undefined;
     try {
       client = new BedrockRuntimeClient(config);
-      const cacheRetention = resolveCacheRetention(options.cacheRetention);
+      const cacheRetention = resolveCacheRetention(model, options.cacheRetention);
       const cachePoint = resolveBedrockCachePoint(model, cacheRetention);
       const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
       const thinking = (additionalModelRequestFields as Record<string, unknown> | undefined)
@@ -876,11 +880,17 @@ function mapThinkingLevelToEffort(
 
 /**
  * Resolve cache retention preference.
- * Defaults to "short" and uses OPENCLAW_CACHE_RETENTION for backward compatibility.
+ * Nova requires explicit opt-in; other models retain the existing env/default policy.
  */
-function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+function resolveCacheRetention(
+  model: Model<"bedrock-converse-stream">,
+  cacheRetention?: CacheRetention,
+): CacheRetention {
   if (cacheRetention) {
     return cacheRetention;
+  }
+  if (resolveBedrockPromptCachePolicy(model) === "nova") {
+    return "none";
   }
   if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
     return "long";

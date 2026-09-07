@@ -309,8 +309,8 @@ describe("cacheRetention default behavior", () => {
     ).toBe("long");
   });
 
-  it.each(["short", "long", "none"] as const)(
-    "passes explicit %s retention to the Bedrock Converse policy owner",
+  it.each([undefined, "short", "long", "none"] as const)(
+    "preserves %s retention for the Bedrock Converse policy owner",
     (cacheRetention) => {
       expect(
         resolveCacheRetention(
