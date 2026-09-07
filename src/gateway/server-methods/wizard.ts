@@ -78,6 +78,10 @@ function sanitizeWizardResultForClient<T extends { step?: WizardStep }>(result: 
   return result.step ? { ...result, step: sanitizeWizardStepForClient(result.step) } : result;
 }
 
+// Same idle budget as openclaw.setup.auth.start so a dropped Control UI
+// cannot pin SETUP_ADMISSION_BUSY until Gateway restart.
+const WIZARD_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
+
 /** Resolves a live wizard session or sends the public not-found error. */
 function findWizardSessionOrRespond(params: {
   context: GatewayRequestContext;
@@ -108,33 +112,37 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const flow = params.flow ?? "setup";
     const createSession = () =>
       flow === "channels"
-        ? new WizardSession((prompter, _signal, wizardSession) =>
-            runHostedWizard((runtime) =>
-              context.channelWizardRunner(
-                {
-                  channel: readStringValue(params.channel),
-                  onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
-                  // Durable effects (plugin installs, config commit) must finish
-                  // even if the client cancels mid-write.
-                  beforePersistentEffect: async () => wizardSession.lockCancellation(),
-                },
-                runtime,
-                prompter,
+        ? new WizardSession(
+            (prompter, _signal, wizardSession) =>
+              runHostedWizard((runtime) =>
+                context.channelWizardRunner(
+                  {
+                    channel: readStringValue(params.channel),
+                    onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
+                    // Durable effects (plugin installs, config commit) must finish
+                    // even if the client cancels mid-write.
+                    beforePersistentEffect: async () => wizardSession.lockCancellation(),
+                  },
+                  runtime,
+                  prompter,
+                ),
               ),
-            ),
+            { timeoutMs: WIZARD_SESSION_TIMEOUT_MS },
           )
-        : new WizardSession((prompter) =>
-            runHostedWizard((runtime) =>
-              context.wizardRunner(
-                {
-                  mode: params.mode,
-                  workspace: readStringValue(params.workspace),
-                  installDaemon: params.installDaemon,
-                },
-                runtime,
-                prompter,
+        : new WizardSession(
+            (prompter) =>
+              runHostedWizard((runtime) =>
+                context.wizardRunner(
+                  {
+                    mode: params.mode,
+                    workspace: readStringValue(params.workspace),
+                    installDaemon: params.installDaemon,
+                  },
+                  runtime,
+                  prompter,
+                ),
               ),
-            ),
+            { timeoutMs: WIZARD_SESSION_TIMEOUT_MS },
           );
     const session = await createAdmittedWizardSession(createSession, flow === "setup");
     if (!session) {

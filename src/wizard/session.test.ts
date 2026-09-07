@@ -399,6 +399,35 @@ describe("WizardSession", () => {
     }
   });
 
+  test("client answers refresh the idle TTL", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new WizardSession(
+        async (prompter) => {
+          await prompter.text({ message: "Name" });
+          await prompter.text({ message: "Email" });
+        },
+        { timeoutMs: 1_000 },
+      );
+
+      const first = await session.next();
+      expect(first.step?.type).toBe("text");
+      await vi.advanceTimersByTimeAsync(800);
+      expect(session.getStatus()).toBe("running");
+      await session.answer(first.step?.id ?? "", "Ada");
+
+      const second = await session.next();
+      expect(second.step?.type).toBe("text");
+      await vi.advanceTimersByTimeAsync(800);
+      expect(session.getStatus()).toBe("running");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(session.getStatus()).toBe("cancelled");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test.each(["return", "commit"])(
     "a cancelled runner stays cancelled on late %s",
     async (action) => {
