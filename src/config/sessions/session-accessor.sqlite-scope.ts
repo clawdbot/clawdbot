@@ -2,6 +2,7 @@
 // Runtime feature code imports the session accessor barrel instead of this module.
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { isMainThread, threadId } from "node:worker_threads";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
@@ -26,6 +27,7 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-reclamation.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "./store-writer-state.js";
@@ -100,12 +102,20 @@ export function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
 export async function runExclusiveSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
+  reclamation?: SqliteSessionReclamationDiagnostics,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const startedAt = performance.now();
   const timing: StoreWriterTiming = {};
   const timingFields = (completedAt: number) => ({
+    pid: process.pid,
+    threadId,
+    isMainThread,
+    ...(reclamation?.kind ? { reclamationKind: reclamation.kind } : {}),
+    ...(reclamation?.workerThreadId !== undefined
+      ? { workerThreadId: reclamation.workerThreadId }
+      : {}),
     elapsedMs: Math.round(completedAt - startedAt),
     ...(timing.startedAt !== undefined && timing.finishedAt !== undefined
       ? {

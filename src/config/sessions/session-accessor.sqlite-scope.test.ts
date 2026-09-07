@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, expect, test, vi } from "vitest";
 import * as logging from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { drainSessionStoreWriterQueuesForTest } from "./store-writer-state.js";
 
@@ -31,13 +33,23 @@ test.each([false, true])(
       const scope = { agentId: "main", env: state.env };
       const release = createDeferredCore();
       const order: string[] = [];
+      const diagnostics: SqliteSessionReclamationDiagnostics = {};
       const first = owners.run("first", () =>
-        runExclusiveSqliteSessionWrite(scope, async () => {
-          order.push("first:start");
-          await release.promise;
-          order.push("first:end");
-          return "first";
-        }),
+        runExclusiveSqliteSessionWrite(
+          scope,
+          async () => {
+            order.push("first:start");
+            await release.promise;
+            Object.assign(diagnostics, {
+              kind: "history-eviction",
+              workerThreadId: 7,
+              payload: "must not enter diagnostics",
+            });
+            order.push("first:end");
+            return "first";
+          },
+          diagnostics,
+        ),
       );
       expect(order).toEqual(["first:start"]);
       clock = 100;
@@ -72,21 +84,34 @@ test.each([false, true])(
         expect(order).toEqual(["first:start", "first:end", "second:start", "queued-successor"]);
         expect(records.find((entry) => entry.owner === "first")?.args[1]).toEqual(
           expect.objectContaining({
+            pid: process.pid,
+            threadId,
+            isMainThread,
+            reclamationKind: "history-eviction",
+            workerThreadId: 7,
             elapsedMs: 2_000,
             queueWaitMs: 0,
             writerExecutionMs: 1_600,
             completionDelayMs: 400,
           }),
         );
+        expect(records.find((entry) => entry.owner === "first")?.args[1]).not.toHaveProperty(
+          "payload",
+        );
         const record = records.find((entry) => entry.owner === "second");
         expect(record?.args[1]).toEqual(
           expect.objectContaining({
+            pid: process.pid,
+            threadId,
+            isMainThread,
             elapsedMs: 1_900,
             queueWaitMs: 1_500,
             writerExecutionMs: 400,
             completionDelayMs: 0,
           }),
         );
+        expect(record?.args[1]).not.toHaveProperty("reclamationKind");
+        expect(record?.args[1]).not.toHaveProperty("workerThreadId");
         if (fail) {
           expect(record?.args[1]).toHaveProperty("error", failure);
         }

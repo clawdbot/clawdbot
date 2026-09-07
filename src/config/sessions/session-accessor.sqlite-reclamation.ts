@@ -117,6 +117,12 @@ export type SqliteSessionReclamationWorkerData = {
   type: "sqlite-transcript-archive-v2";
 };
 
+/** One writer callback owns this record; no Worker object or plan payload is retained. */
+export type SqliteSessionReclamationDiagnostics = {
+  kind?: SqliteSessionReclamationPlan["kind"];
+  workerThreadId?: number;
+};
+
 export type SqliteSessionReclamationWorkerResult = {
   cleanupIncomplete?: true;
   cleanupWarnings?: string[];
@@ -389,11 +395,15 @@ function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan
 }
 
 export async function runSqliteSessionReclamation(params: {
+  diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
+  if (params.diagnostics) {
+    params.diagnostics.kind = params.plan.kind;
+  }
   if (
     params.forceInProcess ||
     isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
@@ -413,6 +423,7 @@ export async function runSqliteSessionReclamation(params: {
   const recoveredCommitErrors: unknown[] = [];
   const runWorker = (authorize: () => unknown[]) =>
     runSqliteTranscriptArchiveWorkerOperation<SqliteSessionReclamationWorkerResult>({
+      diagnostics: params.diagnostics,
       expectedMessageType: "reclaimed",
       onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
       transferList: prepareReclamationWorkerTransferList(params.plan),

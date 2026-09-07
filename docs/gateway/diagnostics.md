@@ -137,6 +137,14 @@ lock-wait and hold warnings remain separate. Writes rejected before entering the
 writer omit these three fields. This breakdown is in
 file logs, not the aggregate Gateway RPC Prometheus histograms.
 
+These warnings include the writer's `pid`, Node `threadId`, and `isMainThread`.
+Reclamation callbacks also record their `reclamationKind` and, when a Worker was
+created, its captured `workerThreadId`. Within the same process lifetime, match
+the warning's `pid` and `workerThreadId` to an agent-database-open warning's
+`pid` and `threadId` to identify the awaited Worker. This establishes association,
+not CPU attribution or a breakdown of the Worker's lifetime. A missing Worker
+ID does not establish that work ran on the main thread.
+
 Stalled embedded-run diagnostics mark `terminalProgressStale=true`
 when the last bridge progress looked terminal (for example a raw response
 item or response-completion event) but the Gateway still considers the
