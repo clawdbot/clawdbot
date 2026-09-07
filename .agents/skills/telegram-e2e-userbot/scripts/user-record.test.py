@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 RECORD_PATH = Path(__file__).with_name("user-record.py")
@@ -48,6 +49,58 @@ class CallbackScenarioTest(unittest.TestCase):
                 },
             )
             self.assertEqual(list(target.parent.glob(".*.tmp")), [])
+
+    def test_checks_chat_writability_before_publishing_ready(self):
+        events = []
+
+        class FakeDriver:
+            client = object()
+
+            def resolve_chat(self, _chat):
+                return -1001
+
+            def require_chat_writable(self, chat_id):
+                events.append(("preflight", chat_id))
+
+        class FakeRecorder:
+            def __init__(self, _client, chat_id, _record, _sut_user_id):
+                self.chat_id = chat_id
+                self.started_at = 1
+
+            def close(self):
+                pass
+
+            def summary(self):
+                return {"timeline": []}
+
+        fake_driver = FakeDriver()
+        with tempfile.TemporaryDirectory() as directory:
+            scenario_path = Path(directory) / "scenario.json"
+            scenario_path.write_text('{"actions":[]}\n')
+            argv = [
+                "user-record.py",
+                "--scenario",
+                str(scenario_path),
+                "--ready-file",
+                str(Path(directory) / "ready.json"),
+                "--seconds",
+                "0",
+            ]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(record, "build_driver", return_value=({}, {}, fake_driver)),
+                mock.patch.object(record, "EventRecorder", FakeRecorder),
+                mock.patch.object(record.driver, "resolve_sut", return_value={}),
+                mock.patch.object(
+                    record,
+                    "publish_recorder_ready",
+                    side_effect=lambda *_args: events.append(("ready", -1001)),
+                ),
+                mock.patch("builtins.print"),
+            ):
+                record.main()
+
+        self.assertEqual(events, [("preflight", -1001), ("ready", -1001)])
 
     def test_ignores_cached_messages_from_before_recording_window(self):
         recorder = record.EventRecorder(FakeClient(), -1001, "", 42)

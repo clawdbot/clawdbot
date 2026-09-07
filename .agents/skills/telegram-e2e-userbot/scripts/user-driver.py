@@ -47,6 +47,13 @@ class DriverError(RuntimeError):
     pass
 
 
+def chat_writability(member=False, writable=False):
+    return {
+        "testerGroupMembership": member,
+        "testerCanSendBasicMessages": writable,
+    }
+
+
 def read_json(path):
     try:
         return json.loads(path.read_text())
@@ -561,6 +568,108 @@ class UserDriver:
                     f"Chat not found for tester account: {chat}. Add the QA user to the group, or configure the TDLib chat id from `user-driver.py chats --json`."
                 ) from error
 
+    def inspect_chat_writability(self, chat_id):
+        chat = self.client.request({"@type": "getChat", "chat_id": chat_id}, timeout=10)
+        chat_type = chat.get("type") if isinstance(chat, dict) else None
+        chat_type_name = chat_type.get("@type") if isinstance(chat_type, dict) else ""
+        default_permissions = chat.get("permissions") if isinstance(chat, dict) else None
+        default_can_send = (
+            isinstance(default_permissions, dict)
+            and default_permissions.get("can_send_basic_messages") is True
+        )
+
+        if chat_type_name == "chatTypePrivate":
+            user_id = chat_type.get("user_id")
+            if type(user_id) is not int or user_id <= 0:
+                return chat_writability()
+            can_message = self.client.request(
+                {
+                    "@type": "canSendMessageToUser",
+                    "user_id": user_id,
+                    "only_local": False,
+                },
+                timeout=10,
+            )
+            return chat_writability(
+                member=True,
+                writable=(
+                    isinstance(can_message, dict)
+                    and can_message.get("@type") == "canSendMessageToUserResultOk"
+                ),
+            )
+
+        if chat_type_name == "chatTypeBasicGroup":
+            group_id = chat_type.get("basic_group_id")
+            method = "getBasicGroup"
+            id_field = "basic_group_id"
+        elif (
+            chat_type_name == "chatTypeSupergroup"
+            and chat_type.get("is_channel") is False
+        ):
+            group_id = chat_type.get("supergroup_id")
+            method = "getSupergroup"
+            id_field = "supergroup_id"
+        else:
+            return chat_writability()
+        if type(group_id) is not int or group_id == 0:
+            return chat_writability()
+
+        group = self.client.request({"@type": method, id_field: group_id}, timeout=10)
+        status = group.get("status") if isinstance(group, dict) else None
+        if not isinstance(status, dict):
+            return chat_writability()
+
+        status_type = status.get("@type")
+        if status_type == "chatMemberStatusCreator":
+            member = status.get("is_member") is True
+            return chat_writability(member=member, writable=member)
+        if status_type == "chatMemberStatusAdministrator":
+            return chat_writability(member=True, writable=True)
+        if status_type == "chatMemberStatusMember":
+            member = True
+            personal_can_send = True
+        elif status_type == "chatMemberStatusRestricted":
+            personal_permissions = status.get("permissions")
+            personal_can_send = (
+                isinstance(personal_permissions, dict)
+                and personal_permissions.get("can_send_basic_messages") is True
+            )
+            member = status.get("is_member") is True
+        else:
+            return chat_writability()
+
+        writable = member and personal_can_send and default_can_send
+        if member and personal_can_send and chat_type_name == "chatTypeSupergroup":
+            full_info = self.client.request(
+                {"@type": "getSupergroupFullInfo", "supergroup_id": group_id},
+                timeout=10,
+            )
+            paid_message_star_count = full_info.get(
+                "outgoing_paid_message_star_count"
+            )
+            my_boost_count = full_info.get("my_boost_count")
+            unrestrict_boost_count = full_info.get("unrestrict_boost_count")
+            bypasses_default_permissions = (
+                type(my_boost_count) is int
+                and type(unrestrict_boost_count) is int
+                and unrestrict_boost_count > 0
+                and my_boost_count >= unrestrict_boost_count
+            )
+            writable = (
+                type(paid_message_star_count) is int
+                and paid_message_star_count == 0
+                and (default_can_send or bypasses_default_permissions)
+            )
+        return chat_writability(member=member, writable=writable)
+
+    def require_chat_writable(self, chat_id):
+        writability = self.inspect_chat_writability(chat_id)
+        if not writability["testerCanSendBasicMessages"]:
+            raise DriverError(
+                "Telegram tester cannot send basic messages to the selected chat."
+            )
+        return writability
+
     def formatted_text(self, text):
         sut = resolve_sut(self.config, self.bot_config)
         username = sut.get("username") or ""
@@ -852,17 +961,25 @@ def command_status(args):
     me = driver.client.request({"@type": "getMe"})
     version = driver.client.request({"@type": "getOption", "name": "version"})
     save_tester_identity(config, me)
+    writability = None
+    if args.chat:
+        chat_id = driver.resolve_chat(args.chat)
+        writability = driver.inspect_chat_writability(chat_id)
+    ok = writability is None or writability["testerCanSendBasicMessages"]
     print_result(
         {
-            "ok": True,
+            "ok": ok,
             "authorized": True,
             "testDc": config.get("testDc") is True,
             "tdlibVersion": version.get("value", ""),
             "user": public_user(me),
+            **(writability or {}),
         },
         args.json,
         getattr(args, "output", ""),
     )
+    if not ok:
+        sys.exit(1)
 
 
 def command_confirm_qr(args):
@@ -1083,6 +1200,7 @@ def command_serve(args):
     driver = UserDriver(config, bot_config)
     driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
     chat_id = driver.resolve_chat(args.chat)
+    driver.require_chat_writable(chat_id)
     tester = driver.client.request({"@type": "getMe"})
     write_ndjson(
         {
@@ -1174,6 +1292,7 @@ def main():
 
     status = sub.add_parser("status")
     add_common(status)
+    status.add_argument("--chat", default="")
     status.set_defaults(func=command_status)
 
     confirm_qr = sub.add_parser("confirm-qr")

@@ -547,6 +547,7 @@ def main():
     # One resolution path for every chat form the driver accepts: numeric id,
     # @username (the DM lane passes the SUT's username), or an invite link.
     chat_id = driver_obj.resolve_chat(args.chat)
+    driver_obj.require_chat_writable(chat_id)
     sut = driver.resolve_sut(config, bot_config)
     sut_user_id = args.sut_user_id or sut.get("id") or ""
 

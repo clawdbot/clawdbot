@@ -24,19 +24,32 @@ export async function runTelegramTestDoctor({
   let proxy;
   try {
     const driverEnv = { ...sanitizeChildEnvironment(), ...credential.driverEnv };
-    const status = await runCommandImpl("uv", ["run", USER_DRIVER_PATH, "status", "--json"], {
-      cwd: process.cwd(),
-      env: driverEnv,
-      leaseFailure,
-      timeoutMs: 30_000,
-    });
-    if (status.status !== 0 || status.timedOut) {
+    const status = await runCommandImpl(
+      "uv",
+      ["run", USER_DRIVER_PATH, "status", "--json", "--chat", credential.groupId],
+      {
+        cwd: process.cwd(),
+        env: driverEnv,
+        leaseFailure,
+        timeoutMs: 30_000,
+      },
+    );
+    if (status.timedOut) {
       throw new Error("TDLib Test Server user session is not authorized.");
     }
-    const driver = JSON.parse(status.stdout);
+    let driver;
+    try {
+      driver = JSON.parse(status.stdout);
+    } catch {
+      throw new Error(status.stderr.trim() || "TDLib Test Server user status failed.");
+    }
+    if (status.status !== 0 && driver.ok !== false) {
+      throw new Error(status.stderr.trim() || "TDLib Test Server user status failed.");
+    }
+    if (driver.authorized !== true) {
+      throw new Error("TDLib Test Server user session is not authorized.");
+    }
     if (
-      driver.ok !== true ||
-      driver.authorized !== true ||
       driver.testDc !== true ||
       driver.tdlibVersion !== credential.tdlibVersion ||
       String(driver.user?.id) !== credential.testerUserId
@@ -96,8 +109,10 @@ export async function runTelegramTestDoctor({
     ) {
       throw new Error("Telegram Test Server bot is not an active member of the test group.");
     }
+    const testerGroupMembership = driver.testerGroupMembership === true;
+    const testerCanSendBasicMessages = driver.testerCanSendBasicMessages === true;
     return {
-      ok: true,
+      ok: testerGroupMembership && testerCanSendBasicMessages,
       credentialSource: "convex",
       credentialLoaded: true,
       isolatedTdlibState: true,
@@ -107,6 +122,8 @@ export async function runTelegramTestDoctor({
       sutBot: true,
       groupPrivacyDisabled: true,
       groupMembership: true,
+      testerGroupMembership,
+      testerCanSendBasicMessages,
     };
   } finally {
     await proxy?.close();
@@ -116,7 +133,12 @@ export async function runTelegramTestDoctor({
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runTelegramTestDoctor()
-    .then((result) => console.log(JSON.stringify(result)))
+    .then((result) => {
+      console.log(JSON.stringify(result));
+      if (!result.ok) {
+        process.exitCode = 1;
+      }
+    })
     .catch((error) => {
       console.error(
         JSON.stringify({
