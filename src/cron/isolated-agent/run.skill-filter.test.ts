@@ -463,19 +463,22 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       resolveContextTokensForModelMock.mockReturnValue(512_000);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
-          payloads: [{ text: "test output" }],
-          meta: {
-            agentMeta: {
-              provider: "openai",
-              model: "gpt-5.4",
-              agentHarnessId: "codex",
-              contextTokens: 1_000_000,
-              contextTokensSource: "runtime",
+          result: {
+            payloads: [{ text: "test output" }],
+            meta: {
+              agentMeta: {
+                provider: "openai",
+                model: "gpt-5.4",
+                agentHarnessId: "codex",
+                contextTokens: 1_000_000,
+                contextTokensSource: "runtime",
+              },
             },
           },
         },
         provider: "openai",
         model: "gpt-5.4",
+        attempts: [],
       });
 
       const result = await runSkillFilterCase();
@@ -500,17 +503,20 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       resolveContextTokensForModelMock.mockReturnValue(undefined);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
-          payloads: [{ text: "test output" }],
-          meta: {
-            agentMeta: {
-              provider: "openai",
-              model: "gpt-5.4",
-              agentHarnessId: "codex",
+          result: {
+            payloads: [{ text: "test output" }],
+            meta: {
+              agentMeta: {
+                provider: "openai",
+                model: "gpt-5.4",
+                agentHarnessId: "codex",
+              },
             },
           },
         },
         provider: "openai",
         model: "gpt-5.4",
+        attempts: [],
       });
 
       const result = await runSkillFilterCase();
@@ -534,17 +540,20 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       resolveContextTokensForModelMock.mockReturnValue(512_000);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
-          payloads: [{ text: "test output" }],
-          meta: {
-            agentMeta: {
-              provider: "openai",
-              model: "gpt-5.4",
-              agentHarnessId: "codex",
+          result: {
+            payloads: [{ text: "test output" }],
+            meta: {
+              agentMeta: {
+                provider: "openai",
+                model: "gpt-5.4",
+                agentHarnessId: "codex",
+              },
             },
           },
         },
         provider: "openai",
         model: "gpt-5.4",
+        attempts: [],
       });
 
       const result = await runSkillFilterCase();
@@ -568,17 +577,20 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       resolveContextTokensForModelMock.mockReturnValue(512_000);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
-          payloads: [{ text: "test output" }],
-          meta: {
-            agentMeta: {
-              provider: "openai",
-              model: "gpt-5.4",
-              agentHarnessId: "codex",
+          result: {
+            payloads: [{ text: "test output" }],
+            meta: {
+              agentMeta: {
+                provider: "openai",
+                model: "gpt-5.4",
+                agentHarnessId: "codex",
+              },
             },
           },
         },
         provider: "openai",
         model: "gpt-5.4",
+        attempts: [],
       });
 
       const result = await runSkillFilterCase();
@@ -602,17 +614,20 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       resolveContextTokensForModelMock.mockReturnValue(512_000);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
-          payloads: [{ text: "test output" }],
-          meta: {
-            agentMeta: {
-              provider: "openai",
-              model: "gpt-5.4",
-              agentHarnessId: "codex",
+          result: {
+            payloads: [{ text: "test output" }],
+            meta: {
+              agentMeta: {
+                provider: "openai",
+                model: "gpt-5.4",
+                agentHarnessId: "codex",
+              },
             },
           },
         },
         provider: "openai",
         model: "gpt-5.4",
+        attempts: [],
       });
 
       const result = await runSkillFilterCase({
@@ -649,17 +664,20 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       resolveContextTokensForModelMock.mockReturnValue(undefined);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
-          payloads: [{ text: "test output" }],
-          meta: {
-            agentMeta: {
-              provider: "openai",
-              model: "gpt-5.4",
-              agentHarnessId: "codex",
+          result: {
+            payloads: [{ text: "test output" }],
+            meta: {
+              agentMeta: {
+                provider: "openai",
+                model: "gpt-5.4",
+                agentHarnessId: "codex",
+              },
             },
           },
         },
         provider: "openai",
         model: "gpt-5.4",
+        attempts: [],
       });
 
       const result = await runSkillFilterCase();
@@ -688,17 +706,20 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       resolveContextTokensForModelMock.mockReturnValue(undefined);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
-          payloads: [{ text: "test output" }],
-          meta: {
-            agentMeta: {
-              provider: "openai",
-              model: "gpt-5.4",
-              agentHarnessId: "codex",
+          result: {
+            payloads: [{ text: "test output" }],
+            meta: {
+              agentMeta: {
+                provider: "openai",
+                model: "gpt-5.4",
+                agentHarnessId: "codex",
+              },
             },
           },
         },
         provider: "openai",
         model: "gpt-5.4",
+        attempts: [],
       });
 
       const result = await runSkillFilterCase();

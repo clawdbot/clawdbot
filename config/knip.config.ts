@@ -235,6 +235,8 @@ const rootEntries = [
   "src/agents/subagents/registry/subagent-registry-restart-recovery.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
   "src/tasks/task-registry-control.runtime.ts!",
+  // Reply dispatch and Gateway startup consume this namespace through loadGetReplyFromConfigRuntime.
+  "src/auto-reply/reply/get-reply-from-config.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",

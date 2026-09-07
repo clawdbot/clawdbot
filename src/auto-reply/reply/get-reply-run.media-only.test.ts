@@ -4738,6 +4738,50 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.chatType).toBe("direct");
   });
 
+  it.each(["heartbeat", "cron", "exec"] as const)(
+    "keeps cross-channel %s reply policy independent of remembered chat type",
+    async (source) => {
+      for (const liveChatType of [undefined, "direct"] as const) {
+        vi.mocked(runReplyAgent).mockClear();
+        const route = {
+          InternalTurnSource: source,
+          OriginatingChannel: "slack" as const,
+          OriginatingTo: "user:U1",
+          ChatType: liveChatType,
+        };
+        await runPrepared({
+          cfg: {
+            session: {},
+            channels: {
+              slack: {
+                replyToMode: "all",
+                replyToModeByChatType: { channel: "off", direct: "first" },
+              },
+            },
+            agents: { defaults: {} },
+          },
+          opts: { isHeartbeat: true },
+          ctx: { ...createInboundBody("scheduled wake"), ...route },
+          sessionCtx: { ...createSessionBody("scheduled wake"), ...route },
+          sessionEntry: {
+            sessionId: "session-1",
+            updatedAt: 1,
+            chatType: "channel",
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "discord", to: "channel:remembered" },
+            }),
+          },
+        });
+
+        const call = requireRunReplyAgentCall();
+        expect(call.followupRun.originatingChannel).toBe("slack");
+        expect(call.followupRun.originatingChatType).toBe(liveChatType);
+        expect(call.followupRun.run.chatType).toBe(liveChatType);
+        expect(call.followupRun.originatingReplyToMode).toBe(liveChatType ? "first" : "all");
+      }
+    },
+  );
+
   it("uses transport thread metadata for followup originatingThreadId", async () => {
     await runPrepared({
       ctx: {

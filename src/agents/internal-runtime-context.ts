@@ -276,7 +276,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
 }
 
 /** Identifies hidden runtime context independently of its queue or transcript owner. */
-function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
+export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }

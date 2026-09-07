@@ -73,13 +73,13 @@ function installReplyEntryMocks() {
   });
 }
 
-let getReplyFromConfig: typeof import("../auto-reply/reply.js").getReplyFromConfig;
+let getReplyFromConfig: typeof import("../auto-reply/reply/get-reply.js").getReplyFromConfig;
 let withFullRuntimeReplyConfig: typeof import("../auto-reply/reply/get-reply-fast-path.js").withFullRuntimeReplyConfig;
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
 
 beforeAll(async () => {
   installReplyEntryMocks();
-  ({ getReplyFromConfig } = await import("../auto-reply/reply.js"));
+  ({ getReplyFromConfig } = await import("../auto-reply/reply/get-reply.js"));
   ({ withFullRuntimeReplyConfig } = await import("../auto-reply/reply/get-reply-fast-path.js"));
 });
 

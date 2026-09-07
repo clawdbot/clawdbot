@@ -38,7 +38,6 @@ const {
   systemEventReceiptRemoveMock,
   requestHeartbeatMock,
   requestHeartbeatAndWaitMock,
-  runHeartbeatOnceMock,
   loadConfigMock,
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
@@ -60,9 +59,6 @@ const {
   requestHeartbeatAndWaitMock: vi.fn<(...args: unknown[]) => Promise<HeartbeatRunResult>>(
     async () => ({ status: "ran", durationMs: 1 }),
   ),
-  runHeartbeatOnceMock: vi.fn<
-    (...args: unknown[]) => Promise<{ status: "ran"; durationMs: number }>
-  >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   sendCronAnnouncePayloadStrictMock: vi.fn<
@@ -148,10 +144,6 @@ function requestHeartbeatAndWait(...args: unknown[]) {
   return requestHeartbeatAndWaitMock(...args);
 }
 
-function runHeartbeatOnce(...args: unknown[]) {
-  return runHeartbeatOnceMock(...args);
-}
-
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
   enqueueSystemEventWithReceipt,
@@ -169,14 +161,11 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
 });
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
-  runHeartbeatOnce,
   // Heartbeat monitor convergence enumerates agents at cron start; keep it
   // inert so these tests exercise cron wiring, not heartbeat enrollment.
   resolveHeartbeatAgents: () => [],
   resolveHeartbeatSchedulerSeed: () => "test-seed",
 }));
-
-vi.mock("../infra/heartbeat-runner-run.js", () => ({ runHeartbeatOnce }));
 
 vi.mock("../infra/restart-coordinator.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/restart-coordinator.js")>(
@@ -335,10 +324,7 @@ function getCronState(service: CronServiceFixture): CronServiceState {
   return (service.cron as unknown as { state: CronServiceState }).state;
 }
 
-type CronTestDeps = Omit<
-  CronServiceState["deps"],
-  "enqueueSystemEvent" | "requestHeartbeat" | "runHeartbeatOnce"
-> & {
+type CronTestDeps = Omit<CronServiceState["deps"], "enqueueSystemEvent" | "requestHeartbeat"> & {
   enqueueSystemEvent?: (
     text: string,
     opts?: Partial<Parameters<NonNullable<CronServiceState["deps"]["enqueueSystemEvent"]>>[1]>,
@@ -346,9 +332,6 @@ type CronTestDeps = Omit<
   requestHeartbeat?: (
     opts?: Partial<Parameters<NonNullable<CronServiceState["deps"]["requestHeartbeat"]>>[0]>,
   ) => void;
-  runHeartbeatOnce?: (
-    opts?: Partial<Parameters<NonNullable<CronServiceState["deps"]["runHeartbeatOnce"]>>[0]>,
-  ) => Promise<unknown>;
 };
 
 function getCronDeps(service: CronServiceFixture): CronTestDeps {
@@ -477,7 +460,6 @@ describe("buildGatewayCronService", () => {
     systemEventReceiptRemoveMock.mockClear();
     requestHeartbeatMock.mockClear();
     requestHeartbeatAndWaitMock.mockClear();
-    runHeartbeatOnceMock.mockClear();
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     sendCronAnnouncePayloadStrictMock.mockClear();
@@ -1214,7 +1196,7 @@ describe("buildGatewayCronService", () => {
         noOutputTimedOut: false,
       });
 
-      await vi.waitFor(() => expect(runHeartbeatOnceMock).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce());
       expect(state.cron.getJob(job.id)?.enabled).toBe(false);
     } finally {
       state.cron.stop();
@@ -1258,7 +1240,7 @@ describe("buildGatewayCronService", () => {
 
       await vi.waitFor(() => expect(state.cron.getJob(job.id)?.enabled).toBe(false));
       expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-      expect(runHeartbeatOnceMock).not.toHaveBeenCalled();
+      expect(requestHeartbeatAndWaitMock).not.toHaveBeenCalled();
 
       state.cron.resumeScheduling();
       expect(suspensionAdmission?.release()).toBe(true);
@@ -1285,7 +1267,7 @@ describe("buildGatewayCronService", () => {
         await predecessorRelease.promise;
       };
       if (sessionTarget === "main") {
-        runHeartbeatOnceMock.mockImplementationOnce(async () => {
+        requestHeartbeatAndWaitMock.mockImplementationOnce(async () => {
           await holdPredecessor();
           return { status: "ran", durationMs: 1 };
         });
@@ -1336,7 +1318,7 @@ describe("buildGatewayCronService", () => {
         expect(recorded).toContain(job.id);
         expect(recorded).toContain("Exit code: 3");
         expect(recorded).toContain("watched result");
-        expect(runHeartbeatOnceMock).toHaveBeenCalledTimes(sessionTarget === "main" ? 1 : 0);
+        expect(requestHeartbeatAndWaitMock).toHaveBeenCalledTimes(sessionTarget === "main" ? 1 : 0);
         expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(
           sessionTarget === "isolated" ? 1 : 0,
         );
@@ -3051,13 +3033,11 @@ describe("buildGatewayCronService", () => {
       );
       expect(eventOptions.sessionKey).toBe("global");
       const heartbeatRun = requireRecord(
-        callArg(runHeartbeatOnceMock, 0, 0, "heartbeat run options"),
+        callArg(requestHeartbeatAndWaitMock, 0, 0, "heartbeat run options"),
         "heartbeat run options",
       );
       expect(heartbeatRun.agentId).toBe("main");
       expect(heartbeatRun.sessionKey).toBe("global");
-      // The adapter rebuilds this object field-by-field; preserve the optional owner.
-      expect(heartbeatRun.owningCronJobMarker).toMatchObject({ jobId: job.id });
       expect(heartbeatRun.heartbeat).toEqual({
         target: "last",
         to: undefined,
@@ -3136,79 +3116,9 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it.each(["requests-in-flight", "channel-not-ready"])(
-    "retains a direct %s retry deadline through the cron wake adapter",
-    async (reason) => {
-      const wakeRuntime = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-        "../infra/heartbeat-wake.js",
-      );
-      vi.useFakeTimers();
-      const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-      const dispose = wakeRuntime.setHeartbeatWakeHandler(handler);
-      const state = loadCronService(createCronConfig("server-cron-retry-deadline"));
-      try {
-        getCronState(state).deps.requestHeartbeat(
-          {
-            source: "cron",
-            intent: "immediate",
-            reason: "cron:retained",
-            sessionKey: "discord:channel:ops",
-            heartbeat: { target: "last" },
-          },
-          { status: "skipped", reason, retryAtMs: Date.now() + 1_000 },
-        );
-        wakeRuntime.requestHeartbeat({
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          agentId: "main",
-          sessionKey: "agent:main:discord:channel:ops",
-          coalesceMs: 0,
-        });
-        wakeRuntime.requestHeartbeat({
-          source: "manual",
-          intent: "immediate",
-          reason: "global-flush",
-          coalesceMs: 0,
-        });
-
-        await vi.advanceTimersByTimeAsync(999);
-        expect(handler).toHaveBeenCalledExactlyOnceWith({
-          source: "manual",
-          intent: "immediate",
-          reason: "global-flush",
-        });
-        expect(requestHeartbeatMock).not.toHaveBeenCalled();
-
-        await vi.advanceTimersByTimeAsync(1);
-        expect(handler).toHaveBeenCalledTimes(2);
-        expect(handler.mock.calls[1]?.[0]).toMatchObject({
-          source: "cron",
-          intent: "immediate",
-          reason: "cron:retained",
-          agentId: "main",
-          sessionKey: "agent:main:discord:channel:ops",
-          heartbeat: { target: "last", to: undefined, accountId: undefined },
-          ...(reason === "channel-not-ready" ? { retainedWork: true } : {}),
-        });
-      } finally {
-        state.cron.stop();
-        dispose();
-        const drain = wakeRuntime.setHeartbeatWakeHandler(async () => ({
-          status: "skipped",
-          reason: "disabled",
-        }));
-        // Drain this wake deadline without advancing SQLite's recurring maintenance forever.
-        await vi.advanceTimersByTimeAsync(1_000);
-        drain();
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it("passes direct target-last wakes as destination-only overrides", async () => {
+  it("passes awaited target-last wakes as destination-only overrides", async () => {
     const cfg = {
-      ...createCronConfig("server-cron-direct-heartbeat-route"),
+      ...createCronConfig("server-cron-awaited-heartbeat-route"),
       agents: {
         defaults: {
           heartbeat: {
@@ -3227,20 +3137,22 @@ describe("buildGatewayCronService", () => {
     try {
       const cronDeps = getCronDeps(state);
 
-      const owningCronLaneTaskMarker = { lane: "cron", taskId: 7, generation: 3 };
-      await cronDeps?.runHeartbeatOnce?.({
-        reason: "cron:test",
-        sessionKey: "telegram:group:123:topic:456",
-        owningCronLaneTaskMarker,
-        heartbeat: { target: "last" },
-      });
+      await cronDeps.requestHeartbeatAndWait?.(
+        {
+          source: "cron",
+          intent: "immediate",
+          reason: "cron:test",
+          sessionKey: "telegram:group:123:topic:456",
+          heartbeat: { target: "last" },
+        },
+        {},
+      );
 
       const call = requireRecord(
-        callArg(runHeartbeatOnceMock, 0, 0, "heartbeat run options"),
+        callArg(requestHeartbeatAndWaitMock, 0, 0, "heartbeat run options"),
         "heartbeat run options",
       );
       expect(call.sessionKey).toBe("agent:main:telegram:group:123:topic:456");
-      expect(call.owningCronLaneTaskMarker).toEqual(owningCronLaneTaskMarker);
       expect(call.heartbeat).toEqual({
         target: "last",
         to: undefined,
@@ -4051,14 +3963,19 @@ describe("buildGatewayCronService", () => {
     const state = createCronService(startupCfg);
     try {
       const cronDeps = getCronDeps(state);
-      await expect(
-        cronDeps?.runHeartbeatOnce?.({
-          agentId: "yinze",
-          sessionKey: "agent:yinze:main",
-          heartbeat: {},
-        }),
-      ).rejects.toThrow("cron job agent is unavailable: yinze");
-      expect(runHeartbeatOnceMock).not.toHaveBeenCalled();
+      expect(() =>
+        cronDeps.requestHeartbeatAndWait?.(
+          {
+            source: "cron",
+            intent: "immediate",
+            agentId: "yinze",
+            sessionKey: "agent:yinze:main",
+            heartbeat: {},
+          },
+          {},
+        ),
+      ).toThrow("cron job agent is unavailable: yinze");
+      expect(requestHeartbeatAndWaitMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
     }
@@ -4239,7 +4156,7 @@ describe("buildGatewayCronService", () => {
     } as never;
     let observed: unknown = "never-ran";
     const ran = createDeferred();
-    runHeartbeatOnceMock.mockImplementationOnce(async () => {
+    requestHeartbeatAndWaitMock.mockImplementationOnce(async () => {
       observed = getInProcessGatewayToolContext();
       ran.resolve();
       return { status: "ran", durationMs: 1 };

@@ -120,7 +120,7 @@ describe("cron service timer seam coverage", () => {
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
-    const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    const requestHeartbeatAndWait = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
     const job = {
       ...createDueMainJob({ now, wakeMode: "now" }),
       sessionKey: "agent:main-pr-router:main",
@@ -147,7 +147,7 @@ describe("cron service timer seam coverage", () => {
       resolveSessionStorePath: () => sessionStorePath,
       enqueueSystemEvent,
       requestHeartbeat,
-      runHeartbeatOnce,
+      requestHeartbeatAndWait,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -160,14 +160,16 @@ describe("cron service timer seam coverage", () => {
       contextKey: "cron:main-heartbeat-job",
       deliveryContext: { channel: "discord", to: "channel-1", accountId: "default" },
     });
-    expect(runHeartbeatOnce).toHaveBeenCalledWith({
-      source: "cron",
-      intent: "immediate",
-      reason: "cron:main-heartbeat-job",
-      agentId: "main-pr-router",
-      owningCronJobMarker: undefined,
-      heartbeat: { target: "last" },
-    });
+    expect(requestHeartbeatAndWait).toHaveBeenCalledWith(
+      {
+        source: "cron",
+        intent: "immediate",
+        reason: "cron:main-heartbeat-job",
+        agentId: "main-pr-router",
+        heartbeat: { target: "last" },
+      },
+      expect.objectContaining({ stopWaitingOnRetry: expect.any(Function) }),
+    );
   });
 
   it("persists the next schedule and hands off next-heartbeat main jobs", async () => {

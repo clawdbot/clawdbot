@@ -1,6 +1,9 @@
 import path from "node:path";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import {
+  resolveSqliteTargetFromSessionStorePath,
+  resolveUnsuffixedSqliteTargetFromSessionStorePath,
+} from "../../config/sessions/session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils-store-lookup.js";
@@ -16,23 +19,30 @@ import {
 } from "./main-session-restart-recovery-shared.js";
 
 export function resolveRestartRecoveryDispatchTarget(params: {
+  agentId?: string;
+  storeAgentId?: string;
   cfg?: OpenClawConfig;
   sessionKey: string;
   storePath: string;
 }): { agentId: string; sessionKey: string } | undefined {
-  // Global keys lose their agent prefix; the canonical per-agent store still owns it.
-  // Fixed stores and qualified aliases retain their existing logical-owner route.
+  // Expected targets and discovered agent partitions carry their execution owner.
+  // A shared SQLite store's schema owner must never override its logical session route.
   const storeAgentId =
-    isPerAgentSessionStoreConfig(params.cfg?.session?.store) &&
+    params.agentId ??
+    (params.storeAgentId &&
+    !resolveSqliteTargetFromSessionStorePath(params.storePath, { agentId: params.storeAgentId })
+      .shared
+      ? params.storeAgentId
+      : undefined) ??
+    (isPerAgentSessionStoreConfig(params.cfg?.session?.store) &&
     classifySessionKeyShape(params.sessionKey) === "legacy_or_alias"
       ? resolveUnsuffixedSqliteTargetFromSessionStorePath(params.storePath).agentId
-      : undefined;
+      : undefined);
   if (!params.cfg) {
     return {
-      agentId: resolveAgentIdFromSessionKey(
-        params.sessionKey,
-        storeAgentId ?? LEGACY_IMPLICIT_AGENT_ID,
-      ),
+      agentId:
+        params.agentId ??
+        resolveAgentIdFromSessionKey(params.sessionKey, storeAgentId ?? LEGACY_IMPLICIT_AGENT_ID),
       sessionKey: params.sessionKey,
     };
   }
@@ -55,12 +65,9 @@ export function resolveRestartRecoveryDispatchTarget(params: {
 }
 
 /** Captures the durable continuation that a completed requester turn yielded to. */
-export function captureYieldedMainSessionContinuation(params: {
-  cfg?: OpenClawConfig;
-  entry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): (() => boolean) | undefined {
+export function captureYieldedMainSessionContinuation(
+  params: Parameters<typeof resolveRestartRecoveryDispatchTarget>[0] & { entry: SessionEntry },
+): (() => boolean) | undefined {
   // A prepared final may not have reached its queue yet; main recovery still owns that debt.
   if (
     params.entry.status !== "running" ||

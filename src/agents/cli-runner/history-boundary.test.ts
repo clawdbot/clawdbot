@@ -21,7 +21,7 @@ import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
-import { buildCliSessionHistoryPrompt, loadCliSessionReseedMessages } from "./session-history.js";
+import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -97,11 +97,13 @@ async function fixture(withHeader = true) {
 
 async function history(allowed: boolean, params: PreparedCliRunContext["params"]) {
   return buildCliSessionHistoryPrompt({
-    messages: await loadCliSessionReseedMessages({
-      ...params,
-      allowRawTranscriptReseed: true,
-      rawTranscriptReseedReason: allowed ? "missing-transcript" : "auth-unknown",
-    }),
+    messages: (
+      await loadCliSessionPromptContext({
+        ...params,
+        allowRawTranscriptReseed: true,
+        rawTranscriptReseedReason: allowed ? "missing-transcript" : "auth-unknown",
+      })
+    ).reseedMessages,
     prompt: "current ask",
     maxHistoryChars: 8192,
   });

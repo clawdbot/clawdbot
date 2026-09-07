@@ -12,6 +12,7 @@ import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -56,6 +57,66 @@ async function makePendingFinalFixture() {
 }
 
 describe("beforeDeliver in reply dispatcher", () => {
+  it.each([
+    {
+      name: "unconfirmed send",
+      result: { visibleReplySent: true, ambiguous: true },
+      state: "unknown",
+      count: "failedAfterSend",
+      fallback: true,
+    },
+    {
+      name: "channel transform",
+      result: { visibleReplySent: false, suppression: { reason: "channel_transform" } },
+      state: "suppressed",
+      count: "deliveredNotVisible",
+      fallback: true,
+    },
+    {
+      name: "confirmed send",
+      result: { visibleReplySent: true },
+      state: "delivered",
+      count: "delivered",
+      fallback: true,
+    },
+    {
+      name: "ordinary invisible result",
+      result: { visibleReplySent: false },
+      state: "delivered",
+      count: "deliveredNotVisible",
+      fallback: false,
+    },
+  ] as const)(
+    "records callback settlement for $name before reopening",
+    async ({ result, state, count, fallback }) => {
+      const fixture = await makePendingFinalFixture();
+      const deliver = vi.fn(async () => result);
+      try {
+        if (fallback) {
+          attachReplyDispatchUndeliveredFallback(fixture.payload, { text: "fallback" });
+        }
+        const dispatcher = createReplyDispatcher({ deliver });
+        dispatcher.sendFinalReply(fixture.payload);
+        dispatcher.markComplete();
+        const receipt = await dispatcher.waitForIdle();
+        closeOpenClawAgentDatabasesForTest();
+        expect(
+          (loadSessionEntry(fixture) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
+        ).toEqual([{ id: "delivery-1", state }]);
+        expect(receipt?.counts.final[count]).toBe(1);
+
+        const replay = createReplyDispatcher({ deliver });
+        replay.sendFinalReply(fixture.payload);
+        replay.markComplete();
+        await replay.waitForIdle();
+        expect(deliver).toHaveBeenCalledOnce();
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+        await fs.rm(fixture.tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("settles explicitly non-visible delivery in the dispatcher receipt", async () => {
     const dispatcher = createReplyDispatcher({
       deliver: async () => ({ visibleReplySent: false }),
@@ -509,19 +570,31 @@ describe("beforeDeliver in reply dispatcher", () => {
       const failure = error();
       const onError = vi.fn();
       try {
-        const dispatcher = createReplyDispatcher({
-          deliver: async () => {
-            if (deferred) {
-              return { finalization: Promise.reject(failure) };
-            }
-            throw failure;
-          },
-          onError,
+        const deliver = vi.fn(async () => {
+          if (deferred) {
+            return { finalization: Promise.reject(failure) };
+          }
+          throw failure;
         });
-
+        const dispatcher = createReplyDispatcher({ deliver, onError });
+        const capture = captureReplyDispatchDeliveryOutcome(fixture.payload);
+        const pending = expected !== "prepared";
+        if (pending) {
+          attachReplyDispatchUndeliveredFallback(fixture.payload, { text: "duplicate fallback" });
+        }
         dispatcher.sendFinalReply(fixture.payload);
         dispatcher.markComplete();
         const receipt = await dispatcher.waitForIdle();
+        await expect(capture.promise).resolves.toBe(
+          !failedBeforeSend
+            ? "failed-deliver"
+            : pending
+              ? "recovery-owned"
+              : "failed-before-deliver",
+        );
+        expect(capture.hasPendingDelivery()).toBe(pending);
+        expect(receipt?.hasPendingDelivery).toBe(pending ? true : undefined);
+        expect(deliver).toHaveBeenCalledTimes(1);
 
         if (deferred) {
           expect(onError).not.toHaveBeenCalled();

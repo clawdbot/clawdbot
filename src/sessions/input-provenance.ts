@@ -46,13 +46,20 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
   if (!isInputProvenanceKind(record.kind)) {
     return undefined;
   }
-  return {
-    kind: record.kind,
-    originSessionId: normalizeOptionalString(record.originSessionId),
-    sourceSessionKey: normalizeOptionalString(record.sourceSessionKey),
-    sourceChannel: normalizeOptionalString(record.sourceChannel),
-    sourceTool: normalizeOptionalString(record.sourceTool),
-  };
+  const provenance: InputProvenance = { kind: record.kind };
+  // Admission snapshots must match their persisted JSON without undefined properties.
+  for (const key of [
+    "originSessionId",
+    "sourceSessionKey",
+    "sourceChannel",
+    "sourceTool",
+  ] as const) {
+    const normalized = normalizeOptionalString(record[key]);
+    if (normalized) {
+      provenance[key] = normalized;
+    }
+  }
+  return provenance;
 }
 
 // Only attach provenance to user messages that do not already carry it. Existing

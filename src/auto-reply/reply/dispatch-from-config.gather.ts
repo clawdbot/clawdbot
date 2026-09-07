@@ -100,6 +100,7 @@ export async function gatherDispatchRequest(
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
+    allowInboundHandlers: replyOperationRunState.heartbeat === undefined,
     get inboundDedupeReplayUnsafe() {
       // Read the recorded input outcome even when source adoption or cleanup fails.
       // Queued followups have not transferred custody to the active run yet.
@@ -243,7 +244,9 @@ export async function gatherDispatchRequest(
     replayUnsafeActivity = true;
   };
 
-  const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
+  const boundAcpDispatchSessionKey = state.allowInboundHandlers
+    ? resolveBoundAcpDispatchSessionKey({ ctx, cfg })
+    : undefined;
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
   // initialSessionStoreEntry stays command-target-aware for handler/store

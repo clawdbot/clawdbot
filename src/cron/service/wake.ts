@@ -1,5 +1,4 @@
 /** Manual cron wake helper for queueing system events into sessions. */
-import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import {
   isSubagentSessionKey,
   normalizeOptionalAgentId,
@@ -8,26 +7,6 @@ import {
 import { resolveCronDeliverySessionKey } from "../session-target.js";
 import type { CronJob } from "../types.js";
 import type { CronServiceState } from "./state.js";
-
-export function enqueueCronSystemEvent(
-  state: CronServiceState,
-  text: string,
-  opts?: Parameters<CronServiceState["deps"]["enqueueSystemEvent"]>[1],
-) {
-  return state.deps.enqueueSystemEvent(text, opts);
-}
-
-export function requestCronHeartbeat(
-  state: CronServiceState,
-  opts: Omit<HeartbeatWakeRequest, "source"> & { source?: HeartbeatWakeRequest["source"] },
-  retry?: Parameters<CronServiceState["deps"]["requestHeartbeat"]>[1],
-) {
-  if (retry) {
-    state.deps.requestHeartbeat({ source: "cron", ...opts }, retry);
-    return;
-  }
-  state.deps.requestHeartbeat({ source: "cron", ...opts });
-}
 
 /** Keeps safety notices with their creator and limits failure routes to explicit origins. */
 export function enqueueCronNotification(
@@ -46,14 +25,14 @@ export function enqueueCronNotification(
     sessionKey || (kind === "auto-disabled" && agentId)
       ? state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })
       : undefined;
-  enqueueCronSystemEvent(state, text, {
+  state.deps.enqueueSystemEvent(text, {
     agentId,
     sessionKey,
     contextKey: `cron:${job.id}:${kind}`,
     ...(deliveryContext ? { deliveryContext } : {}),
   });
   if (kind === "auto-disabled" || job.wakeMode === "now" || sessionKey) {
-    requestCronHeartbeat(state, {
+    state.deps.requestHeartbeat({
       source: "notifications-event",
       intent: "immediate",
       reason: "wake",
@@ -113,11 +92,11 @@ export function wake(
           ...(originDeliveryContext ? { deliveryContext: originDeliveryContext } : {}),
         }
       : undefined;
-  enqueueCronSystemEvent(state, text, enqueueOpts);
+  state.deps.enqueueSystemEvent(text, enqueueOpts);
   if (opts.mode === "now" || sessionKey) {
     // Scheduled heartbeats only inspect the agent's main session, so a targeted
     // next-heartbeat event needs an immediate wake to avoid being stranded.
-    requestCronHeartbeat(state, {
+    state.deps.requestHeartbeat({
       source: "manual",
       intent: "immediate",
       reason: "wake",

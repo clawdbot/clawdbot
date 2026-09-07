@@ -1,3 +1,4 @@
+import type { HeartbeatDispatch } from "../../infra/heartbeat-dispatch.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -27,6 +28,7 @@ export type ReplyPreRunRejectionCode =
   | "session-directive-rejected";
 
 export type ReplyOperationRunState = {
+  heartbeat?: HeartbeatDispatch;
   admission?: ReplyOperationAdmissionSnapshot;
   messageInjectionAborted?: true;
   agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;

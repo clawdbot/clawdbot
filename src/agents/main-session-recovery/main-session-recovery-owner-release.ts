@@ -12,12 +12,10 @@ export function scheduleMainSessionRecoveryPendingTarget(
   void import("./main-session-restart-recovery.js").then(
     ({ scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease: schedule }) =>
       schedule({
+        ...target,
         expectedSessionId: target.sessionId,
         getConfig: getRuntimeConfig,
         getGatewayRuntime: getGatewayRecoveryRuntime,
-        sessionKey: target.sessionKey,
-        stateDir: target.stateDir,
-        storePath: target.storePath,
       }),
     () => {}, // Startup recovery remains the fallback if this optional module cannot load.
   );

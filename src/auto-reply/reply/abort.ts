@@ -216,19 +216,15 @@ export async function tryFastAbortFromMessage(params: {
   const commandSessionKey =
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.ParentSessionKey);
   const targetKey = normalizeOptionalString(ctx.CommandTargetSessionKey) ?? commandSessionKey;
+  const resolveTargetAgentId = () =>
+    resolveSessionAgentId({
+      sessionKey: targetKey ?? ctx.SessionKey ?? "",
+      config: cfg,
+      fallbackAgentId: ctx.AgentId,
+    });
   const raw = stripStructuralPrefixes(ctx.commandText);
   const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
-  const stripped = isGroup
-    ? stripMentions(
-        raw,
-        ctx,
-        cfg,
-        resolveSessionAgentId({
-          sessionKey: targetKey ?? ctx.SessionKey ?? "",
-          config: cfg,
-        }),
-      )
-    : raw;
+  const stripped = isGroup ? stripMentions(raw, ctx, cfg, resolveTargetAgentId()) : raw;
   const abortRequested = isAbortRequestText(stripped);
   if (!abortRequested) {
     return { handled: false, aborted: false };
@@ -244,11 +240,7 @@ export async function tryFastAbortFromMessage(params: {
     return { handled: false, aborted: false };
   }
 
-  const agentId = resolveSessionAgentId({
-    sessionKey: targetKey ?? ctx.SessionKey ?? "",
-    config: cfg,
-    fallbackAgentId: ctx.AgentId,
-  });
+  const agentId = resolveTargetAgentId();
   const abortKey = targetKey ?? auth.from ?? auth.to;
   const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
 

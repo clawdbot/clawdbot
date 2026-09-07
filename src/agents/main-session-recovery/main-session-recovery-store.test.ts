@@ -19,6 +19,7 @@ import {
   refreshMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
 } from "./main-session-recovery-store.js";
+import { retryRestartAbortedMainSessionRecovery } from "./main-session-restart-recovery-runtime.js";
 
 const sessionKey = "agent:main:main";
 const executionIdentity = (runId: string) => ({
@@ -514,6 +515,90 @@ describe("main session recovery store", () => {
       sessionKey,
       storePath,
     });
+  });
+
+  it("retains the shared-store agent owner through claim, refresh, and release", async () => {
+    const target = { agentId: "ops", sessionKey: "global", storePath };
+    await sessionAccessor.replaceSessionEntry(target, interruptedEntry());
+
+    await expect(
+      inspectMainSessionRecoveryRequired({
+        expectedSessionId: "session-1",
+        lifecycleGeneration,
+        target,
+      }),
+    ).resolves.toEqual({ kind: "required" });
+    const claim = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration,
+      sessionId: "session-1",
+      target,
+    });
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") {
+      throw new Error("expected shared-store foreground claim");
+    }
+    await expect(refreshMainSessionRecoveryOwner(claim.lease, "foreground-run")).resolves.toEqual(
+      expect.objectContaining({ entry: expect.objectContaining({ sessionId: "session-1" }) }),
+    );
+    expect(
+      sessionAccessor.loadSessionEntry(target)?.mainRestartRecovery?.foregroundClaims?.tokens,
+    ).toEqual([claim.lease.claimId]);
+
+    await expect(releaseMainSessionRecoveryOwner(claim.lease)).resolves.toEqual({
+      ...target,
+      sessionId: "session-1",
+    });
+    expect(
+      sessionAccessor.loadSessionEntry(target)?.mainRestartRecovery?.foregroundClaims,
+    ).toBeUndefined();
+    await expect(refreshMainSessionRecoveryOwner(claim.lease)).resolves.toBeUndefined();
+  });
+
+  it("settles an owned shared-store recovery receipt without redispatching", async () => {
+    const target = { agentId: "ops", sessionKey: "global", storePath };
+    await sessionAccessor.replaceSessionEntry(
+      target,
+      interruptedEntry({
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "already handled",
+          createdAt: 100,
+          intentId: "owned-final",
+          deliveries: [{ id: "owned-delivery", state: "suppressed" }],
+        },
+      }),
+    );
+    const dispatch = vi.fn(async (): Promise<never> => {
+      throw new Error("a settled delivery must not dispatch recovery work");
+    });
+
+    await expect(
+      retryRestartAbortedMainSessionRecovery({
+        ...target,
+        expectedSessionId: "session-1",
+        stateDir: dir,
+        cfg: {
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {} },
+          },
+          session: { scope: "global", store: storePath },
+        },
+        gatewayRuntime: {
+          dispatchAgent: dispatch,
+          waitForAgent: dispatch,
+          sendRecoveryNotice: dispatch,
+        },
+      }),
+    ).resolves.toEqual({ started: 0, settled: 1, failed: 0, skipped: 0 });
+    const completed = sessionAccessor.loadSessionEntry(target);
+    expect(completed).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+    });
+    expect(completed?.pendingFinalDelivery).toBeUndefined();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("does not let an old lease release a same-token claim from a new cycle", async () => {
