@@ -60,6 +60,17 @@ them with `listMessageReceiptPlatformIds(...)` or
 `resolveMessageReceiptPrimaryId(...)` instead of keeping parallel `messageIds`
 fields.
 
+For turn adapters that aggregate confirmed visible sends, use
+`createAcceptedChannelDeliveryResult(...)` from
+`openclaw/plugin-sdk/channel-inbound`. It combines native `results` followed by
+logical `deliveryResults`, including a partial-delivery error's accepted subset.
+A logical result's receipt takes precedence over its legacy message IDs.
+The result carries a receipt, `messageIds` (including an empty array), and
+`visibleReplySent: true`; routing fields stay in the receipt. Optional `content`
+is passed through, and `kind` and `replyToId` use the receipt builder's rules.
+Keep acceptance side effects, content joining,
+suppression, and whether an identityless outcome needs a receipt in the adapter.
+
 Channel actions and adapter capabilities come from the selected plugin
 registration. An omitted `actions`, `message`, or `outbound` surface is not
 filled from another plugin with the same channel ID. Prepared delivery handlers

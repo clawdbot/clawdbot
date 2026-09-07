@@ -367,7 +367,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, runtime-plan tool policy helpers, terminal outcome classification, tool progress formatting/detail helpers, and attempt result utilities |
     | `plugin-sdk/async-lock-runtime` | Private-local after July 2026; Process-local async lock helper for small runtime state files |
     | `plugin-sdk/channel-activity-runtime` | Private-local after July 2026; Channel activity telemetry helper |
-    | `plugin-sdk/concurrency-runtime` | Private-local after July 2026; Bounded async task concurrency helper |
+    | `plugin-sdk/concurrency-runtime` | Private-local after July 2026; Bounded async task concurrency (`runTasksWithConcurrency`) and cancellable permit admission (`createPermitPool`) with caller-owned release |
     | `plugin-sdk/dedupe-runtime` | In-memory and persistent-backed dedupe cache helpers |
     | `plugin-sdk/delivery-queue-runtime` | Private-local after July 2026; Outbound pending-delivery drain helper |
     | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file, path-containment, temp-root, media-source path, and directory-durability helpers |

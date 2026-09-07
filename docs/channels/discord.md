@@ -308,6 +308,7 @@ Now create channels and start chatting. The agent sees the channel name, and eac
 
 - Gateway owns the Discord connection.
 - Reply routing is deterministic: Discord inbound replies back to Discord.
+- Bot replies and thread-bound persona replies share Markdown formatting, including CommonMark bold and configured table conversion.
 - Forwarded message snapshots reach the agent together with any accompanying caption. Forwarded text is not treated as a typed command; command classification uses only the sender’s own message text.
 - Discord guild/channel metadata is added to the model prompt as untrusted context, not as a user-visible reply prefix. If a model copies that envelope back, OpenClaw strips the copied metadata from outbound replies and from future replay context.
 - By default (`session.dmScope=main`), direct chats share the agent main session (`agent:main:main`).
@@ -1748,6 +1749,18 @@ message(action="send", channel="discord", target="channel:123", path="/path/to/a
     - verify guild allowlist under `channels.discord.guilds`
     - if a guild `channels` map exists, only listed channels are allowed
     - verify `requireMention` behavior and mention patterns
+
+    The Control UI channel details and `openclaw channels status` warn when the
+    effective policy is `allowlist` but no guilds are configured. Add your server
+    under `channels.discord.guilds`, or the account's `guilds` map when overridden.
+    An explicit `channels.discord.accounts.default.guilds` map also overrides the
+    top-level map, even when the account map is empty.
+
+    If status reports a deferred configuration reload, wait for active work to
+    finish and refresh. A successful channel stop/start does not apply unpublished
+    configuration. The warning distinguishes waiting to publish configuration
+    from channel work deferred after publication; connection health alone does
+    not confirm that a policy change has applied.
 
     Useful checks:
 

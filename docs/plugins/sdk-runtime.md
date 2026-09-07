@@ -186,6 +186,20 @@ return {
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
 
+### Stage timing diagnostics
+
+`openclaw/plugin-sdk/time-runtime` exports `createStageTimingTracker(now?)` and
+`formatStageTimings(stages)`. The tracker records rounded, nonnegative
+`durationMs` and `elapsedMs` values. `mark(name)` measures since the previous
+mark; `measure(name, run)` and `measureSync(name, run)` record explicit spans,
+including failed work, and preserve the callback's result or error. Measured
+spans do not advance the checkpoint used by `mark`.
+
+`snapshot()` returns `{ totalMs, stages }` with a copied stage array. The optional
+clock defaults to `Date.now`. Formatting produces comma-separated
+`name:durationMs@elapsedMs` entries (with `ms` units) or `none`. Callers retain
+ownership of log labels, warning thresholds, and when to emit a summary.
+
 ## Plugin command runtime helpers
 
 Plugin command handlers receive request-bound capabilities through

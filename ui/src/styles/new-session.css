@@ -202,11 +202,6 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   border-style: dashed;
 }
 
-/* Image and emoji fallbacks carry the same welcome-avatar silhouette. */
-.new-session-page .agent-chat__avatar--text {
-  border-radius: 50%;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .new-session-page__incognito-notice {
     transition-duration: 0ms;

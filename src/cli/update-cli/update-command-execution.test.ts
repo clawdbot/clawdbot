@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   maybeRestartService: vi.fn(),
   maybeStopService: vi.fn(),
   prepareMutableUpdate: vi.fn<(env?: NodeJS.ProcessEnv) => Promise<void>>(),
+  pluginPreflight: vi.fn(),
   readGitRecovery: vi.fn(),
   runGitUpdate: vi.fn(),
   runPackageUpdate: vi.fn(),
@@ -32,6 +33,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../infra/update-global.js", () => ({
   verifyPackageUpdateRecovery: mocks.verifyPackageRecovery,
+}));
+
+vi.mock("./update-command-plugin-preflight.js", () => ({
+  preflightConfiguredNpmPluginTargets: mocks.pluginPreflight,
 }));
 
 vi.mock("../../infra/update-runner-git-recovery.js", () => ({
@@ -81,6 +86,7 @@ vi.mock("./update-command-service.js", async () => {
   };
 });
 
+import { UpdatePreMutationError } from "./shared.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 
 const successfulUpdate: UpdateRunResult = {
@@ -111,6 +117,7 @@ function executionParams(
     opts: { json: true },
     shouldRestart: true,
     packageInstallSpec: "openclaw@1.0.1",
+    packageTargetVersion: "1.0.1",
     managedServiceRootRedirect: null,
     invocationCwd: "/work",
     recoveryState: { triageTarget: { env: {} } },
@@ -179,6 +186,7 @@ beforeEach(() => {
   mocks.maybeRestartService.mockResolvedValue(undefined);
   mocks.maybeStopService.mockImplementation(async ({ phase }) => inspectOrStopService(phase));
   mocks.prepareMutableUpdate.mockResolvedValue(undefined);
+  mocks.pluginPreflight.mockResolvedValue(undefined);
   mocks.readGitRecovery.mockResolvedValue({ serviceRestartSafe: true });
   mocks.runGitUpdate.mockResolvedValue({ ...successfulUpdate, mode: "git" });
   mocks.runPackageUpdate.mockResolvedValue(successfulUpdate);
@@ -187,6 +195,65 @@ beforeEach(() => {
 });
 
 describe("mutable update execution", () => {
+  it.each([
+    "@openclaw/example@1.0.1: Package not found on npm",
+    "@openclaw/example@1.0.1: npm view failed: ECONNRESET",
+  ])("keeps the serving package unchanged when plugin admission fails: %s", async (detail) => {
+    mocks.pluginPreflight.mockRejectedValue(
+      new UpdatePreMutationError("plugin-target-unavailable", detail),
+    );
+
+    const execution = await executeMutableUpdate(executionParams("package"));
+
+    expect(execution).toMatchObject({
+      mutationStarted: false,
+      result: {
+        status: "error",
+        reason: "plugin-target-unavailable",
+        steps: [expect.objectContaining({ stderrTail: detail })],
+      },
+    });
+    expect(mocks.serviceStopped).toBe(false);
+    expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+    expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+  });
+
+  it("waits for plugin availability before preparing a package update", async () => {
+    const available = createDeferred();
+    mocks.pluginPreflight.mockImplementation(() => available.promise);
+    const execution = executeMutableUpdate(executionParams("package"));
+    try {
+      await vi.waitFor(() => expect(mocks.pluginPreflight).toHaveBeenCalledOnce());
+      expect(mocks.serviceStopped).toBe(false);
+      expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+      expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+    } finally {
+      available.resolve();
+    }
+    expect((await execution)?.result).toBe(successfulUpdate);
+    expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("refuses configuration drift during plugin admission before mutable preparation", async () => {
+    let configChanged = false;
+    mocks.pluginPreflight.mockImplementation(async () => {
+      configChanged = true;
+    });
+    mocks.revalidateSchemaContext.mockImplementation(async (context) => {
+      if (configChanged) {
+        throw new UpdatePreMutationError("database-schema-preflight", "Configuration changed");
+      }
+      return context;
+    });
+
+    const execution = await executeMutableUpdate(executionParams("package"));
+
+    expect(execution?.result.reason).toBe("database-schema-preflight");
+    expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+    expect(mocks.serviceStopped).toBe(false);
+    expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+  });
+
   it("captures the package target before schema revalidation and binds the latest service environment", async () => {
     const events: string[] = [];
     mocks.runPackageUpdate.mockImplementation(async () => {
@@ -224,11 +291,10 @@ describe("mutable update execution", () => {
     const pendingExecution = executeMutableUpdate(params);
     try {
       await vi.waitFor(() => expect(events).toContain("schema-after-inspection"));
-      expect(events).toEqual([
-        "schema-before-inspection",
-        "mutable-prepare",
-        "schema-after-inspection",
-      ]);
+      expect(events.indexOf("schema-before-inspection")).toBeLessThan(
+        events.indexOf("mutable-prepare"),
+      );
+      expect(events.at(-1)).toBe("schema-after-inspection");
       expect(mocks.serviceStopped).toBe(false);
       expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
       params.packageInstallSpec = "openclaw@changed-during-schema-check";

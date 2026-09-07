@@ -5,8 +5,6 @@ import {
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
-import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
-import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
@@ -108,13 +106,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
 
   const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();
 
-  const activeProcessSessions = listActiveProcessSessionReferences({
-    scopeKey: resolveProcessToolScopeKey({
-      sessionKey: attempt.sessionKey,
-      sessionId: attempt.sessionId,
-      agentId: params.setup.sessionAgentId,
-    }),
-  });
   const {
     runtimeChannel,
     runtimeCapabilities,
@@ -142,7 +133,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     currentMessageId: attempt.currentMessageId,
     senderId: attempt.senderId,
     senderIsOwner: attempt.senderIsOwner,
-    activeProcessSessions,
   });
   const promptMode =
     attempt.promptMode ??

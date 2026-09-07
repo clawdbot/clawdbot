@@ -32,6 +32,7 @@ export {
 export {
   buildEmbeddingBatchGroupOptions,
   runEmbeddingBatchGroups,
+  runEmbeddingBatches,
   type EmbeddingBatchExecutionParams,
 } from "./host/batch-runner.js";
 export {

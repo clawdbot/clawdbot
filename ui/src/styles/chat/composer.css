@@ -4357,7 +4357,7 @@
 .agent-chat__avatar--text {
   width: 80px;
   height: 80px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-full);
   background: var(--secondary);
   border: 1px solid var(--border);
   color: var(--text);

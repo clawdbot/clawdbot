@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
+import { resolveHomePath } from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
 
@@ -10,12 +12,15 @@ const scratchRoot = process.env.KITCHEN_SINK_TMP_DIR || os.tmpdir();
 
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_FINDING_CONTEXT_CHARS = 2048;
-const LOG_SCAN_MAX_ENTRIES = readPositiveIntEnv("KITCHEN_SINK_LOG_SCAN_MAX_ENTRIES", 20_000);
+const LOG_SCAN_MAX_ENTRIES = readPositiveIntEnvWithEmptyFallback(
+  "KITCHEN_SINK_LOG_SCAN_MAX_ENTRIES",
+  20_000,
+);
 const LOG_SCAN_MAX_FILES = 5000;
 const LOG_SCAN_MAX_FINDINGS = 100;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_SCAN_SEGMENT_OVERLAP_CHARS = 256;
-const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnv(
+const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnvWithEmptyFallback(
   "KITCHEN_SINK_EXPECT_FAILURE_OUTPUT_MAX_BYTES",
   1024 * 1024,
 );
@@ -23,32 +28,6 @@ const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnv(
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const normalizedPath = (filePath) => filePath.replaceAll("\\", "/");
-
-function readPositiveIntEnv(name, fallback) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  const text = raw.trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${name} must be a positive integer; got: ${raw}`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer; got: ${raw}`);
-  }
-  return parsed;
-}
-
-function resolveHomePath(value) {
-  if (value === "~") {
-    return process.env.HOME;
-  }
-  if (value?.startsWith("~/") || value?.startsWith("~\\")) {
-    return path.join(process.env.HOME, value.slice(2));
-  }
-  return value;
-}
 
 function readTextFileBounded(file, maxBytes, label) {
   const stats = fs.statSync(file);

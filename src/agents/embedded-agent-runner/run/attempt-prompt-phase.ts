@@ -103,7 +103,7 @@ export async function runEmbeddedAttemptPromptPhase(
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const { diagnosticTrace, runTrace } = input.diagnostics;
   const { systemPromptReport, runtimeInfo } = prepared.systemPrompt;
-  // Hook phases retain the prompt/cache snapshot prepared before assembly.
+  // Hook phases retain the prompt snapshot prepared before assembly.
   const systemPromptText = sessionRuntimeState.systemPromptText;
   const toolSearchCompacted = prepared.toolCatalog.toolSearch.compacted;
   let skipPromptSubmission = false;
@@ -206,6 +206,7 @@ export async function runEmbeddedAttemptPromptPhase(
         : undefined;
     const promptContext = prepareEmbeddedAttemptPromptContext({
       attempt,
+      capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       ...(heartbeatOutcomeContext ? { heartbeatOutcomeContext } : {}),
       messages: activeSession.messages,
       prompt: promptAssembly,
@@ -268,7 +269,6 @@ export async function runEmbeddedAttemptPromptPhase(
         },
         signal: runAbortController.signal,
         streamFn: activeSession.agent.streamFn,
-        systemPrompt: systemPromptText,
       });
       if (googlePromptCacheStreamFn) {
         activeSession.agent.streamFn = googlePromptCacheStreamFn;
